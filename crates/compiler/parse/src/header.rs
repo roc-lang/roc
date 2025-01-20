@@ -1,8 +1,8 @@
 use std::fmt::Debug;
 
 use crate::ast::{
-    Collection, CommentOrNewline, Defs, Header, Malformed, Pattern, Spaced, Spaces, SpacesBefore,
-    StrLiteral, TypeAnnotation,
+    Collection, CommentOrNewline, Defs, Header, Malformed, RecordFieldPattern, Spaced, Spaces,
+    SpacesBefore, StrLiteral, TypeAnnotation,
 };
 use crate::blankspace::{space0_before_e, space0_e};
 use crate::expr::merge_spaces;
@@ -1186,7 +1186,7 @@ pub struct ModuleHeader<'a> {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ModuleParams<'a> {
-    pub pattern: Loc<Collection<'a, Loc<Pattern<'a>>>>,
+    pub pattern: Loc<Collection<'a, Loc<RecordFieldPattern<'a>>>>,
     pub before_arrow: &'a [CommentOrNewline<'a>],
     pub after_arrow: &'a [CommentOrNewline<'a>],
 }

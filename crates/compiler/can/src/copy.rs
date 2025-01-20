@@ -3,7 +3,9 @@ use crate::{
     expr::{
         ClosureData, Expr, Field, OpaqueWrapFunctionData, StructAccessorData, WhenBranchPattern,
     },
-    pattern::{DestructType, ListPatterns, Pattern, RecordDestruct, TupleDestruct},
+    pattern::{
+        DestructType, ListPatterns, Pattern, RecordDestruct, RecordDestructureSpread, TupleDestruct,
+    },
 };
 use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_module::{
@@ -799,6 +801,7 @@ fn deep_copy_pattern_help<C: CopyEnv>(
             whole_var,
             ext_var,
             destructs,
+            opt_spread,
         } => RecordDestructure {
             whole_var: sub!(*whole_var),
             ext_var: sub!(*ext_var),
@@ -829,6 +832,19 @@ fn deep_copy_pattern_help<C: CopyEnv>(
                     )
                 })
                 .collect(),
+            opt_spread: Box::new(opt_spread.clone().map(
+                |RecordDestructureSpread {
+                     opt_pattern,
+                     spread_var,
+                 }| RecordDestructureSpread {
+                    opt_pattern: opt_pattern.map(|opt_pat| {
+                        opt_pat
+                            .as_ref()
+                            .map(|loc_pat| loc_pat.map(|pat| go_help!(&pat)))
+                    }),
+                    spread_var: sub!(spread_var),
+                },
+            )),
         },
         TupleDestructure {
             whole_var,

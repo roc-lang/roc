@@ -595,6 +595,7 @@ pub fn constrain_pattern_help(
             whole_var,
             ext_var,
             destructs,
+            opt_spread,
         } => {
             state.vars.push(*whole_var);
             state.vars.push(*ext_var);

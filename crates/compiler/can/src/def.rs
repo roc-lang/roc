@@ -41,6 +41,7 @@ use roc_parse::ast::AssignedField;
 use roc_parse::ast::Defs;
 use roc_parse::ast::ExtractSpaces;
 use roc_parse::ast::TypeHeader;
+use roc_parse::expr::RecordValuePrefix;
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::ShadowKind;
@@ -540,12 +541,19 @@ fn canonicalize_claimed_ability_impl<'a>(
     ability: Symbol,
     loc_impl: &Loc<ast::AssignedField<'a, ast::Expr<'a>>>,
 ) -> Result<(Symbol, Symbol), ()> {
-    let ability_home = ability.module_id();
+    match loc_impl.value {
+        // TODO: validate whether this is valid
+        AssignedField::WithoutValue { ignored, loc_label } => {
+            if ignored {
+                env.problems
+                    .push(Problem::IgnoredFieldForAbilityImpl(loc_impl.region));
 
-    match loc_impl.extract_spaces().item {
-        AssignedField::LabelOnly(label) => {
-            let label_str = label.value;
-            let region = label.region;
+                return Err(());
+            }
+
+            let ability_home = ability.module_id();
+            let label_str = loc_label.value;
+            let region = loc_label.region;
 
             let member_symbol =
                 match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
@@ -617,45 +625,70 @@ fn canonicalize_claimed_ability_impl<'a>(
                 _ => {
                     env.problem(Problem::ImplementationNotFound {
                         member: member_symbol,
-                        region: label.region,
+                        region: loc_label.region,
                     });
                     Err(())
                 }
             }
         }
-        AssignedField::RequiredValue(label, _spaces, value) => {
-            let impl_ident = match value.value {
+        AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix: _,
+            prefix,
+            loc_val,
+        } => {
+            if ignored {
+                env.problems
+                    .push(Problem::IgnoredFieldForAbilityImpl(loc_impl.region));
+
+                return Err(());
+            }
+
+            match prefix {
+                RecordValuePrefix::DoubleQuestion => {
+                    env.problems
+                        .push(Problem::DefaultValueFieldForAbilityImpl(loc_impl.region));
+
+                    return Err(());
+                }
+                RecordValuePrefix::Colon => {}
+            }
+
+            let ability_home = ability.module_id();
+
+            let impl_ident = match loc_val.value {
                 ast::Expr::Var { module_name, ident } => {
                     if module_name.is_empty() {
                         ident
                     } else {
                         env.problem(Problem::QualifiedAbilityImpl {
-                            region: value.region,
+                            region: loc_val.region,
                         });
                         return Err(());
                     }
                 }
                 _ => {
                     env.problem(Problem::AbilityImplNotIdent {
-                        region: value.region,
+                        region: loc_val.region,
                     });
                     return Err(());
                 }
             };
-            let impl_region = value.region;
+            let impl_region = loc_val.region;
 
             let member_symbol = match env.qualified_lookup_with_module_id(
                 scope,
                 ability_home,
-                label.value,
-                label.region,
+                loc_label.value,
+                loc_label.region,
             ) {
                 Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                 Err(_) => {
                     env.problem(Problem::NotAnAbilityMember {
                         ability,
-                        name: label.value.to_owned(),
-                        region: label.region,
+                        name: loc_label.value.to_owned(),
+                        region: loc_label.region,
                     });
                     return Err(());
                 }
@@ -671,17 +704,18 @@ fn canonicalize_claimed_ability_impl<'a>(
 
             Ok((member_symbol, impl_symbol))
         }
-        AssignedField::OptionalValue(_, _, _) => {
-            env.problem(Problem::OptionalAbilityImpl {
-                ability,
-                region: loc_impl.region,
-            });
-            Err(())
+        AssignedField::SpreadValue(_opt_spread) => {
+            env.problems
+                .push(Problem::SpreadUsedInAbilityImpl(loc_impl.region));
+            return Err(());
         }
-        AssignedField::SpaceBefore(_, _)
-        | AssignedField::SpaceAfter(_, _)
-        | AssignedField::IgnoredValue(_, _, _) => {
-            internal_error!("unreachable")
+        AssignedField::SpaceBefore(inner, _) | AssignedField::SpaceAfter(inner, _) => {
+            canonicalize_claimed_ability_impl(
+                env,
+                scope,
+                ability,
+                &*env.arena.alloc(Loc::at(loc_impl.region, *inner)),
+            )
         }
     }
 }

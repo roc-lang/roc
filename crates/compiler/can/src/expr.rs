@@ -19,7 +19,8 @@ use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentId, ModuleId, Symbol};
-use roc_parse::ast::{self, Defs, PrecedenceConflict, ResultTryKind, StrLiteral};
+use roc_parse::ast::{self, Defs, DesugarProblem, ResultTryKind, StrLiteral};
+use roc_parse::expr::RecordValuePrefix;
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
@@ -949,7 +950,7 @@ pub fn canonicalize_expr<'a>(
             let (can_update, update_out) =
                 canonicalize_expr(env, var_store, scope, loc_update.region, &loc_update.value);
             if let Var(symbol, _) = &can_update.value {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
+                match canonicalize_fields(env, scope, var_store, region, fields.items) {
                     Ok((can_fields, mut output)) => {
                         output.references.union_mut(&update_out.references);
 
@@ -962,30 +963,7 @@ pub fn canonicalize_expr<'a>(
 
                         (answer, output)
                     }
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
+                    Err(runtime_error) => (Expr::RuntimeError(runtime_error), Output::default()),
                 }
             } else {
                 // only (optionally qualified) variables can be updated, not arbitrary expressions
@@ -1512,38 +1490,6 @@ pub fn canonicalize_expr<'a>(
             )
         }
 
-        ast::Expr::PrecedenceConflict(ast::PrecedenceConflict {
-            whole_region,
-            binop1_position,
-            binop2_position,
-            binop1,
-            binop2,
-            expr: _,
-        }) => {
-            use roc_problem::can::RuntimeError::*;
-
-            let region1 = Region::new(
-                *binop1_position,
-                binop1_position.bump_column(binop1.width() as u32),
-            );
-            let loc_binop1 = Loc::at(region1, *binop1);
-
-            let region2 = Region::new(
-                *binop2_position,
-                binop2_position.bump_column(binop2.width() as u32),
-            );
-            let loc_binop2 = Loc::at(region2, *binop2);
-
-            let problem =
-                PrecedenceProblem::BothNonAssociative(*whole_region, loc_binop1, loc_binop2);
-
-            env.problem(Problem::PrecedenceProblem(problem.clone()));
-
-            (
-                RuntimeError(InvalidPrecedence(problem, region)),
-                Output::default(),
-            )
-        }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1552,33 +1498,63 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::EmptyRecordBuilder(sub_expr) => {
+        ast::Expr::DesugarProblem(desugar_problem) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = EmptyRecordBuilder(sub_expr.region);
-            env.problem(Problem::RuntimeError(problem.clone()));
+            let runtime_error = match desugar_problem {
+                DesugarProblem::EmptyRecordBuilder(sub_expr) => EmptyRecordBuilder(sub_expr.region),
+                DesugarProblem::SingleFieldRecordBuilder(sub_expr) => {
+                    SingleFieldRecordBuilder(sub_expr.region)
+                }
+                DesugarProblem::OptionalFieldInRecordBuilder(loc_name, loc_value) => {
+                    let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
+                    OptionalFieldInRecordBuilder {
+                        record_region: region,
+                        field_region: sub_region,
+                    }
+                }
+                DesugarProblem::SpreadInRecordBuilder {
+                    record_region,
+                    spread_region,
+                    opt_spread_expr: _,
+                } => SpreadInRecordBuilder {
+                    record_region: *record_region,
+                    spread_region: *spread_region,
+                },
+                DesugarProblem::PrecedenceConflict(ast::PrecedenceConflict {
+                    whole_region,
+                    binop1_position,
+                    binop2_position,
+                    binop1,
+                    binop2,
+                    expr: _,
+                }) => {
+                    let region1 = Region::new(
+                        *binop1_position,
+                        binop1_position.bump_column(binop1.width() as u32),
+                    );
+                    let loc_binop1 = Loc::at(region1, *binop1);
 
-            (RuntimeError(problem), Output::default())
-        }
-        ast::Expr::SingleFieldRecordBuilder(sub_expr) => {
-            use roc_problem::can::RuntimeError::*;
+                    let region2 = Region::new(
+                        *binop2_position,
+                        binop2_position.bump_column(binop2.width() as u32),
+                    );
+                    let loc_binop2 = Loc::at(region2, *binop2);
 
-            let problem = SingleFieldRecordBuilder(sub_expr.region);
-            env.problem(Problem::RuntimeError(problem.clone()));
+                    let problem = PrecedenceProblem::BothNonAssociative(
+                        *whole_region,
+                        loc_binop1,
+                        loc_binop2,
+                    );
 
-            (RuntimeError(problem), Output::default())
-        }
-        ast::Expr::OptionalFieldInRecordBuilder(loc_name, loc_value) => {
-            use roc_problem::can::RuntimeError::*;
-
-            let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
-            let problem = OptionalFieldInRecordBuilder {
-                record: region,
-                field: sub_region,
+                    InvalidPrecedence(problem, region)
+                }
             };
-            env.problem(Problem::RuntimeError(problem.clone()));
 
-            (RuntimeError(problem), Output::default())
+            env.problems
+                .push(Problem::RuntimeError(runtime_error.clone()));
+
+            (RuntimeError(runtime_error), Output::default())
         }
         &ast::Expr::NonBase10Int {
             string,
@@ -1686,43 +1662,18 @@ pub fn canonicalize_record<'a>(
     region: Region,
     fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
 ) -> (Expr, Output) {
-    use Expr::*;
-
     if fields.is_empty() {
-        (EmptyRecord, Output::default())
+        (Expr::EmptyRecord, Output::default())
     } else {
-        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+        match canonicalize_fields(env, scope, var_store, region, fields.items) {
             Ok((can_fields, output)) => (
-                Record {
+                Expr::Record {
                     record_var: var_store.fresh(),
                     fields: can_fields,
                 },
                 output,
             ),
-            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                field_name,
-                field_region,
-                record_region,
-            }) => (
-                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                    field_name,
-                    field_region,
-                    record_region,
-                }),
-                Output::default(),
-            ),
-            Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
-                field_name,
-                field_region,
-                record_region,
-            }) => (
-                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
-                    field_name,
-                    field_region,
-                    record_region,
-                }),
-                Output::default(),
-            ),
+            Err(runtime_error) => (Expr::RuntimeError(runtime_error), Output::default()),
         }
     }
 }
@@ -2057,35 +2008,28 @@ fn canonicalize_when_branch<'a>(
     )
 }
 
-enum CanonicalizeRecordProblem {
-    InvalidOptionalValue {
-        field_name: Lowercase,
-        field_region: Region,
-        record_region: Region,
-    },
-    InvalidIgnoredValue {
-        field_name: Lowercase,
-        field_region: Region,
-        record_region: Region,
-    },
-}
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
-    var_store: &mut VarStore,
     scope: &mut Scope,
+    var_store: &mut VarStore,
     region: Region,
     fields: &'a [Loc<ast::AssignedField<'a, ast::Expr<'a>>>],
-) -> Result<(SendMap<Lowercase, Field>, Output), CanonicalizeRecordProblem> {
+) -> Result<(SendMap<Lowercase, Field>, Output), RuntimeError> {
     let mut can_fields = SendMap::default();
     let mut output = Output::default();
 
     for loc_field in fields.iter() {
-        match canonicalize_field(env, var_store, scope, &loc_field.value) {
-            Ok((label, field_expr, field_out, field_var)) => {
+        match canonicalize_field(env, scope, var_store, &loc_field.value, loc_field.region) {
+            Ok(CanonicalizedField {
+                label,
+                loc_expr,
+                output: field_out,
+                field_var,
+            }) => {
                 let field = Field {
                     var: field_var,
                     region: loc_field.region,
-                    loc_expr: Box::new(field_expr),
+                    loc_expr: Box::new(loc_expr),
                 };
 
                 let replaced = can_fields.insert(label.clone(), field);
@@ -2105,36 +2049,48 @@ fn canonicalize_fields<'a>(
                 field_name,
                 field_region,
             }) => {
-                env.problems.push(Problem::InvalidOptionalValue {
+                let runtime_error = RuntimeError::InvalidOptionalValue {
                     field_name: field_name.clone(),
                     field_region,
                     record_region: region,
-                });
-                return Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                    field_name,
-                    field_region,
-                    record_region: region,
-                });
+                };
+                env.problems
+                    .push(Problem::RuntimeError(runtime_error.clone()));
+
+                return Err(runtime_error);
             }
             Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
                 field_name,
                 field_region,
             }) => {
-                env.problems.push(Problem::InvalidIgnoredValue {
+                let runtime_error = RuntimeError::InvalidIgnoredValue {
                     field_name: field_name.clone(),
                     field_region,
                     record_region: region,
-                });
-                return Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
-                    field_name,
-                    field_region,
-                    record_region: region,
-                });
+                };
+                env.problems
+                    .push(Problem::RuntimeError(runtime_error.clone()));
+
+                return Err(runtime_error);
+            }
+            Err(CanonicalizeFieldProblem::SpreadNotImplementedYet(spread_region)) => {
+                let runtime_error = RuntimeError::SpreadNotImplementedYet(spread_region);
+                env.problems
+                    .push(Problem::RuntimeError(runtime_error.clone()));
+
+                return Err(runtime_error);
             }
         }
     }
 
     Ok((can_fields, output))
+}
+
+struct CanonicalizedField {
+    label: Lowercase,
+    loc_expr: Loc<Expr>,
+    output: Output,
+    field_var: Variable,
 }
 
 enum CanonicalizeFieldProblem {
@@ -2146,48 +2102,94 @@ enum CanonicalizeFieldProblem {
         field_name: Lowercase,
         field_region: Region,
     },
+    SpreadNotImplementedYet(Region),
 }
+
 fn canonicalize_field<'a>(
     env: &mut Env<'a>,
-    var_store: &mut VarStore,
     scope: &mut Scope,
+    var_store: &mut VarStore,
     field: &'a ast::AssignedField<'a, ast::Expr<'a>>,
-) -> Result<(Lowercase, Loc<Expr>, Output, Variable), CanonicalizeFieldProblem> {
-    use roc_parse::ast::AssignedField::*;
-
+    field_region: Region,
+) -> Result<CanonicalizedField, CanonicalizeFieldProblem> {
     match field {
         // Both a label and a value, e.g. `{ name: "blah" }`
-        RequiredValue(label, _, loc_expr) => {
-            let field_var = var_store.fresh();
-            let (loc_can_expr, output) =
-                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+        ast::AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix: _,
+            prefix,
+            loc_val,
+        } => {
+            if *ignored {
+                // An ignored value, e.g. `{ _name: 123 }`
+                Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+                    field_name: Lowercase::from(loc_label.value),
+                    field_region: Region::span_across(&loc_label.region, &loc_val.region),
+                })
+            } else {
+                match prefix {
+                    RecordValuePrefix::Colon => {
+                        let field_var = var_store.fresh();
+                        let (loc_can_expr, output) = canonicalize_expr(
+                            env,
+                            var_store,
+                            scope,
+                            loc_val.region,
+                            &loc_val.value,
+                        );
 
-            Ok((
-                Lowercase::from(label.value),
-                loc_can_expr,
-                output,
-                field_var,
-            ))
+                        Ok(CanonicalizedField {
+                            label: Lowercase::from(loc_label.value),
+                            loc_expr: loc_can_expr,
+                            output,
+                            field_var,
+                        })
+                    }
+                    RecordValuePrefix::DoubleQuestion => {
+                        Err(CanonicalizeFieldProblem::InvalidOptionalValue {
+                            field_name: Lowercase::from(loc_label.value),
+                            field_region: Region::span_across(&loc_label.region, &loc_val.region),
+                        })
+                    }
+                }
+            }
         }
-
-        OptionalValue(label, _, loc_expr) => Err(CanonicalizeFieldProblem::InvalidOptionalValue {
-            field_name: Lowercase::from(label.value),
-            field_region: Region::span_across(&label.region, &loc_expr.region),
-        }),
-
-        // An ignored value, e.g. `{ _name: 123 }`
-        IgnoredValue(name, _, value) => Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
-            field_name: Lowercase::from(name.value),
-            field_region: Region::span_across(&name.region, &value.region),
-        }),
 
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-        LabelOnly(_) => {
-            internal_error!("Somehow a LabelOnly record field was not desugared!");
+        ast::AssignedField::WithoutValue { ignored, loc_label } => {
+            if *ignored {
+                Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+                    field_name: Lowercase::from(loc_label.value),
+                    field_region,
+                })
+            } else {
+                let field_var = var_store.fresh();
+                let (field_expr, output) = canonicalize_var_lookup(
+                    env,
+                    var_store,
+                    scope,
+                    "",
+                    loc_label.value,
+                    field_region,
+                );
+
+                Ok(CanonicalizedField {
+                    label: Lowercase::from(loc_label.value),
+                    loc_expr: Loc::at(field_region, field_expr),
+                    output,
+                    field_var,
+                })
+            }
         }
 
-        SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
-            canonicalize_field(env, var_store, scope, sub_field)
+        ast::AssignedField::SpreadValue(_opt_spread) => Err(
+            CanonicalizeFieldProblem::SpreadNotImplementedYet(field_region),
+        ),
+
+        ast::AssignedField::SpaceBefore(sub_field, _)
+        | ast::AssignedField::SpaceAfter(sub_field, _) => {
+            canonicalize_field(env, scope, var_store, sub_field, field_region)
         }
     }
 }
@@ -2343,23 +2345,26 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             })
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
-            ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
-                loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+            ast::AssignedField::WithValue {
+                before_prefix,
+                loc_val,
+                ..
+            } => before_prefix.is_empty() && is_valid_interpolation(&loc_val.value),
+            ast::AssignedField::WithoutValue { .. } => true,
+            ast::AssignedField::SpreadValue(opt_spread) => {
+                opt_spread.is_some_and(|spread| is_valid_interpolation(&spread.value))
             }
-            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
-        ast::Expr::EmptyRecordBuilder(loc_expr)
-        | ast::Expr::SingleFieldRecordBuilder(loc_expr)
-        | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
-        | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
-        | ast::Expr::UnaryOp(loc_expr, _)
-        | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
+        ast::Expr::UnaryOp(loc_expr, _) | ast::Expr::Closure(_, loc_expr) => {
+            is_valid_interpolation(&loc_expr.value)
+        }
+        ast::Expr::DesugarProblem(problem) => problem
+            .loc_expr()
+            .is_some_and(|loc_expr| is_valid_interpolation(&loc_expr.value)),
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
         | ast::Expr::RecordAccess(sub_expr, _)
@@ -2398,29 +2403,35 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             .all(|loc_expr| is_valid_interpolation(&loc_expr.value)),
         ast::Expr::RecordUpdate { update, fields } => {
             is_valid_interpolation(&update.value)
-                && fields.iter().all(|loc_field| match loc_field.value {
-                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
-                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
-                    }
-                    ast::AssignedField::LabelOnly(_) => true,
-                    ast::AssignedField::SpaceBefore(_, _)
-                    | ast::AssignedField::SpaceAfter(_, _) => false,
-                })
+                && fields
+                    .iter()
+                    .all(|loc_field| assigned_field_is_valid_interpolation(&loc_field.value))
         }
         ast::Expr::RecordBuilder { mapper, fields } => {
             is_valid_interpolation(&mapper.value)
-                && fields.iter().all(|loc_field| match loc_field.value {
-                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
-                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
-                    }
-                    ast::AssignedField::LabelOnly(_) => true,
-                    ast::AssignedField::SpaceBefore(_, _)
-                    | ast::AssignedField::SpaceAfter(_, _) => false,
-                })
+                && fields
+                    .iter()
+                    .all(|loc_field| assigned_field_is_valid_interpolation(&loc_field.value))
+        }
+    }
+}
+
+fn assigned_field_is_valid_interpolation<'a>(
+    assigned_field: &'a ast::AssignedField<ast::Expr<'a>>,
+) -> bool {
+    match assigned_field {
+        ast::AssignedField::WithValue {
+            before_prefix,
+            loc_val,
+            ..
+        } => before_prefix.is_empty() && is_valid_interpolation(&loc_val.value),
+        ast::AssignedField::WithoutValue { .. } => true,
+        ast::AssignedField::SpreadValue(opt_spread) => {
+            opt_spread.is_some_and(|spread| is_valid_interpolation(&spread.value))
+        }
+        ast::AssignedField::SpaceBefore(inner, spaces)
+        | ast::AssignedField::SpaceAfter(inner, spaces) => {
+            spaces.is_empty() && assigned_field_is_valid_interpolation(&inner)
         }
     }
 }

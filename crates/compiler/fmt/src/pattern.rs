@@ -1,13 +1,12 @@
 use crate::annotation::{Formattable, Newlines, Parens};
-use crate::expr::{
-    expr_is_multiline, expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline,
-};
+use crate::expr::{expr_lift_spaces_after, fmt_str_literal, format_sq_literal, is_str_multiline};
 use crate::node::{Node, NodeInfo, NodeSequenceBuilder, Prec, Sp};
 use crate::spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use bumpalo::Bump;
 use roc_parse::ast::{
-    Base, CommentOrNewline, Pattern, PatternAs, Spaceable, Spaces, SpacesAfter, SpacesBefore,
+    Base, CommentOrNewline, Pattern, PatternAs, RecordFieldPattern, Spaceable, Spaces, SpacesAfter,
+    SpacesBefore,
 };
 use roc_parse::expr::merge_spaces;
 use roc_region::all::Loc;
@@ -45,6 +44,33 @@ impl<'a> Formattable for PatternAs<'a> {
     }
 }
 
+impl<'a> Formattable for RecordFieldPattern<'a> {
+    fn is_multiline(&self) -> bool {
+        match self {
+            RecordFieldPattern::RequiredField { label: _, inner } => inner.is_multiline(),
+            RecordFieldPattern::Identifier { label: _ } => false,
+            RecordFieldPattern::OptionalField {
+                label: _,
+                default_value,
+            } => default_value.is_multiline(),
+            RecordFieldPattern::Spread { opt_pattern } => {
+                opt_pattern.is_some_and(|pattern| pattern.is_multiline())
+            }
+            RecordFieldPattern::SpaceBefore(inner, _)
+            | RecordFieldPattern::SpaceAfter(inner, _) => inner.is_multiline(),
+        }
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+    }
+}
+
 impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
         // Theory: a pattern should only be multiline when it contains a comment
@@ -60,9 +86,6 @@ impl<'a> Formattable for Pattern<'a> {
             }
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
-            Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
-
-            Pattern::OptionalField(_, expr) => expr_is_multiline(&expr.value, true),
 
             Pattern::As(pattern, pattern_as) => pattern.is_multiline() || pattern_as.is_multiline(),
             Pattern::ListRest(opt_pattern_as) => match opt_pattern_as {
@@ -201,7 +224,7 @@ fn fmt_pattern_only(
                 let mut last_was_multiline = false;
                 let mut it = loc_patterns.iter().peekable();
                 while let Some(loc_pattern) = it.next() {
-                    let item = pattern_lift_spaces(buf.text.bump(), &loc_pattern.value);
+                    let item = record_field_pattern_lift_spaces(loc_pattern.value, buf.text.bump());
 
                     if !item.before.is_empty() {
                         if !is_multiline {
@@ -215,14 +238,15 @@ fn fmt_pattern_only(
                         buf.ensure_ends_with_newline();
                     }
 
-                    fmt_pattern_inner(
-                        &item.item,
-                        buf,
-                        Parens::NotNeeded,
-                        indent,
-                        is_multiline,
-                        false,
-                    );
+                    // fmt_pattern_inner(
+                    //     &item.item,
+                    //     buf,
+                    //     Parens::NotNeeded,
+                    //     indent,
+                    //     is_multiline,
+                    //     false,
+                    // );
+                    // TODO
 
                     let is_multiline = item.item.is_multiline();
                     last_was_multiline = is_multiline;
@@ -253,29 +277,28 @@ fn fmt_pattern_only(
             buf.push_str("}");
         }
 
-        Pattern::RequiredField(name, loc_pattern) => {
-            buf.indent(indent);
-            snakify_camel_ident(buf, name);
-            buf.push_str(":");
-            buf.spaces(1);
-            fmt_pattern_inner(
-                &loc_pattern.value,
-                buf,
-                Parens::NotNeeded,
-                indent,
-                is_multiline,
-                false,
-            );
-        }
+        // Pattern::RequiredField(name, loc_pattern) => {
+        //     buf.indent(indent);
+        //     snakify_camel_ident(buf, name);
+        //     buf.push_str(":");
+        //     buf.spaces(1);
+        //     fmt_pattern_inner(
+        //         &loc_pattern.value,
+        //         buf,
+        //         Parens::NotNeeded,
+        //         indent,
+        //         is_multiline,
+        //         false,
+        //     );
+        // }
 
-        Pattern::OptionalField(name, loc_pattern) => {
-            buf.indent(indent);
-            snakify_camel_ident(buf, name);
-            buf.push_str(" ??");
-            buf.spaces(1);
-            loc_pattern.format(buf, indent);
-        }
-
+        // Pattern::OptionalField(name, loc_pattern) => {
+        //     buf.indent(indent);
+        //     snakify_camel_ident(buf, name);
+        //     buf.push_str(" ??");
+        //     buf.spaces(1);
+        //     loc_pattern.format(buf, indent);
+        // }
         Pattern::NumLiteral(string) => {
             buf.indent(indent);
             let needs_parens = parens == Parens::InClosurePattern
@@ -653,8 +676,6 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::Tag(_)
         | Pattern::OpaqueRef(_)
         | Pattern::RecordDestructure(..)
-        | Pattern::RequiredField(_, _)
-        | Pattern::OptionalField(_, _)
         | Pattern::NumLiteral(_)
         | Pattern::NonBase10Literal { .. }
         | Pattern::FloatLiteral(_)
@@ -680,6 +701,76 @@ pub fn starts_with_inline_comment<'a, I: IntoIterator<Item = &'a CommentOrNewlin
         spaces.into_iter().next(),
         Some(CommentOrNewline::LineComment(_))
     )
+}
+
+pub fn record_field_pattern_lift_spaces<'a>(
+    field: RecordFieldPattern<'a>,
+    arena: &'a Bump,
+) -> Spaces<'a, RecordFieldPattern<'a>> {
+    match field {
+        RecordFieldPattern::RequiredField { label, inner } => {
+            let lifted = pattern_lift_spaces_after(arena, &inner.value);
+
+            Spaces {
+                before: &[],
+                item: RecordFieldPattern::RequiredField {
+                    label,
+                    inner: arena.alloc(Loc::at(inner.region, lifted.item)),
+                },
+                after: lifted.after,
+            }
+        }
+        RecordFieldPattern::Identifier { label } => Spaces {
+            before: &[],
+            item: RecordFieldPattern::Identifier { label },
+            after: &[],
+        },
+        RecordFieldPattern::OptionalField {
+            label,
+            default_value,
+        } => {
+            let lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &default_value.value);
+
+            Spaces {
+                before: &[],
+                item: RecordFieldPattern::OptionalField {
+                    label,
+                    default_value: arena.alloc(Loc::at(default_value.region, lifted.item)),
+                },
+                after: lifted.after,
+            }
+        }
+        RecordFieldPattern::Spread {
+            opt_pattern: Some(pattern),
+        } => {
+            let lifted = pattern_lift_spaces_after(arena, &pattern.value);
+
+            Spaces {
+                before: &[],
+                item: RecordFieldPattern::Spread {
+                    opt_pattern: Some(arena.alloc(Loc::at(pattern.region, lifted.item))),
+                },
+                after: lifted.after,
+            }
+        }
+        RecordFieldPattern::Spread { opt_pattern: None } => Spaces {
+            before: &[],
+            item: RecordFieldPattern::Spread { opt_pattern: None },
+            after: &[],
+        },
+
+        RecordFieldPattern::SpaceBefore(expr, spaces) => {
+            let mut inner = record_field_pattern_lift_spaces(*expr, arena);
+            inner.before = merge_spaces(arena, spaces, inner.before);
+
+            inner
+        }
+        RecordFieldPattern::SpaceAfter(expr, spaces) => {
+            let mut inner = record_field_pattern_lift_spaces(*expr, arena);
+            inner.after = merge_spaces(arena, inner.after, spaces);
+            inner
+        }
+    }
 }
 
 pub fn pattern_lift_spaces<'a, 'b: 'a>(
@@ -733,22 +824,6 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
                 before: func_lifted.before,
                 item: Pattern::PncApply(arena.alloc(Loc::at_zero(func_lifted.item)), *args),
                 after: &[],
-            }
-        }
-        Pattern::OptionalField(name, expr) => {
-            let lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, &expr.value);
-            Spaces {
-                before: &[],
-                item: Pattern::OptionalField(name, arena.alloc(Loc::at(expr.region, lifted.item))),
-                after: lifted.after,
-            }
-        }
-        Pattern::RequiredField(name, pat) => {
-            let lifted = pattern_lift_spaces_after(arena, &pat.value);
-            Spaces {
-                before: &[],
-                item: Pattern::RequiredField(name, arena.alloc(Loc::at(pat.region, lifted.item))),
-                after: lifted.after,
             }
         }
         Pattern::SpaceBefore(expr, spaces) => {

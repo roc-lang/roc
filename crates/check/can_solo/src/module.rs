@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use bumpalo::Bump;
 use roc_module::symbol::ModuleId;
 use roc_parse::{
-    ast::{Collection, Defs, Pattern},
+    ast::{Collection, Defs, RecordFieldPattern},
     header::HeaderType,
 };
 use roc_problem::can::Problem;
@@ -31,7 +31,7 @@ pub struct SoloCanOutput<'a> {
     /// time.
     pub lazy_line_info: &'a mut Option<LineInfo>,
 
-    pub module_params: Option<(Region, Collection<'a, Loc<Pattern<'a>>>)>,
+    pub module_params: Option<(Region, Collection<'a, Loc<RecordFieldPattern<'a>>>)>,
 }
 
 // TODO trim these down

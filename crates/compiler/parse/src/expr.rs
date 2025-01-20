@@ -2,8 +2,8 @@ use crate::ast::{
     AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
     ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
     IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
-    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, TypeVar,
-    ValueDef,
+    RecordFieldPattern, Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef,
+    TypeHeader, TypeVar, ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -1044,12 +1044,14 @@ fn import_params<'a>() -> impl Parser<'a, ModuleImportParams<'a>, EImportParams<
                 .value
                 .fields
                 .map_items_result(arena, |loc_field| {
-                    match loc_field.value.to_assigned_field(arena) {
-                        AssignedField::IgnoredValue(_, _, _) => Err((
+                    if loc_field.value.is_ignored_value() {
+                        Err((
                             MadeProgress,
                             EImportParams::RecordIgnoredFieldFound(loc_field.region),
-                        )),
-                        field => Ok(Loc::at(loc_field.region, field)),
+                        ))
+                    } else {
+                        let field = loc_field.value.to_assigned_field(arena);
+                        Ok(Loc::at(loc_field.region, field))
                     }
                 })?;
 
@@ -2140,13 +2142,15 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
 
         Expr::Record(fields) => {
-            let patterns = fields.map_items_result(arena, |loc_assigned_field| {
-                let region = loc_assigned_field.region;
-                let value = assigned_expr_field_to_pattern_help(arena, &loc_assigned_field.value)?;
-                Ok(Loc { region, value })
-            })?;
+            let mut pattern_fields = Vec::with_capacity_in(fields.len(), arena);
 
-            Pattern::RecordDestructure(patterns)
+            for loc_assigned_field in fields.items {
+                let pattern =
+                    assigned_expr_field_to_pattern_help(arena, &loc_assigned_field.value)?;
+                pattern_fields.push(Loc::at(loc_assigned_field.region, pattern));
+            }
+
+            Pattern::RecordDestructure(Collection::with_items(pattern_fields.into_bump_slice()))
         }
 
         Expr::Tuple(fields) => Pattern::Tuple(fields.map_items_result(arena, |loc_expr| {
@@ -2182,16 +2186,13 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::LowLevelDbg(_, _, _)
         | Expr::LowLevelTry(_, _)
         | Expr::Return(_, _)
-        | Expr::PrecedenceConflict { .. }
-        | Expr::EmptyRecordBuilder(_)
-        | Expr::SingleFieldRecordBuilder(_)
-        | Expr::OptionalFieldInRecordBuilder(_, _)
         | Expr::RecordUpdate { .. }
         | Expr::RecordUpdater(_)
         | Expr::UnaryOp(_, _)
         | Expr::TrySuffix { .. }
         | Expr::Crash
-        | Expr::RecordBuilder { .. } => return Err(()),
+        | Expr::RecordBuilder { .. }
+        | Expr::DesugarProblem(_) => return Err(()),
 
         Expr::Str(string) => Pattern::StrLiteral(string),
         Expr::SingleQuote(string) => Pattern::SingleQuote(string),
@@ -2213,49 +2214,101 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 fn assigned_expr_field_to_pattern_help<'a>(
     arena: &'a Bump,
     assigned_field: &AssignedField<'a, Expr<'a>>,
-) -> Result<Pattern<'a>, ()> {
+) -> Result<RecordFieldPattern<'a>, ()> {
     // the assigned fields always store spaces, but this slice is often empty
-    Ok(match assigned_field {
-        AssignedField::RequiredValue(name, spaces, value) => {
-            let pattern = expr_to_pattern_help(arena, &value.value)?;
-            let result = arena.alloc(Loc {
-                region: value.region,
-                value: pattern,
-            });
-            if spaces.is_empty() {
-                Pattern::RequiredField(name.value, result)
+    match assigned_field {
+        AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix,
+            prefix,
+            loc_val,
+        } => {
+            if *ignored {
+                return Err(());
+            }
+
+            let pattern = match prefix {
+                RecordValuePrefix::Colon => {
+                    let pattern = expr_to_pattern_help(arena, &loc_val.value)?;
+                    let result = arena.alloc(Loc {
+                        region: loc_val.region,
+                        value: pattern,
+                    });
+
+                    if before_prefix.is_empty() {
+                        RecordFieldPattern::RequiredField {
+                            label: loc_label.value,
+                            inner: result,
+                        }
+                    } else {
+                        RecordFieldPattern::SpaceAfter(
+                            arena.alloc(RecordFieldPattern::RequiredField {
+                                label: loc_label.value,
+                                inner: result,
+                            }),
+                            before_prefix,
+                        )
+                    }
+                }
+                RecordValuePrefix::DoubleQuestion => {
+                    if before_prefix.is_empty() {
+                        RecordFieldPattern::OptionalField {
+                            label: loc_label.value,
+                            default_value: loc_val,
+                        }
+                    } else {
+                        RecordFieldPattern::SpaceAfter(
+                            arena.alloc(RecordFieldPattern::OptionalField {
+                                label: loc_label.value,
+                                default_value: loc_val,
+                            }),
+                            before_prefix,
+                        )
+                    }
+                }
+            };
+
+            Ok(pattern)
+        }
+        AssignedField::WithoutValue { ignored, loc_label } => {
+            if *ignored {
+                Err(())
             } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::RequiredField(name.value, result)),
-                    spaces,
-                )
+                Ok(RecordFieldPattern::Identifier {
+                    label: loc_label.value,
+                })
             }
         }
-        AssignedField::OptionalValue(name, spaces, value) => {
-            let result = arena.alloc(Loc {
-                region: value.region,
-                value: value.value,
-            });
-            if spaces.is_empty() {
-                Pattern::OptionalField(name.value, result)
-            } else {
-                Pattern::SpaceAfter(
-                    arena.alloc(Pattern::OptionalField(name.value, result)),
-                    spaces,
-                )
-            }
+        AssignedField::SpreadValue(opt_loc_val) => match opt_loc_val {
+            Some(Loc {
+                region,
+                value:
+                    Expr::Var {
+                        module_name: "",
+                        ident,
+                    },
+            }) => Ok(RecordFieldPattern::Spread {
+                opt_pattern: Some(&*arena.alloc(Loc::at(*region, Pattern::Identifier { ident }))),
+            }),
+            None => Ok(RecordFieldPattern::Spread { opt_pattern: None }),
+            Some(_) => Err(()),
+        },
+        AssignedField::SpaceBefore(nested, spaces) => {
+            let inner_pattern = assigned_expr_field_to_pattern_help(arena, nested)?;
+            Ok(RecordFieldPattern::SpaceBefore(
+                arena.alloc(inner_pattern),
+                spaces,
+            ))
         }
-        AssignedField::LabelOnly(name) => Pattern::Identifier { ident: name.value },
-        AssignedField::SpaceBefore(nested, spaces) => Pattern::SpaceBefore(
-            arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::SpaceAfter(nested, spaces) => Pattern::SpaceAfter(
-            arena.alloc(assigned_expr_field_to_pattern_help(arena, nested)?),
-            spaces,
-        ),
-        AssignedField::IgnoredValue(_, _, _) => return Err(()),
-    })
+        AssignedField::SpaceAfter(nested, spaces) => {
+            let inner_pattern = assigned_expr_field_to_pattern_help(arena, nested)?;
+            Ok(RecordFieldPattern::SpaceAfter(
+                arena.alloc(inner_pattern),
+                spaces,
+            ))
+        }
+    }
 }
 
 pub fn parse_top_level_defs<'a>(
@@ -3381,8 +3434,7 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
         Pattern::As(left, _) => starts_with_spaces_conservative(&left.value),
         Pattern::Apply(left, _) => starts_with_spaces_conservative(&left.value),
         Pattern::PncApply(left, _) => starts_with_spaces_conservative(&left.value),
-        Pattern::RecordDestructure(_) => false,
-        Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
+        Pattern::RecordDestructure { .. } => false,
         Pattern::SpaceBefore(_, _) => true,
         Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
         Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => true,
@@ -3616,11 +3668,25 @@ fn list_literal_help<'a>() -> impl Parser<'a, Expr<'a>, EList<'a>> {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
+pub enum RecordValuePrefix {
+    Colon,
+    DoubleQuestion,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum RecordField<'a> {
-    RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
-    OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
-    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
-    LabelOnly(Loc<&'a str>),
+    WithValue {
+        ignored: bool,
+        loc_label: Loc<&'a str>,
+        before_prefix: &'a [CommentOrNewline<'a>],
+        prefix: RecordValuePrefix,
+        loc_expr: Loc<Expr<'a>>,
+    },
+    WithoutValue {
+        ignored: bool,
+        loc_label: Loc<&'a str>,
+    },
+    SpreadValue(Option<Loc<Expr<'a>>>),
     SpaceBefore(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a RecordField<'a>, &'a [CommentOrNewline<'a>]),
 }
@@ -3631,11 +3697,13 @@ impl<'a> RecordField<'a> {
 
         loop {
             match current {
-                RecordField::IgnoredValue(_, _, _) => break true,
-                RecordField::SpaceBefore(field, _) | RecordField::SpaceAfter(field, _) => {
+                Self::WithValue { ignored, .. } | Self::WithoutValue { ignored, .. } => {
+                    break *ignored
+                }
+                Self::SpaceBefore(field, _) | Self::SpaceAfter(field, _) => {
                     current = *field;
                 }
-                _ => break false,
+                Self::SpreadValue(_) => break false,
             }
         }
     }
@@ -3644,19 +3712,25 @@ impl<'a> RecordField<'a> {
         use AssignedField::*;
 
         match self {
-            RecordField::RequiredValue(loc_label, spaces, loc_expr) => {
-                RequiredValue(loc_label, spaces, loc_expr)
-            }
+            RecordField::WithValue {
+                ignored,
+                loc_label,
+                before_prefix,
+                prefix,
+                loc_expr,
+            } => WithValue {
+                ignored,
+                loc_label,
+                before_prefix,
+                prefix,
+                loc_val: arena.alloc(loc_expr),
+            },
 
-            RecordField::OptionalValue(loc_label, spaces, loc_expr) => {
-                OptionalValue(loc_label, spaces, loc_expr)
-            }
+            RecordField::WithoutValue { ignored, loc_label } => WithoutValue { ignored, loc_label },
 
-            RecordField::IgnoredValue(loc_label, spaces, loc_expr) => {
-                IgnoredValue(loc_label, spaces, loc_expr)
+            RecordField::SpreadValue(loc_spread) => {
+                SpreadValue(loc_spread.map(|spread| &*arena.alloc(spread)))
             }
-
-            RecordField::LabelOnly(loc_label) => LabelOnly(loc_label),
 
             RecordField::SpaceBefore(field, spaces) => {
                 let assigned_field = field.to_assigned_field(arena);
@@ -3685,85 +3759,59 @@ impl<'a> Spaceable<'a> for RecordField<'a> {
 pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
     use RecordField::*;
 
-    map_with_arena(
+    let value_prefix = map(
         either(
+            byte(b':', ERecord::Colon),
             and(
-                specialize_err(|_, pos| ERecord::Field(pos), loc(lowercase_ident())),
-                and(
-                    spaces(),
-                    optional(either(
-                        and(byte(b':', ERecord::Colon), record_field_expr()),
-                        and(
-                            and(
-                                byte(b'?', ERecord::QuestionMark),
-                                optional(byte(b'?', ERecord::SecondQuestionMark)),
-                            ),
-                            spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(true))),
-                        ),
-                    )),
-                ),
-            ),
-            and(
-                loc(skip_first(
-                    byte(b'_', ERecord::UnderscoreField),
-                    optional(specialize_err(
-                        |_, pos| ERecord::Field(pos),
-                        lowercase_ident(),
-                    )),
-                )),
-                and(
-                    spaces(),
-                    skip_first(
-                        byte(b':', ERecord::Colon),
-                        spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(false))),
-                    ),
-                ),
+                byte(b'?', ERecord::QuestionMark),
+                optional(byte(b'?', ERecord::SecondQuestionMark)),
             ),
         ),
-        |arena: &'a bumpalo::Bump, field_data| {
-            match field_data {
-                Either::First((loc_label, (spaces, opt_loc_val))) => {
-                    match opt_loc_val {
-                        Some(Either::First((_, loc_val))) => {
-                            RequiredValue(loc_label, spaces, arena.alloc(loc_val))
-                        }
-
-                        Some(Either::Second((_, loc_val))) => {
-                            OptionalValue(loc_label, spaces, arena.alloc(loc_val))
-                        }
-
-                        // If no value was provided, record it as a Var.
-                        // Canonicalize will know what to do with a Var later.
-                        None => {
-                            if !spaces.is_empty() {
-                                SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
-                            } else {
-                                LabelOnly(loc_label)
-                            }
-                        }
-                    }
-                }
-                Either::Second((loc_opt_label, (spaces, loc_val))) => {
-                    let loc_label = loc_opt_label
-                        .map(|opt_label| opt_label.unwrap_or_else(|| arena.alloc_str("")));
-
-                    IgnoredValue(loc_label, spaces, arena.alloc(loc_val))
-                }
-            }
+        |either| match either {
+            Either::First(()) => RecordValuePrefix::Colon,
+            Either::Second(((), Some(()) | None)) => RecordValuePrefix::DoubleQuestion,
         },
-    )
-}
+    );
 
-fn record_field_expr<'a>() -> impl Parser<'a, Loc<Expr<'a>>, ERecord<'a>> {
-    map_with_arena(
-        and(spaces(), specialize_err_ref(ERecord::Expr, loc_expr(false))),
-        |arena: &'a bumpalo::Bump, (spaces, loc_expr)| {
-            if spaces.is_empty() {
-                loc_expr
-            } else {
-                arena
-                    .alloc(loc_expr.value)
-                    .with_spaces_before(spaces, loc_expr.region)
+    map(
+        either(
+            and(
+                two_bytes(b'.', b'.', ERecord::DoubleDot),
+                optional(specialize_err_ref(ERecord::SpreadExpr, loc_expr(true))),
+            ),
+            and(
+                loc(and(
+                    optional(byte(b'_', ERecord::UnderscoreField)),
+                    specialize_err(|_, pos| ERecord::Field(pos), lowercase_ident()),
+                )),
+                optional(and(
+                    and(spaces(), value_prefix),
+                    spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(true))),
+                )),
+            ),
+        ),
+        |either_spread_or_field| match either_spread_or_field {
+            Either::First((_spread, opt_value)) => SpreadValue(opt_value),
+            Either::Second((loc_name_with_opt_underscore, opt_value_with_prefix)) => {
+                let ignored = loc_name_with_opt_underscore.value.0.is_none();
+                let loc_name = Loc {
+                    region: loc_name_with_opt_underscore.region,
+                    value: loc_name_with_opt_underscore.value.1,
+                };
+
+                match opt_value_with_prefix {
+                    None => WithoutValue {
+                        ignored,
+                        loc_label: loc_name,
+                    },
+                    Some(((spaces_before_prefix, prefix), loc_expr)) => WithValue {
+                        ignored,
+                        loc_label: loc_name,
+                        before_prefix: spaces_before_prefix,
+                        prefix,
+                        loc_expr,
+                    },
+                }
             }
         },
     )
@@ -3871,14 +3919,11 @@ fn record_update_help<'a>(
     fields: Collection<'a, Loc<RecordField<'a>>>,
 ) -> Result<Expr<'a>, EExpr<'a>> {
     let result = fields.map_items_result(arena, |loc_field| {
-        match loc_field.value.to_assigned_field(arena) {
-            AssignedField::IgnoredValue(_, _, _) => {
-                Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
-            }
-            builder_field => Ok(Loc {
-                region: loc_field.region,
-                value: builder_field,
-            }),
+        let assigned_field = loc_field.value.to_assigned_field(arena);
+        if assigned_field.is_ignored() {
+            Err(EExpr::RecordUpdateIgnoredField(loc_field.region))
+        } else {
+            Ok(Loc::at(loc_field.region, assigned_field))
         }
     });
 

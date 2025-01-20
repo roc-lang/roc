@@ -436,6 +436,7 @@ impl<'a> LowerParams<'a> {
                     whole_var: module_params.record_var,
                     ext_var: module_params.record_ext_var,
                     destructs,
+                    opt_spread: Box::new(None),
                 };
                 let loc_record_pattern = Loc::at(module_params.region, record_pattern);
                 let as_pattern =

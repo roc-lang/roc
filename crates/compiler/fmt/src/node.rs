@@ -91,6 +91,9 @@ pub enum Node<'a> {
         first: &'a Node<'a>,
         rest: &'a [Item<'a>],
     },
+    Spread {
+        item: Option<&'a Node<'a>>,
+    },
 
     // Temporary! TODO: translate these into proper Node elements
     TypeAnnotation(TypeAnnotation<'a>),
@@ -360,6 +363,7 @@ impl<'a> Formattable for Node<'a> {
                 rest,
             } => first.is_multiline() || rest.iter().any(|item| item.is_multiline()),
             Node::Literal(_) => false,
+            Node::Spread { item } => item.is_multiline(),
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Pattern(pat) => pat.is_multiline(),
             Node::Expr(expr) => expr.is_multiline(),
@@ -458,6 +462,12 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::TypeAnnotation(type_annotation) => {
                 type_annotation.format_with_options(buf, parens, newlines, indent);
+            }
+            Node::Spread { item } => {
+                buf.indent(indent);
+                buf.push_str("..");
+
+                item.format_with_options(buf, parens, newlines, indent);
             }
             Node::Pattern(pat) => {
                 pat.format_with_options(buf, parens, newlines, indent);

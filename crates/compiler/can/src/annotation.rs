@@ -7,6 +7,7 @@ use roc_module::symbol::Symbol;
 use roc_parse::ast::{
     AssignedField, ExtractSpaces, FunctionArrow, Tag, TypeAnnotation, TypeHeader, TypeVar,
 };
+use roc_parse::expr::RecordValuePrefix;
 use roc_problem::can::{Problem, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
@@ -464,12 +465,10 @@ pub fn find_type_def_symbols(
 
                 while let Some(assigned_field) = inner_stack.pop() {
                     match assigned_field {
-                        AssignedField::RequiredValue(_, _, t)
-                        | AssignedField::OptionalValue(_, _, t)
-                        | AssignedField::IgnoredValue(_, _, t) => {
-                            stack.push(&t.value);
-                        }
-                        AssignedField::LabelOnly(_) => {}
+                        AssignedField::WithValue { loc_val, .. } => stack.push(&loc_val.value),
+                        AssignedField::WithoutValue { .. } => {}
+                        AssignedField::SpreadValue(Some(spread)) => stack.push(&spread.value),
+                        AssignedField::SpreadValue(None) => {}
                         AssignedField::SpaceBefore(inner, _)
                         | AssignedField::SpaceAfter(inner, _) => inner_stack.push(inner),
                     }
@@ -1365,7 +1364,7 @@ fn can_assigned_fields<'a>(
     // field names we've seen so far in this record
     let mut seen = std::collections::HashMap::with_capacity(fields.len());
 
-    for loc_field in fields.iter() {
+    'outer: for loc_field in fields.iter() {
         let mut field = &loc_field.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1374,12 +1373,28 @@ fn can_assigned_fields<'a>(
         // a duplicate
         let new_name = 'inner: loop {
             match field {
-                RequiredValue(field_name, _, annotation) => {
+                WithValue {
+                    ignored,
+                    loc_label,
+                    before_prefix: _,
+                    prefix,
+                    loc_val,
+                } => {
+                    if *ignored {
+                        env.problems.push(Problem::IgnoredFieldInType {
+                            record_region: region,
+                            field_region: loc_field.region,
+                        });
+
+                        continue 'outer;
+                    }
+
+                    let label = Lowercase::from(loc_label.value);
                     let field_type = can_annotation_help(
                         env,
                         pol,
-                        &annotation.value,
-                        annotation.region,
+                        &loc_val.value,
+                        loc_val.region,
                         scope,
                         var_store,
                         introduced_variables,
@@ -1387,37 +1402,29 @@ fn can_assigned_fields<'a>(
                         references,
                     );
 
-                    let label = Lowercase::from(field_name.value);
                     check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
 
-                    field_types.insert(label.clone(), RigidRequired(field_type));
+                    let rigid_field_type = match prefix {
+                        RecordValuePrefix::Colon => RigidRequired(field_type),
+                        RecordValuePrefix::DoubleQuestion => RigidOptional(field_type),
+                    };
+
+                    field_types.insert(label.clone(), rigid_field_type);
 
                     break 'inner label;
                 }
-                OptionalValue(field_name, _, annotation) => {
-                    let field_type = can_annotation_help(
-                        env,
-                        pol,
-                        &annotation.value,
-                        annotation.region,
-                        scope,
-                        var_store,
-                        introduced_variables,
-                        local_aliases,
-                        references,
-                    );
+                WithoutValue { ignored, loc_label } => {
+                    if *ignored {
+                        env.problems.push(Problem::IgnoredFieldInType {
+                            record_region: region,
+                            field_region: loc_field.region,
+                        });
 
-                    let label = Lowercase::from(field_name.value);
-                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+                        continue 'outer;
+                    }
 
-                    field_types.insert(label.clone(), RigidOptional(field_type));
-
-                    break 'inner label;
-                }
-                IgnoredValue(_, _, _) => unreachable!(),
-                LabelOnly(loc_field_name) => {
                     // Interpret { a, b } as { a : a, b : b }
-                    let field_name = Lowercase::from(loc_field_name.value);
+                    let field_name = Lowercase::from(loc_label.value);
                     let field_type = {
                         if let Some(var) = introduced_variables.var_by_name(&field_name) {
                             Type::Variable(var)
@@ -1425,7 +1432,7 @@ fn can_assigned_fields<'a>(
                             let field_var = var_store.fresh();
                             introduced_variables.insert_named(
                                 field_name.clone(),
-                                Loc::at(loc_field_name.region, field_var),
+                                Loc::at(loc_label.region, field_var),
                             );
                             Type::Variable(field_var)
                         }
@@ -1434,6 +1441,10 @@ fn can_assigned_fields<'a>(
                     field_types.insert(field_name.clone(), RigidRequired(field_type));
 
                     break 'inner field_name;
+                }
+                SpreadValue(_opt_spread) => {
+                    env.problems
+                        .push(Problem::SpreadInTypeNotImplemented(loc_field.region));
                 }
                 SpaceBefore(nested, _) | SpaceAfter(nested, _) => {
                     // check the nested field instead

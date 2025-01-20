@@ -1,17 +1,17 @@
-#![allow(clippy::manual_map)]
-
 use crate::env::SoloEnv;
 use crate::scope::SoloScope;
 
 use bumpalo::collections::Vec;
+use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia};
 use roc_module::ident::ModuleName;
 use roc_parse::ast::Expr::{self, *};
 use roc_parse::ast::{
-    AssignedField, Collection, Defs, ModuleImportParams, Pattern, ResultTryKind, StrLiteral,
-    StrSegment, ValueDef, WhenBranch,
+    AssignedField, Collection, Defs, DesugarProblem, ModuleImportParams, Pattern,
+    RecordFieldPattern, ResultTryKind, StrLiteral, StrSegment, ValueDef, WhenBranch,
 };
+use roc_parse::expr::RecordValuePrefix;
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 
@@ -514,14 +514,11 @@ pub fn desugar_expr<'a>(
         | AccessorFunction(_)
         | Underscore { .. }
         | MalformedIdent(_, _)
-        | PrecedenceConflict { .. }
-        | EmptyRecordBuilder(_)
-        | SingleFieldRecordBuilder(_)
-        | OptionalFieldInRecordBuilder { .. }
         | Tag(_)
         | OpaqueRef(_)
         | Crash
-        | Try => loc_expr,
+        | Try
+        | DesugarProblem(_) => loc_expr,
 
         Str(str_literal) => match str_literal {
             StrLiteral::PlainLine(_) => loc_expr,
@@ -649,17 +646,19 @@ pub fn desugar_expr<'a>(
                     Vec::from_iter_in(
                         [Loc::at(
                             region,
-                            AssignedField::RequiredValue(
-                                Loc::at(region, field_name),
-                                &[],
-                                &*env.arena.alloc(Loc {
+                            AssignedField::WithValue {
+                                ignored: false,
+                                loc_label: Loc::at(region, field_name),
+                                before_prefix: &[],
+                                prefix: RecordValuePrefix::Colon,
+                                loc_val: &*env.arena.alloc(Loc {
                                     region,
                                     value: Expr::Var {
                                         module_name: "",
                                         ident: "#record_updater_field",
                                     },
                                 }),
-                            ),
+                            },
                         )],
                         env.arena,
                     )
@@ -700,74 +699,112 @@ pub fn desugar_expr<'a>(
             // any spaces before/after
             let new_mapper = desugar_expr(env, scope, mapper);
 
-            if fields.is_empty() {
-                return env.arena.alloc(Loc {
-                    value: EmptyRecordBuilder(loc_expr),
-                    region: loc_expr.region,
-                });
-            } else if fields.len() == 1 {
-                return env.arena.alloc(Loc {
-                    value: SingleFieldRecordBuilder(loc_expr),
-                    region: loc_expr.region,
-                });
-            }
-
             struct FieldData<'d> {
-                name: Loc<&'d str>,
+                label: Loc<&'d str>,
                 value: &'d Loc<Expr<'d>>,
                 ignored: bool,
             }
 
-            let mut field_data = Vec::with_capacity_in(fields.len(), env.arena);
-
-            for field in fields.items {
-                let desugared_field = desugar_field(env, scope, &field.value);
-                let (name, value, ignored) = match desugared_field {
-                    AssignedField::RequiredValue(loc_name, _, loc_val) => {
-                        (loc_name, loc_val, false)
-                    }
-                    AssignedField::IgnoredValue(loc_name, _, loc_val) => (loc_name, loc_val, true),
-                    AssignedField::LabelOnly(loc_name) => (
-                        loc_name,
-                        &*env.arena.alloc(Loc {
-                            region: loc_name.region,
+            fn extract_builder_field<'a>(
+                field: &'a AssignedField<Expr<'a>>,
+                field_region: Region,
+                builder_region: Region,
+                arena: &'a Bump,
+            ) -> Result<FieldData<'a>, DesugarProblem<'a>> {
+                match field {
+                    &AssignedField::WithValue {
+                        ignored,
+                        loc_label,
+                        before_prefix: _,
+                        prefix,
+                        loc_val,
+                    } => match prefix {
+                        RecordValuePrefix::Colon => Ok(FieldData {
+                            label: loc_label,
+                            value: loc_val,
+                            ignored,
+                        }),
+                        RecordValuePrefix::DoubleQuestion => {
+                            Err(DesugarProblem::OptionalFieldInRecordBuilder(
+                                arena.alloc(loc_label),
+                                loc_val,
+                            ))
+                        }
+                    },
+                    &AssignedField::WithoutValue { ignored, loc_label } => Ok(FieldData {
+                        label: loc_label,
+                        value: &*arena.alloc(Loc {
+                            region: loc_label.region,
                             value: Expr::Var {
                                 module_name: "",
-                                ident: loc_name.value,
+                                ident: if ignored {
+                                    arena.alloc_str(&format!("_{}", loc_label.value))
+                                } else {
+                                    loc_label.value
+                                },
                             },
                         }),
-                        false,
-                    ),
-                    AssignedField::OptionalValue(loc_name, _, loc_val) => {
-                        return env.arena.alloc(Loc {
-                            region: loc_expr.region,
-                            value: OptionalFieldInRecordBuilder(env.arena.alloc(loc_name), loc_val),
-                        });
+                        ignored: false,
+                    }),
+                    AssignedField::SpreadValue(opt_spread) => {
+                        Err(DesugarProblem::SpreadInRecordBuilder {
+                            record_region: builder_region,
+                            spread_region: field_region,
+                            opt_spread_expr: *opt_spread,
+                        })
                     }
-                    AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
-                        unreachable!("Should have been desugared in `desugar_field`")
+                    AssignedField::SpaceBefore(inner, _) | AssignedField::SpaceAfter(inner, _) => {
+                        extract_builder_field(inner, field_region, builder_region, arena)
                     }
-                };
+                }
+            }
 
-                field_data.push(FieldData {
-                    name,
-                    value,
-                    ignored,
-                });
+            let mut field_data = Vec::with_capacity_in(fields.len(), env.arena);
+            for field in fields.iter() {
+                let desugared_field = env.arena.alloc(desugar_field(env, scope, &field.value));
+                match extract_builder_field(
+                    desugared_field,
+                    field.region,
+                    loc_expr.region,
+                    env.arena,
+                ) {
+                    Ok(field) => field_data.push(field),
+                    Err(problem) => {
+                        return env
+                            .arena
+                            .alloc(Loc::at(loc_expr.region, Expr::DesugarProblem(problem)));
+                    }
+                }
+            }
+
+            match field_data.len() {
+                0 => {
+                    return env.arena.alloc(Loc {
+                        value: DesugarProblem(DesugarProblem::EmptyRecordBuilder(loc_expr)),
+                        region: loc_expr.region,
+                    });
+                }
+                1 => {
+                    return env.arena.alloc(Loc {
+                        value: DesugarProblem(DesugarProblem::SingleFieldRecordBuilder(loc_expr)),
+                        region: loc_expr.region,
+                    });
+                }
+                _ => {}
             }
 
             let closure_arg_from_field =
                 |FieldData {
-                     name,
+                     label,
                      value: _,
                      ignored,
                  }: &FieldData<'a>| Loc {
-                    region: name.region,
+                    region: label.region,
                     value: if *ignored {
-                        Pattern::Underscore(name.value)
+                        Pattern::Underscore(label.value)
                     } else {
                         Pattern::Identifier {
-                            ident: env.arena.alloc_str(&format!("#{}", name.value)),
+                            ident: env.arena.alloc_str(&format!("#{}", label.value)),
                         }
                     },
                 };
@@ -841,8 +878,10 @@ pub fn desugar_expr<'a>(
                                 closure_arg_from_field(&field_data[index]),
                                 Loc::at(second_arg_region, second_arg),
                             ])));
-                        second_arg_region =
-                            Region::span_across(&field_data[index].name.region, &second_arg_region);
+                        second_arg_region = Region::span_across(
+                            &field_data[index].label.region,
+                            &second_arg_region,
+                        );
                     }
 
                     env.arena.alloc_slice_copy(&[
@@ -859,20 +898,22 @@ pub fn desugar_expr<'a>(
                         .filter(|field| !field.ignored)
                         .map(|field| {
                             Loc::at(
-                                field.name.region,
-                                AssignedField::RequiredValue(
-                                    field.name,
-                                    &[],
-                                    env.arena.alloc(Loc::at(
-                                        field.name.region,
+                                field.label.region,
+                                AssignedField::WithValue {
+                                    ignored: false,
+                                    loc_label: field.label,
+                                    before_prefix: &[],
+                                    prefix: RecordValuePrefix::Colon,
+                                    loc_val: env.arena.alloc(Loc::at(
+                                        field.label.region,
                                         Expr::Var {
                                             module_name: "",
                                             ident: env
                                                 .arena
-                                                .alloc_str(&format!("#{}", field.name.value)),
+                                                .alloc_str(&format!("#{}", field.label.value)),
                                         },
                                     )),
-                                ),
+                                },
                             )
                         }),
                     env.arena,
@@ -1371,54 +1412,29 @@ fn desugar_field<'a>(
     scope: &mut SoloScope,
     field: &'a AssignedField<'a, Expr<'a>>,
 ) -> AssignedField<'a, Expr<'a>> {
-    use roc_parse::ast::AssignedField::*;
-
     match field {
-        RequiredValue(loc_str, spaces, loc_expr) => RequiredValue(
-            Loc {
-                value: loc_str.value,
-                region: loc_str.region,
-            },
-            spaces,
-            desugar_expr(env, scope, loc_expr),
-        ),
-        OptionalValue(loc_str, spaces, loc_expr) => OptionalValue(
-            Loc {
-                value: loc_str.value,
-                region: loc_str.region,
-            },
-            spaces,
-            desugar_expr(env, scope, loc_expr),
-        ),
-        IgnoredValue(loc_str, spaces, loc_expr) => IgnoredValue(
-            Loc {
-                value: loc_str.value,
-                region: loc_str.region,
-            },
-            spaces,
-            desugar_expr(env, scope, loc_expr),
-        ),
-        LabelOnly(loc_str) => {
-            // Desugar { x } into { x: x }
-            let loc_expr = Loc {
-                value: Var {
-                    module_name: "",
-                    ident: loc_str.value,
-                },
-                region: loc_str.region,
-            };
-
-            RequiredValue(
-                Loc {
-                    value: loc_str.value,
-                    region: loc_str.region,
-                },
-                &[],
-                desugar_expr(env, scope, env.arena.alloc(loc_expr)),
-            )
+        &AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix,
+            prefix,
+            loc_val,
+        } => AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix,
+            prefix,
+            loc_val: desugar_expr(env, scope, loc_val),
+        },
+        &AssignedField::WithoutValue { ignored, loc_label } => {
+            AssignedField::WithoutValue { ignored, loc_label }
         }
-        SpaceBefore(field, _spaces) => desugar_field(env, scope, field),
-        SpaceAfter(field, _spaces) => desugar_field(env, scope, field),
+        AssignedField::SpreadValue(opt_spread) => {
+            AssignedField::SpreadValue(opt_spread.map(|spread| desugar_expr(env, scope, spread)))
+        }
+        AssignedField::SpaceBefore(field, _spaces) | AssignedField::SpaceAfter(field, _spaces) => {
+            desugar_field(env, scope, field)
+        }
     }
 }
 
@@ -1503,10 +1519,6 @@ fn desugar_pattern<'a>(
         RecordDestructure(field_patterns) => {
             RecordDestructure(desugar_record_destructures(env, scope, field_patterns))
         }
-        RequiredField(name, field_pattern) => {
-            RequiredField(name, desugar_loc_pattern(env, scope, field_pattern))
-        }
-        OptionalField(name, expr) => OptionalField(name, desugar_expr(env, scope, expr)),
         Tuple(patterns) => {
             let mut allocated = Vec::with_capacity_in(patterns.len(), env.arena);
             for pattern in patterns.iter() {
@@ -1542,18 +1554,55 @@ fn desugar_pattern<'a>(
 pub fn desugar_record_destructures<'a>(
     env: &mut SoloEnv<'a>,
     scope: &mut SoloScope,
-    field_patterns: Collection<'a, Loc<Pattern<'a>>>,
-) -> Collection<'a, Loc<Pattern<'a>>> {
-    let mut allocated = Vec::with_capacity_in(field_patterns.len(), env.arena);
+    field_patterns: Collection<'a, Loc<RecordFieldPattern<'a>>>,
+) -> Collection<'a, Loc<RecordFieldPattern<'a>>> {
+    let mut desugared_field_patterns = Vec::with_capacity_in(field_patterns.len(), env.arena);
     for field_pattern in field_patterns.iter() {
-        let value = desugar_pattern(env, scope, field_pattern.value);
-        allocated.push(Loc {
+        let value =
+            desugar_record_field_pattern(env, scope, field_pattern.value, field_pattern.region);
+        desugared_field_patterns.push(Loc {
             value,
             region: field_pattern.region,
         });
     }
 
-    field_patterns.replace_items(allocated.into_bump_slice())
+    field_patterns.replace_items(desugared_field_patterns.into_bump_slice())
+}
+
+fn desugar_record_field_pattern<'a>(
+    env: &mut SoloEnv<'a>,
+    scope: &mut SoloScope,
+    field: RecordFieldPattern<'a>,
+    field_region: Region,
+) -> RecordFieldPattern<'a> {
+    match field {
+        RecordFieldPattern::RequiredField { label, inner } => RecordFieldPattern::RequiredField {
+            label,
+            inner: &*env.arena.alloc(Loc::at(
+                field_region,
+                desugar_pattern(env, scope, inner.value),
+            )),
+        },
+        RecordFieldPattern::Identifier { label } => RecordFieldPattern::Identifier { label },
+        RecordFieldPattern::OptionalField {
+            label,
+            default_value,
+        } => RecordFieldPattern::OptionalField {
+            label,
+            default_value: desugar_expr(env, scope, default_value),
+        },
+        RecordFieldPattern::Spread { opt_pattern } => RecordFieldPattern::Spread {
+            opt_pattern: opt_pattern.map(|pattern| {
+                &*env.arena.alloc(Loc::at(
+                    pattern.region,
+                    desugar_pattern(env, scope, pattern.value),
+                ))
+            }),
+        },
+        RecordFieldPattern::SpaceBefore(inner, _) | RecordFieldPattern::SpaceAfter(inner, _) => {
+            desugar_record_field_pattern(env, scope, *inner, field_region)
+        }
+    }
 }
 
 /// Desugars a `dbg expr` expression into a statement block that prints and returns the
@@ -1830,7 +1879,9 @@ fn binop_step<'a>(
                                 binop2: bad_op.value,
                                 expr: env.arena.alloc(broken_expr),
                             };
-                            let value = Expr::PrecedenceConflict(env.arena.alloc(data));
+                            let value = Expr::DesugarProblem(DesugarProblem::PrecedenceConflict(
+                                env.arena.alloc(data),
+                            ));
 
                             Step::Error(env.arena.alloc(Loc { region, value }))
                         }

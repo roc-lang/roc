@@ -19,7 +19,7 @@ use roc_parse::{
         FunctionArrow, ImplementsAbilities, ImplementsAbility, ImplementsClause, Spaceable, Spaces,
         SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
     },
-    expr::merge_spaces,
+    expr::{merge_spaces, RecordValuePrefix},
 };
 use roc_parse::{
     ast::{Spaced, TypeVar},
@@ -380,25 +380,67 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
         'a: 'b,
     {
         match self {
-            AssignedField::RequiredValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, ":", flags)
+            AssignedField::WithValue {
+                ignored,
+                loc_label,
+                before_prefix,
+                prefix,
+                loc_val,
+            } => {
+                let label = if *ignored {
+                    let mut label = String::with_capacity_in(loc_label.value.len() + 1, arena);
+                    label.push('_');
+                    label.push_str(loc_label.value);
+                    label.into_bump_str()
+                } else {
+                    loc_label.value
+                };
+                let prefix_text = match prefix {
+                    RecordValuePrefix::Colon => ":",
+                    RecordValuePrefix::DoubleQuestion => "??",
+                };
+
+                assigned_field_value_to_node(
+                    label,
+                    arena,
+                    &before_prefix,
+                    &loc_val.value,
+                    prefix_text,
+                    flags,
+                )
             }
-            AssignedField::IgnoredValue(name, sp, value) => {
-                let mut n = String::with_capacity_in(name.value.len() + 1, arena);
-                n.push('_');
-                n.push_str(name.value);
-                assigned_field_value_to_node(n.into_bump_str(), arena, sp, &value.value, ":", flags)
+
+            AssignedField::WithoutValue { ignored, loc_label } => {
+                let label = if *ignored {
+                    let mut label = String::with_capacity_in(loc_label.value.len() + 1, arena);
+                    label.push('_');
+                    label.push_str(loc_label.value);
+                    label.into_bump_str()
+                } else {
+                    loc_label.value
+                };
+
+                NodeInfo {
+                    before: &[],
+                    node: Node::Literal(label),
+                    after: &[],
+                    needs_indent: true,
+                    prec: Prec::Term,
+                }
             }
-            AssignedField::OptionalValue(name, sp, value) => {
-                assigned_field_value_to_node(name.value, arena, sp, &value.value, "??", flags)
-            }
-            AssignedField::LabelOnly(name) => NodeInfo {
+
+            AssignedField::SpreadValue(opt_spread) => NodeInfo {
                 before: &[],
-                node: Node::Literal(name.value),
+                node: Node::Spread {
+                    item: opt_spread
+                        .map(|spread| &*arena.alloc(Node::TypeAnnotation(spread.value))),
+                },
                 after: &[],
+                // TODO: validate with Joshua or Anthony that this is what should be done
                 needs_indent: true,
                 prec: Prec::Term,
             },
+
             AssignedField::SpaceBefore(inner, sp) => {
                 let mut inner = inner.to_node(arena, flags);
                 inner.before = merge_spaces_conservative(arena, sp, inner.before);
@@ -416,7 +458,7 @@ impl<'a> Nodify<'a> for AssignedField<'a, TypeAnnotation<'a>> {
 fn assigned_field_value_to_node<'a, 'b>(
     name: &'b str,
     arena: &'b Bump,
-    sp: &'a [CommentOrNewline<'a>],
+    before_sep: &'a [CommentOrNewline<'a>],
     value: &'a TypeAnnotation<'a>,
     sep: &'static str,
     flags: MigrationFlags,
@@ -437,7 +479,7 @@ where
 
     let mut b = NodeSequenceBuilder::new(arena, first, 2, false);
 
-    b.push(Sp::with_space(sp), Node::Literal(sep));
+    b.push(Sp::with_space(before_sep), Node::Literal(sep));
 
     let value_lifted = value.to_node(arena, flags);
 
@@ -453,19 +495,22 @@ where
 }
 
 fn is_multiline_assigned_field_help<T: Formattable>(afield: &AssignedField<'_, T>) -> bool {
-    use self::AssignedField::*;
-
     match afield {
-        RequiredValue(_, spaces, ann)
-        | OptionalValue(_, spaces, ann)
-        | IgnoredValue(_, spaces, ann) => !spaces.is_empty() || ann.value.is_multiline(),
-        LabelOnly(_) => false,
+        AssignedField::WithValue {
+            before_prefix,
+            loc_val,
+            ..
+        } => !before_prefix.is_empty() || loc_val.is_multiline(),
+        AssignedField::WithoutValue { .. } => false,
+        AssignedField::SpreadValue(opt_spread) => {
+            opt_spread.is_some_and(|spread| spread.is_multiline())
+        }
         AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => true,
     }
 }
 
 fn format_assigned_field_help<T>(
-    zelf: &AssignedField<T>,
+    assigned_field: &AssignedField<T>,
     buf: &mut Buf,
     indent: u16,
     separator_spaces: usize,
@@ -473,86 +518,72 @@ fn format_assigned_field_help<T>(
 ) where
     T: Formattable,
 {
-    use self::AssignedField::*;
-
-    match zelf {
-        RequiredValue(name, spaces, ann) => {
+    match assigned_field {
+        AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix,
+            prefix,
+            loc_val,
+        } => {
             if is_multiline {
                 buf.newline();
             }
 
             buf.indent(indent);
-            if buf.flags().snakify {
-                snakify_camel_ident(buf, name.value);
-            } else {
-                buf.push_str(name.value);
+            if *ignored {
+                buf.push('_');
             }
 
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
+            if buf.flags().snakify {
+                snakify_camel_ident(buf, loc_label.value);
+            } else {
+                buf.push_str(loc_label.value);
+            }
+
+            if !before_prefix.is_empty() {
+                fmt_spaces(buf, before_prefix.iter(), indent);
             }
 
             buf.spaces(separator_spaces);
             buf.indent(indent);
-            buf.push(':');
+
+            match prefix {
+                RecordValuePrefix::Colon => buf.push(':'),
+                RecordValuePrefix::DoubleQuestion => buf.push_str("??"),
+            }
+
             buf.spaces(1);
-            ann.value.format(buf, indent);
+
+            loc_val.value.format(buf, indent);
         }
-        OptionalValue(name, spaces, ann) => {
+        AssignedField::WithoutValue { ignored, loc_label } => {
             if is_multiline {
                 buf.newline();
             }
 
             buf.indent(indent);
+
+            if *ignored {
+                buf.push('_');
+            }
             if buf.flags().snakify {
-                snakify_camel_ident(buf, name.value);
+                snakify_camel_ident(buf, loc_label.value);
             } else {
-                buf.push_str(name.value);
+                buf.push_str(loc_label.value);
             }
-
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
-
-            buf.spaces(separator_spaces);
-            buf.indent(indent);
-            buf.push_str("??");
-            buf.spaces(1);
-            ann.value.format(buf, indent);
         }
-        IgnoredValue(name, spaces, ann) => {
+        AssignedField::SpreadValue(opt_spread) => {
             if is_multiline {
                 buf.newline();
             }
 
             buf.indent(indent);
-            buf.push('_');
-            if buf.flags().snakify {
-                snakify_camel_ident(buf, name.value);
-            } else {
-                buf.push_str(name.value);
-            }
 
-            if !spaces.is_empty() {
-                fmt_spaces(buf, spaces.iter(), indent);
-            }
+            buf.push_str("..");
 
-            buf.spaces(separator_spaces);
-            buf.indent(indent);
-            buf.push(':');
-            buf.spaces(1);
-            ann.value.format(buf, indent);
-        }
-        LabelOnly(name) => {
-            if is_multiline {
-                buf.newline();
-            }
-
-            buf.indent(indent);
-            if buf.flags().snakify {
-                snakify_camel_ident(buf, name.value);
-            } else {
-                buf.push_str(name.value);
+            if let Some(spread) = opt_spread {
+                spread.format(buf, indent);
             }
         }
         AssignedField::SpaceBefore(sub_field, spaces) => {

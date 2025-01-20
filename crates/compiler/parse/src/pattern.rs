@@ -1,4 +1,6 @@
-use crate::ast::{Collection, ExtractSpaces, Implements, Pattern, PatternAs, Spaceable};
+use crate::ast::{
+    Collection, ExtractSpaces, Implements, Pattern, PatternAs, RecordFieldPattern, Spaceable,
+};
 use crate::blankspace::{space0_before_optional_after, space0_e, spaces, spaces_before};
 use crate::ident::{lowercase_ident, parse_ident, Accessor, Ident};
 use crate::keyword;
@@ -533,18 +535,19 @@ fn record_pattern_help<'a>() -> impl Parser<'a, Pattern<'a>, PRecord<'a>> {
     map(record_pattern_fields(), Pattern::RecordDestructure)
 }
 
-pub fn record_pattern_fields<'a>() -> impl Parser<'a, Collection<'a, Loc<Pattern<'a>>>, PRecord<'a>>
-{
+pub fn record_pattern_fields<'a>(
+) -> impl Parser<'a, Collection<'a, Loc<RecordFieldPattern<'a>>>, PRecord<'a>> {
     collection_trailing_sep_e(
         byte(b'{', PRecord::Open),
         record_pattern_field(),
         byte(b',', PRecord::End),
         byte(b'}', PRecord::End),
-        Pattern::SpaceBefore,
+        RecordFieldPattern::SpaceBefore,
     )
 }
 
-fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> {
+// TODO: rework in the style of the Expr version of this function?
+fn record_pattern_field<'a>() -> impl Parser<'a, Loc<RecordFieldPattern<'a>>, PRecord<'a>> {
     use crate::parser::Either::*;
 
     move |arena, state: State<'a>, min_indent: u32| {
@@ -588,12 +591,12 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                     MadeProgress,
                     Loc::at(
                         region,
-                        Pattern::RequiredField(
+                        RecordFieldPattern::RequiredField {
                             label,
                             // TODO spaces are dropped here
                             // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-                            arena.alloc(loc_val),
-                        ),
+                            inner: arena.alloc(loc_val),
+                        },
                     ),
                     state,
                 ))
@@ -615,12 +618,12 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
                     MadeProgress,
                     Loc::at(
                         region,
-                        Pattern::OptionalField(
+                        RecordFieldPattern::OptionalField {
                             label,
                             // TODO spaces are dropped
                             // arena.alloc(arena.alloc(value).with_spaces_before(spaces, region)),
-                            arena.alloc(loc_val),
-                        ),
+                            default_value: arena.alloc(loc_val),
+                        },
                     ),
                     state,
                 ))
@@ -630,9 +633,12 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PRecord<'a>> 
             None => {
                 let Loc { value, region } = loc_label;
                 let value = if !spaces.is_empty() {
-                    Pattern::SpaceAfter(arena.alloc(Pattern::Identifier { ident: value }), spaces)
+                    RecordFieldPattern::SpaceAfter(
+                        arena.alloc(RecordFieldPattern::Identifier { label: value }),
+                        spaces,
+                    )
                 } else {
-                    Pattern::Identifier { ident: value }
+                    RecordFieldPattern::Identifier { label: value }
                 };
 
                 Ok((MadeProgress, Loc::at(region, value), state))

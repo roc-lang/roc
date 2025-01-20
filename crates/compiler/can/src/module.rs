@@ -14,7 +14,7 @@ use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
 use roc_module::symbol::{IdentId, ModuleId, Symbol};
-use roc_parse::ast::{Collection, Defs, Pattern as ParsePattern, TypeAnnotation};
+use roc_parse::ast::{Collection, Defs, RecordFieldPattern, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -154,6 +154,7 @@ impl ModuleParams {
             whole_var: self.record_var,
             ext_var: self.record_ext_var,
             destructs: self.destructs.clone(),
+            opt_spread: Box::new(None),
         };
         let loc_record_pattern = Loc::at(self.region, record_pattern);
 
@@ -215,7 +216,7 @@ pub fn canonicalize_module_defs<'a>(
     mut scope: Scope,
     mut env: Env<'a>,
     loc_defs: Defs<'a>,
-    module_params: Option<(Region, Collection<'a, Loc<ParsePattern<'a>>>)>,
+    module_params: Option<(Region, Collection<'a, Loc<RecordFieldPattern<'a>>>)>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
 
@@ -279,7 +280,7 @@ pub fn canonicalize_module_defs<'a>(
     let mut output = Output::default();
 
     let module_params = module_params.map(|(params_region, desugared_patterns)| {
-        let (destructs, _) = canonicalize_record_destructs(
+        let (destructs, opt_spread, _) = canonicalize_record_destructs(
             &mut env,
             var_store,
             &mut scope,
@@ -289,6 +290,13 @@ pub fn canonicalize_module_defs<'a>(
             params_region,
             PermitShadows(false),
         );
+
+        if let Some(spread) = opt_spread {
+            env.problems.push(Problem::SpreadInModuleParams {
+                params_region,
+                spread_region: spread.opt_pattern.region,
+            });
+        }
 
         let whole_symbol = scope.gen_unique_symbol();
         env.top_level_symbols.insert(whole_symbol);

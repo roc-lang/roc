@@ -14,8 +14,8 @@ use bumpalo::collections::Vec;
 use bumpalo::Bump;
 use roc_module::called_via::{self, BinOp, UnaryOp};
 use roc_parse::ast::{
-    AssignedField, Base, Collection, CommentOrNewline, Expr, ExtractSpaces, Pattern, Spaceable,
-    Spaces, SpacesAfter, SpacesBefore, WhenBranch,
+    AssignedField, Base, Collection, CommentOrNewline, DesugarProblem, Expr, ExtractSpaces,
+    Pattern, Spaceable, Spaces, SpacesAfter, SpacesBefore, WhenBranch,
 };
 use roc_parse::ast::{StrLiteral, StrSegment};
 use roc_parse::expr::merge_spaces;
@@ -360,10 +360,7 @@ fn format_expr_only(
                 buf.push_str(str);
             }
         }
-        Expr::PrecedenceConflict { .. } => {}
-        Expr::EmptyRecordBuilder { .. } => {}
-        Expr::SingleFieldRecordBuilder { .. } => {}
-        Expr::OptionalFieldInRecordBuilder(_, _) => {}
+        Expr::DesugarProblem(_problem) => {}
     }
 }
 
@@ -417,45 +414,48 @@ fn assigned_field_lift_spaces<'a, 'b: 'a>(
     value: AssignedField<'b, Expr<'b>>,
 ) -> Spaces<'a, AssignedField<'a, Expr<'a>>> {
     match value {
-        AssignedField::RequiredValue(name, sp, value) => {
-            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
+        AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix,
+            prefix,
+            loc_val,
+        } => {
+            let space_lifted_value =
+                expr_lift_spaces_after(Parens::NotNeeded, arena, &loc_val.value);
+
             Spaces {
                 before: &[],
-                item: AssignedField::RequiredValue(
-                    name,
-                    sp,
-                    arena.alloc(Loc::at(value.region, new_value.item)),
-                ),
-                after: new_value.after,
+                item: AssignedField::WithValue {
+                    ignored,
+                    loc_label,
+                    before_prefix,
+                    prefix,
+                    loc_val: arena.alloc(Loc::at(loc_val.region, space_lifted_value.item)),
+                },
+                after: space_lifted_value.after,
             }
         }
-        AssignedField::OptionalValue(name, sp, value) => {
-            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
-            Spaces {
-                before: &[],
-                item: AssignedField::OptionalValue(
-                    name,
-                    sp,
-                    arena.alloc(Loc::at(value.region, new_value.item)),
-                ),
-                after: new_value.after,
-            }
-        }
-        AssignedField::IgnoredValue(name, sp, value) => {
-            let new_value = expr_lift_spaces_after(Parens::NotNeeded, arena, &value.value);
-            Spaces {
-                before: &[],
-                item: AssignedField::IgnoredValue(
-                    name,
-                    sp,
-                    arena.alloc(Loc::at(value.region, new_value.item)),
-                ),
-                after: new_value.after,
-            }
-        }
-        AssignedField::LabelOnly(name) => Spaces {
+        AssignedField::WithoutValue { ignored, loc_label } => Spaces {
             before: &[],
-            item: AssignedField::LabelOnly(name),
+            item: AssignedField::WithoutValue { ignored, loc_label },
+            after: &[],
+        },
+        AssignedField::SpreadValue(Some(spread)) => {
+            let space_lifted_spread =
+                expr_lift_spaces_after(Parens::NotNeeded, arena, &spread.value);
+
+            Spaces {
+                before: &[],
+                item: AssignedField::SpreadValue(Some(
+                    arena.alloc(Loc::at(spread.region, space_lifted_spread.item)),
+                )),
+                after: space_lifted_spread.after,
+            }
+        }
+        AssignedField::SpreadValue(None) => Spaces {
+            before: &[],
+            item: AssignedField::SpreadValue(None),
             after: &[],
         },
         AssignedField::SpaceBefore(inner, sp) => {
@@ -548,15 +548,10 @@ pub fn expr_is_multiline(me: &Expr<'_>, comments_only: bool) -> bool {
                 || expr_is_multiline(&loc_right.value, comments_only)
         }
 
-        Expr::UnaryOp(loc_subexpr, _)
-        | Expr::PrecedenceConflict(roc_parse::ast::PrecedenceConflict {
-            expr: loc_subexpr, ..
-        })
-        | Expr::EmptyRecordBuilder(loc_subexpr)
-        | Expr::SingleFieldRecordBuilder(loc_subexpr)
-        | Expr::OptionalFieldInRecordBuilder(_, loc_subexpr) => {
-            expr_is_multiline(&loc_subexpr.value, comments_only)
-        }
+        Expr::UnaryOp(loc_subexpr, _) => expr_is_multiline(&loc_subexpr.value, comments_only),
+        Expr::DesugarProblem(problem) => problem
+            .loc_expr()
+            .is_some_and(|loc_expr| expr_is_multiline(&loc_expr.value, comments_only)),
 
         Expr::ParensAround(subexpr) => expr_is_multiline(subexpr, comments_only),
 
@@ -1368,11 +1363,7 @@ pub fn expr_lift_spaces<'a, 'b: 'a>(
             }
         }
 
-        Expr::MalformedIdent(_, _)
-        | Expr::PrecedenceConflict(_)
-        | Expr::EmptyRecordBuilder(_)
-        | Expr::SingleFieldRecordBuilder(_)
-        | Expr::OptionalFieldInRecordBuilder(_, _) => Spaces {
+        Expr::MalformedIdent(_, _) | Expr::DesugarProblem(_) => Spaces {
             before: &[],
             item: *expr,
             after: &[],
@@ -1409,8 +1400,6 @@ pub fn expr_prec(expr: Expr<'_>) -> Prec {
         | Expr::Dbg
         | Expr::Try
         | Expr::MalformedIdent(_, _)
-        | Expr::EmptyRecordBuilder(_)
-        | Expr::SingleFieldRecordBuilder(_)
         | Expr::RecordAccess(_, _)
         | Expr::TupleAccess(_, _)
         | Expr::TrySuffix { .. }
@@ -1421,8 +1410,7 @@ pub fn expr_prec(expr: Expr<'_>) -> Prec {
         | Expr::RecordBuilder { .. }
         | Expr::LowLevelTry(_, _)
         | Expr::LowLevelDbg(_, _, _)
-        | Expr::PncApply(_, _)
-        | Expr::OptionalFieldInRecordBuilder(_, _) => Prec::Term,
+        | Expr::PncApply(_, _) => Prec::Term,
 
         Expr::Closure(_, _)
         | Expr::Defs(_, _)
@@ -1435,8 +1423,20 @@ pub fn expr_prec(expr: Expr<'_>) -> Prec {
         | Expr::Return(_, _)
         | Expr::SpaceBefore(_, _)
         | Expr::SpaceAfter(_, _)
-        | Expr::ParensAround(_)
-        | Expr::PrecedenceConflict(_) => Prec::Apply,
+        | Expr::ParensAround(_) => Prec::Apply,
+
+        Expr::DesugarProblem(problem) => desugar_problem_prec(&problem),
+    }
+}
+
+fn desugar_problem_prec(desugar_problem: &DesugarProblem<'_>) -> Prec {
+    match desugar_problem {
+        DesugarProblem::OptionalFieldInRecordBuilder(_, _)
+        | DesugarProblem::EmptyRecordBuilder(_)
+        | DesugarProblem::SingleFieldRecordBuilder(_)
+        | DesugarProblem::SpreadInRecordBuilder { .. } => Prec::Term,
+
+        DesugarProblem::PrecedenceConflict(_) => Prec::Apply,
     }
 }
 

@@ -7,7 +7,7 @@ use crate::blankspace::{
     self, plain_spaces_before, space0_around_ee, space0_before, space0_before_e, space0_e,
     spaces_before_optional_after,
 };
-use crate::expr::record_field;
+use crate::expr::{record_field, RecordValuePrefix};
 use crate::ident::{lowercase_ident, lowercase_ident_keyword_e};
 use crate::keyword;
 use crate::parser::{
@@ -598,23 +598,35 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
         let val_parser = specialize_err_ref(ETypeRecord::Type, expression(true, false));
 
         match opt_loc_val {
-            Some(First(_)) => {
+            Some(First(())) => {
                 let (_, loc_val, state) = space0_before_e(val_parser, ETypeRecord::IndentColon)
                     .parse(arena, state, min_indent)?;
 
                 Ok((
                     MadeProgress,
-                    RequiredValue(loc_label, spaces, arena.alloc(loc_val)),
+                    WithValue {
+                        ignored: false,
+                        loc_label,
+                        before_prefix: spaces,
+                        prefix: RecordValuePrefix::Colon,
+                        loc_val: arena.alloc(loc_val),
+                    },
                     state,
                 ))
             }
-            Some(Second(_)) => {
+            Some(Second(((), _))) => {
                 let (_, loc_val, state) = space0_before_e(val_parser, ETypeRecord::IndentOptional)
                     .parse(arena, state, min_indent)?;
 
                 Ok((
                     MadeProgress,
-                    OptionalValue(loc_label, spaces, arena.alloc(loc_val)),
+                    WithValue {
+                        ignored: false,
+                        loc_label,
+                        before_prefix: spaces,
+                        prefix: RecordValuePrefix::DoubleQuestion,
+                        loc_val: arena.alloc(loc_val),
+                    },
                     state,
                 ))
             }
@@ -622,9 +634,18 @@ fn record_type_field<'a>() -> impl Parser<'a, AssignedField<'a, TypeAnnotation<'
             // Canonicalize will know what to do with a Var later.
             None => {
                 let value = if !spaces.is_empty() {
-                    SpaceAfter(arena.alloc(LabelOnly(loc_label)), spaces)
+                    SpaceAfter(
+                        arena.alloc(WithoutValue {
+                            ignored: false,
+                            loc_label,
+                        }),
+                        spaces,
+                    )
                 } else {
-                    LabelOnly(loc_label)
+                    WithoutValue {
+                        ignored: false,
+                        loc_label,
+                    }
                 };
 
                 Ok((MadeProgress, value, state))
@@ -872,11 +893,11 @@ fn parse_implements_ability<'a>() -> impl Parser<'a, ImplementsAbility<'a>, ETyp
 
 fn ability_impl_field<'a>() -> impl Parser<'a, AssignedField<'a, Expr<'a>>, ERecord<'a>> {
     then(record_field(), move |arena, state, _, field| {
-        match field.to_assigned_field(arena) {
-            AssignedField::IgnoredValue(_, _, _) => {
-                Err((MadeProgress, ERecord::Field(state.pos())))
-            }
-            assigned_field => Ok((MadeProgress, assigned_field, state)),
+        let assigned_field = field.to_assigned_field(arena);
+        if assigned_field.is_ignored() {
+            Err((MadeProgress, ERecord::Field(state.pos())))
+        } else {
+            Ok((MadeProgress, assigned_field, state))
         }
     })
 }

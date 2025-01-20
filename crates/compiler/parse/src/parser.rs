@@ -686,9 +686,11 @@ pub enum ERecord<'a> {
     SecondQuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
+    DoubleDot(Position),
 
     // TODO remove
     Expr(&'a EExpr<'a>, Position),
+    SpreadExpr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
 }
@@ -698,6 +700,7 @@ impl<'a> ERecord<'a> {
         match self {
             // Cases with child node that has get_region()
             ERecord::Expr(expr, _) => expr.get_region(),
+            ERecord::SpreadExpr(expr, _) => expr.get_region(),
 
             // Cases with Position values
             ERecord::End(p)
@@ -710,6 +713,7 @@ impl<'a> ERecord<'a> {
             | ERecord::SecondQuestionMark(p)
             | ERecord::Arrow(p)
             | ERecord::Ampersand(p)
+            | ERecord::DoubleDot(p)
             | ERecord::Space(_, p) => Region::from_pos(*p),
         }
     }
@@ -1404,7 +1408,9 @@ pub enum ETypeAbilityImpl<'a> {
     QuestionMark(Position),
     SecondQuestionMark(Position),
     Ampersand(Position),
+    DoubleDot(Position),
     Expr(&'a EExpr<'a>, Position),
+    SpreadExpr(&'a EExpr<'a>, Position),
     IndentBar(Position),
     IndentAmpersand(Position),
 }
@@ -1414,6 +1420,7 @@ impl<'a> ETypeAbilityImpl<'a> {
             // Case with child node that has get_region()
             ETypeAbilityImpl::Type(type_expr, _) => type_expr.get_region(),
             ETypeAbilityImpl::Expr(expr, _) => expr.get_region(),
+            ETypeAbilityImpl::SpreadExpr(expr, _) => expr.get_region(),
             // Cases with Position values
             ETypeAbilityImpl::End(p)
             | ETypeAbilityImpl::Open(p)
@@ -1427,6 +1434,7 @@ impl<'a> ETypeAbilityImpl<'a> {
             | ETypeAbilityImpl::QuestionMark(p)
             | ETypeAbilityImpl::SecondQuestionMark(p)
             | ETypeAbilityImpl::Ampersand(p)
+            | ETypeAbilityImpl::DoubleDot(p)
             | ETypeAbilityImpl::IndentBar(p)
             | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
         }
@@ -1447,7 +1455,9 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
             ERecord::SecondQuestionMark(p) => ETypeAbilityImpl::SecondQuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
+            ERecord::DoubleDot(p) => ETypeAbilityImpl::DoubleDot(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
+            ERecord::SpreadExpr(e, p) => ETypeAbilityImpl::SpreadExpr(e, p),
         }
     }
 }

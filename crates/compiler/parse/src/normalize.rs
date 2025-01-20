@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-use crate::ast::{ImplementsAbilities, TypeVar};
+use crate::ast::{DesugarProblem, ImplementsAbilities, RecordFieldPattern, TypeVar};
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -412,8 +412,8 @@ impl<'a> Normalize<'a> for ValueDef<'a> {
                 let a = a.normalize(arena);
                 let b = b.normalize(arena);
 
-                let is_unit_assignment = if let Pattern::RecordDestructure(collection) = a.value {
-                    collection.is_empty()
+                let is_unit_assignment = if let Pattern::RecordDestructure(fields) = a.value {
+                    fields.is_empty()
                 } else {
                     false
                 };
@@ -557,24 +557,86 @@ impl<'a> Normalize<'a> for WhenBranch<'a> {
 impl<'a, T: Normalize<'a> + Copy + std::fmt::Debug> Normalize<'a> for AssignedField<'a, T> {
     fn normalize(&self, arena: &'a Bump) -> Self {
         match *self {
-            AssignedField::RequiredValue(a, _, c) => AssignedField::RequiredValue(
-                a.normalize(arena),
-                arena.alloc([]),
-                arena.alloc(c.normalize(arena)),
+            AssignedField::WithValue {
+                ignored,
+                loc_label,
+                before_prefix: _,
+                prefix,
+                loc_val,
+            } => AssignedField::WithValue {
+                ignored,
+                loc_label,
+                before_prefix: &[],
+                prefix,
+                loc_val: arena.alloc(loc_val.normalize(arena)),
+            },
+            AssignedField::WithoutValue { ignored, loc_label } => {
+                AssignedField::WithoutValue { ignored, loc_label }
+            }
+            AssignedField::SpreadValue(opt_spread_val) => AssignedField::SpreadValue(
+                opt_spread_val.map(|spread_val| &*arena.alloc(spread_val.normalize(arena))),
             ),
-            AssignedField::OptionalValue(a, _, c) => AssignedField::OptionalValue(
-                a.normalize(arena),
-                arena.alloc([]),
-                arena.alloc(c.normalize(arena)),
-            ),
-            AssignedField::IgnoredValue(a, _, c) => AssignedField::IgnoredValue(
-                a.normalize(arena),
-                arena.alloc([]),
-                arena.alloc(c.normalize(arena)),
-            ),
-            AssignedField::LabelOnly(a) => AssignedField::LabelOnly(a.normalize(arena)),
             AssignedField::SpaceBefore(a, _) => a.normalize(arena),
             AssignedField::SpaceAfter(a, _) => a.normalize(arena),
+        }
+    }
+}
+
+impl<'a> Normalize<'a> for RecordFieldPattern<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match *self {
+            RecordFieldPattern::RequiredField { label, inner } => {
+                RecordFieldPattern::RequiredField {
+                    label: label.normalize(arena),
+                    inner: arena.alloc(inner.normalize(arena)),
+                }
+            }
+            RecordFieldPattern::Identifier { label } => RecordFieldPattern::Identifier {
+                label: label.normalize(arena),
+            },
+            RecordFieldPattern::OptionalField {
+                label,
+                default_value,
+            } => RecordFieldPattern::OptionalField {
+                label: label.normalize(arena),
+                default_value: arena.alloc(default_value.normalize(arena)),
+            },
+            RecordFieldPattern::Spread { opt_pattern } => RecordFieldPattern::Spread {
+                opt_pattern: opt_pattern.normalize(arena),
+            },
+            RecordFieldPattern::SpaceBefore(a, _) | RecordFieldPattern::SpaceAfter(a, _) => {
+                a.normalize(arena)
+            }
+        }
+    }
+}
+
+impl<'a> Normalize<'a> for DesugarProblem<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            DesugarProblem::PrecedenceConflict(a) => DesugarProblem::PrecedenceConflict(a),
+            DesugarProblem::EmptyRecordBuilder(a) => {
+                DesugarProblem::EmptyRecordBuilder(arena.alloc(a.normalize(arena)))
+            }
+            DesugarProblem::SingleFieldRecordBuilder(a) => {
+                DesugarProblem::SingleFieldRecordBuilder(arena.alloc(a.normalize(arena)))
+            }
+            DesugarProblem::OptionalFieldInRecordBuilder(a, b) => {
+                DesugarProblem::OptionalFieldInRecordBuilder(
+                    arena.alloc(a.normalize(arena)),
+                    arena.alloc(b.normalize(arena)),
+                )
+            }
+            DesugarProblem::SpreadInRecordBuilder {
+                record_region,
+                spread_region,
+                opt_spread_expr,
+            } => DesugarProblem::SpreadInRecordBuilder {
+                record_region: *record_region,
+                spread_region: *spread_region,
+                opt_spread_expr: opt_spread_expr
+                    .map(|spread| &*arena.alloc(spread.normalize(arena))),
+            },
         }
     }
 }
@@ -790,20 +852,10 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
             Expr::SingleQuote(a) => Expr::SingleQuote(a),
-            Expr::EmptyRecordBuilder(a) => {
-                Expr::EmptyRecordBuilder(arena.alloc(a.normalize(arena)))
-            }
-            Expr::SingleFieldRecordBuilder(a) => {
-                Expr::SingleFieldRecordBuilder(arena.alloc(a.normalize(arena)))
-            }
-            Expr::OptionalFieldInRecordBuilder(a, b) => Expr::OptionalFieldInRecordBuilder(
-                arena.alloc(a.normalize(arena)),
-                arena.alloc(b.normalize(arena)),
-            ),
+            Expr::DesugarProblem(problem) => Expr::DesugarProblem(problem.normalize(arena)),
         }
     }
 }
@@ -906,12 +958,8 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::PncApply(a, b) => {
                 Pattern::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
-            Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
-            Pattern::RequiredField(a, b) => {
-                Pattern::RequiredField(a, arena.alloc(b.normalize(arena)))
-            }
-            Pattern::OptionalField(a, b) => {
-                Pattern::OptionalField(a, arena.alloc(b.normalize(arena)))
+            Pattern::RecordDestructure(fields) => {
+                Pattern::RecordDestructure(fields.normalize(arena))
             }
             Pattern::As(pattern, pattern_as) => Pattern::As(
                 arena.alloc(pattern.normalize(arena)),
@@ -1245,8 +1293,12 @@ impl<'a> Normalize<'a> for ERecord<'a> {
             ERecord::SecondQuestionMark(_) => ERecord::SecondQuestionMark(Position::zero()),
             ERecord::Arrow(_) => ERecord::Arrow(Position::zero()),
             ERecord::Ampersand(_) => ERecord::Ampersand(Position::zero()),
+            ERecord::DoubleDot(_) => ERecord::DoubleDot(Position::zero()),
             ERecord::Expr(inner_err, _) => {
                 ERecord::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
+            }
+            ERecord::SpreadExpr(inner_err, _) => {
+                ERecord::SpreadExpr(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
             ERecord::Space(inner_err, _) => ERecord::Space(*inner_err, Position::zero()),
             ERecord::Prefix(_) => ERecord::Prefix(Position::zero()),
@@ -1421,9 +1473,14 @@ impl<'a> Normalize<'a> for ETypeAbilityImpl<'a> {
                 ETypeAbilityImpl::SecondQuestionMark(Position::zero())
             }
             ETypeAbilityImpl::Ampersand(_) => ETypeAbilityImpl::Ampersand(Position::zero()),
+            ETypeAbilityImpl::DoubleDot(_) => ETypeAbilityImpl::DoubleDot(Position::zero()),
             ETypeAbilityImpl::Expr(inner_err, _) => {
                 ETypeAbilityImpl::Expr(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }
+            ETypeAbilityImpl::SpreadExpr(inner_err, _) => ETypeAbilityImpl::SpreadExpr(
+                arena.alloc(inner_err.normalize(arena)),
+                Position::zero(),
+            ),
             ETypeAbilityImpl::IndentBar(_) => ETypeAbilityImpl::IndentBar(Position::zero()),
             ETypeAbilityImpl::IndentAmpersand(_) => {
                 ETypeAbilityImpl::IndentAmpersand(Position::zero())

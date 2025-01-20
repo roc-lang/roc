@@ -62,6 +62,15 @@ pub enum Problem {
     PrecedenceProblem(PrecedenceProblem),
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(BadPattern, Region),
+    MultipleSpreadsInPattern {
+        record_region: Region,
+        first_spread: Region,
+        shadow_spread: Region,
+    },
+    IgnoredFieldInType {
+        record_region: Region,
+        field_region: Region,
+    },
     Shadowing {
         original_region: Region,
         shadow: Loc<Ident>,
@@ -92,11 +101,6 @@ pub enum Problem {
         record_region: Region,
         field_region: Region,
         replaced_region: Region,
-    },
-    InvalidOptionalValue {
-        field_name: Lowercase,
-        record_region: Region,
-        field_region: Region,
     },
     DuplicateTag {
         tag_name: TagName,
@@ -165,16 +169,15 @@ pub enum Problem {
         name: String,
         region: Region,
     },
-    OptionalAbilityImpl {
-        ability: Symbol,
-        region: Region,
-    },
     QualifiedAbilityImpl {
         region: Region,
     },
     AbilityImplNotIdent {
         region: Region,
     },
+    IgnoredFieldForAbilityImpl(Region),
+    DefaultValueFieldForAbilityImpl(Region),
+    SpreadUsedInAbilityImpl(Region),
     DuplicateImpl {
         original: Region,
         duplicate: Region,
@@ -258,12 +261,12 @@ pub enum Problem {
     SuffixedPureRecordField(Region),
     EmptyTupleType(Region),
     UnboundTypeVarsInAs(Region),
-    InvalidIgnoredValue {
-        field_name: Lowercase,
-        field_region: Region,
-        record_region: Region,
-    },
     InterpolatedStringNotAllowed(Region),
+    SpreadInModuleParams {
+        params_region: Region,
+        spread_region: Region,
+    },
+    SpreadInTypeNotImplemented(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -291,6 +294,8 @@ impl Problem {
             Problem::UnusedBranchDef(_, _) => Warning,
             Problem::PrecedenceProblem(_) => RuntimeError,
             Problem::UnsupportedPattern(_, _) => RuntimeError,
+            Problem::MultipleSpreadsInPattern { .. } => Warning,
+            Problem::IgnoredFieldInType { .. } => Warning,
             Problem::Shadowing { .. } => RuntimeError,
             Problem::CyclicAlias(..) => RuntimeError,
             Problem::BadRecursion(_) => RuntimeError,
@@ -300,8 +305,6 @@ impl Problem {
             Problem::UnderscoreNotAllowed { .. } => RuntimeError,
             Problem::DuplicateRecordFieldValue { .. } => Warning,
             Problem::DuplicateRecordFieldType { .. } => RuntimeError,
-            Problem::InvalidOptionalValue { .. } => RuntimeError,
-            Problem::InvalidIgnoredValue { .. } => RuntimeError,
             Problem::DuplicateTag { .. } => RuntimeError,
             Problem::RuntimeError(_) => RuntimeError,
             Problem::SignatureDefMismatch { .. } => RuntimeError,
@@ -323,9 +326,11 @@ impl Problem {
             Problem::IllegalDerivedAbility(_) => RuntimeError,
             Problem::ImplementationNotFound { .. } => RuntimeError,
             Problem::NotAnAbilityMember { .. } => RuntimeError,
-            Problem::OptionalAbilityImpl { .. } => RuntimeError,
             Problem::QualifiedAbilityImpl { .. } => RuntimeError,
             Problem::AbilityImplNotIdent { .. } => RuntimeError,
+            Problem::IgnoredFieldForAbilityImpl(_) => RuntimeError,
+            Problem::DefaultValueFieldForAbilityImpl(_) => RuntimeError,
+            Problem::SpreadUsedInAbilityImpl(_) => Warning,
             Problem::DuplicateImpl { .. } => Warning, // First impl is used at runtime
             Problem::NotAnAbility(_) => Warning,
             Problem::ImplementsNonRequired { .. } => Warning,
@@ -355,6 +360,8 @@ impl Problem {
             }
             Problem::EmptyTupleType(_) => Warning,
             Problem::UnboundTypeVarsInAs(_) => Warning,
+            Problem::SpreadInModuleParams { .. } => Warning,
+            Problem::SpreadInTypeNotImplemented(_) => Warning,
         }
     }
 
@@ -385,6 +392,15 @@ impl Problem {
             | Problem::UnusedBranchDef(_, region)
             | Problem::PrecedenceProblem(PrecedenceProblem::BothNonAssociative(region, _, _))
             | Problem::UnsupportedPattern(_, region)
+            | Problem::MultipleSpreadsInPattern {
+                record_region: _,
+                first_spread: _,
+                shadow_spread: region,
+            }
+            | Problem::IgnoredFieldInType {
+                record_region: _,
+                field_region: region,
+            }
             | Problem::CyclicAlias(_, region, _, _)
             | Problem::PhantomTypeArgument {
                 variable_region: region,
@@ -407,14 +423,6 @@ impl Problem {
                 ..
             }
             | Problem::DuplicateRecordFieldType {
-                record_region: region,
-                ..
-            }
-            | Problem::InvalidOptionalValue {
-                record_region: region,
-                ..
-            }
-            | Problem::InvalidIgnoredValue {
                 record_region: region,
                 ..
             }
@@ -449,9 +457,11 @@ impl Problem {
             | Problem::IllegalDerivedAbility(region)
             | Problem::ImplementationNotFound { region, .. }
             | Problem::NotAnAbilityMember { region, .. }
-            | Problem::OptionalAbilityImpl { region, .. }
             | Problem::QualifiedAbilityImpl { region }
             | Problem::AbilityImplNotIdent { region }
+            | Problem::IgnoredFieldForAbilityImpl(region)
+            | Problem::DefaultValueFieldForAbilityImpl(region)
+            | Problem::SpreadUsedInAbilityImpl(region)
             | Problem::DuplicateImpl {
                 original: region, ..
             }
@@ -481,7 +491,12 @@ impl Problem {
             | Problem::ReturnAtEndOfFunction { region }
             | Problem::UnboundTypeVarsInAs(region)
             | Problem::UnsuffixedEffectfulRecordField(region)
-            | Problem::SuffixedPureRecordField(region) => Some(*region),
+            | Problem::SuffixedPureRecordField(region)
+            | Problem::SpreadInModuleParams {
+                params_region: _,
+                spread_region: region,
+            }
+            | Problem::SpreadInTypeNotImplemented(region) => Some(*region),
 
             Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
@@ -684,9 +699,15 @@ pub enum RuntimeError {
     EmptyRecordBuilder(Region),
     SingleFieldRecordBuilder(Region),
     OptionalFieldInRecordBuilder {
-        record: Region,
-        field: Region,
+        record_region: Region,
+        field_region: Region,
     },
+    SpreadInRecordBuilder {
+        record_region: Region,
+        spread_region: Region,
+    },
+
+    SpreadNotImplementedYet(Region),
 
     NonFunctionHostedAnnotation(Region),
     InvalidTupleIndex(Region),
@@ -737,9 +758,14 @@ impl RuntimeError {
             | RuntimeError::EmptyRecordBuilder(region)
             | RuntimeError::SingleFieldRecordBuilder(region)
             | RuntimeError::OptionalFieldInRecordBuilder {
-                record: _,
-                field: region,
+                record_region: _,
+                field_region: region,
             }
+            | RuntimeError::SpreadInRecordBuilder {
+                record_region: _,
+                spread_region: region,
+            }
+            | RuntimeError::SpreadNotImplementedYet(region)
             | RuntimeError::ReadIngestedFileError { region, .. }
             | RuntimeError::InvalidUnicodeCodePt(region)
             | RuntimeError::NonFunctionHostedAnnotation(region) => *region,

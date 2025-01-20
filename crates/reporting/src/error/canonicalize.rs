@@ -1,5 +1,5 @@
 use roc_collections::all::MutSet;
-use roc_module::ident::{Ident, Lowercase, ModuleName};
+use roc_module::ident::{Ident, ModuleName};
 use roc_module::symbol::DERIVABLE_ABILITIES;
 use roc_problem::can::PrecedenceProblem::BothNonAssociative;
 use roc_problem::can::{
@@ -404,6 +404,40 @@ pub fn can_problem<'b>(
 
             title = SYNTAX_PROBLEM.to_string();
         }
+        Problem::MultipleSpreadsInPattern {
+            record_region,
+            first_spread,
+            shadow_spread,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("The spread in this destructure is redundant after the first one:"),
+                alloc.region_all_the_things(
+                    lines.convert_region(record_region),
+                    lines.convert_region(first_spread),
+                    lines.convert_region(shadow_spread),
+                    Annotation::Error,
+                ),
+                alloc.reflow("All spreads after the first one are ignored."),
+            ]);
+
+            title = "MULTIPLE SPREAD IN PATTERN".to_string();
+        }
+        Problem::IgnoredFieldInType {
+            record_region,
+            field_region,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("This record type has an ignored field:"),
+                alloc.region_with_subregion(
+                    lines.convert_region(record_region),
+                    lines.convert_region(field_region),
+                    Severity::Warning,
+                ),
+                alloc.reflow("Record field names in types cannot start with an _ underscore, and are ignored."),
+            ]);
+
+            title = "IGNORED FIELD IN TYPE".to_string();
+        }
         Problem::Shadowing {
             original_region,
             shadow,
@@ -614,34 +648,6 @@ pub fn can_problem<'b>(
             ]);
 
             title = DUPLICATE_FIELD_NAME.to_string();
-        }
-        Problem::InvalidOptionalValue {
-            field_name,
-            field_region,
-            record_region,
-        } => {
-            return to_invalid_optional_value_report(
-                alloc,
-                lines,
-                filename,
-                field_name,
-                field_region,
-                record_region,
-            );
-        }
-        Problem::InvalidIgnoredValue {
-            field_name,
-            field_region,
-            record_region,
-        } => {
-            return to_invalid_ignored_value_report(
-                alloc,
-                lines,
-                filename,
-                field_name,
-                field_region,
-                record_region,
-            );
         }
         Problem::DuplicateRecordFieldType {
             field_name,
@@ -1065,24 +1071,6 @@ pub fn can_problem<'b>(
             ]);
             title = IMPLEMENTATION_NOT_FOUND.to_string();
         }
-        Problem::OptionalAbilityImpl { ability, region } => {
-            let hint = if ability.is_builtin() {
-                alloc.hint("").append(
-                    alloc.reflow("if you want this implementation to be derived, don't include a record of implementations. For example,")
-                        .append(alloc.type_block(alloc.concat([alloc.type_str(roc_parse::keyword::IMPLEMENTS), alloc.type_str(" ["), alloc.symbol_unqualified(ability), alloc.type_str("]")])))
-                        .append(alloc.reflow(" will attempt to derive ").append(alloc.symbol_unqualified(ability))))
-            } else {
-                alloc.nil()
-            };
-
-            doc = alloc.stack([
-                alloc.reflow("Ability implementations cannot be optional:"),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.reflow("Custom implementations must be supplied fully."),
-                hint,
-            ]);
-            title = OPTIONAL_ABILITY_IMPLEMENTATION.to_string();
-        }
         Problem::QualifiedAbilityImpl { region } => {
             doc = alloc.stack([
                 alloc.reflow("This ability implementation is qualified:"),
@@ -1103,6 +1091,33 @@ pub fn can_problem<'b>(
                 alloc.tip().append(alloc.reflow("consider defining this expression as a variable."))
             ]);
             title = ABILITY_IMPLEMENTATION_NOT_IDENTIFIER.to_string();
+        }
+        Problem::IgnoredFieldForAbilityImpl(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Ability implementations cannot start with an underscore:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Implementations must have snake_case names."),
+            ]);
+
+            title = "IGNORED ABILITY IMPLEMENTATION".to_string();
+        }
+        Problem::DefaultValueFieldForAbilityImpl(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Ability implementations cannot be optional:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Custom implementations must be supplied fully."),
+            ]);
+
+            title = OPTIONAL_ABILITY_IMPLEMENTATION.to_string();
+        }
+        Problem::SpreadUsedInAbilityImpl(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Spreads do not do anything in ability implementations:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Only explicit functions can be used to implement an ability."),
+            ]);
+
+            title = "UNUSED SPREAD".to_string();
         }
         Problem::DuplicateImpl {
             original,
@@ -1488,6 +1503,31 @@ pub fn can_problem<'b>(
 
             title = INTERPOLATED_STRING_NOT_ALLOWED.to_string();
         }
+        Problem::SpreadInModuleParams {
+            params_region,
+            spread_region,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("Spreads are not allowed in module params:"),
+                alloc.region_with_subregion(
+                    lines.convert_region(params_region),
+                    lines.convert_region(spread_region),
+                    Severity::Warning,
+                ),
+                alloc.reflow("Any spreads in module params will be discarded."),
+            ]);
+
+            title = "SPREAD IN MODULE PARAMS".to_string();
+        }
+        Problem::SpreadInTypeNotImplemented(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Spreads in record types have not been implemented yet!"),
+                alloc.region(lines.convert_region(region), Severity::Warning),
+                alloc.reflow("They can only be used for destructures at the moment, they should be available for use Soon™."),
+            ]);
+
+            title = "TYPE SPREAD NOT IMPLEMENTED".to_string();
+        }
     };
 
     Report {
@@ -1505,101 +1545,6 @@ fn list_builtin_abilities<'a>(alloc: &'a RocDocAllocator<'a>) -> RocDocBuilder<'
             .map(|(ab, _)| alloc.symbol_unqualified(*ab)),
         alloc.reflow(", "),
     )
-}
-
-fn to_invalid_optional_value_report<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    field_name: Lowercase,
-    field_region: Region,
-    record_region: Region,
-) -> Report<'b> {
-    let doc = to_invalid_optional_value_report_help(
-        alloc,
-        lines,
-        field_name,
-        field_region,
-        record_region,
-    );
-
-    Report {
-        title: "BAD OPTIONAL VALUE".to_string(),
-        filename,
-        doc,
-        severity: Severity::RuntimeError,
-    }
-}
-
-fn to_invalid_optional_value_report_help<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    field_name: Lowercase,
-    field_region: Region,
-    record_region: Region,
-) -> RocDocBuilder<'b> {
-    alloc.stack([
-        alloc.concat([
-            alloc.reflow("This record uses an optional value for the "),
-            alloc.record_field(field_name),
-            alloc.reflow(" field in an incorrect context!"),
-        ]),
-        alloc.region_all_the_things(
-            lines.convert_region(record_region),
-            lines.convert_region(field_region),
-            lines.convert_region(field_region),
-            Annotation::Error,
-        ),
-        alloc.reflow(r"You can only use optional values in record destructuring, like:"),
-        alloc
-            .reflow(r"{ answer ? 42, otherField } = myRecord")
-            .indent(4),
-    ])
-}
-
-fn to_invalid_ignored_value_report<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    filename: PathBuf,
-    field_name: Lowercase,
-    field_region: Region,
-    record_region: Region,
-) -> Report<'b> {
-    let doc =
-        to_invalid_ignored_value_report_help(alloc, lines, field_name, field_region, record_region);
-
-    Report {
-        title: "BAD IGNORED VALUE".to_string(),
-        filename,
-        doc,
-        severity: Severity::RuntimeError,
-    }
-}
-
-fn to_invalid_ignored_value_report_help<'b>(
-    alloc: &'b RocDocAllocator<'b>,
-    lines: &LineInfo,
-    field_name: Lowercase,
-    field_region: Region,
-    record_region: Region,
-) -> RocDocBuilder<'b> {
-    alloc.stack([
-        alloc.concat([
-            alloc.reflow("This record uses an ignored value for the "),
-            alloc.record_field(field_name),
-            alloc.reflow(" field in an incorrect context!"),
-        ]),
-        alloc.region_all_the_things(
-            lines.convert_region(record_region),
-            lines.convert_region(field_region),
-            lines.convert_region(field_region),
-            Annotation::Error,
-        ),
-        alloc.reflow(r"You can only use ignored values in record builders, like:"),
-        alloc
-            .reflow(r"{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2 }")
-            .indent(4),
-    ])
 }
 
 fn to_bad_ident_expr_report<'b>(
@@ -2267,9 +2212,33 @@ fn pretty_runtime_error<'b>(
 
             title = INGESTED_FILE_ERROR;
         }
-        RuntimeError::InvalidPrecedence(_, _) => {
-            // do nothing, reported with PrecedenceProblem
-            unreachable!();
+        RuntimeError::InvalidPrecedence(BothNonAssociative(region, left_bin_op, right_bin_op), outer_region) => {
+            doc = alloc.stack([
+                if left_bin_op.value == right_bin_op.value {
+                    alloc.concat([
+                        alloc.reflow("Using more than one "),
+                        alloc.binop(left_bin_op.value),
+                        alloc.reflow(concat!(
+                            " like this requires parentheses,",
+                            " to clarify how things should be grouped.",
+                        )),
+                    ])
+                } else {
+                    alloc.concat([
+                        alloc.reflow("Using "),
+                        alloc.binop(left_bin_op.value),
+                        alloc.reflow(" and "),
+                        alloc.binop(right_bin_op.value),
+                        alloc.reflow(concat!(
+                            " together requires parentheses, ",
+                            "to clarify how they should be grouped."
+                        )),
+                    ])
+                },
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
+            title = "INVALID PRECEDENCE";
         }
         RuntimeError::MalformedIdentifier(_box_str, bad_ident, surroundings) => {
             doc = to_bad_ident_expr_report(alloc, lines, bad_ident, surroundings, severity);
@@ -2532,30 +2501,52 @@ fn pretty_runtime_error<'b>(
             field_region,
             record_region,
         } => {
-            doc = to_invalid_optional_value_report_help(
-                alloc,
-                lines,
-                field_name,
-                field_region,
-                record_region,
-            );
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This record uses an optional value for the "),
+                    alloc.record_field(field_name),
+                    alloc.reflow(" field in an incorrect context!"),
+                ]),
+                alloc.region_all_the_things(
+                    lines.convert_region(record_region),
+                    lines.convert_region(field_region),
+                    lines.convert_region(field_region),
+                    Annotation::Error,
+                ),
+                alloc.reflow(r"You can only use optional values in record destructuring, like:"),
+                alloc
+                    .reflow(r"{ answer ? 42, otherField } = myRecord")
+                    .indent(4),
+            ]);
 
-            title = SYNTAX_PROBLEM;
+            title = "BAD OPTIONAL VALUE";
         }
         RuntimeError::InvalidIgnoredValue {
             field_name,
             field_region,
             record_region,
         } => {
-            doc = to_invalid_ignored_value_report_help(
-                alloc,
-                lines,
-                field_name,
-                field_region,
-                record_region,
-            );
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This record uses an ignored value for the "),
+                    alloc.record_field(field_name),
+                    alloc.reflow(" field in an incorrect context!"),
+                ]),
+                alloc.region_all_the_things(
+                    lines.convert_region(record_region),
+                    lines.convert_region(field_region),
+                    lines.convert_region(field_region),
+                    Annotation::Error,
+                ),
+                alloc.reflow(r"You can only use ignored values in record builders, like:"),
+                alloc
+                    .reflow(r"{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2 }")
+                    .indent(4),
+            ]);
 
-            title = SYNTAX_PROBLEM;
+            title = "BAD IGNORED VALUE";
+
+            // title = SYNTAX_PROBLEM;
         }
         RuntimeError::InvalidRecordUpdate { region } => {
             doc = alloc.stack([
@@ -2747,8 +2738,8 @@ fn pretty_runtime_error<'b>(
             title = "NOT ENOUGH FIELDS IN RECORD BUILDER";
         }
         RuntimeError::OptionalFieldInRecordBuilder {
-            record: record_region,
-            field: field_region,
+            record_region,
+            field_region,
         } => {
             doc = alloc.stack([
                 alloc.reflow("Optional fields are not allowed to be used in record builders."),
@@ -2757,10 +2748,35 @@ fn pretty_runtime_error<'b>(
                     lines.convert_region(field_region),
                     severity,
                 ),
-                alloc.reflow("Record builders can only have required values for their fields."),
+                alloc.reflow("Record builders can only have defined values for their fields."),
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
+        }
+        RuntimeError::SpreadInRecordBuilder {
+            record_region,
+            spread_region,
+        } => {
+            doc = alloc.stack([
+                alloc.reflow("Spreads are not allowed to be used in record builders."),
+                alloc.region_with_subregion(
+                    lines.convert_region(record_region),
+                    lines.convert_region(spread_region),
+                    severity,
+                ),
+                alloc.reflow("Record builders can only have defined values for their fields."),
+            ]);
+
+            title = "SPREAD IN RECORD BUILDER";
+        }
+        RuntimeError::SpreadNotImplementedYet(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Spreads are not implemented for use in updating records yet!"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("They can only be used for destructures at the moment, they should be available for use Soon™."),
+            ]);
+
+            title = "SPREAD NOT IMPLEMENTED YET";
         }
         RuntimeError::NonFunctionHostedAnnotation(region) => {
             doc = alloc.stack([

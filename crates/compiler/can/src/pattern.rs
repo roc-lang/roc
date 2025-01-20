@@ -10,13 +10,19 @@ use bumpalo::collections::Vec as BumpVec;
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, ExtractSpaces, StrLiteral, StrSegment};
+use roc_parse::ast::{self, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordDestructureSpread {
+    pub opt_pattern: Loc<Option<Loc<Pattern>>>,
+    pub spread_var: Variable,
+}
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
@@ -58,6 +64,7 @@ pub enum Pattern {
         whole_var: Variable,
         ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
+        opt_spread: Box<Option<RecordDestructureSpread>>,
     },
     TupleDestructure {
         whole_var: Variable,
@@ -675,7 +682,7 @@ pub fn canonicalize_pattern<'a>(
             let ext_var = var_store.fresh();
             let whole_var = var_store.fresh();
 
-            let (destructs, opt_erroneous) = canonicalize_record_destructs(
+            let (destructs, opt_spread, opt_erroneous) = canonicalize_record_destructs(
                 env,
                 var_store,
                 scope,
@@ -692,14 +699,8 @@ pub fn canonicalize_pattern<'a>(
                 whole_var,
                 ext_var,
                 destructs,
+                opt_spread: Box::new(opt_spread),
             })
-        }
-
-        RequiredField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
-        }
-        OptionalField(_name, _loc_pattern) => {
-            unreachable!("should have been handled in RecordDestructure");
         }
 
         List(patterns) => {
@@ -846,18 +847,45 @@ pub fn canonicalize_record_destructs<'a>(
     scope: &mut Scope,
     output: &mut Output,
     pattern_type: PatternType,
-    patterns: &ast::Collection<Loc<ast::Pattern<'a>>>,
+    patterns: &ast::Collection<Loc<ast::RecordFieldPattern<'a>>>,
     region: Region,
     permit_shadows: PermitShadows,
-) -> (Vec<Loc<RecordDestruct>>, Option<Pattern>) {
-    use ast::Pattern::*;
-
+) -> (
+    Vec<Loc<RecordDestruct>>,
+    Option<RecordDestructureSpread>,
+    Option<Pattern>,
+) {
     let mut destructs = Vec::with_capacity(patterns.len());
     let mut opt_erroneous = None;
+    let mut opt_spread_rest: Option<RecordDestructureSpread> = None;
 
     for loc_pattern in patterns.iter() {
-        match loc_pattern.value.extract_spaces().item {
-            Identifier { ident: label } => {
+        match loc_pattern.value {
+            ast::RecordFieldPattern::RequiredField { label, inner } => {
+                // a guard does not introduce the label into scope!
+                let symbol = scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &inner.value,
+                    inner.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_pattern.region,
+                    value: RecordDestruct {
+                        var: var_store.fresh(),
+                        label: Lowercase::from(label),
+                        symbol,
+                        typ: DestructType::Guard(var_store.fresh(), can_guard),
+                    },
+                });
+            }
+            ast::RecordFieldPattern::Identifier { label } => {
                 match scope.introduce(label.into(), region) {
                     Ok(symbol) => {
                         output.references.insert_bound(symbol);
@@ -891,32 +919,10 @@ pub fn canonicalize_record_destructs<'a>(
                     }
                 };
             }
-
-            RequiredField(label, loc_guard) => {
-                // a guard does not introduce the label into scope!
-                let symbol = scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
-                let can_guard = canonicalize_pattern(
-                    env,
-                    var_store,
-                    scope,
-                    output,
-                    pattern_type,
-                    &loc_guard.value,
-                    loc_guard.region,
-                    permit_shadows,
-                );
-
-                destructs.push(Loc {
-                    region: loc_pattern.region,
-                    value: RecordDestruct {
-                        var: var_store.fresh(),
-                        label: Lowercase::from(label),
-                        symbol,
-                        typ: DestructType::Guard(var_store.fresh(), can_guard),
-                    },
-                });
-            }
-            OptionalField(label, loc_default) => {
+            ast::RecordFieldPattern::OptionalField {
+                label,
+                default_value,
+            } => {
                 // an optional DOES introduce the label into scope!
                 match scope.introduce(label.into(), region) {
                     Ok(symbol) => {
@@ -924,8 +930,8 @@ pub fn canonicalize_record_destructs<'a>(
                             env,
                             var_store,
                             scope,
-                            loc_default.region,
-                            &loc_default.value,
+                            default_value.region,
+                            &default_value.value,
                         );
 
                         // an optional field binds the symbol!
@@ -962,14 +968,48 @@ pub fn canonicalize_record_destructs<'a>(
                     }
                 };
             }
-            _ => unreachable!(
-                "Any other pattern should have given a parse error: {:?}",
-                loc_pattern.value
-            ),
+            ast::RecordFieldPattern::Spread { opt_pattern } => match &opt_spread_rest {
+                Some(spread) => {
+                    env.problems.push(Problem::MultipleSpreadsInPattern {
+                        record_region: region,
+                        first_spread: spread.opt_pattern.region,
+                        shadow_spread: loc_pattern.region,
+                    });
+                }
+                None => match opt_pattern {
+                    None => {
+                        opt_spread_rest = Some(RecordDestructureSpread {
+                            opt_pattern: Loc::at(loc_pattern.region, None),
+                            spread_var: var_store.fresh(),
+                        });
+                    }
+                    Some(spread_pattern) => {
+                        let can_spread = canonicalize_pattern(
+                            env,
+                            var_store,
+                            scope,
+                            output,
+                            pattern_type,
+                            &spread_pattern.value,
+                            spread_pattern.region,
+                            permit_shadows,
+                        );
+
+                        opt_spread_rest = Some(RecordDestructureSpread {
+                            opt_pattern: Loc::at(loc_pattern.region, Some(can_spread)),
+                            spread_var: var_store.fresh(),
+                        });
+                    }
+                },
+            },
+            ast::RecordFieldPattern::SpaceBefore(_, _)
+            | ast::RecordFieldPattern::SpaceAfter(_, _) => {
+                // TODO: emit a compiler problem for these
+            }
         }
     }
 
-    (destructs, opt_erroneous)
+    (destructs, opt_spread_rest, opt_erroneous)
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't

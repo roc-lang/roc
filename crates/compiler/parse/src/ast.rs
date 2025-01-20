@@ -1,6 +1,6 @@
 use std::fmt::Debug;
 
-use crate::expr::merge_spaces;
+use crate::expr::{merge_spaces, RecordValuePrefix};
 use crate::header::{
     self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
 };
@@ -438,6 +438,33 @@ pub enum ResultTryKind {
     OperatorSuffix,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DesugarProblem<'a> {
+    PrecedenceConflict(&'a PrecedenceConflict<'a>),
+    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
+    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
+    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
+    SpreadInRecordBuilder {
+        record_region: Region,
+        spread_region: Region,
+        opt_spread_expr: Option<&'a Loc<Expr<'a>>>,
+    },
+}
+
+impl<'a> DesugarProblem<'a> {
+    pub fn loc_expr<'b>(&'b self) -> Option<&'b Loc<Expr<'a>>> {
+        match self {
+            DesugarProblem::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
+            | DesugarProblem::EmptyRecordBuilder(loc_expr)
+            | DesugarProblem::SingleFieldRecordBuilder(loc_expr)
+            | DesugarProblem::OptionalFieldInRecordBuilder(_, loc_expr) => Some(loc_expr),
+            DesugarProblem::SpreadInRecordBuilder {
+                opt_spread_expr, ..
+            } => opt_spread_expr.as_deref(),
+        }
+    }
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -580,10 +607,7 @@ pub enum Expr<'a> {
     MalformedIdent(&'a str, crate::ident::BadIdent),
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
-    PrecedenceConflict(&'a PrecedenceConflict<'a>),
-    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
-    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
-    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
+    DesugarProblem(DesugarProblem<'a>),
 }
 
 impl Expr<'_> {
@@ -787,11 +811,15 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                         use AssignedField::*;
 
                         match current {
-                            RequiredValue(_, _, loc_val)
-                            | OptionalValue(_, _, loc_val)
-                            | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            WithValue { loc_val, .. } => break expr_stack.push(&loc_val.value),
+                            WithoutValue { .. } => break,
+                            SpreadValue(opt_loc_val) => {
+                                if let Some(loc_val) = opt_loc_val {
+                                    expr_stack.push(&loc_val.value);
+                                }
+                                break;
+                            }
                             SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
-                            LabelOnly(_) => break,
                         }
                     }
                 }
@@ -930,9 +958,11 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | SpaceAfter(expr, _)
                 | ParensAround(expr) => expr_stack.push(expr),
 
-                EmptyRecordBuilder(loc_expr)
-                | SingleFieldRecordBuilder(loc_expr)
-                | OptionalFieldInRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
+                DesugarProblem(problem) => {
+                    if let Some(loc_expr) = problem.loc_expr() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
 
                 Float(_)
                 | Num(_)
@@ -948,8 +978,7 @@ impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
                 | Try
                 | Tag(_)
                 | OpaqueRef(_)
-                | MalformedIdent(_, _)
-                | PrecedenceConflict(_) => { /* terminal */ }
+                | MalformedIdent(_, _) => { /* terminal */ }
             }
         }
     }
@@ -1178,11 +1207,11 @@ impl<'a> Defs<'a> {
                 Err(value_index) => match self.value_defs[value_index.index()] {
                     ValueDef::Body(
                         Loc {
-                            value: Pattern::RecordDestructure(collection),
+                            value: Pattern::RecordDestructure(fields),
                             ..
                         },
                         loc_expr,
-                    ) if collection.is_empty() => Some((tag_index, loc_expr)),
+                    ) if fields.is_empty() => Some((tag_index, loc_expr)),
                     ValueDef::Stmt(loc_expr) => Some((tag_index, loc_expr)),
                     _ => None,
                 },
@@ -1503,22 +1532,24 @@ pub enum Tag<'a> {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum AssignedField<'a, Val> {
-    // A required field with a label, e.g. `{ name: "blah" }` or `{ name : Str }`
-    RequiredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+    /// A field with a label, e.g. `{ name: "blah" }` or `{ name : Str }` or `{ foo ?? bar }`
+    WithValue {
+        ignored: bool,
+        loc_label: Loc<&'a str>,
+        before_prefix: &'a [CommentOrNewline<'a>],
+        prefix: RecordValuePrefix,
+        loc_val: &'a Loc<Val>,
+    },
 
-    // An optional field with a label, e.g. `{ name ? "blah" }`
-    //
-    // NOTE: This only comes up in type annotations (e.g. `name ? Str`)
-    // and in destructuring patterns (e.g. `{ name ? "blah" }`)
-    OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+    WithoutValue {
+        ignored: bool,
+        loc_label: Loc<&'a str>,
+    },
 
-    // An ignored field, e.g. `{ _name: "blah" }` or `{ _ : Str }`
-    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+    /// A record spread, e.g. `{ foo: 123, ..spread_record }`
+    SpreadValue(Option<&'a Loc<Val>>),
 
-    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<&'a str>),
-
-    // We preserve this for the formatter; canonicalization ignores it.
+    /// We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
 }
@@ -1529,11 +1560,20 @@ impl<'a, Val> AssignedField<'a, Val> {
 
         loop {
             match current {
-                Self::RequiredValue(_, _, val)
-                | Self::OptionalValue(_, _, val)
-                | Self::IgnoredValue(_, _, val) => break Some(val),
-                Self::LabelOnly(_) => break None,
+                Self::WithValue { loc_val, .. } => break Some(loc_val),
+                Self::WithoutValue { .. } | Self::SpreadValue(_) => break None,
                 Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
+            }
+        }
+    }
+
+    pub fn is_ignored(&self) -> bool {
+        match self {
+            AssignedField::WithValue { ignored, .. }
+            | AssignedField::WithoutValue { ignored, .. } => *ignored,
+            AssignedField::SpreadValue(_) => false,
+            AssignedField::SpaceBefore(inner, _) | AssignedField::SpaceAfter(inner, _) => {
+                inner.is_ignored()
             }
         }
     }
@@ -1587,6 +1627,106 @@ impl<'a> PatternAs<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
+pub enum RecordFieldPattern<'a> {
+    /// A required field pattern, e.g. { x: Just 0 } -> ...
+    /// Can only occur inside of a RecordDestructure
+    RequiredField {
+        label: &'a str,
+        inner: &'a Loc<Pattern<'a>>,
+    },
+
+    Identifier {
+        label: &'a str,
+    },
+
+    /// An optional field pattern, e.g. { x ? Just 0 } -> ...
+    /// Can only occur inside of a RecordDestructure
+    OptionalField {
+        label: &'a str,
+        default_value: &'a Loc<Expr<'a>>,
+    },
+
+    Spread {
+        opt_pattern: Option<&'a Loc<Pattern<'a>>>,
+    },
+
+    /// Spaces
+    SpaceBefore(&'a RecordFieldPattern<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a RecordFieldPattern<'a>, &'a [CommentOrNewline<'a>]),
+}
+
+impl<'a> RecordFieldPattern<'a> {
+    // TODO: check for equivalence based on whether there are any spreads, zip is a footgun here!
+    pub fn fields_are_equivalent(
+        lefts: &[Loc<Self>],
+        rights: &[Loc<Self>],
+        // arena: &'a Bump,
+    ) -> bool {
+        // let mut left_required_fields = Vec::with_capacity_in(lefts.len(), arena);
+        // let mut left_optional_fields = Vec::with_capacity_in(lefts.len(), arena);
+
+        // let mut right_required_fields = Vec::with_capacity_in(rights.len(), arena);
+        // let mut right_optional_fields = Vec::with_capacity_in(rights.len(), arena);
+
+        true
+    }
+
+    // pub fn equivalent(&self, other: &Self) -> bool {
+    //     match self {
+    //         Self::RequiredField { label, value } => match other {
+    //             Self::RequiredField {
+    //                 label: other_label,
+    //                 value,
+    //             } => label == other_label,
+    //             Self::OptionalField {
+    //                 label: other_label,
+    //                 default_value,
+    //             } => {}
+    //             Self::Identifier { label: other_label } => label == other_label,
+    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
+    //         },
+    //         Self::OptionalField {
+    //             label,
+    //             default_value,
+    //         } => match other {
+    //             Self::RequiredField {
+    //                 label: other_label,
+    //                 value,
+    //             } => label == other_label,
+    //             Self::OptionalField {
+    //                 label,
+    //                 default_value,
+    //             } => {}
+    //             Self::Identifier { label: other_label } => label == other_label,
+    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
+    //         },
+    //         Self::Identifier { label } => match other {
+    //             Self::RequiredField {
+    //                 label: other_label,
+    //                 value,
+    //             } => label == other_label,
+    //             Self::OptionalField {
+    //                 label,
+    //                 default_value,
+    //             } => {}
+    //             Self::Identifier { label: other_label } => label == other_label,
+    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
+    //         },
+    //         Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
+    //     }
+    // }
+}
+
+impl<'a> Spaceable<'a> for RecordFieldPattern<'a> {
+    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordFieldPattern::SpaceBefore(self, spaces)
+    }
+    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
+        RecordFieldPattern::SpaceAfter(self, spaces)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
     Identifier {
@@ -1608,15 +1748,7 @@ pub enum Pattern<'a> {
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
     /// In practice, these patterns will always be Identifier
-    RecordDestructure(Collection<'a, Loc<Pattern<'a>>>),
-
-    /// A required field pattern, e.g. { x: Just 0 } -> ...
-    /// Can only occur inside of a RecordDestructure
-    RequiredField(&'a str, &'a Loc<Pattern<'a>>),
-
-    /// An optional field pattern, e.g. { x ? Just 0 } -> ...
-    /// Can only occur inside of a RecordDestructure
-    OptionalField(&'a str, &'a Loc<Expr<'a>>),
+    RecordDestructure(Collection<'a, Loc<RecordFieldPattern<'a>>>),
 
     // Literal
     NumLiteral(&'a str),
@@ -1725,32 +1857,13 @@ impl<'a> Pattern<'a> {
             }
             RecordDestructure(fields_x) => {
                 if let RecordDestructure(fields_y) = other {
-                    fields_x
-                        .iter()
-                        .zip(fields_y.iter())
-                        .all(|(p, q)| p.value.equivalent(&q.value))
+                    RecordFieldPattern::fields_are_equivalent(fields_x.items, fields_y.items)
                 } else {
                     false
                 }
             }
-            RequiredField(x, inner_x) => {
-                if let RequiredField(y, inner_y) = other {
-                    x == y && inner_x.value.equivalent(&inner_y.value)
-                } else {
-                    false
-                }
-            }
-
-            // optional record fields can be annotated as:
-            //      { x, y } : { x : Int, y ? Bool }
-            //      { x, y ? False } = rec
-            OptionalField(x, _) => match other {
-                Identifier { ident: y } | OptionalField(y, _) => x == y,
-                _ => false,
-            },
             Identifier { ident: x } => match other {
                 Identifier { ident: y } => x == y,
-                OptionalField(y, _) => x == y,
                 _ => false,
             },
             NumLiteral(x) => {
@@ -2274,6 +2387,7 @@ impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
 impl_extract_spaces!(Implements);
 impl_extract_spaces!(TypeVar);
+impl_extract_spaces!(RecordFieldPattern);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -2470,11 +2584,7 @@ impl<'a> Malformed for Expr<'a> {
             SpaceAfter(expr, _) |
             ParensAround(expr) => expr.is_malformed(),
 
-            MalformedIdent(_, _) |
-            PrecedenceConflict(_) |
-            EmptyRecordBuilder(_) |
-            SingleFieldRecordBuilder(_) |
-            OptionalFieldInRecordBuilder(_, _) => true,
+            MalformedIdent(_, _) | DesugarProblem(_) => true,
         }
     }
 }
@@ -2537,13 +2647,29 @@ impl<T: Malformed> Malformed for Option<T> {
 impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     fn is_malformed(&self) -> bool {
         match self {
-            AssignedField::RequiredValue(_, _, val)
-            | AssignedField::OptionalValue(_, _, val)
-            | AssignedField::IgnoredValue(_, _, val) => val.is_malformed(),
-            AssignedField::LabelOnly(_) => false,
+            AssignedField::WithValue { loc_val, .. } => loc_val.value.is_malformed(),
+            AssignedField::WithoutValue { .. } => false,
+            AssignedField::SpreadValue(opt_loc_val) => {
+                opt_loc_val.is_some_and(|loc_val| loc_val.is_malformed())
+            }
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
             }
+        }
+    }
+}
+
+impl<'a> Malformed for RecordFieldPattern<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            RecordFieldPattern::RequiredField { inner, .. } => inner.value.is_malformed(),
+            RecordFieldPattern::OptionalField { default_value, .. } => default_value.is_malformed(),
+            RecordFieldPattern::Identifier { .. } => false,
+            RecordFieldPattern::Spread { opt_pattern } => {
+                opt_pattern.is_some_and(|pattern| pattern.is_malformed())
+            }
+            RecordFieldPattern::SpaceBefore(field, _)
+            | RecordFieldPattern::SpaceAfter(field, _) => field.is_malformed(),
         }
     }
 }
@@ -2558,9 +2684,7 @@ impl<'a> Malformed for Pattern<'a> {
             OpaqueRef(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
-            RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
-            RequiredField(_, pat) => pat.is_malformed(),
-            OptionalField(_, expr) => expr.is_malformed(),
+            RecordDestructure(fields) => fields.iter().any(|item| item.is_malformed()),
 
             NumLiteral(_) |
             NonBase10Literal { .. } |

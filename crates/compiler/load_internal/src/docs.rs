@@ -7,6 +7,7 @@ use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
 use roc_parse::ast::{self, ExtractSpaces, TypeHeader, TypeVar};
 use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
+use roc_parse::expr::RecordValuePrefix;
 
 // Documentation generation requirements
 
@@ -105,6 +106,9 @@ pub enum RecordField {
     },
     LabelOnly {
         name: String,
+    },
+    Spread {
+        type_annotation: Option<TypeAnnotation>,
     },
 }
 
@@ -466,14 +470,16 @@ fn contains_unexposed_type(
 
             while let Some(field) = fields_to_process.pop() {
                 match field {
-                    AssignedField::RequiredValue(_field, _spaces, loc_val)
-                    | AssignedField::OptionalValue(_field, _spaces, loc_val)
-                    | AssignedField::IgnoredValue(_field, _spaces, loc_val) => {
-                        if contains_unexposed_type(&loc_val.value, exposed_module_ids, module_ids) {
+                    AssignedField::WithValue {
+                        loc_val: type_ann, ..
+                    }
+                    | AssignedField::SpreadValue(Some(type_ann)) => {
+                        if contains_unexposed_type(&type_ann.value, exposed_module_ids, module_ids)
+                        {
                             return true;
                         }
                     }
-                    AssignedField::LabelOnly(_) => {
+                    AssignedField::SpreadValue(None) | AssignedField::WithoutValue { .. } => {
                         // contains no unexposed types, so continue
                     }
                     AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
@@ -709,20 +715,43 @@ fn record_field_to_doc(
     field: ast::AssignedField<'_, ast::TypeAnnotation>,
 ) -> Option<RecordField> {
     match field {
-        AssignedField::RequiredValue(name, _, type_ann) => Some(RecordField::RecordField {
-            name: name.value.to_string(),
-            type_annotation: type_to_docs(in_func_ann, type_ann.value),
+        AssignedField::WithValue {
+            ignored,
+            loc_label,
+            before_prefix: _,
+            prefix,
+            loc_val,
+        } => {
+            let name = if ignored {
+                format!("_{}", loc_label.value)
+            } else {
+                loc_label.value.to_owned()
+            };
+
+            match prefix {
+                RecordValuePrefix::Colon => Some(RecordField::RecordField {
+                    name,
+                    type_annotation: type_to_docs(in_func_ann, loc_val.value),
+                }),
+                RecordValuePrefix::DoubleQuestion => Some(RecordField::OptionalField {
+                    name,
+                    type_annotation: type_to_docs(in_func_ann, loc_val.value),
+                }),
+            }
+        }
+        AssignedField::WithoutValue { ignored, loc_label } => Some(RecordField::LabelOnly {
+            name: if ignored {
+                format!("_{}", loc_label.value)
+            } else {
+                loc_label.value.to_owned()
+            },
         }),
-        AssignedField::SpaceBefore(&sub_field, _) => record_field_to_doc(in_func_ann, sub_field),
-        AssignedField::SpaceAfter(&sub_field, _) => record_field_to_doc(in_func_ann, sub_field),
-        AssignedField::OptionalValue(name, _, type_ann) => Some(RecordField::OptionalField {
-            name: name.value.to_string(),
-            type_annotation: type_to_docs(in_func_ann, type_ann.value),
+        AssignedField::SpreadValue(opt_spread) => Some(RecordField::Spread {
+            type_annotation: opt_spread.map(|spread| type_to_docs(in_func_ann, spread.value)),
         }),
-        AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
-            name: label.value.to_string(),
-        }),
-        AssignedField::IgnoredValue(_, _, _) => None,
+        AssignedField::SpaceBefore(&sub_field, _) | AssignedField::SpaceAfter(&sub_field, _) => {
+            record_field_to_doc(in_func_ann, sub_field)
+        }
     }
 }
 
