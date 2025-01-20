@@ -2,7 +2,7 @@ app "test" provides [main] to "./platform"
 
 Noop := {} implements [Hash {hash}]
 
-hash = \hasher, @Noop {} -> hasher
+hash = |hasher, @Noop({})| hasher
 
-main = \hasher -> hash hasher (@Noop {})
+main = |hasher| hash(hasher, @Noop({}))
 #^^^^{-1} hasher -[[main(0)]]-> hasher where hasher implements Hasher

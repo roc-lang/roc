@@ -700,6 +700,42 @@ mod solve_expr {
     }
 
     #[test]
+    fn zero_arg_specializes_numbers_differently() {
+        infer_eq(
+            indoc!(
+                r#"
+                    num_gen : () -> Num a
+                    num_gen = || 5
+
+                    u64_num : U64
+                    u64_num = num_gen()
+
+                    u8_num : U8
+                    u8_num = num_gen()
+
+                    (u64_num, u8_num)
+                "#
+            ),
+            "( U64, U8 )*",
+        );
+    }
+
+    #[test]
+    fn zero_arg_specializes_dicts_differently() {
+        infer_eq(
+            indoc!(
+                r#"
+                    (
+                        Dict.empty() |> Dict.insert("abc", 123),
+                        Dict.empty() |> Dict.insert(123, Red)
+                    )
+                "#
+            ),
+            "( Dict Str (Num *), Dict (Num *) [Red] )*",
+        );
+    }
+
+    #[test]
     fn identity_returns_given_type() {
         infer_eq(
             indoc!(

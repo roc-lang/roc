@@ -2,5 +2,5 @@ app "test" provides [main] to "./platform"
 
 Op := {}
 
-main = Inspect.to_inspector (@Op {}) |> Inspect.apply (Inspect.init {})
+main = Inspect.to_inspector(@Op({})) |> Inspect.apply(Inspect.init())
 #      ^^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.to_inspector(32): Op -[[] + f:Inspect.opaque(15):1]-> Inspector f where f implements InspectFormatter

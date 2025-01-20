@@ -4,6 +4,6 @@ app "test" provides [main] to "./platform"
 N := U8 implements [Decoding]
 
 main : Decoder N _
-main = Decode.custom \bytes, fmt ->
-    Decode.decode_with bytes Decode.decoder fmt
-#                            ^^^^^^^^^^^^^^ N#Decode.decoder(3): List U8, fmt -[[7]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } where fmt implements DecoderFormatting
+main = Decode.custom(|bytes, fmt|
+    Decode.decode_with(bytes, Decode.decoder, fmt))
+#                             ^^^^^^^^^^^^^^ N#Decode.decoder(3): List U8, fmt -[[7]]-> { rest : List U8, result : [Err [TooShort], Ok U8] } where fmt implements DecoderFormatting

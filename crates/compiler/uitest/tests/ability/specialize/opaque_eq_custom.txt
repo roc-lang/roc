@@ -2,7 +2,7 @@ app "test" provides [main] to "./platform"
 
 Trivial := {} implements [Eq {is_eq}]
 
-is_eq = \@Trivial {}, @Trivial {} -> Bool.true
+is_eq = |@Trivial({}), @Trivial({})| Bool.true
 
-main = Bool.is_eq (@Trivial {}) (@Trivial {})
+main = Bool.is_eq(@Trivial({}), @Trivial({}))
 #      ^^^^^^^^^^ Trivial#Bool.is_eq(2): Trivial, Trivial -[[is_eq(2)]]-> Bool

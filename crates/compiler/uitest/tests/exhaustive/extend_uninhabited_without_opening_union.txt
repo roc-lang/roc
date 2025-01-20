@@ -1,7 +1,7 @@
 app "test" provides [main] to "./platform"
 
-walkHelp : {} -> [Continue {}, Break []]
+walkHelp : () -> [Continue {}, Break []]
 
-main = when walkHelp {} is
-#           ^^^^^^^^^^^ [Break []w_a, Continue {}]
-    Continue {} -> {}
+main = when walkHelp() is
+#           ^^^^^^^^^^ [Break []w_a, Continue {}]
+    Continue({}) -> {}

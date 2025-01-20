@@ -2,5 +2,5 @@ app "test" provides [main] to "./platform"
 
 N := U8 implements [Encoding]
 
-main = Encode.to_encoder (@N 15)
+main = Encode.to_encoder(@N(15))
 #      ^^^^^^^^^^^^^^^^^ N#Encode.to_encoder(3): N -[[#N_to_encoder(3)]]-> Encoder fmt where fmt implements EncoderFormatting

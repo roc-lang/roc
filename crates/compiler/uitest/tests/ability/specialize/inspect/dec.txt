@@ -1,4 +1,4 @@
 app "test" provides [main] to "./platform"
 
-main = Inspect.to_inspector 7dec |> Inspect.apply (Inspect.init {})
+main = Inspect.to_inspector(7dec) |> Inspect.apply(Inspect.init())
 #      ^^^^^^^^^^^^^^^^^^^^ Inspect#Inspect.to_inspector(32): Dec -[[] + f:Inspect.dec(29):1]-> Inspector f where f implements InspectFormatter

@@ -1482,14 +1482,18 @@ fn write_fn<'a>(
         buf.push('(');
     }
 
-    for arg in args {
-        if needs_comma {
-            buf.push_str(", ");
-        } else {
-            needs_comma = true;
-        }
+    if args.is_empty() {
+        buf.push_str("()");
+    } else {
+        for arg in args {
+            if needs_comma {
+                buf.push_str(", ");
+            } else {
+                needs_comma = true;
+            }
 
-        write_content(env, ctx, *arg, subs, buf, Parens::InFn, Polarity::Neg);
+            write_content(env, ctx, *arg, subs, buf, Parens::InFn, Polarity::Neg);
+        }
     }
 
     if !env.debug.print_lambda_sets {
