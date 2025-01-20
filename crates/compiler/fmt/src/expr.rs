@@ -1,6 +1,6 @@
 use crate::annotation::{except_last, is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
-use crate::def::{fmt_defs, valdef_lift_spaces_before};
+use crate::def::{fmt_defs, starts_with_block_string_literal, valdef_lift_spaces_before};
 use crate::node::Prec;
 use crate::pattern::{
     fmt_pattern, pattern_lift_spaces, snakify_camel_ident, starts_with_inline_comment,
@@ -264,7 +264,7 @@ fn format_expr_only(
             let before_all_newlines = lifted.before.iter().all(|s| s.is_newline());
 
             let needs_newline =
-                !before_all_newlines || term_starts_with_multiline_str(&lifted.item);
+                !before_all_newlines || starts_with_block_string_literal(&lifted.item);
 
             let needs_parens = (needs_newline
                 && matches!(unary_op.value, called_via::UnaryOp::Negate))
@@ -364,14 +364,6 @@ fn format_expr_only(
         Expr::EmptyRecordBuilder { .. } => {}
         Expr::SingleFieldRecordBuilder { .. } => {}
         Expr::OptionalFieldInRecordBuilder(_, _) => {}
-    }
-}
-
-fn term_starts_with_multiline_str(expr: &Expr<'_>) -> bool {
-    match expr {
-        Expr::Str(text) => is_str_multiline(text),
-        Expr::PncApply(inner, _) => term_starts_with_multiline_str(&inner.value),
-        _ => false,
     }
 }
 
@@ -959,8 +951,8 @@ fn push_op(buf: &mut Buf, op: BinOp) {
         called_via::BinOp::GreaterThan => buf.push('>'),
         called_via::BinOp::LessThanOrEq => buf.push_str("<="),
         called_via::BinOp::GreaterThanOrEq => buf.push_str(">="),
-        called_via::BinOp::And => buf.push_str("&&"),
-        called_via::BinOp::Or => buf.push_str("||"),
+        called_via::BinOp::Or => buf.push_str("or"),
+        called_via::BinOp::And => buf.push_str("and"),
         called_via::BinOp::Pizza => buf.push_str("|>"),
         called_via::BinOp::DoubleQuestion => buf.push_str("??"),
         called_via::BinOp::SingleQuestion => buf.push_str("?"),
@@ -1024,14 +1016,6 @@ pub fn fmt_str_literal(buf: &mut Buf, literal: StrLiteral, indent: u16) {
             buf.push_str("\"\"\"");
         }
     }
-}
-
-pub fn expr_lift_and_lower<'a, 'b: 'a>(
-    _parens: Parens,
-    arena: &'a Bump,
-    expr: &Expr<'b>,
-) -> Expr<'a> {
-    lower(arena, expr_lift_spaces(Parens::NotNeeded, arena, expr))
 }
 
 pub fn expr_lift_spaces<'a, 'b: 'a>(
@@ -1496,7 +1480,6 @@ fn fmt_binops<'a>(
     buf: &mut Buf,
     lefts: &'a [(Loc<Expr<'a>>, Loc<BinOp>)],
     loc_right_side: &'a Loc<Expr<'a>>,
-
     indent: u16,
 ) {
     let is_multiline = loc_right_side.value.is_multiline()
@@ -1825,6 +1808,8 @@ fn guard_needs_parens(value: &Expr<'_>) -> bool {
         Expr::ParensAround(expr) | Expr::SpaceBefore(expr, _) | Expr::SpaceAfter(expr, _) => {
             guard_needs_parens(expr)
         }
+        Expr::BinOps(_lefts, right) => guard_needs_parens(&right.value),
+        Expr::UnaryOp(inner, _) => guard_needs_parens(&inner.value),
         Expr::Closure(_, body) => guard_needs_parens(&body.value),
         Expr::Defs(_, final_expr) => guard_needs_parens(&final_expr.value),
         _ => false,

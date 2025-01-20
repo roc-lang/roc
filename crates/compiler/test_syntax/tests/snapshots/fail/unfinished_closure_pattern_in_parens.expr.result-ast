@@ -1,1 +1,1 @@
-Expr(Closure(IndentArrow(@10), @4), @0)
+Expr(Closure(Arrow(@11), @4), @0)

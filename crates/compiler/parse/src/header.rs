@@ -927,7 +927,7 @@ impl<'a> HeaderType<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HeaderType<'a> {
     App {
         provides: &'a [Loc<ExposedName<'a>>],

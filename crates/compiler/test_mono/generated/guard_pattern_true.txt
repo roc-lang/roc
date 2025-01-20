@@ -1,6 +1,6 @@
 procedure Bool.1 ():
-    let Bool.23 : Int1 = false;
-    ret Bool.23;
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
 
 procedure Test.1 (Test.2):
     let Test.5 : I64 = 2i64;

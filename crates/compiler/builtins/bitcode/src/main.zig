@@ -212,6 +212,7 @@ comptime {
     exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
+    exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
 
     for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

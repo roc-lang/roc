@@ -259,6 +259,9 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
+            StrWithAsciiLowercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_LOWERCASED)
+            }
 
             // List
             ListLenU64 => {
@@ -2164,14 +2167,6 @@ impl<'a> LowLevelCall<'a> {
             NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
             NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
             NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
-            And => {
-                self.load_args(backend);
-                backend.code_builder.i32_and();
-            }
-            Or => {
-                self.load_args(backend);
-                backend.code_builder.i32_or();
-            }
             Not => {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();

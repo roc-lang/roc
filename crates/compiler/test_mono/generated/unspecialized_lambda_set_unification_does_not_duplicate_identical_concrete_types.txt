@@ -1,6 +1,6 @@
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Encode.23 (Encode.100):
     ret Encode.100;
@@ -29,7 +29,7 @@ procedure Encode.26 (Encode.107, Encode.108):
     let Encode.110 : List U8 = CallByName Encode.24 Encode.111 Encode.112 Encode.108;
     ret Encode.110;
 
-procedure List.101 (#Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15, #Derived_gen.16):
+procedure List.101 (#Derived_gen.9, #Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_gen.13):
     joinpoint List.678 List.175 List.176 List.177 List.178 List.179:
         let List.680 : Int1 = CallByName Num.22 List.178 List.179;
         if List.680 then
@@ -43,8 +43,8 @@ procedure List.101 (#Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_
             dec List.175;
             ret List.176;
     in
-    inc #Derived_gen.12;
-    jump List.678 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15 #Derived_gen.16;
+    inc #Derived_gen.9;
+    jump List.678 #Derived_gen.9 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13;
 
 procedure List.13 (#Attr.2, #Attr.3):
     let List.701 : List Str = lowlevel ListPrepend #Attr.2 #Attr.3;
@@ -99,12 +99,12 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.12 (#Attr.2):
-    let Str.379 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.379;
+    let Str.249 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.249;
 
 procedure Str.36 (#Attr.2):
-    let Str.380 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
-    ret Str.380;
+    let Str.250 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.250;
 
 procedure Test.20 (Test.58):
     let Test.295 : Str = CallByName Encode.23 Test.58;

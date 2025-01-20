@@ -1,10 +1,10 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.379 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.379;
+    let Str.249 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.249;
 
 procedure Test.2 (Test.7):
     let Test.24 : Str = ".trace(\"";
@@ -29,16 +29,16 @@ procedure Test.0 ():
     let Test.14 : [<r>C List *self, C Str] = CallByName Test.3;
     let Test.16 : Str = "";
     let Test.15 : [<r>C List *self, C Str] = TagId(1) Test.16;
-    let Test.13 : Int1 = CallByName Bool.11 Test.14 Test.15;
-    joinpoint #Derived_gen.0:
+    let Test.13 : Int1 = CallByName Bool.9 Test.14 Test.15;
+    joinpoint Bool.22:
         dec Test.14;
         ret Test.13;
     in
-    let #Derived_gen.1 : Int1 = lowlevel RefCountIsUnique Test.15;
-    if #Derived_gen.1 then
+    let Bool.23 : Int1 = lowlevel RefCountIsUnique Test.15;
+    if Bool.23 then
         dec Test.16;
         free Test.15;
-        jump #Derived_gen.0;
+        jump Bool.22;
     else
         decref Test.15;
-        jump #Derived_gen.0;
+        jump Bool.22;

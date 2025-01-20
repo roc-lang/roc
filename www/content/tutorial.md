@@ -640,7 +640,7 @@ We refer to whatever comes before a `->` in a `when` expression as a _pattern_â€
 
 In many programming languages, `true` and `false` are special language keywords that refer to the two [boolean](https://en.wikipedia.org/wiki/Boolean_data_type) values. In Roc, booleans do not get special keywords; instead, they are exposed as the ordinary values `Bool.true` and `Bool.false`.
 
-This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended to be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
+This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended to be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`and`, `or`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
 
 As an example of why tags are encouraged for data modeling, in many languages it would be common to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` - some of which might also want payloads.
 
@@ -2369,22 +2369,21 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                   | Desugars To                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------------- |
-| `a + b`                      | `Num.add a b`                                                                |
-| `a - b`                      | `Num.sub a b`                                                                |
-| `a * b`                      | `Num.mul a b`                                                                |
-| `a / b`                      | `Num.div a b`                                                                |
-| `a // b`                     | `Num.divTrunc a b`                                                           |
-| `a ^ b`                      | `Num.pow a b`                                                                |
-| `a % b`                      | `Num.rem a b`                                                                |
-| `-a`                         | `Num.neg a`                                                                  |
-| `a == b`                     | `Bool.isEq a b`                                                              |
-| `a != b`                     | `Bool.isNotEq a b`                                                           |
-| `a && b`                     | `Bool.and a b`                                                               |
-| <code>a \|\| b</code>        | `Bool.or a b`                                                                |
-| `!a`                         | `Bool.not a`                                                                 |
-| <code>a \|> f</code>         | `f a`                                                                        |
-| <code>f a b \|> g x y</code> | `g (f a b) x y`                                                              |
-| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html) |
+| `a + b`                      | `Num.add(a, b)`                                                              |
+| `a - b`                      | `Num.sub(a, b)`                                                              |
+| `a * b`                      | `Num.mul(a, b)`                                                              |
+| `a / b`                      | `Num.div(a, b)`                                                              |
+| `a // b`                     | `Num.div_trunc(a, b)`                                                        |
+| `a ^ b`                      | `Num.pow(a, b)`                                                              |
+| `a % b`                      | `Num.rem(a, b)`                                                              |
+| `-a`                         | `Num.neg(a)`                                                                 |
+| `a == b`                     | `Bool.is_eq(a, b)`                                                           |
+| `a != b`                     | `Bool.is_not_eq(a, b)`                                                       |
+| `a and b`                    | `if a then b else Bool.false`                                                |
+| `a or b`                     | `if a then Bool.true else b`                                                 |
+| `!a`                         | `Bool.not(a)`                                                                |
+| <code>a \|> f</code>         | `f(a)`                                                                       |
+| <code>f a b \|> g x y</code> | `g(f(a, b), x, y)`                                                           |
 | `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)   |
 
 ### [Additional Resources](#additional-resources) {#additional-resources}

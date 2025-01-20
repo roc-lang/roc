@@ -2460,7 +2460,7 @@ fn issue_4557() {
         app "test" provides [main] to "./platform"
 
         is_eq_q = \q1, q2 -> when T q1 q2 is
-            T (U f1) (U f2) -> Bool.or (is_eq_q (U f2) (U f1)) (f1 {} == f2 {})
+            T (U f1) (U f2) -> (is_eq_q (U f2) (U f1)) or (f1 {} == f2 {})
 
         main = is_eq_q (U \{} -> "a") (U \{} -> "a")
         "#

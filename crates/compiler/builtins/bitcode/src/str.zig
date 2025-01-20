@@ -2,6 +2,7 @@ const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
+const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
@@ -370,11 +371,17 @@ pub const RocStr = extern struct {
     }
 
     fn refcount(self: RocStr) usize {
-        if ((self.getCapacity() == 0 and !self.isSeamlessSlice()) or self.isSmallStr()) {
+        const is_seamless_slice = self.isSeamlessSlice();
+        if ((self.getCapacity() == 0 and !is_seamless_slice) or self.isSmallStr()) {
             return 1;
         }
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.bytes)));
+        const data_ptr = if (is_seamless_slice)
+            self.getAllocationPtr()
+        else
+            self.bytes;
+
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
         return (ptr - 1)[0];
     }
 
@@ -609,16 +616,6 @@ pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
 
 fn initFromSmallStr(slice_bytes: [*]u8, len: usize, _: usize) RocStr {
     return RocStr.init(slice_bytes, len);
-}
-
-// The alloc_ptr must already be shifted to be ready for storing in a seamless slice.
-fn initFromBigStr(slice_bytes: [*]u8, len: usize, alloc_ptr: usize) RocStr {
-    // Here we can make seamless slices instead of copying to a new small str.
-    return RocStr{
-        .bytes = slice_bytes,
-        .length = len | SEAMLESS_SLICE_BIT,
-        .capacity_or_alloc_ptr = alloc_ptr,
-    };
 }
 
 fn strSplitOnHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
@@ -2136,6 +2133,66 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     }
 
     return byte_count;
+}
+
+// Str.with_ascii_lowercased
+pub fn strWithAsciiLowercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toLower(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiLowercased: small str" {
+    const original = RocStr.fromSlice("cOFFÉ");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: non small str" {
+    const original = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: seamless slice" {
+    const l = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("offÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
 }
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}

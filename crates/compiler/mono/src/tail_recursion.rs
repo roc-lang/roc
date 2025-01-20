@@ -49,7 +49,15 @@ pub fn apply_trmc<'a, 'i>(
 
     let env = &mut env;
 
-    for proc in procs.values_mut() {
+    // TODO temporary workaround for #7531, remove this cloning and sorting once that is fixed
+    let clone_procs = procs.clone();
+    let mut procs_key_value_list = clone_procs.iter().collect::<std::vec::Vec<_>>();
+
+    procs_key_value_list.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+
+    for (key, _) in procs_key_value_list {
+        let proc = procs.get_mut(key).unwrap();
+
         use self::SelfRecursive::*;
         if let SelfRecursive(id) = proc.is_self_recursive {
             let trmc_candidate_symbols = trmc_candidates(env.interner, proc);

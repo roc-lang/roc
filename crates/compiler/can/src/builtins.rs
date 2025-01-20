@@ -131,6 +131,7 @@ map_symbol_to_lowlevel_and_arity! {
     StrToNum; STR_TO_NUM; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
+    StrWithAsciiLowercased; STR_WITH_ASCII_LOWERCASED; 1,
 
     ListLenUsize; LIST_LEN_USIZE; 1,
     ListLenU64; LIST_LEN_U64; 1,
@@ -213,8 +214,6 @@ map_symbol_to_lowlevel_and_arity! {
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
-    And; BOOL_AND; 2,
-    Or; BOOL_OR; 2,
     Not; BOOL_NOT; 1,
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,

@@ -39,18 +39,18 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.378 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.378;
+    let Str.248 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.248;
 
 procedure Test.0 ():
-    let Test.6 : I64 = 1i64;
-    let Test.7 : Str = CallByName Inspect.33 Test.6;
-    dbg Test.7;
-    dec Test.7;
-    let Test.8 : Str = CallByName Inspect.33 Test.6;
-    dbg Test.8;
-    dec Test.8;
-    let Test.9 : Str = CallByName Inspect.33 Test.6;
-    dbg Test.9;
-    dec Test.9;
-    ret Test.6;
+    let Test.3 : I64 = 1i64;
+    let Test.4 : Str = CallByName Inspect.33 Test.3;
+    dbg Test.4;
+    dec Test.4;
+    let Test.5 : Str = CallByName Inspect.33 Test.3;
+    dbg Test.5;
+    dec Test.5;
+    let Test.6 : Str = CallByName Inspect.33 Test.3;
+    dbg Test.6;
+    dec Test.6;
+    ret Test.3;

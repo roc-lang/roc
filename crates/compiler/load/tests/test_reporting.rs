@@ -1522,18 +1522,18 @@ mod test_reporting {
         from_annotation_if,
         indoc!(
             r"
-            x : Num.Int *
+            x : Num.Int _
             x = if Bool.true then 3.14 else 4
 
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the `then` branch of this `if` expression:
 
-    4│      x : Num.Int *
+    4│      x : Num.Int _
     5│      x = if Bool.true then 3.14 else 4
                                   ^^^^
 
@@ -1547,14 +1547,14 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.to_frac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
         from_annotation_when,
         indoc!(
             r"
-            x : Num.Int *
+            x : Num.Int _
             x =
                 when True is
                     _ -> 3.14
@@ -1562,12 +1562,12 @@ mod test_reporting {
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
-    4│       x : Num.Int *
+    4│       x : Num.Int _
     5│       x =
     6│>          when True is
     7│>              _ -> 3.14
@@ -1582,7 +1582,7 @@ mod test_reporting {
 
     Tip: You can convert between integers and fractions using functions
     like `Num.to_frac` and `Num.round`.
-    "
+    "###
     );
 
     test_report!(
@@ -1910,7 +1910,7 @@ mod test_reporting {
         from_annotation_complex_pattern,
         indoc!(
             r"
-            { x } : { x : Num.Int * }
+            { x } : { x : Num.Int _ }
             { x } = { x: 4.0 }
 
             x
@@ -1921,7 +1921,7 @@ mod test_reporting {
 
     Something is off with the body of this definition:
 
-    4│      { x } : { x : Num.Int * }
+    4│      { x } : { x : Num.Int _ }
     5│      { x } = { x: 4.0 }
                     ^^^^^^^^^^
 
@@ -2047,18 +2047,18 @@ mod test_reporting {
         missing_fields,
         indoc!(
             r"
-            x : { a : Num.Int *, b : Num.Frac *, c : Str }
+            x : { a : Num.Int _, b : Num.Frac _, c : Str }
             x = { b: 4.0 }
 
             x
             "
         ),
-        @r"
+        @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
     Something is off with the body of the `x` definition:
 
-    4│      x : { a : Num.Int *, b : Num.Frac *, c : Str }
+    4│      x : { a : Num.Int _, b : Num.Frac _, c : Str }
     5│      x = { b: 4.0 }
                 ^^^^^^^^^^
 
@@ -2075,7 +2075,7 @@ mod test_reporting {
         }
 
     Tip: Looks like the c and a fields are missing.
-    "
+    "###
     );
 
     // this previously reported the message below, not sure which is better
@@ -3448,7 +3448,7 @@ mod test_reporting {
             x : AList Num.I64 Num.I64
             x = ACons 0 (BCons 1 (ACons "foo" BNil ))
 
-            y : BList a a
+            y : BList _ _
             y = BNil
 
             { x, y }
@@ -4189,9 +4189,8 @@ mod test_reporting {
             RBTree k v : [Node NodeColor k v (RBTree k v) (RBTree k v), Empty]
 
             # Create an empty dictionary.
-            empty : RBTree k v
-            empty =
-                Empty
+            empty : {} -> RBTree k v
+            empty = \{} -> Empty
 
             empty
             "
@@ -6036,7 +6035,7 @@ All branches in an `if` must have the same type!
         double_binop,
         indoc!(
             r"
-            key >= 97 && <= 122
+            key >= 97 and <= 122
             "
         ),
         @r"
@@ -6692,17 +6691,20 @@ All branches in an `if` must have the same type!
             )
             "
         ),
-        @r"
-    ── UNFINISHED FUNCTION in tmp/unfinished_closure_pattern_in_parens/Test.roc ────
+        @r###"
+    ── MISSING ARROW in tmp/unfinished_closure_pattern_in_parens/Test.roc ──────────
 
-    I was partway through parsing a function, but I got stuck here:
+    I am partway through parsing a function argument list, but I got stuck
+    here:
 
     4│      x = \( a
     5│      )
-             ^
+    6│
+    7│
+        ^
 
-    I just saw a pattern, so I was expecting to see a -> next.
-    "
+    I was expecting a -> next.
+    "###
     );
 
     test_report!(
@@ -11215,10 +11217,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                my_decoder : Decoder (a -> a) fmt where fmt implements DecoderFormatting
-                my_decoder = decoder
+            my_decoder : Decoder (_ -> _) _
+            my_decoder = decoder
 
+            main =
                 my_decoder
             "#
         ),
@@ -11227,12 +11229,12 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      my_decoder = decoder
-                         ^^^^^^^
+    6│  my_decoder = decoder
+                     ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
-        a -> a
+        * -> *
 
     Note: `Decoding` cannot be generated for functions.
     "
@@ -11248,10 +11250,10 @@ All branches in an `if` must have the same type!
 
             A := {}
 
-            main =
-                my_decoder : Decoder {x : A} fmt where fmt implements DecoderFormatting
-                my_decoder = decoder
+            my_decoder : Decoder {x : A} _
+            my_decoder = decoder
 
+            main =
                 my_decoder
             "#
         ),
@@ -11260,8 +11262,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    9│      my_decoder = decoder
-                         ^^^^^^^
+    8│  my_decoder = decoder
+                     ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -11511,11 +11513,10 @@ All branches in an `if` must have the same type!
 
              import Decode exposing [decoder]
 
-             main =
-                 my_decoder : Decoder {x : Str, y ? Str} fmt where fmt implements DecoderFormatting
-                 my_decoder = decoder
+             my_decoder : Decoder {x : Str, y ? Str} _
+             my_decoder = decoder
 
-                 my_decoder
+             main = my_decoder
              "#
         ),
         @r"
@@ -11523,8 +11524,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      my_decoder = decoder
-                         ^^^^^^^
+    6│  my_decoder = decoder
+                     ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -14108,11 +14109,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                my_decoder : Decoder (U32, Str) fmt where fmt implements DecoderFormatting
-                my_decoder = decoder
+            my_decoder : Decoder (U32, Str) _
+            my_decoder = decoder
 
-                my_decoder
+            main = my_decoder
             "#
         )
     );
@@ -14125,11 +14125,10 @@ All branches in an `if` must have the same type!
 
             import Decode exposing [decoder]
 
-            main =
-                my_decoder : Decoder (U32, {} -> {}) fmt where fmt implements DecoderFormatting
-                my_decoder = decoder
+            my_decoder : Decoder (U32, {} -> {}) _
+            my_decoder = decoder
 
-                my_decoder
+            main = my_decoder
             "#
         ),
         @r"
@@ -14137,8 +14136,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    7│      my_decoder = decoder
-                         ^^^^^^^
+    6│  my_decoder = decoder
+                     ^^^^^^^
 
     I can't generate an implementation of the `Decoding` ability for
 
@@ -15993,5 +15992,67 @@ All branches in an `if` must have the same type!
 
         Str -> {}
     "#
+    );
+
+    test_report!(
+        invalid_generic_literal,
+        indoc!(
+            r#"
+            module [v]
+
+            v : *
+            v = 1
+            "#
+        ),
+        @r###"
+    ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
+
+    Something is off with the body of the `v` definition:
+
+    3│  v : *
+    4│  v = 1
+            ^
+
+    The body is a number of type:
+
+        Num *
+
+    But the type annotation on `v` says it should be:
+
+        *
+
+    Tip: The type annotation uses the type variable `*` to say that this
+    definition can produce any type of value. But in the body I see that
+    it will only produce a `Num` value of a single specific type. Maybe
+    change the type annotation to be more specific? Maybe change the code
+    to be more general?
+    "###
+    );
+
+    test_report!(
+        invalid_generic_literal_list,
+        indoc!(
+            r#"
+            module [v]
+
+            v : List *
+            v = []
+            "#
+        ),
+        @r###"
+    ── TYPE VARIABLE IS NOT GENERIC in /code/proj/Main.roc ─────────────────────────
+
+    This type variable has a single type:
+
+    3│  v : List *
+                 ^
+
+    Type variables tell me that they can be used with any type, but they
+    can only be used with functions. All other values have exactly one
+    type.
+
+    Hint: If you would like the type to be inferred for you, use an
+    underscore _ instead.
+    "###
     );
 }

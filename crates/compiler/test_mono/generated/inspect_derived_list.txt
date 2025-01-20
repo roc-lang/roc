@@ -14,12 +14,12 @@ procedure #Derived.4 (#Derived.5, #Derived.1):
     ret #Derived_gen.3;
 
 procedure Bool.1 ():
-    let Bool.24 : Int1 = false;
-    ret Bool.24;
+    let Bool.22 : Int1 = false;
+    ret Bool.22;
 
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Inspect.156 (Inspect.157, #Attr.12):
     let Inspect.155 : {} = StructAtIndex 2 #Attr.12;
@@ -120,7 +120,7 @@ procedure Inspect.63 (Inspect.295, Inspect.291):
 procedure Inspect.64 (Inspect.297):
     ret Inspect.297;
 
-procedure List.101 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14, #Derived_gen.15):
+procedure List.101 (#Derived_gen.10, #Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_gen.14):
     joinpoint List.678 List.175 List.176 List.177 List.178 List.179:
         let List.680 : Int1 = CallByName Num.22 List.178 List.179;
         if List.680 then
@@ -133,8 +133,8 @@ procedure List.101 (#Derived_gen.11, #Derived_gen.12, #Derived_gen.13, #Derived_
             dec List.175;
             ret List.176;
     in
-    inc #Derived_gen.11;
-    jump List.678 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14 #Derived_gen.15;
+    inc #Derived_gen.10;
+    jump List.678 #Derived_gen.10 #Derived_gen.11 #Derived_gen.12 #Derived_gen.13 #Derived_gen.14;
 
 procedure List.18 (List.172, List.173, List.174):
     let List.676 : U64 = 0i64;
@@ -163,8 +163,8 @@ procedure Num.96 (#Attr.2):
     ret Num.283;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.378 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.378;
+    let Str.248 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.248;
 
 procedure Test.0 ():
     let Test.2 : List I64 = Array [1i64, 2i64, 3i64];

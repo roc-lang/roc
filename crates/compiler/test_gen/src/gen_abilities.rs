@@ -2095,13 +2095,13 @@ mod eq {
 
                 LyingEq := U8 implements [Eq {is_eq}]
 
-                is_eq = \@LyingEq m, @LyingEq n -> m != n
+                is_eq = \@LyingEq(m), @LyingEq(n) -> m != n
 
                 main =
-                    a = @LyingEq 10
-                    b = @LyingEq 5
-                    c = @LyingEq 5
-                    if Bool.is_eq a b && !(Bool.is_eq b c) then
+                    a = @LyingEq(10)
+                    b = @LyingEq(5)
+                    c = @LyingEq(5)
+                    if Bool.is_eq(a, b) and !(Bool.is_eq(b, c)) then
                         "okay"
                     else
                         "fail"

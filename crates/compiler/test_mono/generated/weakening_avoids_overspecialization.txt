@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure List.116 (List.563, List.564, List.565):
     let List.693 : U64 = 0i64;
@@ -51,7 +51,7 @@ procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
     let List.681 : List U8 = lowlevel ListSublist #Attr.2 #Attr.3 #Attr.4;
     ret List.681;
 
-procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.3, #Derived_gen.4):
+procedure List.80 (Bool.22, Bool.23, Bool.24, Bool.25, Bool.26):
     joinpoint List.695 List.566 List.567 List.568 List.569 List.570:
         let List.697 : Int1 = CallByName Num.22 List.569 List.570;
         if List.697 then
@@ -75,8 +75,8 @@ procedure List.80 (#Derived_gen.0, #Derived_gen.1, #Derived_gen.2, #Derived_gen.
             let List.696 : [C U64, C U64] = TagId(1) List.567;
             ret List.696;
     in
-    inc #Derived_gen.0;
-    jump List.695 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.3 #Derived_gen.4;
+    inc Bool.22;
+    jump List.695 Bool.22 Bool.23 Bool.24 Bool.25 Bool.26;
 
 procedure Num.22 (#Attr.2, #Attr.3):
     let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
@@ -99,7 +99,7 @@ procedure Test.0 (Test.1):
     let Test.11 : {} = Struct {};
     let Test.2 : U64 = CallByName List.26 Test.1 Test.10 Test.11;
     let Test.9 : U64 = 0i64;
-    let Test.7 : Int1 = CallByName Bool.11 Test.2 Test.9;
+    let Test.7 : Int1 = CallByName Bool.9 Test.2 Test.9;
     if Test.7 then
         ret Test.1;
     else

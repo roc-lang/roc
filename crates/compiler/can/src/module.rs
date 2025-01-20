@@ -1,9 +1,6 @@
-use std::path::Path;
-
 use crate::abilities::{AbilitiesStore, ImplKey, PendingAbilitiesStore, ResolvedImpl};
 use crate::annotation::{canonicalize_annotation, AnnotationFor};
 use crate::def::{canonicalize_defs, report_unused_imports, Def, DefKind};
-use crate::desugar::desugar_record_destructures;
 use crate::env::Env;
 use crate::expr::{ClosureData, Declarations, ExpectLookup, Expr, Output, PendingDerives};
 use crate::pattern::{
@@ -16,8 +13,8 @@ use roc_collections::{MutMap, SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
-use roc_module::symbol::{IdentId, IdentIds, IdentIdsByModule, ModuleId, PackageModuleIds, Symbol};
-use roc_parse::ast::{Defs, TypeAnnotation};
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
+use roc_parse::ast::{Collection, Defs, Pattern as ParsePattern, TypeAnnotation};
 use roc_parse::header::HeaderType;
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{Problem, RuntimeError};
@@ -209,54 +206,18 @@ fn has_no_implementation(expr: &Expr) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_module_defs<'a>(
     arena: &'a Bump,
-    loc_defs: &'a mut Defs<'a>,
     header_type: &'a roc_parse::header::HeaderType,
     home: ModuleId,
-    module_path: &'a str,
-    src: &'a str,
-    qualified_module_ids: &'a PackageModuleIds<'a>,
-    exposed_ident_ids: IdentIds,
-    dep_idents: &'a IdentIdsByModule,
-    aliases: MutMap<Symbol, Alias>,
-    imported_abilities_state: PendingAbilitiesStore,
     initial_scope: MutMap<Ident, (Symbol, Region)>,
     exposed_symbols: VecSet<Symbol>,
     symbols_from_requires: &[(Loc<Symbol>, Loc<TypeAnnotation<'a>>)],
     var_store: &mut VarStore,
-    opt_shorthand: Option<&'a str>,
+    mut scope: Scope,
+    mut env: Env<'a>,
+    loc_defs: Defs<'a>,
+    module_params: Option<(Region, Collection<'a, Loc<ParsePattern<'a>>>)>,
 ) -> ModuleOutput {
     let mut can_exposed_imports = MutMap::default();
-
-    let mut scope = Scope::new(
-        home,
-        qualified_module_ids
-            .get_name(home)
-            .expect("home module not found")
-            .as_inner()
-            .to_owned(),
-        exposed_ident_ids,
-        imported_abilities_state,
-    );
-    let mut env = Env::new(
-        arena,
-        src,
-        home,
-        arena.alloc(Path::new(module_path)),
-        dep_idents,
-        qualified_module_ids,
-        opt_shorthand,
-    );
-
-    for (name, alias) in aliases.into_iter() {
-        scope.add_alias(
-            name,
-            alias.region,
-            alias.type_variables,
-            alias.infer_ext_in_output_variables,
-            alias.typ,
-            alias.kind,
-        );
-    }
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -265,8 +226,6 @@ pub fn canonicalize_module_defs<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-
-    crate::desugar::desugar_defs_node_values(&mut env, &mut scope, loc_defs);
 
     let mut rigid_variables = RigidVariables::default();
 
@@ -319,51 +278,42 @@ pub fn canonicalize_module_defs<'a>(
 
     let mut output = Output::default();
 
-    let module_params = header_type.get_params().as_ref().map(
-        |roc_parse::header::ModuleParams {
-             pattern,
-             before_arrow: _,
-             after_arrow: _,
-         }| {
-            let desugared_patterns =
-                desugar_record_destructures(&mut env, &mut scope, pattern.value);
+    let module_params = module_params.map(|(params_region, desugared_patterns)| {
+        let (destructs, _) = canonicalize_record_destructs(
+            &mut env,
+            var_store,
+            &mut scope,
+            &mut output,
+            PatternType::ModuleParams,
+            &desugared_patterns,
+            params_region,
+            PermitShadows(false),
+        );
 
-            let (destructs, _) = canonicalize_record_destructs(
-                &mut env,
-                var_store,
-                &mut scope,
-                &mut output,
-                PatternType::ModuleParams,
-                &desugared_patterns,
-                pattern.region,
-                PermitShadows(false),
-            );
+        let whole_symbol = scope.gen_unique_symbol();
+        env.top_level_symbols.insert(whole_symbol);
 
-            let whole_symbol = scope.gen_unique_symbol();
-            env.top_level_symbols.insert(whole_symbol);
+        let whole_var = var_store.fresh();
 
-            let whole_var = var_store.fresh();
+        env.home_params_record = Some((whole_symbol, whole_var));
 
-            env.home_params_record = Some((whole_symbol, whole_var));
-
-            ModuleParams {
-                region: pattern.region,
-                whole_var,
-                whole_symbol,
-                record_var: var_store.fresh(),
-                record_ext_var: var_store.fresh(),
-                destructs,
-                arity_by_name: Default::default(),
-            }
-        },
-    );
+        ModuleParams {
+            region: params_region,
+            whole_var,
+            whole_symbol,
+            record_var: var_store.fresh(),
+            record_ext_var: var_store.fresh(),
+            destructs,
+            arity_by_name: Default::default(),
+        }
+    });
 
     let (defs, output, symbols_introduced, imports_introduced) = canonicalize_defs(
         &mut env,
         output,
         var_store,
         &mut scope,
-        loc_defs,
+        arena.alloc(loc_defs),
         PatternType::TopLevelDef,
     );
 

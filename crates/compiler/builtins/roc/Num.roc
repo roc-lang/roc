@@ -532,7 +532,7 @@ pi = 3.14159265358979323846264338327950288419716939937510
 
 ## Circle constant (τ)
 tau : Frac *
-tau = 2 * pi
+tau = 6.2831853071795864769252867665590057683943387987502
 
 # ------- Functions
 ## Convert a number to a [Str].
@@ -619,9 +619,9 @@ is_gte : Num a, Num a -> Bool
 ## is [defined to be unordered](https://en.wikipedia.org/wiki/NaN#Comparison_with_NaN).)
 is_approx_eq : Frac a, Frac a, { rtol ?? Frac a, atol ?? Frac a } -> Bool
 is_approx_eq = |x, y, { rtol ?? 0.00001, atol ?? 0.00000001 }|
-    eq = x <= y && x >= y
+    eq = x <= y and x >= y
     meets_tolerance = Num.abs_diff(x, y) <= Num.max(atol, (rtol * Num.max(Num.abs(x), Num.abs(y))))
-    eq || meets_tolerance
+    eq or meets_tolerance
 
 ## Returns `Bool.true` if the number is `0`, and `Bool.false` otherwise.
 is_zero : Num a -> Bool

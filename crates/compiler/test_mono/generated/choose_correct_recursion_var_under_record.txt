@@ -1,6 +1,6 @@
 procedure Bool.1 ():
-    let Bool.23 : Int1 = false;
-    ret Bool.23;
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
 
 procedure Test.2 (Test.6):
     let Test.22 : U8 = 1i64;
@@ -8,7 +8,7 @@ procedure Test.2 (Test.6):
     let Test.24 : Int1 = lowlevel Eq Test.22 Test.23;
     if Test.24 then
         let Test.7 : [<r>C List *self, C *self] = UnionAtIndex (Id 1) (Index 0) Test.6;
-        joinpoint #Derived_gen.1:
+        joinpoint Bool.23:
             let Test.8 : Str = CallByName Test.2 Test.7;
             let Test.18 : Int1 = CallByName Bool.1;
             if Test.18 then
@@ -18,29 +18,29 @@ procedure Test.2 (Test.6):
                 let Test.17 : Str = "foo";
                 ret Test.17;
         in
-        let #Derived_gen.2 : Int1 = lowlevel RefCountIsUnique Test.6;
-        if #Derived_gen.2 then
+        let Bool.24 : Int1 = lowlevel RefCountIsUnique Test.6;
+        if Bool.24 then
             free Test.6;
-            jump #Derived_gen.1;
+            jump Bool.23;
         else
             inc Test.7;
             decref Test.6;
-            jump #Derived_gen.1;
+            jump Bool.23;
     else
         let Test.9 : List [<r>C List [<r>C List *self, C *self], C [<r>C List *self, C *self]] = UnionAtIndex (Id 0) (Index 0) Test.6;
-        joinpoint #Derived_gen.3:
+        joinpoint Bool.25:
             dec Test.9;
             let Test.21 : Str = "ValueNotExposed { module_name: ModuleName(IdentStr { string: \"Result\" }), ident: Ident(IdentStr { string: \"withDefault\" }), region: @662-680, exposed_values: ['is_err', 'on_err', 'map_ok', 'map_err', 'with_default', 'try', 'is_ok', 'map_both', 'map2', 'on_err!'] }";
             Crash Test.21
         in
-        let #Derived_gen.4 : Int1 = lowlevel RefCountIsUnique Test.6;
-        if #Derived_gen.4 then
+        let Bool.26 : Int1 = lowlevel RefCountIsUnique Test.6;
+        if Bool.26 then
             free Test.6;
-            jump #Derived_gen.3;
+            jump Bool.25;
         else
             inc Test.9;
             decref Test.6;
-            jump #Derived_gen.3;
+            jump Bool.25;
 
 procedure Test.0 ():
     let Test.25 : List [<r>C List [<r>C List *self, C *self], C [<r>C List *self, C *self]] = Array [];
