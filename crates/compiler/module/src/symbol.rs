@@ -986,6 +986,10 @@ macro_rules! define_builtins {
                 self.to_zero_indexed() < $total
             }
 
+            pub const fn first_after_builtins() -> Self {
+                ModuleId::from_zero_indexed($total)
+            }
+
             $(
                 pub const $module_const: ModuleId = ModuleId::from_zero_indexed($module_id);
             )+

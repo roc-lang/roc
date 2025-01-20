@@ -10,6 +10,7 @@ version.workspace = true
 [dependencies]
 roc_builtins.workspace = true
 roc_can.workspace = true
+roc_can_solo.workspace = true
 roc_work.workspace = true
 roc_checkmate.workspace = true
 roc_collections.workspace = true
@@ -39,6 +40,8 @@ bumpalo.workspace = true
 crossbeam.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true
+base64-url.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
 roc_test_utils_dir.workspace = true

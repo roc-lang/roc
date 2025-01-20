@@ -2,7 +2,7 @@ procedure Num.20 (#Attr.2, #Attr.3):
     let Num.283 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.283;
 
-procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
+procedure Test.1 (Bool.21, Bool.22):
     joinpoint Test.12 Test.2 Test.3:
         let Test.13 : {List Str, U64} = Struct {Test.2, Test.3};
         let Test.31 : List Str = StructAtIndex 0 Test.13;
@@ -37,8 +37,8 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
             let Test.14 : [C {}, C Str] = TagId(0) Test.15;
             ret Test.14;
     in
-    inc #Derived_gen.0;
-    jump Test.12 #Derived_gen.0 #Derived_gen.1;
+    inc Bool.21;
+    jump Test.12 Bool.21 Bool.22;
 
 procedure Test.0 ():
     let Test.35 : Str = "a";

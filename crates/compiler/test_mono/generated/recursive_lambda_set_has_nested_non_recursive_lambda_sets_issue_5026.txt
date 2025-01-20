@@ -25,7 +25,7 @@ procedure Test.3 (Test.7):
 
 procedure Test.6 (Test.16, #Attr.12):
     let Test.23 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    joinpoint #Derived_gen.2:
+    joinpoint Bool.24:
         let Test.19 : {} = Struct {};
         let Test.22 : Str = "foobar";
         let Test.20 : [<rnu><null>, C {}] = CallByName Test.8 Test.22 Test.23;
@@ -42,13 +42,13 @@ procedure Test.6 (Test.16, #Attr.12):
                 ret Test.18;
         
     in
-    let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.3 then
+    let Bool.25 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if Bool.25 then
         free #Attr.12;
-        jump #Derived_gen.2;
+        jump Bool.24;
     else
         decref #Attr.12;
-        jump #Derived_gen.2;
+        jump Bool.24;
 
 procedure Test.8 (Test.9, Test.7):
     let Test.25 : [<rnu><null>, C {}] = CallByName Test.10 Test.9;

@@ -1,11 +1,12 @@
 use crate::help_parse::ParseExpr;
 use bumpalo::Bump;
 use roc_can::{
-    desugar,
     env::Env,
     expr::{canonicalize_expr, Expr, Output},
     scope::Scope,
 };
+use roc_can_solo::env::SoloEnv;
+use roc_can_solo::scope::SoloScope;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
@@ -80,7 +81,10 @@ impl CanExpr {
                 // visited a BinOp node we'd recursively try to apply this to each of its nested
                 // operators, and then again on *their* nested operators, ultimately applying the
                 // rules multiple times unnecessarily.
-                let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
+                let mut solo_env = SoloEnv::new(self.arena(), input, Path::new("Test.roc"));
+                let mut solo_scope = SoloScope::new();
+                let loc_expr =
+                    roc_can_solo::desugar::desugar_expr(&mut solo_env, &mut solo_scope, &loc_expr);
 
                 scope.add_alias(
                     Symbol::NUM_INT,

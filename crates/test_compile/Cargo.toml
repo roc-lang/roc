@@ -15,6 +15,7 @@ roc_collections.workspace = true
 roc_load.workspace = true
 roc_parse.workspace = true
 roc_can.workspace = true
+roc_can_solo.workspace = true
 roc_module.workspace = true
 roc_types.workspace = true
 roc_problem.workspace = true

@@ -2393,6 +2393,7 @@ dependencies = [
  "bumpalo",
  "indoc",
  "pretty_assertions",
+ "roc_can_solo",
  "roc_collections",
  "roc_error_macros",
  "roc_exhaustive",
@@ -2405,6 +2406,25 @@ dependencies = [
  "soa",
  "static_assertions",
  "test_compile",
+ "ven_pretty",
+]
+
+[[package]]
+name = "roc_can_solo"
+version = "0.0.1"
+dependencies = [
+ "bitvec",
+ "bumpalo",
+ "roc_collections",
+ "roc_error_macros",
+ "roc_module",
+ "roc_parse",
+ "roc_problem",
+ "roc_region",
+ "roc_serialize",
+ "roc_types",
+ "soa",
+ "static_assertions",
  "ven_pretty",
 ]
 
@@ -2805,6 +2825,7 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_can_solo",
  "roc_collections",
  "roc_constrain",
  "roc_derive",
@@ -2828,6 +2849,8 @@ dependencies = [
 name = "roc_load_internal"
 version = "0.0.1"
 dependencies = [
+ "base64-url",
+ "blake3",
  "bumpalo",
  "crossbeam",
  "indoc",
@@ -2836,6 +2859,7 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_can_solo",
  "roc_checkmate",
  "roc_collections",
  "roc_constrain",
@@ -3872,6 +3896,7 @@ dependencies = [
  "pretty_assertions",
  "roc_builtins",
  "roc_can",
+ "roc_can_solo",
  "roc_collections",
  "roc_constrain",
  "roc_derive",
@@ -4016,6 +4041,7 @@ dependencies = [
  "indoc",
  "pretty_assertions",
  "roc_can",
+ "roc_can_solo",
  "roc_collections",
  "roc_error_macros",
  "roc_fmt",
