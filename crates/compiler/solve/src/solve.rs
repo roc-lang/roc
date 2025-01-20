@@ -15,15 +15,12 @@ use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{
-    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
-    TryTargetConstraint,
+    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, Generalizable, LetConstraint,
+    OpportunisticResolve, TryTargetConstraint,
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
 use roc_collections::{VecMap, VecSet};
-use roc_debug_flags::dbg_do;
-#[cfg(debug_assertions)]
-use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
 use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -32,8 +29,8 @@ use roc_region::all::{Loc, Region};
 use roc_solve_problem::TypeError;
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
-    Variable,
+    self, Content, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt,
+    UlsOfVar, Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
@@ -356,29 +353,13 @@ fn solve(
                 generalize(env, young_mark, visit_mark, rank.next());
                 debug_assert!(env.pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
-                // check that things went well
-                dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
-                    let rigid_vars = &env.constraints[let_con.rigid_vars];
-
-                    // NOTE the `subs.redundant` check does not come from elm.
-                    // It's unclear whether this is a bug with our implementation
-                    // (something is redundant that shouldn't be)
-                    // or that it just never came up in elm.
-                    let mut it = rigid_vars
-                        .iter()
-                        .filter(|loc_var| {
-                            let var = loc_var.value;
-                            !env.subs.redundant(var) && env.subs.get_rank(var) != Rank::GENERALIZED
-                        })
-                        .peekable();
-
-                    if it.peek().is_some() {
-                        let failing: Vec<_> = it.collect();
-                        println!("Rigids {:?}", &rigid_vars);
-                        println!("Failing {failing:?}");
-                        debug_assert!(false);
-                    }
-                });
+                let named_variables = &env.constraints[let_con.rigid_vars];
+                check_named_variables_are_generalized(
+                    env,
+                    problems,
+                    named_variables,
+                    let_con.generalizable,
+                );
 
                 let mut new_scope = scope.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
@@ -1634,6 +1615,30 @@ fn solve(
     }
 
     state
+}
+
+fn check_named_variables_are_generalized(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    named_variables: &[Loc<Variable>],
+    generalizable: Generalizable,
+) {
+    for loc_var in named_variables {
+        let is_generalized = env.subs.get_rank(loc_var.value) == Rank::GENERALIZED;
+        if !is_generalized {
+            // TODO: should be OF_PATTERN if on the LHS of a function, otherwise OF_VALUE.
+            let polarity = Polarity::OF_VALUE;
+            let ctx = ErrorTypeContext::NON_GENERALIZED_AS_INFERRED;
+            let error_type = env
+                .subs
+                .var_to_error_type_contextual(loc_var.value, ctx, polarity);
+            problems.push(TypeError::TypeIsNotGeneralized(
+                loc_var.region,
+                error_type,
+                generalizable,
+            ));
+        }
+    }
 }
 
 fn solve_suffix_fx(

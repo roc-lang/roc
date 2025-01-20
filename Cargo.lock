@@ -3281,6 +3281,7 @@ dependencies = [
 name = "roc_types"
 version = "0.0.1"
 dependencies = [
+ "bitflags 1.3.2",
  "bumpalo",
  "roc_collections",
  "roc_debug_flags",
