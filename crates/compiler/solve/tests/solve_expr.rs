@@ -3827,6 +3827,18 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_with_ascii_lowercased() {
+        infer_eq_without_problem(
+            indoc!(
+                r"
+                Str.with_ascii_lowercased
+                "
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(
