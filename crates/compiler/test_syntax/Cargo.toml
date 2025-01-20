@@ -13,6 +13,7 @@ version.workspace = true
 [dependencies]
 bumpalo.workspace = true
 roc_can.workspace = true
+roc_can_solo.workspace = true
 roc_collections.workspace = true
 roc_error_macros.workspace = true
 roc_fmt.workspace = true

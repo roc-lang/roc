@@ -34,7 +34,7 @@ procedure Test.8 (Test.9):
     let Test.23 : I64 = CallByName Num.19 Test.9 Test.24;
     ret Test.23;
 
-procedure Test.0 (#Derived_gen.0):
+procedure Test.0 (Bool.21):
     joinpoint Test.11 Test.1:
         let Test.25 : I64 = 1i64;
         let Test.13 : I64 = CallByName Num.19 Test.1 Test.25;
@@ -57,4 +57,4 @@ procedure Test.0 (#Derived_gen.0):
                 ret Test.12;
         
     in
-    jump Test.11 #Derived_gen.0;
+    jump Test.11 Bool.21;

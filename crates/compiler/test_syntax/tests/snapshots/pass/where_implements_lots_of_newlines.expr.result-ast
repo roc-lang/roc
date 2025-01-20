@@ -1,0 +1,85 @@
+@0-31 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-29,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-1 "T",
+                        vars: [],
+                    },
+                    ann: @2-29 Where(
+                        @2-5 SpaceAfter(
+                            TagUnion {
+                                ext: None,
+                                tags: Collection {
+                                    items: [],
+                                    final_comments: [
+                                        Newline,
+                                    ],
+                                },
+                            },
+                            [
+                                LineComment(
+                                    "",
+                                ),
+                            ],
+                        ),
+                        [
+                            @15-29 ImplementsClause {
+                                var: @15-16 SpaceBefore(
+                                    SpaceAfter(
+                                        "e",
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                abilities: [
+                                    @28-29 SpaceBefore(
+                                        Apply(
+                                            "",
+                                            "T",
+                                            [],
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ],
+                            },
+                        ],
+                    ),
+                },
+            ],
+            value_defs: [],
+        },
+        @30-31 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "e",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

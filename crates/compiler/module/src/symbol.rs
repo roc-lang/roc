@@ -986,6 +986,10 @@ macro_rules! define_builtins {
                 self.to_zero_indexed() < $total
             }
 
+            pub const fn first_after_builtins() -> Self {
+                ModuleId::from_zero_indexed($total)
+            }
+
             $(
                 pub const $module_const: ModuleId = ModuleId::from_zero_indexed($module_id);
             )+
@@ -1416,6 +1420,7 @@ define_builtins! {
         48 STR_RELEASE_EXCESS_CAPACITY: "release_excess_capacity"
         49 STR_DROP_PREFIX: "drop_prefix"
         50 STR_DROP_SUFFIX: "drop_suffix"
+        51 STR_WITH_ASCII_LOWERCASED: "with_ascii_lowercased"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

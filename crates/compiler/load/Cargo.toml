@@ -9,6 +9,7 @@ version.workspace = true
 
 [dependencies]
 roc_can.workspace = true
+roc_can_solo.workspace = true
 roc_collections.workspace = true
 roc_load_internal.workspace = true
 roc_module.workspace = true

@@ -9,8 +9,8 @@ procedure Dict.1 (Dict.732):
 
 procedure Dict.4 (Dict.738):
     let Dict.163 : List {[], []} = StructAtIndex 1 Dict.738;
-    let #Derived_gen.0 : List {U32, U32} = StructAtIndex 0 Dict.738;
-    dec #Derived_gen.0;
+    let Bool.21 : List {U32, U32} = StructAtIndex 0 Dict.738;
+    dec Bool.21;
     let Dict.739 : U64 = CallByName List.6 Dict.163;
     dec Dict.163;
     ret Dict.739;

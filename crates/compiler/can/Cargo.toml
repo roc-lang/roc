@@ -8,6 +8,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+roc_can_solo.workspace = true
 roc_collections.workspace = true
 roc_error_macros.workspace = true
 roc_exhaustive.workspace = true

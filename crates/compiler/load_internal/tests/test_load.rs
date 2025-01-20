@@ -271,11 +271,13 @@ fn load_fixture(
         );
     }
 
-    assert!(loaded_module
-        .type_problems
-        .remove(&home)
-        .unwrap_or_default()
-        .is_empty());
+    assert_eq!(
+        loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default(),
+        Vec::new()
+    );
 
     let expected_name = loaded_module
         .interns
@@ -433,11 +435,13 @@ fn module_with_deps() {
         loaded_module.can_problems.remove(&home).unwrap_or_default(),
         Vec::new()
     );
-    assert!(loaded_module
-        .type_problems
-        .remove(&home)
-        .unwrap_or_default()
-        .is_empty(),);
+    assert_eq!(
+        loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default(),
+        Vec::new()
+    );
 
     let mut def_count = 0;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();

@@ -513,6 +513,38 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        TypeIsNotGeneralized(region, actual_type, generalizable) => {
+            let doc = alloc.stack([
+                alloc.reflow("This type variable has a single type:"),
+                alloc.region(lines.convert_region(region), severity),
+                if !generalizable.0 {
+                    alloc.concat([
+                        alloc.reflow("Type variables tell me that they can be used with any type, but they can only be used with functions. All other values have exactly one type."),
+                    ])
+                } else {
+                    alloc.concat([
+                        alloc.reflow("Type variables tell me that they can be used as any type."),
+                        alloc.reflow("But, I found that this type can only be used as this single type:"),
+                        alloc.type_block(to_doc(alloc, Parens::Unnecessary, actual_type).0)
+                    ])
+                },
+                alloc.concat([
+                    alloc.hint(""),
+                    alloc.reflow(
+                        "If you would like the type to be inferred for you, use an underscore ",
+                    ),
+                    alloc.type_str("_"),
+                    alloc.reflow(" instead."),
+                ]),
+            ]);
+
+            Some(Report {
+                title: "TYPE VARIABLE IS NOT GENERIC".to_string(),
+                filename,
+                doc,
+                severity,
+            })
+        }
     }
 }
 
@@ -656,9 +688,9 @@ fn underivable_hint<'b>(
             },
         ]))),
         NotDerivableContext::UnboundVar => {
-            let v = match typ {
-                ErrorType::FlexVar(v) => v,
-                ErrorType::RigidVar(v) => v,
+            let formatted_var = match typ {
+                ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => alloc.type_variable(v.clone()),
+                ErrorType::InferenceVar => alloc.type_str("_"),
                 _ => internal_error!("unbound variable context only applicable for variables"),
             };
 
@@ -671,7 +703,7 @@ fn underivable_hint<'b>(
                 alloc.inline_type_block(alloc.concat([
                     alloc.keyword(roc_parse::keyword::WHERE),
                     alloc.space(),
-                    alloc.type_variable(v.clone()),
+                    formatted_var,
                     alloc.space(),
                     alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
@@ -2868,6 +2900,7 @@ fn to_doc_help<'b>(
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
+        InferenceVar => alloc.text("_"),
 
         FlexVar(lowercase) if is_generated_name(&lowercase) => {
             let &usages = gen_usages
@@ -3082,6 +3115,7 @@ fn count_generated_name_usages<'a>(
             RigidVar(name) | RigidAbleVar(name, _) => {
                 debug_assert!(!is_generated_name(name));
             }
+            InferenceVar => {}
             EffectfulFunc => {}
             Type(_, tys) => {
                 stack.extend(tys.iter().map(|t| (t, only_unseen)));
@@ -3752,6 +3786,7 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
             // If either is flex, it will unify to the other type; no diff is needed.
             false
         }
+        (InferenceVar, InferenceVar) => false,
         (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
         | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
             #[cfg(debug_assertions)]
@@ -3944,7 +3979,9 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (Function(_, _, _, _), _)
         | (_, Function(_, _, _, _))
         | (EffectfulFunc, _)
-        | (_, EffectfulFunc) => true,
+        | (_, EffectfulFunc)
+        | (InferenceVar, _)
+        | (_, InferenceVar) => true,
     }
 }
 
@@ -4989,7 +5026,7 @@ fn type_problem_to_pretty<'b>(
             };
 
             match tipe {
-                Infinite | Error | FlexVar(_) | EffectfulFunc => alloc.nil(),
+                Infinite | Error | FlexVar(_) | InferenceVar | EffectfulFunc => alloc.nil(),
                 FlexAbleVar(_, other_abilities) => {
                     rigid_able_vs_different_flex_able(x, abilities, other_abilities)
                 }
@@ -5062,7 +5099,7 @@ fn type_problem_to_pretty<'b>(
             };
 
             match tipe {
-                Infinite | Error | FlexVar(_) => alloc.nil(),
+                Infinite | Error | FlexVar(_) | InferenceVar => alloc.nil(),
                 FlexAbleVar(_, abilities) => {
                     let mut abilities = abilities.into_sorted_iter();
                     let msg = if abilities.len() == 1 {

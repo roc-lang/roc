@@ -1,5 +1,5 @@
 1 : (
     * #
-    where e implements J,
+        where e implements J,
 )*
 l

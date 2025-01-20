@@ -5,7 +5,7 @@ use crate::{
     annotation::{Formattable, Newlines, Parens},
     collection::Braces,
     expr::merge_spaces_conservative,
-    spaces::{fmt_comments_only, fmt_spaces, fmt_spaces_no_blank_lines, NewlineAt, INDENT},
+    spaces::{fmt_spaces, fmt_spaces_no_blank_lines, INDENT},
     Buf, MigrationFlags,
 };
 
@@ -87,7 +87,6 @@ pub enum Node<'a> {
     },
     CommaSequence {
         allow_blank_lines: bool,
-        allow_newlines: bool,
         indent_rest: bool,
         first: &'a Node<'a>,
         rest: &'a [Item<'a>],
@@ -124,12 +123,8 @@ pub struct Item<'a> {
 }
 
 impl<'a> Item<'a> {
-    fn is_multiline(&self, allow_newlines: bool) -> bool {
-        let has_newlines = if allow_newlines {
-            !self.before.is_empty()
-        } else {
-            self.before.iter().any(|c| c.is_comment())
-        };
+    fn is_multiline(&self) -> bool {
+        let has_newlines = !self.before.is_empty();
         self.newline || has_newlines || self.node.is_multiline()
     }
 }
@@ -273,7 +268,6 @@ impl<'b> NodeInfo<'b> {
             },
             node: Node::CommaSequence {
                 allow_blank_lines: false,
-                allow_newlines: true,
                 indent_rest,
                 first: arena.alloc(first.node),
                 rest: rest.into_bump_slice(),
@@ -361,11 +355,10 @@ impl<'a> Formattable for Node<'a> {
             } => after.is_multiline() || items.iter().any(|item| item.is_multiline()),
             Node::CommaSequence {
                 allow_blank_lines: _,
-                allow_newlines,
                 indent_rest: _,
                 first,
                 rest,
-            } => first.is_multiline() || rest.iter().any(|item| item.is_multiline(*allow_newlines)),
+            } => first.is_multiline() || rest.iter().any(|item| item.is_multiline()),
             Node::Literal(_) => false,
             Node::TypeAnnotation(type_annotation) => type_annotation.is_multiline(),
             Node::Pattern(pat) => pat.is_multiline(),
@@ -429,7 +422,6 @@ impl<'a> Formattable for Node<'a> {
             }
             Node::CommaSequence {
                 allow_blank_lines,
-                allow_newlines,
                 indent_rest,
                 first,
                 rest,
@@ -448,10 +440,8 @@ impl<'a> Formattable for Node<'a> {
                     }
                     if *allow_blank_lines {
                         fmt_spaces(buf, item.before.iter(), indent);
-                    } else if *allow_newlines {
-                        fmt_spaces_no_blank_lines(buf, item.before.iter(), inner_indent);
                     } else {
-                        fmt_comments_only(buf, item.before.iter(), NewlineAt::Bottom, inner_indent);
+                        fmt_spaces_no_blank_lines(buf, item.before.iter(), inner_indent);
                     }
                     if item.newline {
                         buf.ensure_ends_with_newline();

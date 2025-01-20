@@ -2319,16 +2319,18 @@ pub fn parse_top_level_defs<'a>(
 
 fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     one_of!(
-        closure_new_syntax_help(),
+        closure_new_syntax_help(check_for_arrow),
         closure_old_syntax_help(check_for_arrow),
     )
 }
 
-fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+fn closure_new_syntax_help<'a>(
+    check_for_arrow: CheckForArrow,
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     map_with_arena(
-        indented_seq_skip_first(
+        skip_first(
             error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
-            and(
+            reset_min_indent(and(
                 trailing_sep_by0(
                     byte_indent(b',', EClosure::Comma),
                     space0_around_ee(
@@ -2341,14 +2343,9 @@ fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
                     // Parse the -> which separates params from body
                     byte(b'|', EClosure::Bar),
                     // Parse the body
-                    block(
-                        CheckForArrow(false),
-                        true,
-                        EClosure::IndentBody,
-                        EClosure::Body,
-                    ),
+                    block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
                 ),
-            ),
+            )),
         ),
         |arena: &'a Bump, (params, body)| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
@@ -2364,12 +2361,12 @@ fn closure_old_syntax_help<'a>(
     // closure_help_help(options)
     map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq_skip_first(
+        skip_first(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
-            and(
+            reset_min_indent(and(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
@@ -2387,7 +2384,7 @@ fn closure_old_syntax_help<'a>(
                     // Parse the body
                     block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
                 ),
-            ),
+            )),
         ),
         |arena: &'a Bump, (params, body)| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
@@ -4009,7 +4006,7 @@ enum OperatorOrDef {
 }
 
 fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
-    move |_, state: State<'a>, min_indent| {
+    (move |_, state: State<'a>, min_indent| {
         let start = state.pos();
         let (_, op, state) = operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent)?;
         let err_progress = if check_for_defs {
@@ -4027,7 +4024,8 @@ fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
                 Err((err_progress, EExpr::BadOperator(":=", start)))
             }
         }
-    }
+    })
+    .trace("bin_op")
 }
 
 fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
@@ -4129,6 +4127,7 @@ where
                 Err((NoProgress, to_error("||", state.pos())))
             }
         }
+        "|" => Err((NoProgress, to_error("|", state.pos()))),
         "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`

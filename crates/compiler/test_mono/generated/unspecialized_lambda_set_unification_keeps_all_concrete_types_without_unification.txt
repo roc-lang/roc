@@ -59,8 +59,8 @@ procedure Test.43 (Test.44, Test.42):
         jump Test.62 Test.61;
     else
         let Test.69 : U8 = StructAtIndex 1 Test.42;
-        let #Derived_gen.5 : Str = StructAtIndex 0 Test.42;
-        dec #Derived_gen.5;
+        let Bool.27 : Str = StructAtIndex 0 Test.42;
+        dec Bool.27;
         let Test.63 : Int1 = CallByName Test.15 Test.69;
         let Test.61 : Int1 = CallByName Test.14 Test.63;
         jump Test.62 Test.61;

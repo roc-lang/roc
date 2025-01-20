@@ -12,6 +12,7 @@ use std::collections::hash_map::Entry;
 pub enum Phase {
     LoadHeader,
     Parse,
+    SoloCanonicalize,
     CanonicalizeAndConstrain,
     SolveTypes,
     FindSpecializations,
@@ -19,9 +20,10 @@ pub enum Phase {
 }
 
 /// NOTE keep up to date manually, from ParseAndGenerateConstraints to the highest phase we support
-const PHASES: [Phase; 6] = [
+const PHASES: [Phase; 7] = [
     Phase::LoadHeader,
     Phase::Parse,
+    Phase::SoloCanonicalize,
     Phase::CanonicalizeAndConstrain,
     Phase::SolveTypes,
     Phase::FindSpecializations,
