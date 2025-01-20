@@ -371,11 +371,12 @@ pub const RocStr = extern struct {
     }
 
     fn refcount(self: RocStr) usize {
-        if ((self.getCapacity() == 0 and !self.isSeamlessSlice()) or self.isSmallStr()) {
+        const is_seamless_slice = self.isSeamlessSlice();
+        if ((self.getCapacity() == 0 and !is_seamless_slice) or self.isSmallStr()) {
             return 1;
         }
 
-        const data_ptr = if (self.isSeamlessSlice())
+        const data_ptr = if (is_seamless_slice)
             self.getAllocationPtr()
         else
             self.bytes;
