@@ -16,5 +16,6 @@ jobs:
 
       - name: run fuzz tests - ok to merge if this one fails # for now!
         run: |
-         cargo +nightly-2024-02-03 install --locked cargo-fuzz
-         cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60
+          cargo +nightly-2024-02-03 install --locked cargo-fuzz
+          cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60
+          cd crates/compiler/test_syntax && for x in fuzz/artifacts/fuzz_expr/crash-*; do cargo run --bin minimize expr $x; done
