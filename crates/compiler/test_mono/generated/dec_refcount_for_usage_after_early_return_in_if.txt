@@ -11,8 +11,8 @@ procedure Num.96 (#Attr.2):
     ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.249 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.249;
+    let Str.381 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.381;
 
 procedure Test.1 (Test.2):
     let Test.3 : Str = CallByName Num.96 Test.2;

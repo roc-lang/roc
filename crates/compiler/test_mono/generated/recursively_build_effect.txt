@@ -3,8 +3,8 @@ procedure Num.20 (#Attr.2, #Attr.3):
     ret Num.283;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.250 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.250;
+    let Str.382 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.382;
 
 procedure Test.11 (Test.29, #Attr.12):
     let Test.32 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
