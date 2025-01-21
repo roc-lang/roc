@@ -3390,7 +3390,7 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
 }
 
 fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>) -> bool {
-    match pat {
+    match pat.without_spaces() {
         Pattern::Apply(func, args) => {
             if !matches!(func.value, Pattern::Tag(tag) if header.name.value == tag) {
                 return false;
@@ -3399,7 +3399,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
                 return false;
             }
             for (arg, var) in (*args).iter().zip(header.vars) {
-                match (arg.value, var.value) {
+                match (arg.value.without_spaces(), var.value.without_spaces()) {
                     (Pattern::Identifier { ident: left }, TypeVar::Identifier(right)) => {
                         if left != right {
                             return false;
@@ -3410,7 +3410,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
             }
             true
         }
-        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == *tag,
+        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == tag,
         _ => false,
     }
 }

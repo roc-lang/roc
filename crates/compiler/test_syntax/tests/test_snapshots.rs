@@ -697,6 +697,7 @@ mod test_snapshots {
         pass/return_record_update_comment_empty_fields.expr,
         pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
+        pass/sep_annotation.expr,
         pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,
         pass/single_arg_with_underscore_closure.expr,
