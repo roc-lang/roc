@@ -3061,7 +3061,7 @@ mod test_fmt {
                    x,
                    y
                 }| a
- 
+
            identity 43
            "
             ),
@@ -3069,7 +3069,7 @@ mod test_fmt {
                 r"
            identity =
                |{ x, y }| a
- 
+
            identity 43
            "
             ),
@@ -3083,7 +3083,7 @@ mod test_fmt {
                    x,
                    y
                 } -> a
- 
+
            identity 43
            "
             ),
@@ -3091,7 +3091,7 @@ mod test_fmt {
                 r"
            identity =
                |{ x, y }| a
- 
+
            identity 43
            "
             ),
@@ -3996,15 +3996,25 @@ mod test_fmt {
 
     #[test]
     fn early_return_else() {
-        expr_formats_same(indoc!(
-            r"
-            if foo then
-                bar
-                else
+        expr_formats_to(
+            indoc!(
+                r"
+                if foo then
+                    bar
+                    else
 
-            baz
-            "
-        ));
+                baz
+                "
+            ),
+            indoc!(
+                r"
+                if foo then
+                    bar
+                else
+                    baz
+                "
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -4019,9 +4029,8 @@ mod test_fmt {
                 r"
                 if thing then
                     whatever
-                    else
-
-                too close
+                else
+                    too close
                 "
             ),
         );
@@ -4031,8 +4040,7 @@ mod test_fmt {
                 r"
                 if isGrowing plant then
                     LetBe
-                    else
-
+                else
                     Water
                 "
             ),
@@ -4040,9 +4048,8 @@ mod test_fmt {
                 r"
                 if isGrowing plant then
                     LetBe
-                    else
-
-                Water
+                else
+                    Water
                 "
             ),
         );

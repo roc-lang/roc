@@ -472,6 +472,7 @@ mod test_snapshots {
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/i_over_not_g.expr,
+        pass/if_bang_then_bang_indented_else.expr,
         pass/if_bang_then_else_one_line.expr,
         pass/if_def.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,

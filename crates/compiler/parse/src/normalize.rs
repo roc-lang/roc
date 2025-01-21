@@ -778,11 +778,11 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::If {
                 if_thens,
                 final_else,
-                indented_else,
+                indented_else: _,
             } => Expr::If {
                 if_thens: if_thens.normalize(arena),
                 final_else: arena.alloc(final_else.normalize(arena)),
-                indented_else,
+                indented_else: false,
             },
             Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
             Expr::ParensAround(a) => {
