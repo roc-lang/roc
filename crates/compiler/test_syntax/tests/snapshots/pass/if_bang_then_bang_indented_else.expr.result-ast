@@ -1,0 +1,72 @@
+@1-24 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @1-22,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Stmt(
+                    @1-22 If {
+                        if_thens: [
+                            (
+                                @3-6 UnaryOp(
+                                    @4-6 Var {
+                                        module_name: "",
+                                        ident: "a!",
+                                    },
+                                    @3-4 Not,
+                                ),
+                                @11-12 SpaceBefore(
+                                    SpaceAfter(
+                                        Var {
+                                            module_name: "",
+                                            ident: "t",
+                                        },
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ),
+                        ],
+                        final_else: @21-22 SpaceBefore(
+                            Var {
+                                module_name: "",
+                                ident: "l",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        indented_else: true,
+                    },
+                ),
+            ],
+        },
+        @23-24 SpaceBefore(
+            Num(
+                "5",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)
