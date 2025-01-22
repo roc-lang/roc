@@ -7,7 +7,6 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, Str
 use inkwell::{AddressSpace, IntPredicate};
 use morphic_lib::UpdateMode;
 use roc_builtins::bitcode;
-use roc_module::symbol::Symbol;
 use roc_mono::layout::{
     Builtin, InLayout, Layout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner,
 };
@@ -17,7 +16,6 @@ use super::build::{
     create_entry_block_alloca, load_roc_value, store_roc_value, use_roc_value, BuilderExt,
 };
 use super::convert::zig_list_type;
-use super::scope::Scope;
 use super::struct_::struct_from_fields;
 
 fn call_list_bitcode_fn_1<'ctx>(
@@ -27,20 +25,6 @@ fn call_list_bitcode_fn_1<'ctx>(
     fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
     call_list_bitcode_fn(env, &[list], other_arguments, BitcodeReturns::List, fn_name)
-}
-
-pub(crate) fn list_symbol_to_c_abi<'a, 'ctx>(
-    env: &Env<'a, 'ctx, '_>,
-    scope: &Scope<'a, 'ctx>,
-    symbol: Symbol,
-) -> PointerValue<'ctx> {
-    let list_type = zig_list_type(env);
-    let list_alloca = create_entry_block_alloca(env, list_type, "list_alloca");
-
-    let list = scope.load_symbol(&symbol);
-    env.builder.new_build_store(list_alloca, list);
-
-    list_alloca
 }
 
 pub(crate) fn pass_update_mode<'ctx>(

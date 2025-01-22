@@ -3,8 +3,8 @@ procedure Bool.9 (#Attr.2, #Attr.3):
     ret Bool.21;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.249 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.249;
+    let Str.381 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.381;
 
 procedure Test.2 (Test.7):
     let Test.24 : Str = ".trace(\"";

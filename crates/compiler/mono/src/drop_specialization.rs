@@ -1604,6 +1604,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,
+        StrFromUtf8Lossy => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
         StrFromInt | StrFromFloat => RC::NoRc,

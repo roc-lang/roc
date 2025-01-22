@@ -3442,7 +3442,7 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
 }
 
 fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>) -> bool {
-    match pat {
+    match pat.without_spaces() {
         Pattern::Apply(func, args) => {
             if !matches!(func.value, Pattern::Tag(tag) if header.name.value == tag) {
                 return false;
@@ -3451,7 +3451,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
                 return false;
             }
             for (arg, var) in (*args).iter().zip(header.vars) {
-                match (arg.value, var.value) {
+                match (arg.value.without_spaces(), var.value.without_spaces()) {
                     (Pattern::Identifier { ident: left }, TypeVar::Identifier(right)) => {
                         if left != right {
                             return false;
@@ -3462,7 +3462,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
             }
             true
         }
-        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == *tag,
+        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == tag,
         _ => false,
     }
 }
@@ -4036,9 +4036,10 @@ enum OperatorOrDef {
 }
 
 fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
-    (move |_, state: State<'a>, min_indent| {
+    (move |arena: &'a Bump, state: State<'a>, min_indent| {
         let start = state.pos();
-        let (_, op, state) = operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent)?;
+        let (_, op, state) =
+            operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)?;
         let err_progress = if check_for_defs {
             MadeProgress
         } else {
@@ -4059,12 +4060,15 @@ fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
 }
 
 fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
-    (move |_, state, min_indent| operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent))
-        .trace("operator")
+    (move |arena: &'a Bump, state, min_indent| {
+        operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)
+    })
+    .trace("operator")
 }
 
 #[inline(always)]
 fn operator_help<'a, F, G, E>(
+    arena: &'a Bump,
     to_expectation: F,
     to_error: G,
     mut state: State<'a>,
@@ -4075,20 +4079,17 @@ where
     G: Fn(&'a str, Position) -> E,
     E: 'a,
 {
-    match *state.bytes() {
-        [b'o', b'r', ..] => {
-            return Ok((
-                MadeProgress,
-                OperatorOrDef::BinOp(BinOp::Or),
-                state.advance(2),
-            ))
+    let and_or = either(
+        parser::keyword(keyword::AND, EExpr::End),
+        parser::keyword(keyword::OR, EExpr::End),
+    );
+
+    match and_or.parse(arena, state.clone(), min_indent) {
+        Ok((MadeProgress, Either::First(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::And), state))
         }
-        [b'a', b'n', b'd', ..] => {
-            return Ok((
-                MadeProgress,
-                OperatorOrDef::BinOp(BinOp::And),
-                state.advance(3),
-            ))
+        Ok((MadeProgress, Either::Second(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::Or), state))
         }
         _ => {}
     }

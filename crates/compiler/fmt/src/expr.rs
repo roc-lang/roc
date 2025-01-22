@@ -233,16 +233,9 @@ fn format_expr_only(
         Expr::If {
             if_thens: branches,
             final_else,
-            indented_else,
+            indented_else: _,
         } => {
-            fmt_if(
-                buf,
-                branches,
-                final_else,
-                item.is_multiline(),
-                *indented_else,
-                indent,
-            );
+            fmt_if(buf, branches, final_else, item.is_multiline(), indent);
         }
         Expr::When(loc_condition, branches) => fmt_when(buf, loc_condition, branches, indent),
         Expr::Tuple(items) => fmt_expr_collection(buf, indent, Braces::Round, *items, Newlines::No),
@@ -1927,8 +1920,6 @@ fn fmt_if<'a>(
     branches: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
     final_else: &'a Loc<Expr<'a>>,
     is_multiline: bool,
-    indented_else: bool,
-
     indent: u16,
 ) {
     //    let is_multiline_then = loc_then.is_multiline();
@@ -1972,29 +1963,20 @@ fn fmt_if<'a>(
     }
 
     buf.ensure_ends_with_whitespace();
-    if indented_else {
-        buf.indent(indent + INDENT);
-        buf.push_str("else");
-        buf.newline();
-        buf.newline();
-    } else if is_multiline {
-        buf.indent(indent);
-        buf.push_str("else");
+    buf.indent(indent);
+    buf.push_str("else");
+    if is_multiline {
         buf.newline();
     } else {
-        buf.indent(indent);
-        buf.push_str("else");
         buf.spaces(1);
     }
-    let indent = if indented_else { indent } else { return_indent };
-    final_else.format(buf, indent);
+    final_else.format(buf, return_indent);
 }
 
 fn fmt_closure<'a>(
     buf: &mut Buf,
     loc_patterns: &'a [Loc<Pattern<'a>>],
     loc_ret: &'a Loc<Expr<'a>>,
-
     indent: u16,
 ) {
     use self::Expr::*;
