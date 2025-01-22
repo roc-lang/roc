@@ -111,7 +111,7 @@ view = \page_path_str, html_content ->
             "/index.html" -> [id("homepage-main")]
             "/tutorial.html" -> [id("tutorial-main"), class("article-layout")]
             _ ->
-                if Str.starts_with(page_path_str, "/examples/") and page_path_str != "/examples/index.html" then
+                if Str.starts_with(page_path_str, "/examples/") && page_path_str != "/examples/index.html" then
                     # Individual examples should render wider than articles.
                     # Otherwise the width is unreasonably low for the code blocks,
                     # and those pages don't tend to have big paragraphs anyway.

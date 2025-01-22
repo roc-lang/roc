@@ -73,7 +73,7 @@ tokens_to_str : List Token -> Str
 tokens_to_str = \tokens ->
     List.walk(tokens, "", \buf, token ->
         buf_with_space =
-            if Str.is_empty(buf) or token == Literal(",") then
+            if Str.is_empty(buf) || token == Literal(",") then
                 buf
             else
                 Str.concat(buf, " ")
