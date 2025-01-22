@@ -359,8 +359,8 @@ As a historical note, these stylistic benefits (of `|> Num.sub 1` working as exp
 ### [Currying and learning curve](#curried-learning-curve) {#curried-learning-curve}
 
 Currying leads to function signatures that look surprising to beginners. For example, in Roc, the
-[`Str.concat`](https://www.roc-lang.org/builtins/Str#concat) function has the type `Str, Str -> Str`. If Roc were a
-curried language, this function would instead have the type `Str -> Str -> Str`. Since no mainstream programming
+[`Bool.and`](https://www.roc-lang.org/builtins/Bool#and) function has the type `Bool, Bool -> Bool`. If Roc were a
+curried language, this function would instead have the type `Bool -> Bool -> Bool`. Since no mainstream programming
 languages today are curried, anyone who knows a mainstream language and is learning their first curried language will
 require additional explanation about why function types look this way.
 

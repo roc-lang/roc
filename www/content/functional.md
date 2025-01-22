@@ -65,7 +65,7 @@ A benefit of this design is that it makes Roc code easier to rearrange without c
 
 <pre><samp class="code-snippet">func <span class="kw">=</span> <span class="kw">\</span>arg <span class="kw">-&gt;</span>
     greeting <span class="kw">=</span> <span class="string">"Hello"</span>
-    welcome <span class="kw">=</span> <span class="kw">\</span>name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">${</span>greeting<span class="kw">}</span><span class="string">, </span><span class="kw">${</span>name<span class="kw">}</span><span class="string">!"</span>
+    welcome <span class="kw">=</span> <span class="kw">\</span>name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">$(</span>greeting<span class="kw">)</span><span class="string">, </span><span class="kw">$(</span>name<span class="kw">)</span><span class="string">!"</span>
 
     <span class="comment"># …</span>
 
@@ -82,7 +82,7 @@ Suppose I decide to extract the `welcome` function to the top level, so I can re
 
     <span class="comment"># …</span>
 
-welcome <span class="kw">=</span> <span class="kw">\</span>prefix<span class="punctuation section">,</span> name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">${</span>prefix<span class="kw">}</span><span class="string">, </span><span class="kw">${</span>name<span class="kw">}</span><span class="string">!"</span></samp></pre>
+welcome <span class="kw">=</span> <span class="kw">\</span>prefix<span class="punctuation section">,</span> name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">$(</span>prefix<span class="kw">)</span><span class="string">, </span><span class="kw">$(</span>name<span class="kw">)</span><span class="string">!"</span></samp></pre>
 
 Even without knowing the rest of `func`, we can be confident this change will not alter the code's behavior.
 
@@ -90,7 +90,7 @@ In contrast, suppose Roc allowed reassignment. Then it's possible something in t
 
 <pre><samp class="code-snippet">func <span class="kw">=</span> <span class="kw">\</span>arg <span class="kw">-&gt;</span>
     greeting <span class="kw">=</span> <span class="string">"Hello"</span>
-    welcome <span class="kw">=</span> <span class="kw">\</span>name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">${</span>greeting<span class="kw">}</span><span class="string">, </span><span class="kw">${</span>name<span class="kw">}</span><span class="string">!"</span>
+    welcome <span class="kw">=</span> <span class="kw">\</span>name <span class="kw">-&gt;</span> <span class="string">"</span><span class="kw">$(</span>greeting<span class="kw">)</span><span class="string">, </span><span class="kw">$(</span>name<span class="kw">)</span><span class="string">!"</span>
 
     <span class="comment"># …</span>
 

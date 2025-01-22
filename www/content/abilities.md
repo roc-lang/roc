@@ -242,14 +242,14 @@ fromU8 = \r, g, b, a -> @Color (RgbaU8 r g b a)
 
 fromI16 : I16, I16, I16, I16 -> Result Color [OutOfRange]
 fromI16 = \r, g, b, a ->
-    if r < 0 or r > 255 or g < 0 or g > 255 or b < 0 or b > 255 or a < 0 or a > 255 then
+    if r < 0 || r > 255 || g < 0 || g > 255 || b < 0 || b > 255 || a < 0 || a > 255 then
         Err OutOfRange
     else
         Ok (@Color (RgbaU8 (Num.toU8 r) (Num.toU8 g) (Num.toU8 b) (Num.toU8 a)))
 
 fromF32 : F32, F32, F32, F32 -> Result Color [OutOfRange]
 fromF32 = \r, g, b, a ->
-    if r < 0.0 or r > 1.0 or g < 0.0 or g > 1.0 or b < 0.0 or b > 1.0 or a < 0.0 or a > 1.0 then
+    if r < 0.0 || r > 1.0 || g < 0.0 || g > 1.0 || b < 0.0 || b > 1.0 || a < 0.0 || a > 1.0 then
         Err OutOfRange
     else
         Ok (@Color (RgbaF32 r g b a))

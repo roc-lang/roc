@@ -9,7 +9,7 @@ Roc's syntax isn't trivial, but there also isn't much of it to learn. It's desig
 - `user.email` always accesses the `email` field of a record named `user`. <span class="nowrap">(Roc has</span> no inheritance, subclassing, or proxying.)
 - `Email.isValid` always refers to something named `isValid` exported by a module named `Email`. (Module names are always capitalized, and variables/constants never are.) Modules are always defined statically and can't be modified at runtime; there's no [monkey patching](https://en.wikipedia.org/wiki/Monkey_patch) to consider either.
 - `x = doSomething y z` always declares a new constant `x` (Roc has [no mutable variables, reassignment, or shadowing](/functional)) to be whatever the `doSomething` function returns when passed the arguments `y` and `z`. (Function calls in Roc don't need parentheses or commas.)
-- `"Name: ${Str.trim(name)}"` uses *string interpolation* syntax: a dollar sign inside a string literal, followed by an expression in parentheses.
+- `"Name: $(Str.trim name)"` uses *string interpolation* syntax: a dollar sign inside a string literal, followed by an expression in parentheses.
 
 Roc also ships with a source code formatter that helps you maintain a consistent style with little effort. The `roc format` command neatly formats your source code according to a common style, and it's designed with the time-saving feature of having no configuration options. This feature saves teams all the time they would otherwise spend debating which stylistic tweaks to settle on!
 
