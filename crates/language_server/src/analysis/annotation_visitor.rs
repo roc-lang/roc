@@ -1,18 +1,15 @@
 use roc_can::{
     def::{Def, DefKind},
-    expr::{ClosureData, Declarations, Expr},
+    expr::{Declarations, Expr},
     traverse::{self, DeclarationInfo, Visitor},
 };
-use roc_error_macros::internal_error;
-use roc_types::subs::Variable;
-
-use roc_module::called_via::CalledVia;
-
 use roc_region::all::Region;
+use roc_types::subs::Variable;
+use std::ops::Range;
 
 pub struct FoundDeclaration {
     pub var: Variable,
-    pub range: std::ops::Range<usize>,
+    pub range: Range<usize>,
 }
 
 pub enum NotFound {
@@ -87,28 +84,6 @@ pub fn find_declaration_at(
                     });
                 }
                 traverse::walk_def(self, def)
-            }
-        }
-
-        fn visit_expr(&mut self, expr: &Expr, region: Region, var: Variable) {
-            if self.should_visit(region) {
-                if let Expr::Call(_, args, CalledVia::QuestionSuffix) = expr {
-                    let Expr::Closure(ClosureData { arguments, .. }) = &args[1].1.value else {
-                        internal_error!("Suffixed expression did not contain a closure")
-                    };
-                    let loc_pattern = &arguments[0].2;
-                    let expr_region = args[0].1.region;
-                    let var = arguments[0].0;
-
-                    let inner_def = matches!(args[0].1.value, Expr::LetNonRec(..));
-                    let def_region = Region::span_across(&loc_pattern.region, &expr_region);
-
-                    if !inner_def && self.should_visit(def_region) {
-                        let range = loc_pattern.byte_range();
-                        self.found = Ok(FoundDeclaration { var, range });
-                    }
-                }
-                traverse::walk_expr(self, expr, var)
             }
         }
     }
