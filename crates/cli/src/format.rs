@@ -18,6 +18,7 @@ use roc_parse::ast::{FullAst, SpacesBefore};
 use roc_parse::header::parse_module_defs;
 use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
+use roc_problem::can::RuntimeError;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::Target;
 use roc_types::subs::{Content, Subs, Variable};
@@ -364,11 +365,11 @@ pub fn annotation_edits(
             let symbol = decls.symbols[index];
             let expr = &decls.expressions[index].value;
 
-            use roc_problem::can::RuntimeError::ExposedButNotDefined;
             if decls.annotations[index].is_some()
                 | matches!(
                     *expr,
-                    Expr::RuntimeError(ExposedButNotDefined(..)) | Expr::ImportParams(..)
+                    Expr::RuntimeError(RuntimeError::ExposedButNotDefined(..))
+                        | Expr::ImportParams(..)
                 )
                 | abilities.is_specialization_name(symbol.value)
                 | matches!(subs.get_content_without_compacting(var), Content::Error)

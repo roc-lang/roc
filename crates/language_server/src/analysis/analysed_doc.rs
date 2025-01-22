@@ -8,7 +8,7 @@ use bumpalo::Bump;
 
 use roc_module::symbol::{ModuleId, Symbol};
 
-use roc_region::all::{LineInfo, Region};
+use roc_region::all::{LineInfo, Position as RocPosition, Region};
 
 use tower_lsp::lsp_types::{
     CodeAction, CodeActionKind, CompletionItem, Diagnostic, GotoDefinitionResponse, Hover,
@@ -394,7 +394,7 @@ impl AnalyzedDocument {
             decl.range,
         );
 
-        let pos = roc_region::all::Position::new(offset as u32);
+        let pos = RocPosition::new(offset as u32);
         let range = Region::new(pos, pos).to_range(self.line_info());
 
         let edit = TextEdit { range, new_text };
