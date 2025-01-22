@@ -1578,6 +1578,7 @@ impl<'a> Normalize<'a> for PRecord<'a> {
             PRecord::Colon(_) => PRecord::Colon(Position::zero()),
             PRecord::OptionalFirst(_) => PRecord::OptionalFirst(Position::zero()),
             PRecord::OptionalSecond(_) => PRecord::OptionalSecond(Position::zero()),
+            PRecord::Spread(_) => PRecord::Spread(Position::zero()),
             PRecord::Pattern(inner_err, _) => {
                 PRecord::Pattern(arena.alloc(inner_err.normalize(arena)), Position::zero())
             }

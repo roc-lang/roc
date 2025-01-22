@@ -195,9 +195,11 @@ impl CompletionVisitor<'_> {
             roc_can::pattern::Pattern::As(pat, symbol) => {
                 self.as_pattern(&pat.value, *symbol, pattern_var)
             }
-            roc_can::pattern::Pattern::RecordDestructure { destructs, .. } => {
-                self.record_destructure(destructs)
-            }
+            roc_can::pattern::Pattern::RecordDestructure {
+                destructs,
+                opt_spread,
+                whole_var: _,
+            } => self.record_destructure(destructs, opt_spread),
             roc_can::pattern::Pattern::TupleDestructure { destructs, .. } => {
                 self.tuple_destructure(destructs)
             }

@@ -37,7 +37,12 @@ impl Union {
 pub enum RenderAs {
     Tag,
     Opaque,
-    Record(Vec<Lowercase>),
+    Record {
+        fields: Vec<Lowercase>,
+        /// The first option is whether there is a spread,
+        /// the second is whether the spread has a subpattern
+        opt_spread: Box<Option<Option<RenderAs>>>,
+    },
     Tuple,
     Guard,
 }

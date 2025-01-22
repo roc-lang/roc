@@ -1547,7 +1547,7 @@ pub fn canonicalize_expr<'a>(
                         loc_binop2,
                     );
 
-                    InvalidPrecedence(problem, region)
+                    InvalidPrecedence(problem)
                 }
             };
 

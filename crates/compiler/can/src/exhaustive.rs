@@ -79,8 +79,13 @@ enum SketchedPattern {
 enum IndexCtor<'a> {
     /// Index an opaque type. There should be one argument.
     Opaque,
-    /// Index a record type. The arguments are the types of the record fields.
-    Record(&'a [Lowercase]),
+    // TODO: can we get this size down to a pointer width or less to avoid bloating the size?
+    /// Index a record type.
+    Record {
+        /// The arguments are the types of the record fields.
+        fields: &'a [Lowercase],
+        opt_spread: Option<&'a IndexCtor<'a>>,
+    },
     /// Index a tuple type.
     Tuple,
     /// Index a guard constructor. The arguments are a faux guard pattern, and then the real
@@ -114,7 +119,7 @@ impl<'a> IndexCtor<'a> {
                 Self::Tag(tag_name)
             }
             RenderAs::Opaque => Self::Opaque,
-            RenderAs::Record(fields) => Self::Record(fields),
+            RenderAs::Record { fields, opt_spread } => Self::Record { fields, opt_spread },
             RenderAs::Tuple => Self::Tuple,
             RenderAs::Guard => Self::Guard,
         }
@@ -165,7 +170,7 @@ fn index_var(
                 FlatType::Apply(..) => internal_error!("not an indexable constructor"),
                 FlatType::Record(fields, ext) => {
                     let fields_order = match render_as {
-                        RenderAs::Record(fields) => fields,
+                        RenderAs::Record { fields, opt_spread } => fields,
                         _ => internal_error!(
                             "record constructors must always be rendered as records"
                         ),
@@ -228,12 +233,12 @@ fn index_var(
                     return Ok(vec![]);
                 }
                 FlatType::EmptyRecord => {
-                    debug_assert!(matches!(ctor, IndexCtor::Record(..)));
+                    debug_assert!(matches!(ctor, IndexCtor::Record { .. }));
                     // If there are optional record fields we don't unify them, but we need to
                     // cover them. Since optional fields correspond to "any" patterns, we can pass
                     // through arbitrary types.
                     let num_fields = match render_as {
-                        RenderAs::Record(fields) => fields.len(),
+                        RenderAs::Record { fields, opt_spread } => fields.len(),
                         _ => internal_error!(
                             "record constructors must always be rendered as records"
                         ),
@@ -338,9 +343,20 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
         &FloatLiteral(_, _, _, f, _) => SP::Literal(Literal::Float(f64::to_bits(f))),
         StrLiteral(v) => SP::Literal(Literal::Str(v.clone())),
         &SingleQuote(_, _, c, _) => SP::Literal(Literal::Byte(c as u8)),
-        RecordDestructure { destructs, .. } => {
+        RecordDestructure {
+            destructs,
+            opt_spread,
+            whole_var: _,
+        } => {
             let tag_id = TagId(0);
-            let mut patterns = std::vec::Vec::with_capacity(destructs.len());
+            let mut patterns = std::vec::Vec::with_capacity(
+                destructs.len()
+                    + if opt_spread.is_some_and(|spread| spread.opt_pattern.value.is_some()) {
+                        1
+                    } else {
+                        0
+                    },
+            );
             let mut field_names = std::vec::Vec::with_capacity(destructs.len());
 
             for Loc {
@@ -358,8 +374,24 @@ fn sketch_pattern(pattern: &crate::pattern::Pattern) -> SketchedPattern {
                 }
             }
 
+            let spread_render_as = if let Some(spread) = &**opt_spread {
+                match &spread.opt_pattern.value {
+                    None => Box::new(Some(None)),
+                    Some(spread_pat) => {
+                        let inner_sp = sketch_pattern(&spread_pat.value);
+                        patterns.push(inner_sp);
+                        Box::new(Some(Some(RenderAs)))
+                    }
+                }
+            } else {
+                Box::new(None)
+            };
+
             let union = Union {
-                render_as: RenderAs::Record(field_names),
+                render_as: RenderAs::Record {
+                    fields: field_names,
+                    opt_spread: spread_render_as,
+                },
                 alternatives: vec![Ctor {
                     name: CtorName::Tag(TagName("#Record".into())),
                     tag_id,

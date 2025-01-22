@@ -1656,65 +1656,85 @@ pub enum RecordFieldPattern<'a> {
 }
 
 impl<'a> RecordFieldPattern<'a> {
-    // TODO: check for equivalence based on whether there are any spreads, zip is a footgun here!
-    pub fn fields_are_equivalent(
-        lefts: &[Loc<Self>],
-        rights: &[Loc<Self>],
-        // arena: &'a Bump,
-    ) -> bool {
-        // let mut left_required_fields = Vec::with_capacity_in(lefts.len(), arena);
-        // let mut left_optional_fields = Vec::with_capacity_in(lefts.len(), arena);
+    pub fn fields_are_equivalent(lefts: &[Loc<Self>], rights: &[Loc<Self>]) -> bool {
+        if lefts.len() != rights.len() {
+            return false;
+        }
 
-        // let mut right_required_fields = Vec::with_capacity_in(rights.len(), arena);
-        // let mut right_optional_fields = Vec::with_capacity_in(rights.len(), arena);
+        for (left, right) in lefts.iter().zip(rights.iter()) {
+            if !left.value.equivalent(&right.value) {
+                return false;
+            }
+        }
 
         true
     }
 
-    // pub fn equivalent(&self, other: &Self) -> bool {
-    //     match self {
-    //         Self::RequiredField { label, value } => match other {
-    //             Self::RequiredField {
-    //                 label: other_label,
-    //                 value,
-    //             } => label == other_label,
-    //             Self::OptionalField {
-    //                 label: other_label,
-    //                 default_value,
-    //             } => {}
-    //             Self::Identifier { label: other_label } => label == other_label,
-    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
-    //         },
-    //         Self::OptionalField {
-    //             label,
-    //             default_value,
-    //         } => match other {
-    //             Self::RequiredField {
-    //                 label: other_label,
-    //                 value,
-    //             } => label == other_label,
-    //             Self::OptionalField {
-    //                 label,
-    //                 default_value,
-    //             } => {}
-    //             Self::Identifier { label: other_label } => label == other_label,
-    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
-    //         },
-    //         Self::Identifier { label } => match other {
-    //             Self::RequiredField {
-    //                 label: other_label,
-    //                 value,
-    //             } => label == other_label,
-    //             Self::OptionalField {
-    //                 label,
-    //                 default_value,
-    //             } => {}
-    //             Self::Identifier { label: other_label } => label == other_label,
-    //             Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
-    //         },
-    //         Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
-    //     }
-    // }
+    fn equivalent(&self, other: &Self) -> bool {
+        match self {
+            Self::RequiredField { label, inner } => match other {
+                Self::RequiredField {
+                    label: other_label,
+                    inner: inner_other,
+                } => label == other_label && inner.value.equivalent(&inner_other.value),
+                Self::OptionalField {
+                    label: _,
+                    default_value: _,
+                } => false,
+                Self::Identifier { label: other_label } => label == other_label,
+                Self::Spread { opt_pattern: _ } => false,
+                Self::SpaceBefore(inner_other, _) | Self::SpaceAfter(inner_other, _) => {
+                    self.equivalent(inner_other)
+                }
+            },
+            Self::OptionalField {
+                label,
+                default_value: _,
+            } => match other {
+                Self::RequiredField { label: _, inner: _ } => false,
+                Self::OptionalField {
+                    label: other_label,
+                    default_value: _,
+                } => label == other_label,
+                Self::Identifier { label: other_label } => label == other_label,
+                Self::Spread { opt_pattern: _ } => false,
+                Self::SpaceBefore(inner_other, _) | Self::SpaceAfter(inner_other, _) => {
+                    self.equivalent(inner_other)
+                }
+            },
+            Self::Identifier { label } => match other {
+                Self::RequiredField {
+                    label: other_label,
+                    inner: _,
+                } => label == other_label,
+                Self::OptionalField {
+                    label: other_label,
+                    default_value: _,
+                } => label == other_label,
+                Self::Identifier { label: other_label } => label == other_label,
+                Self::Spread { opt_pattern: _ } => false,
+                Self::SpaceBefore(inner_other, _) | Self::SpaceAfter(inner_other, _) => {
+                    self.equivalent(inner_other)
+                }
+            },
+            Self::Spread { opt_pattern } => match other {
+                Self::Spread {
+                    opt_pattern: other_opt_pattern,
+                } => match (opt_pattern, other_opt_pattern) {
+                    (Some(pat), Some(other_pat)) => pat.value.equivalent(&other_pat.value),
+                    (None, None) => true,
+                    (Some(_), None) | (None, Some(_)) => false,
+                },
+                Self::RequiredField { .. }
+                | Self::OptionalField { .. }
+                | Self::Identifier { .. } => false,
+                Self::SpaceBefore(inner_other, _) | Self::SpaceAfter(inner_other, _) => {
+                    self.equivalent(inner_other)
+                }
+            },
+            Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => inner.equivalent(other),
+        }
+    }
 }
 
 impl<'a> Spaceable<'a> for RecordFieldPattern<'a> {

@@ -2212,7 +2212,11 @@ fn pretty_runtime_error<'b>(
 
             title = INGESTED_FILE_ERROR;
         }
-        RuntimeError::InvalidPrecedence(BothNonAssociative(region, left_bin_op, right_bin_op), outer_region) => {
+        RuntimeError::InvalidPrecedence(BothNonAssociative(
+            whole_region,
+            left_bin_op,
+            right_bin_op,
+        )) => {
             doc = alloc.stack([
                 if left_bin_op.value == right_bin_op.value {
                     alloc.concat([
@@ -2235,7 +2239,7 @@ fn pretty_runtime_error<'b>(
                         )),
                     ])
                 },
-                alloc.region(lines.convert_region(region), severity),
+                alloc.region(lines.convert_region(whole_region), severity),
             ]);
 
             title = "INVALID PRECEDENCE";

@@ -179,6 +179,7 @@ fn loc_term_or_underscore_or_conditional<'a>(
         loc_term_or_closure(check_for_arrow).parse(arena, state, min_indent)
     }
 }
+
 fn loc_conditional<'a>(
     check_for_arrow: CheckForArrow,
 ) -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -3775,17 +3776,17 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
 
     map(
         either(
-            and(
+            backtrackable(and(
                 two_bytes(b'.', b'.', ERecord::DoubleDot),
                 optional(specialize_err_ref(ERecord::SpreadExpr, loc_expr(true))),
-            ),
+            )),
             and(
                 loc(and(
                     optional(byte(b'_', ERecord::UnderscoreField)),
                     specialize_err(|_, pos| ERecord::Field(pos), lowercase_ident()),
                 )),
                 optional(and(
-                    and(spaces(), value_prefix),
+                    and(backtrackable(spaces()), value_prefix),
                     spaces_before(specialize_err_ref(ERecord::Expr, loc_expr(true))),
                 )),
             ),
@@ -3793,7 +3794,7 @@ pub fn record_field<'a>() -> impl Parser<'a, RecordField<'a>, ERecord<'a>> {
         |either_spread_or_field| match either_spread_or_field {
             Either::First((_spread, opt_value)) => SpreadValue(opt_value),
             Either::Second((loc_name_with_opt_underscore, opt_value_with_prefix)) => {
-                let ignored = loc_name_with_opt_underscore.value.0.is_none();
+                let ignored = loc_name_with_opt_underscore.value.0.is_some();
                 let loc_name = Loc {
                     region: loc_name_with_opt_underscore.region,
                     value: loc_name_with_opt_underscore.value.1,

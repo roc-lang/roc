@@ -2181,9 +2181,19 @@ fn pattern_to_vars_by_symbol(
             }
         }
 
-        RecordDestructure { destructs, .. } => {
+        RecordDestructure {
+            destructs,
+            opt_spread,
+            whole_var: _,
+        } => {
             for destruct in destructs {
                 vars_by_symbol.insert(destruct.value.symbol, destruct.value.var);
+            }
+
+            if let Some(spread) = &**opt_spread {
+                if let Some(spread_pat) = &spread.opt_pattern.value {
+                    pattern_to_vars_by_symbol(vars_by_symbol, &spread_pat.value, spread.spread_var);
+                }
             }
         }
 

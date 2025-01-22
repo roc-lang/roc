@@ -5,9 +5,10 @@ use bumpalo::{
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, Header, Implements,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, PatternAs, Spaced,
-        StrLiteral, Tag, TypeAnnotation, TypeDef, TypeHeader, ValueDef, WhenBranch,
+        AbilityImpls, AbilityMember, AssignedField, Collection, Defs, DesugarProblem, Expr, Header,
+        Implements, ImplementsAbilities, ImplementsAbility, ImplementsClause, Pattern, PatternAs,
+        PrecedenceConflict, RecordFieldPattern, Spaced, StrLiteral, Tag, TypeAnnotation, TypeDef,
+        TypeHeader, ValueDef, WhenBranch,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, ImportsEntry, ModuleHeader, ModuleName, ModuleParams,
@@ -432,15 +433,54 @@ where
 {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         match self {
-            AssignedField::RequiredValue(field, _, ty)
-            | AssignedField::OptionalValue(field, _, ty)
-            | AssignedField::IgnoredValue(field, _, ty) => (field_token(field.region, arena)
-                .into_iter())
-            .chain(ty.iter_tokens(arena))
-            .collect_in(arena),
-            AssignedField::LabelOnly(s) => s.iter_tokens(arena),
+            AssignedField::WithValue {
+                ignored: _,
+                loc_label,
+                before_prefix: _,
+                prefix: _,
+                loc_val,
+            } => (field_token(loc_label.region, arena).into_iter())
+                .chain(loc_val.iter_tokens(arena))
+                .collect_in(arena),
+            AssignedField::WithoutValue {
+                ignored: _,
+                loc_label,
+            } => loc_label.iter_tokens(arena),
+            AssignedField::SpreadValue(opt_spread) => opt_spread
+                .iter()
+                .flat_map(|spread| spread.iter_tokens(arena))
+                .collect_in(arena),
             AssignedField::SpaceBefore(af, _) | AssignedField::SpaceAfter(af, _) => {
                 af.iter_tokens(arena)
+            }
+        }
+    }
+}
+
+impl IterTokens for Loc<RecordFieldPattern<'_>> {
+    fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
+        match self.value {
+            RecordFieldPattern::RequiredField { label: _, inner } => {
+                field_token(self.region, arena)
+                    .into_iter()
+                    .chain(inner.iter_tokens(arena))
+                    .collect_in(arena)
+            }
+            RecordFieldPattern::OptionalField {
+                label: _,
+                default_value,
+            } => field_token(self.region, arena)
+                .into_iter()
+                .chain(default_value.iter_tokens(arena))
+                .collect_in(arena),
+            RecordFieldPattern::Identifier { label: _ } => field_token(self.region, arena),
+            RecordFieldPattern::Spread { opt_pattern } => opt_pattern
+                .iter()
+                .flat_map(|pat| pat.iter_tokens(arena))
+                .collect_in(arena),
+            RecordFieldPattern::SpaceBefore(inner, _)
+            | RecordFieldPattern::SpaceAfter(inner, _) => {
+                Loc::at(self.region, *inner).iter_tokens(arena)
             }
         }
     }
@@ -722,12 +762,18 @@ impl IterTokens for Loc<Expr<'_>> {
                 Loc::at(region, *e).iter_tokens(arena)
             }
             Expr::ParensAround(e) => Loc::at(region, *e).iter_tokens(arena),
-            Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
-            Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _) | Expr::PrecedenceConflict(_) => {
-                bumpvec![in arena;]
-            }
+            Expr::MalformedIdent(_, _) => bumpvec![in arena;],
+            Expr::DesugarProblem(desugar_problem) => match desugar_problem {
+                DesugarProblem::PrecedenceConflict(PrecedenceConflict { expr, .. }) => {
+                    expr.iter_tokens(arena)
+                }
+                DesugarProblem::EmptyRecordBuilder(e) => e.iter_tokens(arena),
+                DesugarProblem::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
+                DesugarProblem::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
+                DesugarProblem::SpreadInRecordBuilder {
+                    opt_spread_expr, ..
+                } => opt_spread_expr.iter_tokens(arena),
+            },
         }
     }
 }
@@ -770,8 +816,6 @@ impl IterTokens for Loc<Pattern<'_>> {
                 .chain(p2.iter_tokens(arena))
                 .collect_in(arena),
             Pattern::RecordDestructure(ps) => ps.iter_tokens(arena),
-            Pattern::RequiredField(_field, p) => p.iter_tokens(arena),
-            Pattern::OptionalField(_field, p) => p.iter_tokens(arena),
             Pattern::NumLiteral(_) => onetoken(Token::Number, region, arena),
             Pattern::NonBase10Literal { .. } => onetoken(Token::Number, region, arena),
             Pattern::FloatLiteral(_) => onetoken(Token::Number, region, arena),

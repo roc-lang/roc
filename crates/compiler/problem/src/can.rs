@@ -662,7 +662,7 @@ pub enum RuntimeError {
         error: io::ErrorKind,
         region: Region,
     },
-    InvalidPrecedence(PrecedenceProblem, Region),
+    InvalidPrecedence(PrecedenceProblem),
     MalformedIdentifier(Box<str>, roc_parse::ident::BadIdent, Region),
     MalformedTypeName(Box<str>, Region),
     InvalidRecordUpdate {
@@ -742,7 +742,11 @@ impl RuntimeError {
             | RuntimeError::OpaqueAppliedToMultipleArgs(region)
             | RuntimeError::ValueNotExposed { region, .. }
             | RuntimeError::ModuleNotImported { region, .. }
-            | RuntimeError::InvalidPrecedence(_, region)
+            | RuntimeError::InvalidPrecedence(PrecedenceProblem::BothNonAssociative(
+                region,
+                _,
+                _,
+            ))
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
             | RuntimeError::InvalidRecordUpdate { region }

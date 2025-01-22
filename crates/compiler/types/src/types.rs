@@ -3392,6 +3392,7 @@ pub enum PReason {
     ListElem,
     PatternGuard,
     OptionalField,
+    SpreadGuard,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -3556,6 +3557,8 @@ pub enum PatternCategory {
     EmptyRecord,
     PatternGuard,
     PatternDefault,
+    NonCapturingSpread,
+    CapturingSpread,
     Set,
     Map,
     Ctor(TagName),

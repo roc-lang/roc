@@ -936,7 +936,7 @@ fn from_can_pattern_help<'a>(
         RecordDestructure {
             whole_var,
             destructs,
-            ..
+            opt_spread,
         } => {
             // sorted fields based on the type
             let sorted_fields = {

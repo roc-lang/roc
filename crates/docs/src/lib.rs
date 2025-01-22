@@ -837,6 +837,15 @@ fn type_annotation_to_html(
                         RecordField::RecordField { name, .. } => name,
                         RecordField::OptionalField { name, .. } => name,
                         RecordField::LabelOnly { name } => name,
+                        RecordField::Spread { type_annotation } => {
+                            buf.push_str("..");
+                            if let Some(type_ann) = type_annotation {
+                                // TODO: is `need_parens` actually always false?
+                                type_annotation_to_html(indent_level, buf, type_ann, false);
+                            }
+
+                            continue;
+                        }
                     };
 
                     buf.push_str(fields_name.as_str());
@@ -854,7 +863,7 @@ fn type_annotation_to_html(
                             buf.push_str(" ? ");
                             type_annotation_to_html(next_indent_level, buf, type_annotation, false);
                         }
-                        RecordField::LabelOnly { .. } => {}
+                        RecordField::LabelOnly { .. } | RecordField::Spread { .. } => {}
                     }
 
                     if is_multiline {
@@ -1106,6 +1115,9 @@ fn should_be_multiline(type_ann: &TypeAnnotation) -> bool {
                         type_annotation, ..
                     } => should_be_multiline(type_annotation),
                     RecordField::LabelOnly { .. } => false,
+                    RecordField::Spread { type_annotation } => type_annotation
+                        .as_ref()
+                        .is_some_and(|type_ann| should_be_multiline(type_ann)),
                 })
         }
         TypeAnnotation::Ability { .. } => true,

@@ -1,5 +1,6 @@
 use bumpalo::collections::{CollectIn, Vec};
 use bumpalo::Bump;
+use roc_parse::expr::RecordValuePrefix;
 use roc_types::types::AliasKind;
 use std::cmp::{max_by_key, min_by_key};
 
@@ -214,7 +215,13 @@ fn apply_newtypes<'a>(
             NewtypeKind::RecordField(field_name) => {
                 let label = Loc::at_zero(field_name.as_str());
                 let field_val = arena.alloc(Loc::at_zero(expr));
-                let field = Loc::at_zero(AssignedField::RequiredValue(label, &[], field_val));
+                let field = Loc::at_zero(AssignedField::WithValue {
+                    ignored: false,
+                    loc_label: label,
+                    before_prefix: &[],
+                    prefix: RecordValuePrefix::Colon,
+                    loc_val: field_val,
+                });
                 expr = Expr::Record(Collection::with_items(&*arena.alloc([field])))
             }
             NewtypeKind::Opaque(name) => {
@@ -1119,7 +1126,13 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
             region: Region::zero(),
         };
         let loc_field = Loc {
-            value: AssignedField::RequiredValue(field_name, &[], loc_expr),
+            value: AssignedField::WithValue {
+                ignored: false,
+                loc_label: field_name,
+                before_prefix: &[],
+                prefix: RecordValuePrefix::Colon,
+                loc_val: loc_expr,
+            },
             region: Region::zero(),
         };
 
@@ -1175,7 +1188,13 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
                 region: Region::zero(),
             };
             let loc_field = Loc {
-                value: AssignedField::RequiredValue(field_name, &[], loc_expr),
+                value: AssignedField::WithValue {
+                    ignored: false,
+                    loc_label: field_name,
+                    before_prefix: &[],
+                    prefix: RecordValuePrefix::Colon,
+                    loc_val: loc_expr,
+                },
                 region: Region::zero(),
             };
 
@@ -1188,7 +1207,10 @@ fn struct_to_ast<'a, M: ReplAppMemory>(
         // to the user we want to present the fields in alphabetical order again, so re-sort
         fn sort_key<'a, T>(loc_field: &'a Loc<AssignedField<'a, T>>) -> &'a str {
             match &loc_field.value {
-                AssignedField::RequiredValue(field_name, _, _) => field_name.value,
+                AssignedField::WithValue {
+                    loc_label: field_name,
+                    ..
+                } => field_name.value,
                 _ => unreachable!("was not added to output"),
             }
         }

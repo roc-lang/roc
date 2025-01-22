@@ -11,7 +11,7 @@ use crate::{
         self, AnnotatedMark, ClosureData, Declarations, Expr, Field, OpaqueWrapFunctionData,
         StructAccessorData,
     },
-    pattern::{DestructType, Pattern, RecordDestruct, TupleDestruct},
+    pattern::{DestructType, Pattern, RecordDestruct, RecordDestructureSpread, TupleDestruct},
 };
 #[derive(Clone)]
 pub enum DeclarationInfo<'a> {
@@ -574,6 +574,12 @@ pub trait Visitor: Sized {
         }
     }
 
+    fn visit_record_spread_destruct(&mut self, destruct: &RecordDestructureSpread) {
+        if let Some(spread_pat) = &destruct.opt_pattern.value {
+            walk_pattern(self, &spread_pat.value);
+        }
+    }
+
     fn visit_tuple_destruct(&mut self, destruct: &TupleDestruct, region: Region) {
         if self.should_visit(region) {
             self.visit_pattern(
@@ -600,9 +606,19 @@ pub fn walk_pattern<V: Visitor>(visitor: &mut V, pattern: &Pattern) {
             let (v, lp) = &**argument;
             visitor.visit_pattern(&lp.value, lp.region, Some(*v));
         }
-        RecordDestructure { destructs, .. } => destructs
-            .iter()
-            .for_each(|d| visitor.visit_record_destruct(&d.value, d.region)),
+        RecordDestructure {
+            destructs,
+            opt_spread,
+            whole_var: _,
+        } => {
+            destructs
+                .iter()
+                .for_each(|d| visitor.visit_record_destruct(&d.value, d.region));
+
+            if let Some(spread) = &**opt_spread {
+                visitor.visit_record_spread_destruct(spread);
+            }
+        }
         TupleDestructure { destructs, .. } => destructs
             .iter()
             .for_each(|d| visitor.visit_tuple_destruct(&d.value, d.region)),

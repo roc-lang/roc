@@ -434,7 +434,6 @@ impl<'a> LowerParams<'a> {
 
                 let record_pattern = Pattern::RecordDestructure {
                     whole_var: module_params.record_var,
-                    ext_var: module_params.record_ext_var,
                     destructs,
                     opt_spread: Box::new(None),
                 };

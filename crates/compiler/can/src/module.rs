@@ -142,7 +142,6 @@ pub struct ModuleParams {
     pub whole_symbol: Symbol,
     pub whole_var: Variable,
     pub record_var: Variable,
-    pub record_ext_var: Variable,
     pub destructs: Vec<Loc<RecordDestruct>>,
     // used while lowering passed functions
     pub arity_by_name: VecMap<IdentId, usize>,
@@ -152,7 +151,6 @@ impl ModuleParams {
     pub fn pattern(&self) -> Loc<Pattern> {
         let record_pattern = Pattern::RecordDestructure {
             whole_var: self.record_var,
-            ext_var: self.record_ext_var,
             destructs: self.destructs.clone(),
             opt_spread: Box::new(None),
         };
@@ -310,7 +308,6 @@ pub fn canonicalize_module_defs<'a>(
             whole_var,
             whole_symbol,
             record_var: var_store.fresh(),
-            record_ext_var: var_store.fresh(),
             destructs,
             arity_by_name: Default::default(),
         }
@@ -823,7 +820,11 @@ fn fix_values_captured_in_closure_pattern(
                 closure_captures,
             );
         }
-        RecordDestructure { destructs, .. } => {
+        RecordDestructure {
+            destructs,
+            whole_var: _,
+            opt_spread,
+        } => {
             for loc_destruct in destructs.iter_mut() {
                 use crate::pattern::DestructType::*;
                 match &mut loc_destruct.value.typ {
@@ -838,6 +839,16 @@ fn fix_values_captured_in_closure_pattern(
                         no_capture_symbols,
                         closure_captures,
                     ),
+                }
+            }
+
+            if let Some(spread) = &mut **opt_spread {
+                if let Some(spread_pat) = &mut spread.opt_pattern.value {
+                    fix_values_captured_in_closure_pattern(
+                        &mut spread_pat.value,
+                        no_capture_symbols,
+                        closure_captures,
+                    );
                 }
             }
         }

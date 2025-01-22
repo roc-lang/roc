@@ -1117,6 +1117,7 @@ pub enum PRecord<'a> {
     Colon(Position),
     OptionalFirst(Position),
     OptionalSecond(Position),
+    Spread(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
@@ -1138,6 +1139,7 @@ impl<'a> PRecord<'a> {
             | PRecord::Colon(p)
             | PRecord::OptionalFirst(p)
             | PRecord::OptionalSecond(p)
+            | PRecord::Spread(p)
             | PRecord::Space(_, p) => Region::from_pos(*p),
         }
     }

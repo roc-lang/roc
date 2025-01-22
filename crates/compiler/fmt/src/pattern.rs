@@ -61,13 +61,82 @@ impl<'a> Formattable for RecordFieldPattern<'a> {
         }
     }
 
-    fn format_with_options(
-        &self,
-        buf: &mut Buf,
-        _parens: Parens,
-        _newlines: Newlines,
-        indent: u16,
-    ) {
+    fn format_with_options(&self, buf: &mut Buf, parens: Parens, newlines: Newlines, indent: u16) {
+        let is_multiline = newlines == Newlines::Yes;
+
+        match self {
+            RecordFieldPattern::RequiredField { label, inner } => {
+                if is_multiline {
+                    buf.newline();
+                }
+
+                buf.indent(indent);
+
+                if buf.flags().snakify {
+                    snakify_camel_ident(buf, label);
+                } else {
+                    buf.push_str(label);
+                }
+
+                buf.push_str_allow_spaces(" : ");
+
+                inner.value.format(buf, indent);
+            }
+            RecordFieldPattern::Identifier { label } => {
+                if is_multiline {
+                    buf.newline();
+                }
+
+                buf.indent(indent);
+
+                if buf.flags().snakify {
+                    snakify_camel_ident(buf, label);
+                } else {
+                    buf.push_str(label);
+                }
+            }
+            RecordFieldPattern::OptionalField {
+                label,
+                default_value,
+            } => {
+                if is_multiline {
+                    buf.newline();
+                }
+
+                buf.indent(indent);
+
+                if buf.flags().snakify {
+                    snakify_camel_ident(buf, label);
+                } else {
+                    buf.push_str(label);
+                }
+
+                buf.push_str_allow_spaces(" ?? ");
+
+                default_value.value.format(buf, indent);
+            }
+            RecordFieldPattern::Spread { opt_pattern } => {
+                if is_multiline {
+                    buf.newline();
+                }
+
+                buf.indent(indent);
+
+                buf.push_str("..");
+
+                if let Some(spread) = opt_pattern {
+                    spread.value.format(buf, indent);
+                }
+            }
+            RecordFieldPattern::SpaceBefore(sub_field, spaces) => {
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+                sub_field.format_with_options(buf, parens, newlines, indent);
+            }
+            RecordFieldPattern::SpaceAfter(sub_field, spaces) => {
+                sub_field.format_with_options(buf, parens, newlines, indent);
+                fmt_comments_only(buf, spaces.iter(), NewlineAt::Bottom, indent);
+            }
+        }
     }
 }
 

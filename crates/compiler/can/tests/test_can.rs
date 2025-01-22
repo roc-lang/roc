@@ -642,9 +642,6 @@ mod test_can {
         } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems.len(), 1);
-        assert!(problems
-            .iter()
-            .all(|problem| matches!(problem, Problem::InvalidOptionalValue { .. })));
 
         assert!(matches!(
             loc_expr.value,

@@ -11,8 +11,8 @@ use roc_module::symbol::Symbol;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::Variable;
 use roc_types::types::{
-    AliasKind, AliasShared, Category, OptAbleType, PReason, PatternCategory, Reason, RecordField,
-    Type, TypeExtension, TypeTag, Types,
+    AliasKind, AliasShared, Category, ExtImplicitOpenness, OptAbleType, PReason, PatternCategory,
+    Reason, RecordField, Type, TypeExtension, TypeTag, Types,
 };
 use soa::Index;
 
@@ -91,12 +91,18 @@ fn headers_from_annotation_help(
         | SingleQuote(..)
         | StrLiteral(_) => true,
 
-        RecordDestructure { destructs, .. } => {
+        RecordDestructure {
+            whole_var: _,
+            destructs,
+            opt_spread,
+        } => {
             let dealiased = types.shallow_dealias(annotation.value);
             match types[dealiased] {
                 TypeTag::Record(fields) => {
                     let (field_names, _, field_types) = types.record_fields_slices(fields);
                     let field_names = &types[field_names];
+
+                    let ext_slice = types.get_type_arguments(annotation.value);
 
                     for loc_destruct in destructs {
                         let destruct = &loc_destruct.value;
@@ -124,7 +130,25 @@ fn headers_from_annotation_help(
                             return false;
                         }
                     }
-                    true
+
+                    match &**opt_spread {
+                        None => true,
+                        Some(spread_destruct) => {
+                            match (&spread_destruct.opt_pattern.value, ext_slice.is_empty()) {
+                                (Some(pat), false) => {
+                                    let spread_type = ext_slice.at(0);
+                                    headers_from_annotation_help(
+                                        types,
+                                        constraints,
+                                        &pat.value,
+                                        &Loc::at(annotation.region, spread_type),
+                                        headers,
+                                    )
+                                }
+                                _ => false,
+                            }
+                        }
+                    }
                 }
                 TypeTag::EmptyRecord => destructs.is_empty(),
                 _ => false,
@@ -593,13 +617,10 @@ pub fn constrain_pattern_help(
 
         RecordDestructure {
             whole_var,
-            ext_var,
             destructs,
             opt_spread,
         } => {
             state.vars.push(*whole_var);
-            state.vars.push(*ext_var);
-            let ext_type = Type::Variable(*ext_var);
 
             let mut field_types: SendMap<Lowercase, RecordField<Type>> = SendMap::default();
 
@@ -713,17 +734,61 @@ pub fn constrain_pattern_help(
                 state.vars.push(*var);
             }
 
+            let extension_type = match &**opt_spread {
+                None => TypeExtension::Closed,
+                Some(spread) => match &spread.opt_pattern.value {
+                    None => TypeExtension::from_type(
+                        Type::Variable(spread.spread_var),
+                        ExtImplicitOpenness::Yes,
+                    ),
+                    Some(spread_pattern) => {
+                        let spread_type = Type::Variable(spread.spread_var);
+                        let spread_type_index = constraints.push_variable(spread.spread_var);
+
+                        let expected_pat =
+                            constraints.push_pat_expected_type(PExpected::ForReason(
+                                PReason::SpreadGuard,
+                                spread_type_index,
+                                spread_pattern.region,
+                            ));
+
+                        state.constraints.push(constraints.pattern_presence(
+                            spread_type_index,
+                            expected_pat,
+                            PatternCategory::CapturingSpread,
+                            region,
+                        ));
+                        state.vars.push(spread.spread_var);
+
+                        constrain_pattern_help(
+                            types,
+                            constraints,
+                            env,
+                            &spread_pattern.value,
+                            spread_pattern.region,
+                            expected,
+                            state,
+                        );
+
+                        TypeExtension::from_non_annotation_type(spread_type)
+                    }
+                },
+            };
+
+            let record_typ = if field_types.is_empty() && opt_spread.is_none() {
+                Type::EmptyRec
+            } else {
+                Type::Record(field_types, extension_type)
+            };
             let record_type = {
-                let typ = types.from_old_type(&Type::Record(
-                    field_types,
-                    TypeExtension::from_non_annotation_type(ext_type),
-                ));
+                let typ = types.from_old_type(&record_typ);
                 constraints.push_type(types, typ)
             };
 
             let whole_var_index = constraints.push_variable(*whole_var);
             let expected_record =
                 constraints.push_expected_type(Expected::NoExpectation(record_type));
+
             let whole_con = constraints.equal_types(
                 whole_var_index,
                 expected_record,

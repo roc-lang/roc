@@ -64,10 +64,10 @@ fn constrain_params(
 
     let mut state = PatternState::default();
 
-    let empty_rec = constraints.push_type(types, Types::EMPTY_RECORD);
-    let closed_con = constraints.store(empty_rec, module_params.record_ext_var, file!(), line!());
+    // let empty_rec = constraints.push_type(types, Types::EMPTY_RECORD);
+    // let closed_con = constraints.store(empty_rec, Variable::EMPTY_RECORD, file!(), line!());
 
-    state.constraints.push(closed_con);
+    // state.constraints.push(closed_con);
 
     constrain_pattern(
         types,

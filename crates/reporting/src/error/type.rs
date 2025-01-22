@@ -2547,6 +2547,32 @@ fn to_pattern_report<'b>(
                     severity,
                 }
             }
+            // TODO: remove if we can't actually generate this!
+            PReason::SpreadGuard => {
+                let doc = alloc.stack([
+                    alloc.concat([alloc.reflow(
+                        "This spread pattern doesn't align with the remaining fields in the :",
+                    )]),
+                    alloc.region(lines.convert_region(region), severity),
+                    pattern_type_comparison(
+                        alloc,
+                        found,
+                        expected_type,
+                        add_pattern_category(alloc, alloc.text("It matches"), &category),
+                        alloc.concat([
+                            alloc.text("But the other elements in this list pattern match")
+                        ]),
+                        vec![],
+                    ),
+                ]);
+
+                Report {
+                    filename,
+                    title: "TYPE MISMATCH".to_string(),
+                    doc,
+                    severity,
+                }
+            }
             PReason::TagArg { .. } | PReason::PatternGuard => {
                 internal_error!("We didn't think this could trigger. Please tell us about it on Zulip if it does!")
             }
@@ -2594,6 +2620,8 @@ fn add_pattern_category<'b>(
         EmptyRecord => alloc.reflow(" an empty record:"),
         PatternGuard => alloc.reflow(" a pattern guard of type:"),
         PatternDefault => alloc.reflow(" an optional field of type:"),
+        NonCapturingSpread => alloc.reflow(" a non-capturing spread:"),
+        CapturingSpread => alloc.reflow(" a capturing spread of type:"),
         Set => alloc.reflow(" sets of type:"),
         Map => alloc.reflow(" maps of type:"),
         List => alloc.reflow(" lists of type:"),
@@ -2603,6 +2631,7 @@ fn add_pattern_category<'b>(
             alloc.reflow(" tag of type:"),
         ]),
         Opaque(opaque) => alloc.concat([
+            alloc.reflow(" "),
             alloc.opaque_name(*opaque),
             alloc.reflow(" unwrappings of type:"),
         ]),
@@ -5578,7 +5607,10 @@ fn pattern_to_doc_help<'b>(
                         alloc.text(" clause)"),
                     ])
                 }
-                RenderAs::Record(field_names) => {
+                RenderAs::Record {
+                    fields: field_names,
+                    opt_spread,
+                } => {
                     let mut arg_docs = Vec::with_capacity(args.len());
 
                     for (label, v) in field_names.into_iter().zip(args.into_iter()) {
@@ -5600,6 +5632,15 @@ fn pattern_to_doc_help<'b>(
                     alloc
                         .text("{ ")
                         .append(alloc.intersperse(arg_docs, alloc.reflow(", ")))
+                        .append(match opt_spread {
+                            None => alloc.text(""),
+                            Some(spread) => match &*spread {
+                                None => alloc.text(".."),
+                                Some(spread_pat) => alloc
+                                    .text("..")
+                                    .append(pattern_to_doc_help(alloc, spread_pat, false)),
+                            },
+                        })
                         .append(" }")
                 }
                 RenderAs::Tuple => {

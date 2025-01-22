@@ -799,12 +799,10 @@ fn deep_copy_pattern_help<C: CopyEnv>(
         }
         RecordDestructure {
             whole_var,
-            ext_var,
             destructs,
             opt_spread,
         } => RecordDestructure {
             whole_var: sub!(*whole_var),
-            ext_var: sub!(*ext_var),
             destructs: destructs
                 .iter()
                 .map(|lrd| {

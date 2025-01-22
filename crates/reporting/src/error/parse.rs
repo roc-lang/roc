@@ -2394,16 +2394,16 @@ fn to_precord_report<'a>(
                 }
                 _ => {
                     let doc = alloc.stack([
-                alloc.reflow("I am partway through parsing a record pattern, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([
-                    alloc.reflow(
-                        r"I was expecting to see a closing curly brace before this, so try adding a ",
-                    ),
-                    alloc.parser_suggestion("}"),
-                    alloc.reflow(" and see if that helps?"),
-                ]),
-            ]);
+                        alloc.reflow("I am partway through parsing a record pattern, but I got stuck here:"),
+                        alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                        alloc.concat([
+                            alloc.reflow(
+                                r"I was expecting to see a closing curly brace before this, so try adding a ",
+                            ),
+                            alloc.parser_suggestion("}"),
+                            alloc.reflow(" and see if that helps?"),
+                        ]),
+                    ]);
 
                     Report {
                         filename,
@@ -2469,6 +2469,10 @@ fn to_precord_report<'a>(
         }
         PRecord::OptionalFirst(_) | PRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
+        }
+
+        PRecord::Spread(_) => {
+            unreachable!("if the spread fails to parse, we try to parse something else, so we can't fail here")
         }
 
         PRecord::Pattern(pattern, pos) => to_pattern_report(alloc, lines, filename, pattern, pos),

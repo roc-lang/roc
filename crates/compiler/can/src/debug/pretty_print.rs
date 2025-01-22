@@ -538,7 +538,11 @@ fn pattern<'a>(
         } => text!(f, "@{} ", opaque.module_string(c.interns))
             .append(pattern(c, Free, f, &argument.1.value))
             .group(),
-        RecordDestructure { destructs, .. } => f
+        RecordDestructure {
+            destructs,
+            opt_spread,
+            whole_var: _,
+        } => f
             .text("{")
             .append(
                 f.intersperse(
@@ -558,6 +562,13 @@ fn pattern<'a>(
                     f.text(", "),
                 ),
             )
+            .append(match &**opt_spread {
+                None => f.text(""),
+                Some(spread) => match &spread.opt_pattern.value {
+                    None => f.text(".."),
+                    Some(spread_pat) => f.text("..").append(pattern(c, Free, f, &spread_pat.value)),
+                },
+            })
             .append(f.text("}"))
             .group(),
         TupleDestructure { destructs, .. } => f

@@ -62,7 +62,6 @@ pub enum Pattern {
     },
     RecordDestructure {
         whole_var: Variable,
-        ext_var: Variable,
         destructs: Vec<Loc<RecordDestruct>>,
         opt_spread: Box<Option<RecordDestructureSpread>>,
     },
@@ -145,12 +144,26 @@ impl Pattern {
             | MalformedPattern(..)
             | AbilityMemberSpecialization { .. } => true,
 
-            RecordDestructure { destructs, .. } => {
+            RecordDestructure {
+                destructs,
+                opt_spread,
+                whole_var: _,
+            } => {
                 // If all destructs are surely exhaustive, then this is surely exhaustive.
-                destructs.iter().all(|d| match &d.value.typ {
+                if !destructs.iter().all(|d| match &d.value.typ {
                     DestructType::Required | DestructType::Optional(_, _) => true,
                     DestructType::Guard(_, pat) => pat.value.surely_exhaustive(),
-                })
+                }) {
+                    return false;
+                }
+
+                match &**opt_spread {
+                    Some(spread) => match &spread.opt_pattern.value {
+                        Some(spread_pat) => spread_pat.value.surely_exhaustive(),
+                        None => true,
+                    },
+                    None => true,
+                }
             }
             TupleDestructure { destructs, .. } => {
                 // If all destructs are surely exhaustive, then this is surely exhaustive.
@@ -679,7 +692,6 @@ pub fn canonicalize_pattern<'a>(
         }
 
         RecordDestructure(patterns) => {
-            let ext_var = var_store.fresh();
             let whole_var = var_store.fresh();
 
             let (destructs, opt_spread, opt_erroneous) = canonicalize_record_destructs(
@@ -697,7 +709,6 @@ pub fn canonicalize_pattern<'a>(
             // use the resulting RuntimeError. Otherwise, return a successful record destructure.
             opt_erroneous.unwrap_or(Pattern::RecordDestructure {
                 whole_var,
-                ext_var,
                 destructs,
                 opt_spread: Box::new(opt_spread),
             })
@@ -1100,8 +1111,16 @@ impl<'a> BindingsFromPattern<'a> {
                             let it = destructs.iter().rev().map(TupleDestruct);
                             stack.extend(it);
                         }
-                        RecordDestructure { destructs, .. } => {
-                            let it = destructs.iter().rev().map(RecordDestruct);
+                        RecordDestructure {
+                            destructs,
+                            opt_spread,
+                            whole_var: _,
+                        } => {
+                            let it = destructs.iter().rev().map(RecordDestruct).chain(
+                                opt_spread.iter().flat_map(|spread| {
+                                    spread.opt_pattern.value.as_ref().map(Pattern)
+                                }),
+                            );
                             stack.extend(it);
                         }
                         NumLiteral(..)

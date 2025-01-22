@@ -218,7 +218,7 @@ release_excess_capacity = |@Dict({ buckets, data, max_bucket_capacity: original_
 ## capacity_of_dict = Dict.capacity(food_dict)
 ## ```
 capacity : Dict * * -> U64
-capacity = |@Dict({ max_bucket_capacity })|
+capacity = |@Dict({ max_bucket_capacity, .. })|
     max_bucket_capacity
 
 ## Returns a dictionary containing the key and value provided as input.
@@ -261,7 +261,7 @@ from_list = |data|
 ##     |> Bool.is_eq(3)
 ## ```
 len : Dict * * -> U64
-len = |@Dict({ data })|
+len = |@Dict({ data, .. })|
     List.len(data)
 
 ## Check if the dictionary is empty.
@@ -271,7 +271,7 @@ len = |@Dict({ data })|
 ## Dict.is_empty(Dict.empty({}))
 ## ```
 is_empty : Dict * * -> Bool
-is_empty = |@Dict({ data })|
+is_empty = |@Dict({ data, .. })|
     List.is_empty(data)
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
@@ -341,7 +341,7 @@ join_map = |dict, transform|
 ##     |> Bool.is_eq(36)
 ## ```
 walk : Dict k v, state, (state, k, v -> state) -> state
-walk = |@Dict({ data }), initial_state, transform|
+walk = |@Dict({ data, .. }), initial_state, transform|
     List.walk(data, initial_state, |state, (k, v)| transform(state, k, v))
 
 ## Same as [Dict.walk], except you can stop walking early.
@@ -373,7 +373,7 @@ walk = |@Dict({ data }), initial_state, transform|
 ## expect someone_is_an_adult == Bool.true
 ## ```
 walk_until : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state
-walk_until = |@Dict({ data }), initial_state, transform|
+walk_until = |@Dict({ data, .. }), initial_state, transform|
     List.walk_until(data, initial_state, |state, (k, v)| transform(state, k, v))
 
 ## Run the given function on each key-value pair of a dictionary, and return
@@ -604,7 +604,7 @@ circular_dist = |start, end, size|
 ##     |> Bool.is_eq([(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
 to_list : Dict k v -> List (k, v)
-to_list = |@Dict({ data })|
+to_list = |@Dict({ data, .. })|
     data
 
 ## Returns the keys of a dictionary as a [List].
@@ -619,7 +619,7 @@ to_list = |@Dict({ data })|
 ##     |> Bool.is_eq([1,2,3,4])
 ## ```
 keys : Dict k v -> List k
-keys = |@Dict({ data })|
+keys = |@Dict({ data, .. })|
     List.map(data, |(k, _)| k)
 
 ## Returns the values of a dictionary as a [List].
@@ -634,7 +634,7 @@ keys = |@Dict({ data })|
 ##     |> Bool.is_eq(["One","Two","Three","Four"])
 ## ```
 values : Dict k v -> List v
-values = |@Dict({ data })|
+values = |@Dict({ data, .. })|
     List.map(data, |(_, v)| v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
@@ -757,7 +757,7 @@ decrement_dist = |dist_and_fingerprint|
     Num.sub_wrap(dist_and_fingerprint, dist_inc)
 
 find : Dict k v, k -> { bucket_index : U64, result : Result v [KeyNotFound] }
-find = |@Dict({ buckets, data, shifts }), key|
+find = |@Dict({ buckets, data, shifts, .. }), key|
     hash = hash_key(key)
     dist_and_fingerprint = dist_and_fingerprint_from_hash(hash)
     bucket_index = bucket_index_from_hash(hash, shifts)
@@ -872,7 +872,7 @@ remove_bucket_helper = |buckets, bucket_index|
         (buckets, bucket_index)
 
 increase_size : Dict k v -> Dict k v
-increase_size = |@Dict({ data, max_bucket_capacity, max_load_factor, shifts })|
+increase_size = |@Dict({ data, max_bucket_capacity, max_load_factor, shifts, .. })|
     if max_bucket_capacity != max_bucket_count then
         new_shifts = shifts |> Num.sub_wrap(1)
         (buckets0, new_max_bucket_capacity) = alloc_buckets_from_shift(new_shifts, max_load_factor)
@@ -1329,7 +1329,7 @@ init_seed = |seed|
     |> wymix(wyp1)
     |> Num.bitwise_xor(seed)
 
-complete = |@LowLevelHasher({ state })| state
+complete = |@LowLevelHasher({ state, .. })| state
 
 # These implementations hash each value individually with the seed and then mix
 # the resulting hash with the state. There are other options that may be faster

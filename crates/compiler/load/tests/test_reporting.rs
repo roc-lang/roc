@@ -596,7 +596,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
+    ── INVALID PRECEDENCE in /code/proj/Main.roc ───────────────────────────────────
 
     Using != and == together requires parentheses, to clarify how they
     should be grouped.
@@ -681,7 +681,7 @@ mod test_reporting {
             "
         ),
         @r"
-    ── SYNTAX PROBLEM in /code/proj/Main.roc ───────────────────────────────────────
+    ── INVALID PRECEDENCE in /code/proj/Main.roc ───────────────────────────────────
 
     Using more than one == like this requires parentheses, to clarify how
     things should be grouped.
@@ -8402,9 +8402,9 @@ All branches in an `if` must have the same type!
     9│              @F {} -> ""
                     ^^^^^
 
-    The 2nd pattern is trying to matchF unwrappings of type:
+    The 2nd pattern is trying to match F unwrappings of type:
 
-        F {}a
+        F {}
 
     But all the previous branches match:
 
@@ -9950,8 +9950,6 @@ All branches in an `if` must have the same type!
 
     Custom implementations must be supplied fully.
 
-
-
     ── INCOMPLETE ABILITY IMPLEMENTATION in /code/proj/Main.roc ────────────────────
 
     This type does not fully implement the `MEq` ability:
@@ -10849,7 +10847,7 @@ All branches in an `if` must have the same type!
             }
             "#
         ),
-        @r#"
+        @r"
     ── OPTIONAL FIELD IN RECORD BUILDER in /code/proj/Main.roc ─────────────────────
 
     Optional fields are not allowed to be used in record builders.
@@ -10859,8 +10857,8 @@ All branches in an `if` must have the same type!
     6│>          c? 456
     7│       }
 
-    Record builders can only have required values for their fields.
-    "#
+    Record builders can only have defined values for their fields.
+    "
     );
 
     // CalledVia::RecordBuilder => {
@@ -12109,7 +12107,7 @@ All branches in an `if` must have the same type!
 
              foo : a -> {} where a implements Hash
 
-             main = foo ("", \{} -> {})
+             main = foo ("", \{ .. } -> {})
              "#
         ),
         @r#"
@@ -12117,8 +12115,8 @@ All branches in an `if` must have the same type!
 
     This expression has a type that does not implement the abilities it's expected to:
 
-    5│  main = foo ("", \{} -> {})
-                   ^^^^^^^^^^^^^^^
+    5│  main = foo ("", \{ .. } -> {})
+                   ^^^^^^^^^^^^^^^^^^^
 
     I can't generate an implementation of the `Hash` ability for
 

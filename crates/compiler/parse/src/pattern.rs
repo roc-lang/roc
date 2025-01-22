@@ -551,7 +551,35 @@ fn record_pattern_field<'a>() -> impl Parser<'a, Loc<RecordFieldPattern<'a>>, PR
     use crate::parser::Either::*;
 
     move |arena, state: State<'a>, min_indent: u32| {
-        // You must have a field name, e.g. "email"
+        let before_field_pos = state.pos();
+        let (_, opt_spread_dots, state) =
+            optional(two_bytes(b'.', b'.', PRecord::Spread)).parse(arena, state, min_indent)?;
+
+        if opt_spread_dots.is_some() {
+            let (_, opt_loc_pattern, state) =
+                optional(specialize_err_ref(PRecord::Pattern, loc_pattern_help()))
+                    .parse(arena, state, min_indent)?;
+
+            let spread_region = Region::new(
+                before_field_pos,
+                opt_loc_pattern
+                    .map(|loc_pat| loc_pat.region.end())
+                    .unwrap_or_else(|| state.pos()),
+            );
+
+            return Ok((
+                MadeProgress,
+                Loc::at(
+                    spread_region,
+                    RecordFieldPattern::Spread {
+                        opt_pattern: opt_loc_pattern.map(|pat| &*arena.alloc(pat)),
+                    },
+                ),
+                state,
+            ));
+        }
+
+        // If this isn't a spread, it must have a field name, e.g. "email"
         // using the initial pos is important for error reporting
         let pos = state.pos();
         let (progress, loc_label, state) = loc(specialize_err(
