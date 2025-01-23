@@ -262,6 +262,12 @@ impl<'a> LowLevelCall<'a> {
             StrWithAsciiLowercased => {
                 self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_LOWERCASED)
             }
+            StrWithAsciiUppercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_UPPERCASED)
+            }
+            StrCaselessAsciiEquals => {
+                self.load_args_and_call_zig(backend, bitcode::STR_CASELESS_ASCII_EQUALS)
+            }
 
             // List
             ListLenU64 => {

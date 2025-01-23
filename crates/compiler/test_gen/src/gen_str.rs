@@ -2244,3 +2244,27 @@ fn with_ascii_lowercased_non_zero_refcount() {
         RocStr
     );
 }
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_ascii_uppercased() {
+    assert_evals_to!(
+        r#"
+        Str.with_ascii_uppercased("café")
+        "#,
+        RocStr::from("CAFé"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn caseless_ascii_equals() {
+    assert_evals_to!(
+        r#"
+        Str.caseless_ascii_equals("CAfé", "caFé")
+        "#,
+        true,
+        bool
+    );
+}

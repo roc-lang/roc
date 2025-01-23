@@ -1726,6 +1726,20 @@ trait Backend<'a> {
                 arg_layouts,
                 ret_layout,
             ),
+            LowLevel::StrWithAsciiUppercased => self.build_fn_call(
+                sym,
+                bitcode::STR_WITH_ASCII_UPPERCASED.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
+            LowLevel::StrCaselessAsciiEquals => self.build_fn_call(
+                sym,
+                bitcode::STR_CASELESS_ASCII_EQUALS.to_string(),
+                args,
+                arg_layouts,
+                ret_layout,
+            ),
             LowLevel::StrToNum => {
                 let number_layout = match self.interner().get_repr(*ret_layout) {
                     LayoutRepr::Struct(field_layouts) => field_layouts[0], // TODO: why is it sometimes a struct?

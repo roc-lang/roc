@@ -1259,6 +1259,8 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         ListIncref => &[OWNED],
         ListDecref => &[OWNED],
         StrWithAsciiLowercased => &[OWNED],
+        StrWithAsciiUppercased => &[OWNED],
+        StrCaselessAsciiEquals => &[BORROWED, BORROWED],
 
         Eq | NotEq => &[BORROWED, BORROWED],
 
