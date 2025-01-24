@@ -53,7 +53,7 @@ view =
                 Desc(
                     [Ident("store_email!"), Kw("="), Lambda(["path"])],
                     """
-                    <p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>store_email</code>.
+                    <p>This <a href=\"/tutorial#defining-functions\">defines a function</a> named <code>store_email!</code>.
                     It takes one argument, named <code>path</code>.</p>
                     <p>In Roc, functions are ordinary values, so we assign names to them using <code>=</code> like with any other value.</p>
                     <p>The <code>|arg1, arg2|</code> syntax begins a function, and the part after the final <code>|</code> is the function's body.</p>

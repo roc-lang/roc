@@ -18,4 +18,4 @@ mkdir -p dist
 cp -r public/* dist/
 cargo run --bin roc -- main.roc --linker=legacy -- content/ dist/
 
-npx http-server -p 8080 --nocache --cors --index -- dist/
+simple-http-server -p 8080 --nocache --cors --index -- dist/

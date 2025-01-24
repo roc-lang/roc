@@ -6,7 +6,7 @@
 
 <p id="homepage-tagline">A fast, friendly, functional language.</p>
 <pre id="first-code-sample"><samp class="code-snippet">credits <span class="kw">=</span> List<span class="punctuation section">.</span>map<span class="punctuation section">(</span>songs<span class="punctuation section">,</span> <span class="kw">|</span>song<span class="kw">|</span>
-    <span class="string">"Performed by </span><span class="kw">${</span>song<span class="punctuation section">.</span>artist<span class="kw">}</span><span class="string">"</span><span class="punctuation section">)</span></samp></pre>
+    <span class="string">"Performed by </span><span class="kw">${</span>song<span class="punctuation section">.</span>artist<span class="kw">}</span><span class="string">"</span><br><span class="punctuation section">)</span></samp></pre>
 </div>
 </div>
 
@@ -72,7 +72,7 @@ Here are some examples of how it can be used today.
 <div role="presentation" class="home-examples-container">
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Command-Line Interfaces</h3>
-    <pre><samp class="code-snippet">main <span class="kw">=</span>
+    <pre><samp class="code-snippet">main! <span class="kw">=</span> <span class="kw">|</span>args<span class="kw">|</span>
     Stdout<span class="punctuation section">.</span>line<span class="punctuation section">!</span><span class="punctuation section">(</span><span class="literal">"Hello!"</span><span class="punctuation section">)</span></samp></pre>
         <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
         <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/main.roc">the code for it</a> in the main Roc code repository.</p>
@@ -80,7 +80,7 @@ Here are some examples of how it can be used today.
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Web Servers</h3>
-<pre><samp class="code-snippet">handleReq <span class="kw">=</span> <span class="kw">|</span>request<span class="kw">|</span>
+<pre><samp class="code-snippet">handle_req! <span class="kw">=</span> <span class="kw">|</span>request<span class="kw">|</span>
     Ok<span class="punctuation section">(</span><span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span><span class="punctuation section">)</span></samp></pre>
         <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a <a href="/platforms">platform</a> with
         a simple interface: you write a function which takes a <code>Request</code>, does some I/O, and returns a <code>Response</code>.</p>

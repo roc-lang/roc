@@ -1213,14 +1213,14 @@ Username := Str
 
 from_str : Str -> Username
 from_str = |str|
-    @Username str
+    @Username(str)
 
 to_str : Username -> Str
 to_str = \@Username(str) ->
     str
 ```
 
-The `from_str` function turns a string into a `Username` by calling `@Username` on that string. The `to_str` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
+The `from_str` function turns a string into a `Username` by calling `@Username` on that string. The `to_str` function turns a `Username` back into a string by pattern matching `@Username(str)` to unwrap the string from the `Username` opaque type.
 
 Now we can expose the `Username` opaque type so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
 
@@ -1328,22 +1328,22 @@ Sometimes you may want to write a function that accepts configuration options. T
 For example:
 
 ```roc
-table = \{ height, width, title ? "oak", description ? "a wooden table" } ->
+table = \{ height, width, title ?? "oak", description ?? "a wooden table" } ->
 ```
 
 This is using _default value field destructuring_ to destructure a record while
 providing default values for any fields that the caller didn't provide. Here, the `?` operator
 essentially means "if the caller did not provide this field, default it to the following value."
 
-The type of `table` uses `?` instead of `:` to indicate which fields the caller can omit:
+The type of `table` uses `??` instead of `:` to indicate which fields the caller can omit:
 
 ```roc
 table :
     {
         height : U64,
         width : U64,
-        title ? Str,
-        description ? Str,
+        title ?? Str,
+        description ?? Str,
     }
     -> Table
 ```
@@ -1355,7 +1355,7 @@ the type `Str`. This means you can choose to omit the `title`, `description`, or
 when calling the function…but if you provide them, they must have the type `Str`.
 
 This is also the type that would have been inferred for `table` if it had no annotation.
-Roc's compiler can tell from the destructuring syntax `title ? "oak"` that `title` is a field with a default,
+Roc's compiler can tell from the destructuring syntax `title ?? "oak"` that `title` is a field with a default,
 and that it has the type `Str`.
 
 Destructuring is the only way to implement a record with default value fields! For example,
@@ -1386,7 +1386,7 @@ answer : Str
 answer =
     when Str.from_utf8(definitely_valid_utf8) is
         Ok(str) -> str
-        Err _ -> crash "This should never happen!"
+        Err(_) -> crash "This should never happen!"
 ```
 
 If the unthinkable happens, and somehow the program reaches this `Err` branch even though that was thought to be impossible, then it will crash - just like if the system had run out of memory. The string passed to `crash` will be provided to the platform as context; each platform may do something different with it.
@@ -1438,9 +1438,9 @@ If a test fails, it will not show the actual value that differs from the expecte
 
 ```roc
 expect
-    funcOut = pluralize("cactus", "cacti", 1)
+    func_out = pluralize("cactus", "cacti", 1)
 
-    funcOut == "2 cactus"
+    func_out == "2 cactus"
 ```
 
 ### [Inline Expectations](#inline-expects) {#inline-expects}
@@ -1861,9 +1861,9 @@ main! = |_args|
     when Stdin.line!({}) is
         Ok(input) ->
             _ = Stdout.line!("Your input was: ${input}")?
-            Ok {}
-        Err _ ->
-            Ok {}
+            Ok({})
+        Err(_) ->
+            Ok({})
 ```
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
@@ -1892,19 +1892,16 @@ import pf.Stdin
 main! = |_args|
 
     Stdout.line!("Type something and press Enter.")
-    |> Result.map_err(UnableToPrintPrompt)
-    |> try
+    |> Result.map_err(UnableToPrintPrompt)?
 
     input =
         Stdin.line!({})
-        |> Result.map_err(UnableToReadInput)
-        |> try
+        |> Result.map_err(UnableToReadInput)?
 
     Stdout.line!("You entered: ${input}")
-    |> Result.map_err(UnableToPrintInput)
-    |> try
+    |> Result.map_err(UnableToPrintInput)?
 
-    Ok {}
+    Ok({})
 ```
 
 The `map_err` function has this type:
@@ -1936,7 +1933,7 @@ main! = |_args|
     Stdout.line!("Type something and press Enter.") ? UnableToPrintPrompt
     input = Stdin.line!({}) ? UnableToReadInput
     Stdout.line!("You entered: ${input}") ? UnableToPrintInput
-    Ok {}
+    Ok({})
 ```
 
 Here the `?` is just syntax sugar that does the same thing as the `?` postfix
@@ -2001,9 +1998,9 @@ full_name = |user|
 
 I can pass this function a record that has more fields than just `first_name` and `last_name`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
 
-- `full_name { first_name: "Sam", last_name: "Sample" }`
-- `full_name { first_name: "Sam", last_name: "Sample", email: "blah@example.com" }`
-- `full_name { age: 5, first_name: "Sam", things: 3, last_name: "Sample", role: Admin }`
+- `full_name({ first_name: "Sam", last_name: "Sample" })`
+- `full_name({ first_name: "Sam", last_name: "Sample", email: "blah@example.com" })`
+- `full_name({ age: 5, first_name: "Sam", things: 3, last_name: "Sample", role: Admin })`
 
 This `user` argument is an _open record_ - that is, a description of a minimum set of fields on a record, and their types. When a function takes an open record as an argument, it's okay if you pass it a record with more fields than just the ones specified.
 
@@ -2201,14 +2198,14 @@ This will be a type mismatch because the two branches have incompatible types. S
 
 ```roc
 if x > 5 then
-    Ok "foo"
+    Ok("foo")
 else
-    Err "bar"
+    Err("bar")
 ```
 
-This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be the closed union `[Ok Str]`, and likewise for `Err "bar"` and `[Err Str]`, then this would have to be a type mismatch - because those two closed unions are incompatible.
+This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok("foo")` to be the closed union `[Ok Str]`, and likewise for `Err("bar")` and `[Err Str]`, then this would have to be a type mismatch - because those two closed unions are incompatible.
 
-Instead, the compiler infers `Ok "foo"` to be the open union `[Ok Str]*`, and `Err "bar"` to be the open union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in a `when` work the same way with open unions.)
+Instead, the compiler infers `Ok("foo")` to be the open union `[Ok Str]*`, and `Err("bar")` to be the open union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in a `when` work the same way with open unions.)
 
 Earlier we saw how a function which accepts an open union must account for more possibilities, by including catch-all `_ ->` patterns in its `when` expressions. So _accepting_ an open union means you have more requirements. In contrast, when you already _have_ a value which is an open union, you have fewer requirements. A value which is an open union (like `Ok "foo"`, which has the type `[Ok Str]*`) can be provided to anything that's expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least the tags in the open union you're providing.
 
@@ -2222,14 +2219,14 @@ So if I have an `[Ok Str]*` value, I can pass it to functions with any of these 
 | `[Ok Str, Err Bool] -> Bool`            | Yes                         |
 | `[Ok Str, Err Bool, Whatever]* -> Bool` | Yes                         |
 | `[Ok Str, Err Bool, Whatever] -> Bool`  | Yes                         |
-| `Result Str(Bool) -> Bool`               | Yes                         |
+| `Result Str Bool -> Bool`               | Yes                         |
 | `[Err Bool, Whatever]* -> Bool`         | Yes                         |
 
 That last one works because a function accepting an open union can accept any unrecognized tag (including `Ok Str`) even though it is not mentioned as one of the tags in `[Err Bool, Whatever]*`! Remember, when a function accepts an open tag union, any `when` branches on that union must include a catch-all `_ ->` branch, which is the branch that will end up handling the `Ok Str` value we pass in.
 
 However, I could not pass an `[Ok Str]*` to a function with a _closed_ tag union argument that did not mention `Ok Str` as one of its tags. So if I tried to pass `[Ok Str]*` to a function with the type `[Err Bool, Whatever] -> Str`, I would get a type mismatch - because a `when` in that function could be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
 
-> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might have the branch `Ok(str) ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked, then that assumption would be false and things would break!
+> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it `Ok(5)`, that will still be a type mismatch. If you think about it, a `when` in that function might have the branch `Ok(str) ->` which assumes there's a string inside that `Ok`, and if `Ok(5)` type-checked, then that assumption would be false and things would break!
 >
 > So `[Ok Str]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag, but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
 
@@ -2302,30 +2299,30 @@ combine_matchers = |matcher_a, matcher_b, combiner| ...
 user_tab_matcher : UrlMatcher { users: {}, user_id: U64, tab: Str }
 user_tab_matcher =
     { combine_matchers <-
-        users: exact_segment "users",
+        users: exact_segment("users"),
         user_id: u64_segment,
         tab: any_segment,
     }
 
 expect
     user_tab_matcher
-    |> match_on_url "/users/123/account"
-    == Ok { users: {}, user_id: 123, tab: "account" }
+    |> match_on_url("/users/123/account")
+    == Ok({ users: {}, user_id: 123, tab: "account" })
 ```
 
 The `user_tab_matcher` record builder desugars to the following:
 
 ```roc
 user_tab_matcher =
-    combine_matchers
-        (exact_segment "users")
-        (
-            combine_matchers
-                u64_segment
-                any_segment
-                |user_id, tab| (user_id, tab)
-        )
-        |users, (user_id, tab)| { users, user_id, tab }
+    combine_matchers(
+        exact_segment("users"),
+        combine_matchers(
+            u64_segment,
+            any_segment,
+            |user_id, tab| (user_id, tab),
+        ),
+        |users, (user_id, tab)| { users, user_id, tab },
+    )
 ```
 
 You can see that the `combine_matchers` builder function is simply applied in sequence, pairing up all fields until a record is created.
@@ -2336,15 +2333,15 @@ You'll notice that the `users` field above holds an empty record, and isn't a us
 user_tab_matcher : UrlMatcher { user_id: U64 }
 user_tab_matcher =
     { combine_matchers <-
-        _: exact_segment "users",
+        _: exact_segment("users"),
         user_id: u64_segment,
         _tab: any_segment,
     }
 
 expect
     user_tab_matcher
-    |> match_on_url "/users/123/account"
-    == Ok { user_id: 123 }
+    |> match_on_url("/users/123/account")
+    == Ok({ user_id: 123 })
 ```
 
 If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html).
@@ -2380,7 +2377,6 @@ Here are various Roc expressions involving operators, and what they desugar to.
 | `!a`                         | `Bool.not(a)`                                                                 |
 | <code>a \|> f</code>         | `f(a)`                                                                        |
 | <code>f a b \|> g x y</code> | `g(f(a, b), x y)`                                                              |
-| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html) |
 | `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)   |
 
 ### [Additional Resources](#additional-resources) {#additional-resources}
