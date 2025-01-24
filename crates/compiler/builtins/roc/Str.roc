@@ -374,6 +374,8 @@ module [
     drop_prefix,
     drop_suffix,
     with_ascii_lowercased,
+    with_ascii_uppercased,
+    caseless_ascii_equals,
 ]
 
 import Bool exposing [Bool]
@@ -1348,7 +1350,71 @@ drop_suffix = |haystack, suffix|
 ## for Unicode capitalization that can be upgraded independently from the language's builtins.
 ##
 ## To do a case-insensitive comparison of the ASCII characters in a string,
-## use [`caseless_ascii_equals`](#caseless_ascii_equals).
+## use [Str.caseless_ascii_equals].
 with_ascii_lowercased : Str -> Str
 
-expect Str.with_ascii_lowercased("cOFFÉ") == "coffÉ"
+expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
+
+## Returns a version of the string with all [ASCII characters](https://en.wikipedia.org/wiki/ASCII) uppercased.
+## Non-ASCII characters are left unmodified. For example:
+##
+## ```roc
+##  expect "café".with_ascii_uppercased() == "CAFé"
+## ```
+##
+## This function is useful for things like
+## [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
+## know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## It has better performance than lowercasing operations which take Unicode into account.
+##
+## That said, strings received from user input can always contain
+## non-ASCII Unicode characters, and uppercasing [Unicode](https://unicode.org)
+## works differently in different languages.
+## For example, the string `"i"` uppercases to `"I"` in English and to `"İ"`
+## (a [dotted I](https://en.wikipedia.org/wiki/%C4%B0)) in Turkish.
+## These rules can also change in each Unicode release,
+## so we have a separate [`unicode` package](https://github.com/roc-lang/unicode) for Unicode capitalization
+## that can be upgraded independently from the language's builtins.
+##
+## To do a case-insensitive comparison of the ASCII characters in a string,
+## use [Str.caseless_ascii_equals].
+with_ascii_uppercased : Str -> Str
+
+expect Str.with_ascii_uppercased("café") == "CAFé"
+
+## Returns `True` if all the [ASCII characters](https://en.wikipedia.org/wiki/ASCII) in the string are the same
+## when ignoring differences in capitalization.
+## Non-ASCII characters must all be exactly the same,
+## including capitalization. For example:
+##
+## ```roc
+##  expect "café".caseless_ascii_equals("CAFé")
+##
+##  expect !"café".caseless_ascii_equals("CAFÉ")
+## ```
+##
+## The first call returns `True` because all the ASCII characters are the same
+## when ignoring differences in capitalization, and the only non-ASCII character
+## (`é`) is the same in both strings. The second call returns `False`because
+## `é` and `É` are not ASCII characters, and they are different.
+##
+## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
+## know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## It has better performance than lowercasing operations which take Unicode into account.
+##
+## That said, strings received from user input can always contain
+## non-ASCII Unicode characters, and lowercasing [Unicode](https://unicode.org) works
+## differently in different languages. For example, the string `"I"` lowercases to `"i"`
+## in English and to `"ı"` (a [dotless i](https://en.wikipedia.org/wiki/Dotless_I))
+## in Turkish. These rules can also change in each [Unicode release](https://www.unicode.org/releases/),
+## so we have separate [`unicode` package](https://github.com/roc-lang/unicode)
+## for Unicode capitalization that can be upgraded independently from the language's builtins.
+##
+##  To convert a string's ASCII characters to uppercase or lowercase, use [Str.with_ascii_uppercased]
+## and [Str.with_ascii_lowercased].
+caseless_ascii_equals : Str, Str -> Bool
+
+expect Str.caseless_ascii_equals("café", "CAFé")
+expect !Str.caseless_ascii_equals("café", "CAFÉ")
