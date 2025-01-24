@@ -10,6 +10,7 @@ Token : [
     Num Str,
     Comment Str,
     Literal Str,
+    Suffix Str,
     ParensAround (List Token),
     Lambda (List Str),
     StrInterpolation Str Str Str,
@@ -37,7 +38,7 @@ view =
                 ),
                 Indent,
                 Desc(
-                    [PncApply("store_email!", [PncApply("Path.from_str", [Str("\"url.txt\"")])]), Kw(" ? "), Ident("handle_err!")],
+                    [PncApply("store_email!", [PncApply("Path.from_str", [Str("\"url.txt\"")])]), Kw("?"), Ident("handle_err!")],
                     """
                     <p>This converts the string <code>\"url.txt\"</code> into a <code>Path</code> by passing it to <code>Path.from_str</code>.</p>
                     <p>It then sends that result to <code>store_email!</code>. The <code>!</code> sigil at the end tells you that this function is
@@ -60,7 +61,7 @@ view =
                     """,
                 ),
                 Indent,
-                Desc([Ident("url"), Kw("="), PncApply("File.read_utf8!", [Ident("path")]), Kw("?")],
+                Desc([Ident("url"), Kw("="), PncApply("File.read_utf8!", [Ident("path")]), Suffix("?")],
                     """
                     <p>This passes <code>path</code> to the <code>File.read_utf8</code> function, which reads the contents of the file
                     (as a <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a> string) into <code>url</code>.</p>
@@ -71,7 +72,7 @@ view =
                     the rest of this function will be skipped, and the <code>handle_err</code> function will take over.</p>
                     """),
                 Newline,
-                Desc([Ident("user"), Kw("="), PncApply("Http.get!", [Ident("url"), Ident("Json.utf8")]), Kw("?")],
+                Desc([Ident("user"), Kw("="), PncApply("Http.get!", [Ident("url"), Ident("Json.utf8")]), Suffix("?")],
                     """
                     <p>This fetches the contents of the URL and decodes them as <a href=\"https://www.json.org\">JSON</a>.</p>
                     <p>If the shape of the JSON isn't compatible with the type of <code>user</code> (based on type inference),
@@ -91,7 +92,7 @@ view =
                     """,
                 ),
                 Newline,
-                Desc([PncApply("File.write_utf8!", [Ident("dest"), Ident("user.email")]), Kw("?")],
+                Desc([PncApply("File.write_utf8!", [Ident("dest"), Ident("user.email")]), Suffix("?")],
                     """
                     <p>This writes <code>user.email</code> to the file, encoded as <a href=\"https://en.wikipedia.org/wiki/UTF-8\">UTF-8</a>.</p>
                     <p>Since <code>File.write_utf8!</code> doesn't produce any information on success, we don't bother using <code>=</code> like we did on the other lines.</p>
@@ -191,10 +192,12 @@ tokens_to_str = |tokens|
         "",
         |buf, token|
             buf_with_space =
-                if Str.is_empty(buf) || token == Literal(",") || token == Kw("?") then
+                if Str.is_empty(buf) then
                     buf
                 else
-                    Str.concat(buf, " ")
+                    when token is
+                        Literal(",") | Suffix(_) -> buf
+                        _ -> Str.concat(buf, " ")
 
             when token is
                 ParensAround(wrapped) ->
@@ -216,9 +219,7 @@ tokens_to_str = |tokens|
                     |> Str.concat(args_with_commas)
                     |> Str.concat("<span class=\"kw\">|</span>")
 
-                Kw(" ? ") ->
-                    Str.concat(buf_with_space, "<span class=\"kw\">?</span>")
-                Kw(str) ->
+                Suffix(str) | Kw(str) ->
                     Str.concat(buf_with_space, "<span class=\"kw\">${str}</span>")
 
                 Num(str) | Str(str) | Literal(str) -> # We may render these differently in the future
