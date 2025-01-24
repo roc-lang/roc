@@ -940,8 +940,8 @@ A helpful way to remember the argument order for `List.walk` is that that its ar
 > **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Consider using one of the following if you would like to call an effectful function on a list of
 
 ```roc
-List.forEach! : List a, (a => {}) => {}
-List.forEachTry! : List a, (a => Result {} err) => Result {} err
+List.for_each! : List a, (a => {}) => {}
+List.for_each_try! : List a, (a => Result {} err) => Result {} err
 ```
 
 ### [Pattern Matching on Lists](#pattern-matching-on-lists) {#pattern-matching-on-lists}
