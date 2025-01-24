@@ -117,7 +117,7 @@ Let's try calling a function:
 
 Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there."`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there."`.
 
-Both the `Str.concat` function has a dot in their names. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module.
+The `Str.concat` function has a dot in its name. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module.
 
 We'll get into more depth about modules later, but for now you can think of a module as a named collection of functions. Eventually we'll discuss how to use them for more than that.
 
