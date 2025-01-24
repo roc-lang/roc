@@ -837,7 +837,6 @@ listGet = |index|
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
-<!-- TODO: Rewrite this for ? -->
 ### [The `?` postfix operator](#the-question-postfix-operator) {#the-question-postfix-operator}
 
 Roc also has a `?` postfix operator, which is convenient syntax sugar for `Result.try`, but avoids a lot of noise introduced by callbacks.
@@ -858,6 +857,27 @@ Here's what this does:
   - For example, if we call `get_letter("abc")`, then the call to `Str.to_u64` returns `Err(InvalidNumStr)`, and the `?` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
 
 Thanks to the `?` postfix operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
+
+### [Recovering from errors with the `??` infix operator](#recovering-from-errors) {#recovering-from-errors}
+
+Above you saw this code sample to show how to recover from errors using the
+`Result.with_default` function:
+
+```roc
+Result.with_default(List.get(["a", "b", "c"], 100), "")
+# returns "" because that's the default we said to use if List.get returned an Err
+```
+
+But this was common enough that Roc has syntax to make it easier to read and
+write:
+
+```roc
+List.get(["a", "b", "c"], 100) ?? ""
+# returns "" because that's the default we said to use if List.get returned an Err
+```
+
+All in all, Roc recognizes that handling errors is important - and makes working
+with them as values as painless as possible.
 
 Now let's get back to lists!
 
@@ -1900,6 +1920,28 @@ This code is doing three things:
 1. Call `Stdout.line!("...")`, which returns a `Result` value
 2. Transform that `Result` value into another `Result` value using `|> Result.map_err`
 3. Unwrap that final `Result` value (returned by `map_err`) using `try` and return early if it's an error
+
+#### Another option - the ? _infix_ operator
+
+The above example could be rewritten to the following with no change to how it
+would behave:
+
+```roc
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.18.0/0APbwVN1_p1mJ96tXjaoiUCr8NBGamr8G8Ac_DrXR-o.tar.br" }
+
+import pf.Stdout
+import pf.Stdin
+
+main! = |_args|
+    Stdout.line!("Type something and press Enter.") ? UnableToPrintPrompt
+    input = Stdin.line!({}) ? UnableToReadInput
+    Stdout.line!("You entered: ${input}") ? UnableToPrintInput
+    Ok {}
+```
+
+Here the `?` is just syntax sugar that does the same thing as the `?` postfix
+operator, put passes any error that would be returned to the function (or in
+this case tag) before it is returned.
 
 See the [Error Handling example](https://www.roc-lang.org/examples/ErrorHandling/README.html) for a more detailed explanation of error handling in a larger program.
 
