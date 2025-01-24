@@ -179,7 +179,7 @@ pub const RocStr = extern struct {
 
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self.bytes == other.bytes and self.length == other.length and self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
+        if (self.bytes == other.bytes and self.length == other.length) {
             return true;
         }
 
@@ -2256,8 +2256,7 @@ test "withAsciiUppercased: seamless slice" {
 }
 
 pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
-    // If they are byte-for-byte equal, they're definitely equal!
-    if (self.bytes == other.bytes and self.length == other.length and self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
+    if (self.bytes == other.bytes and self.length == other.length) {
         return true;
     }
 
