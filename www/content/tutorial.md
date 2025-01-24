@@ -838,9 +838,10 @@ listGet = |index|
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
 
 <!-- TODO: Rewrite this for ? -->
-### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
+### [The `?` postfix operator](#the-question-postfix-operator) {#the-question-postfix-operator}
 
-Roc has a `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `get_letter` function:
+Roc also has a `?` postfix operator, which is convenient syntax sugar for `Result.try`, but avoids a lot of noise introduced by callbacks.
+For example, consider the following `get_letter` function:
 
 ```roc
 get_letter : Str -> Result Str [OutOfBounds, InvalidNumStr]
@@ -851,12 +852,12 @@ get_letter = |index_str|
 
 Here's what this does:
 
-- If the `Str.to_u64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
-  - If we call `get_letter("2")`, then `Str.to_u64` returns `Ok(2)`, and the `try` unwraps to the integer 2, so `index` is set to 2 (not `Ok(2)`). Then the `List.get` function is called and returns `Ok("c")`.
-  - If the `Str.to_u64` function returns an `Err` value, then the `try` keyword immediately interrupts the `get_letter` function and makes it return this error.
-  - For example, if we call `get_letter("abc")`, then the call to `Str.to_u64` returns `Err(InvalidNumStr)`, and the `try` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
-<!-- TODO: Remove try keyword reference -->
-Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
+- If the `Str.to_u64` function returns an `Ok` value, then `?` will return what's inside the `Ok`. For example:
+  - If we call `get_letter("2")`, then `Str.to_u64` returns `Ok(2)`, and the `?` unwraps to the integer 2, so `index` is set to 2 (not `Ok(2)`). Then the `List.get` function is called and returns `Ok("c")`.
+  - If the `Str.to_u64` function returns an `Err` value, then the `?` operator immediately interrupts the `get_letter` function and makes it return this error.
+  - For example, if we call `get_letter("abc")`, then the call to `Str.to_u64` returns `Err(InvalidNumStr)`, and the `?` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `?` postfix operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
 
 Now let's get back to lists!
 
@@ -1942,23 +1943,6 @@ Well done on making it this far!
 We've covered all of the basic syntax and features of Roc in this Tutorial. You should now have a good foundation and be ready to start writing your own applications.
 
 You can continue reading through more-advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
-
-## [Under Construction](#under-construction) {#under-construction}
-
-Here are some features that are either coming soon or leaving soon. You may see these used in others' code, but for now you can choose to ignore them all!
-
-### [The `?` postfix "try" operator](#the-postfix-try-operator) {#the-postfix-try-operator}
-
-STATUS: Work in progress - being modified to support parens and commas calling convention. At this time it may lead to confusing and unhelpful error messages.
-
-Roc also has a `?` postfix operator, which behaves similar to the `try` keyword. An example:
-
-```roc
-get_letter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-get_letter = |index_str|
-    index = Str.to_u64? index_str
-    List.get(["a", "b", "c", "d"], index)
-```
 
 ## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
