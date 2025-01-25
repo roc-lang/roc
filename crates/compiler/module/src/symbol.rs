@@ -1421,10 +1421,12 @@ define_builtins! {
         49 STR_DROP_PREFIX: "drop_prefix"
         50 STR_DROP_SUFFIX: "drop_suffix"
         51 STR_WITH_ASCII_LOWERCASED: "with_ascii_lowercased"
-        52 STR_FROM_UTF16: "from_utf16"
-        53 STR_FROM_UTF16_LOSSY: "from_utf16_lossy"
-        54 STR_FROM_UTF32: "from_utf32"
-        55 STR_FROM_UTF32_LOSSY: "from_utf32_lossy"
+        52 STR_WITH_ASCII_UPPERCASED: "with_ascii_uppercased"
+        53 STR_CASELESS_ASCII_EQUALS: "caseless_ascii_equals"
+        54 STR_FROM_UTF16: "from_utf16"
+        55 STR_FROM_UTF16_LOSSY: "from_utf16_lossy"
+        56 STR_FROM_UTF32: "from_utf32"
+        57 STR_FROM_UTF32_LOSSY: "from_utf32_lossy"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

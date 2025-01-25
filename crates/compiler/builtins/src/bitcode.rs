@@ -360,6 +360,8 @@ pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
 pub const STR_ALLOCATION_PTR: &str = "roc_builtins.str.allocation_ptr";
 pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
 pub const STR_WITH_ASCII_LOWERCASED: &str = "roc_builtins.str.with_ascii_lowercased";
+pub const STR_WITH_ASCII_UPPERCASED: &str = "roc_builtins.str.with_ascii_uppercased";
+pub const STR_CASELESS_ASCII_EQUALS: &str = "roc_builtins.str.caseless_ascii_equals";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";

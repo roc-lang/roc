@@ -626,6 +626,28 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_ASCII_LOWERCASED,
             )
         }
+        StrWithAsciiUppercased => {
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_ASCII_UPPERCASED,
+            )
+        }
+        StrCaselessAsciiEquals => {
+            arguments!(string1, string2);
+
+            call_str_bitcode_fn(
+                env,
+                &[string1, string2],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_CASELESS_ASCII_EQUALS,
+            )
+        }
         ListConcat => {
             debug_assert_eq!(args.len(), 2);
 

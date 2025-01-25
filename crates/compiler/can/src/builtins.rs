@@ -132,6 +132,8 @@ map_symbol_to_lowlevel_and_arity! {
     StrWithCapacity; STR_WITH_CAPACITY; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
     StrWithAsciiLowercased; STR_WITH_ASCII_LOWERCASED; 1,
+    StrWithAsciiUppercased; STR_WITH_ASCII_UPPERCASED; 1,
+    StrCaselessAsciiEquals; STR_CASELESS_ASCII_EQUALS; 2,
 
     ListLenUsize; LIST_LEN_USIZE; 1,
     ListLenU64; LIST_LEN_U64; 1,

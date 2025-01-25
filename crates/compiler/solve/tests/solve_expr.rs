@@ -3839,6 +3839,30 @@ mod solve_expr {
     }
 
     #[test]
+    fn str_with_ascii_uppercased() {
+        infer_eq_without_problem(
+            indoc!(
+                r"
+                Str.with_ascii_uppercased
+                "
+            ),
+            "Str -> Str",
+        );
+    }
+
+    #[test]
+    fn str_caseless_ascii_equals() {
+        infer_eq_without_problem(
+            indoc!(
+                r"
+                Str.caseless_ascii_equals
+                "
+            ),
+            "Str, Str -> Bool",
+        );
+    }
+
+    #[test]
     fn list_take_first() {
         infer_eq_without_problem(
             indoc!(

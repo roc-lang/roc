@@ -179,7 +179,7 @@ pub const RocStr = extern struct {
 
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self.bytes == other.bytes and self.length == other.length and self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
+        if (self.bytes == other.bytes and self.length == other.length) {
             return true;
         }
 
@@ -2193,6 +2193,134 @@ test "withAsciiLowercased: seamless slice" {
 
     try expect(!str_result.isSmallStr());
     try expect(str_result.eq(expected));
+}
+
+// Str.with_ascii_uppercased
+pub fn strWithAsciiUppercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toUpper(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiUppercased: small str" {
+    const original = RocStr.fromSlice("coffé");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: non small str" {
+    const original = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
+    if (self.bytes == other.bytes and self.length == other.length) {
+        return true;
+    }
+
+    return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
+}
+
+test "caselessAsciiEquals: same str" {
+    const str1 = RocStr.fromSlice("coFféÉ");
+    defer str1.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str1);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: differently capitalized non-ascii char" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("coffÉ");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(!are_equal);
+}
+
+test "caselessAsciiEquals: small str" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: non small str" {
+    const str1 = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer str1.decref();
+    try expect(!str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const str1 = substringUnsafeC(l, 1, l.len() - 1);
+    defer str1.decref();
+
+    try expect(str1.isSeamlessSlice());
+
+    const str2 = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
 }
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}
