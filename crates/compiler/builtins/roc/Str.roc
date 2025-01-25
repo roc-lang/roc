@@ -1333,7 +1333,7 @@ drop_suffix = |haystack, suffix|
 ## Non-ASCII characters are left unmodified. For example:
 ##
 ## ```roc
-## expect "CAFÉ".with_ascii_lowercased() == "cafÉ"
+## expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## ```
 ##
 ## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
@@ -1359,7 +1359,7 @@ expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## Non-ASCII characters are left unmodified. For example:
 ##
 ## ```roc
-##  expect "café".with_ascii_uppercased() == "CAFé"
+##  expect Str.with_ascii_uppercased("café") == "CAFé"
 ## ```
 ##
 ## This function is useful for things like
@@ -1389,9 +1389,9 @@ expect Str.with_ascii_uppercased("café") == "CAFé"
 ## including capitalization. For example:
 ##
 ## ```roc
-##  expect "café".caseless_ascii_equals("CAFé")
+##  expect Str.caseless_ascii_equals("café", "CAFé")
 ##
-##  expect !"café".caseless_ascii_equals("CAFÉ")
+##  expect !Str.caseless_ascii_equals("café", "CAFÉ")
 ## ```
 ##
 ## The first call returns `True` because all the ASCII characters are the same
