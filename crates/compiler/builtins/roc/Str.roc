@@ -1338,7 +1338,7 @@ drop_suffix = |haystack, suffix|
 ##
 ## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 ## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
-## where you know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
 ## That said, strings received from user input can always contain
@@ -1365,7 +1365,7 @@ expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## This function is useful for things like
 ## [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 ## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
-## where you know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
 ## That said, strings received from user input can always contain
@@ -1401,7 +1401,7 @@ expect Str.with_ascii_uppercased("café") == "CAFé"
 ##
 ## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 ## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
-## know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
 ## That said, strings received from user input can always contain
