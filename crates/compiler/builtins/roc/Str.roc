@@ -1338,7 +1338,7 @@ drop_suffix = |haystack, suffix|
 ##
 ## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 ## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
-## know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## where you know in advance that you're dealing with a hardcoded string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
 ## That said, strings received from user input can always contain
@@ -1350,7 +1350,7 @@ drop_suffix = |haystack, suffix|
 ## for Unicode capitalization that can be upgraded independently from the language's builtins.
 ##
 ## To do a case-insensitive comparison of the ASCII characters in a string,
-## use [Str.caseless_ascii_equals].
+## you can use [Str.caseless_ascii_equals].
 with_ascii_lowercased : Str -> Str
 
 expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
@@ -1365,7 +1365,7 @@ expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## This function is useful for things like
 ## [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
 ## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
-## know in advance that you're dealing with a hardcoded string containing only ASCII characters.
+## where you know in advance that you're dealing with a hardcoded string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
 ## That said, strings received from user input can always contain
@@ -1378,7 +1378,7 @@ expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## that can be upgraded independently from the language's builtins.
 ##
 ## To do a case-insensitive comparison of the ASCII characters in a string,
-## use [Str.caseless_ascii_equals].
+## you can use [Str.caseless_ascii_equals].
 with_ascii_uppercased : Str -> Str
 
 expect Str.with_ascii_uppercased("café") == "CAFé"
@@ -1412,8 +1412,8 @@ expect Str.with_ascii_uppercased("café") == "CAFé"
 ## so we have separate [`unicode` package](https://github.com/roc-lang/unicode)
 ## for Unicode capitalization that can be upgraded independently from the language's builtins.
 ##
-##  To convert a string's ASCII characters to uppercase or lowercase, use [Str.with_ascii_uppercased]
-## and [Str.with_ascii_lowercased].
+## To convert a string's ASCII characters to uppercase or lowercase, you can use [Str.with_ascii_uppercased]
+## or [Str.with_ascii_lowercased].
 caseless_ascii_equals : Str, Str -> Bool
 
 expect Str.caseless_ascii_equals("café", "CAFé")
