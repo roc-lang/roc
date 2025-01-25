@@ -1336,8 +1336,8 @@ drop_suffix = |haystack, suffix|
 ## expect "CAFÉ".with_ascii_lowercased() == "cafÉ"
 ## ```
 ##
-## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
-## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
+## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
 ## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
@@ -1363,8 +1363,8 @@ expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
 ## ```
 ##
 ## This function is useful for things like
-## [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
-## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
+## [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
 ## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
@@ -1399,8 +1399,8 @@ expect Str.with_ascii_uppercased("café") == "CAFé"
 ## (`é`) is the same in both strings. The second call returns `False`because
 ## `é` and `É` are not ASCII characters, and they are different.
 ##
-## This function is useful for things like [command-line options](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
-## and [environment variables](https://en.wikipedia.org/wiki/Environment_variable)
+## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
 ## where you know in advance that you're dealing with a string containing only ASCII characters.
 ## It has better performance than lowercasing operations which take Unicode into account.
 ##
