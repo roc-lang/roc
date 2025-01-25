@@ -10,7 +10,7 @@ concurrency:
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  RELEASE_TAG: testing-0.12.0
+  RELEASE_TAG: 0.12.0
 
 jobs:
   fetch-releases:
