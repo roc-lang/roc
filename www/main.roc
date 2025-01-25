@@ -1,5 +1,5 @@
 app [main!] {
-    pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.7.0/lVVvjgCyBy6QmqXX0CmK96l67gqxiF5JeszPeAj2NKU.tar.gz",
+    pf: platform "https://github.com/lukewilliamboswell/basic-ssg/releases/download/0.9.0/NLodHsSCfTRet3ssC6WUTJVelmrHTqy9YJo2EdnslgM.tar.br",
 }
 
 import pf.SSG
