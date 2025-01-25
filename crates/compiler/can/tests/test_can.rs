@@ -972,6 +972,29 @@ mod test_can {
     }
 
     #[test]
+    fn try_desugar_pipe_suffix_pnc() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.to_u64()?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
     fn try_desugar_works_elsewhere() {
         let src = indoc!(
             r#"
