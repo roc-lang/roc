@@ -81,7 +81,7 @@ jobs:
             basic-webserver/platform/linux-arm64.a
 
   build-macos-x86_64-files:
-    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
+    runs-on: [macos-13] # I expect the generated files to work on macOS 13 and up
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v4
