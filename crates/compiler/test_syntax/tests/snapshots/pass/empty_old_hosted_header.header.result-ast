@@ -1,0 +1,19 @@
+SpacesBefore {
+    before: [],
+    item: Hosted(
+        HostedHeader {
+            before_exposes: [],
+            exposes: [],
+            old_imports: Some(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportsKeyword,
+                        after: [],
+                    },
+                    item: [],
+                },
+            ),
+        },
+    ),
+}

@@ -172,7 +172,14 @@ impl<'a> Header<'a> {
                 }),
                 Self::header_imports_to_defs(arena, header.old_imports),
             ),
-            Header::Package(_) | Header::Platform(_) | Header::Hosted(_) => (self, Defs::default()),
+            Header::Hosted(header) => (
+                Header::Hosted(HostedHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Package(_) | Header::Platform(_) => (self, Defs::default()),
         };
 
         (header, defs)

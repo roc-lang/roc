@@ -1,6 +1,4 @@
-hosted Host
-    exposes [open_file!, close_file!, get_file_line!, get_file_bytes!, put_line!, put_raw!, get_line!, get_char!]
-    imports []
+hosted [open_file!, close_file!, get_file_line!, get_file_bytes!, put_line!, put_raw!, get_line!, get_char!]
 
 open_file! : Str => U64
 

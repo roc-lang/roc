@@ -1,6 +1,4 @@
-hosted Effect
-    exposes [put_line!, get_line!]
-    imports []
+hosted [put_line!, get_line!]
 
 put_line! : Str => {}
 

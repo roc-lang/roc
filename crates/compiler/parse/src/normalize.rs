@@ -172,10 +172,9 @@ impl<'a> Normalize<'a> for Header<'a> {
                 provides: header.provides.normalize(arena),
             }),
             Header::Hosted(header) => Header::Hosted(HostedHeader {
-                before_name: &[],
-                name: header.name.normalize(arena),
+                before_exposes: &[],
                 exposes: header.exposes.normalize(arena),
-                imports: header.imports.normalize(arena),
+                old_imports: None,
             }),
         }
     }
