@@ -20,6 +20,7 @@ use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::hash::Hash;
 use std::collections::hash_map::Entry;
+use std::sync::Mutex;
 type SymbolMap<T> = Map<symbol::Symbol, T>;
 
 ///The type given as output by mono
@@ -31,16 +32,16 @@ type Map<A: Hash, B> = std::collections::HashMap<A, B>;
 ///The type of information related to a symbol: what register holds it, how it is represented in mono, and whether it is stored by ref or value
 type SymbolInfo<'a> = (Output, LayoutRepr<'a>, Form);
 
-///Top level of ROAR, used to convert from Mono to ROAR
-pub fn build_roar<'a,'b : 'a>(
-    input: MonoInput<'a>,
-    layout_interner: &'b mut STLayoutInterner<'a>,
-    env: &'b Env<'a>,
+// ///Top level of ROAR, used to convert from Mono to ROAR
+// pub fn build_roar<'a,'b>(
+//     input: MonoInput<'a>,
+//     layout_interner: &'b mut STLayoutInterner<'a>,
+//     env: &'b Env<'a>,
     
-) -> Result<Section<'b>> {
-    let converter: &mut Converter<'_, '_> = env.arena.alloc(Converter::new(layout_interner,env));
-    converter.build_section(&input)
-}
+// ) -> Result<Section<'b>> {
+//     let mut converter : Converter<'b, 'a> = Converter::new(layout_interner,env);
+//     converter.build_section(&input)
+// }
 ///A expression that requires statements, ie splitting apart a variable
 ///Implemented as a simple way to model expressions in a way that does not require complex forms
 #[derive(Clone, Debug, PartialEq)]
@@ -140,9 +141,9 @@ pub(crate) struct Converter<'a, 'b> {
     ///Refrences from the symbol of a type to a given procedure
     //TODO get this working
     proc_map: Map<symbol::Symbol, ProcRef>,
-    ///A list of proccedures that need to be implemented
+    ////A list of proccedures that need to be implemented
     //TODO make this not a ref cell
-    proc_queue: RefCell<Vec<'b, (symbol::Symbol, &'b ir::ProcLayout<'b>, &'b ir::Proc<'b>)>>,
+   // proc_queue: RefCell<Vec<'a, (symbol::Symbol, &'a ir::ProcLayout<'a>, &'a ir::Proc<'a>)>>,
 }
 
 pub(super) fn get_sym_reg<'f0>(
@@ -159,8 +160,7 @@ pub(super) fn arg_info<'a>(
     sym_map.get(sym).cloned()
 }
 
-impl<'c, 'a: 'c, 'b: 'c> Converter<'a, 'b>
-where 'b: 'a,
+impl<'a, 'b, 'c> Converter<'a, 'b> where 'b : 'c, 'a : 'c
 {
     pub fn new_register(&'c mut self) -> Register {
         self.register_alloc.new_register()
@@ -176,19 +176,19 @@ where 'b: 'a,
             env : env,
             register_alloc: RegisterAllocater::new(),
             proc_map: Map::new(),
-            proc_queue: RefCell::new(vec![in &env.arena]),
+            //proc_queue: RefCell::new(vec![in &env.arena]),
         }
     }
     ///Get the internal interner
     pub fn intern(&'c self) -> &'c STLayoutInterner<'a> {
         self.layout_interner
     }
-    pub fn arena(&'c self) -> &'a bumpalo::Bump {
+    pub fn arena(&'c self) -> &'b bumpalo::Bump {
         self.env.arena
     }
     ///From an interned layout get a regular layout and if it's possible to store it in a register
     /// Note that this will remove indirection if it exists, ie (Literal,&Int) -> (Ref,Int)
-    pub fn get_form(&self, layout: &InLayout<'b>) -> Result<(LayoutRepr<'b>, Form)> {
+    pub fn get_form(&self, layout: &InLayout<'a>) -> Result<(LayoutRepr<'a>, Form)> {
         use Form::*;
         let repr = self.intern().get_repr(*layout);
         println!("repr is {:?}", repr);
@@ -210,23 +210,25 @@ where 'b: 'a,
 
     ///Convert the mono input into Roar
     pub fn build_section(self : &'c mut Self, input: &MonoInput<'a>) -> Result<Section<'c>> {
-        let arena = self.arena();
-        //TODO FIXME BUG REALLY THIS IS UNSAFE NEED TO FIX THIS, JUST A LITTLE BIT OF SCOTCH TAPE
-        let other_self: *mut Converter<'a, 'b> = self;
-        let procs = input.into_iter().map(|((symbol, layout), proc)| {
-            unsafe { other_self.as_mut().expect("").build_proc(symbol, layout, proc).unwrap() }
-        }).collect_in(arena);
-        // let procs = input
-        //     .into_iter()
-        //     .map(|((symbol, layout), proc)| self.build_proc(symbol, layout, proc).unwrap()) //TODO
-        //     .collect_in::<bumpalo::collections::Vec<Proc>>(&self.arena);
-        //let mut roar = Section::new(&self.arena);
-        let (roar, refs) = Section::new(arena).add_procs(procs,arena);
-        Ok(roar)
+        //TODO FIXME LIKE ACTUALLY DO NOT LET THIS GO INTO ANY SORT OF REALEASE PLEASE
+        unsafe {
+            let bad_self: *mut Converter<'a, 'b> = self as *mut Self;
+            let arena = bad_self.as_ref().expect("").arena();
+            let procs: Vec<'_,Proc<'_>>  = input.into_iter().map( |((symbol, layout), proc)| {
+                bad_self.as_mut().expect("").build_proc(symbol, layout, proc).unwrap()
+            }).collect_in(arena);
+            // let procs = input
+            //     .into_iter()
+            //     .map(|((symbol, layout), proc)| self.build_proc(symbol, layout, proc).unwrap()) //TODO
+            //     .collect_in::<bumpalo::collections::Vec<Proc>>(&self.arena);
+            //let mut roar = Section::new(&self.arena);
+            let (roar, refs) = Section::new(arena).add_procs(procs,arena);
+            Ok(roar)
+        }
     }
     ///Build a single Mono procedure
     pub fn build_proc<'f0>(
-        &'c mut self,
+        self : &'c mut Self,
         sym: &symbol::Symbol,
         layout: &ir::ProcLayout,
         proc: &ir::Proc<'a>,
@@ -238,7 +240,7 @@ where 'b: 'a,
             .map(|(lay, sym): &(InLayout<'_>, symbol::Symbol)| -> Output {
                 let (repr, form) = self.get_form(lay).unwrap(); //TODO
                 let new_reg = self.register_alloc.new_register();
-                &mut sym_map.insert(*sym, (Output::Register(new_reg.clone()), repr, form));
+                sym_map.insert(*sym, (Output::Register(new_reg.clone()), repr, form));
                 Output::Register(new_reg)
             })
             .collect();
@@ -869,7 +871,7 @@ where 'b: 'a,
         at_byte: Offset,
         number: u32,
         sym_map: &mut SymbolMap<SymbolInfo<'_>>,
-    ) -> Result<collections::Vec<'b, StmtExpr>> {
+    ) -> Result<collections::Vec<'c, StmtExpr>> {
         (0..number).into_iter().map(|x| {
             (
                 OpCode::Load(add_offsets(at_byte, mul_offsets(WORD_SIZE, x))),
