@@ -357,6 +357,7 @@ impl AnalyzedDocument {
             *module_id,
             interns,
         )
+        .ok()?
         .into_iter()
         .map(|(offset, new_text)| {
             let pos = roc_region::all::Position::new(offset as u32);
@@ -392,7 +393,8 @@ impl AnalyzedDocument {
             *module_id,
             decl.var,
             decl.range,
-        );
+        )
+        .ok()?;
 
         let pos = RocPosition::new(offset as u32);
         let range = Region::new(pos, pos).to_range(self.line_info());

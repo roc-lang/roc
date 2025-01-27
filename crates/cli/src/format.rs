@@ -3,7 +3,7 @@ use std::io::Write;
 use std::ops::Range;
 use std::path::{Path, PathBuf};
 
-use bumpalo::Bump;
+use bumpalo::{collections::String as BumpString, Bump};
 use roc_can::abilities::{IAbilitiesStore, Resolved};
 use roc_can::expr::{DeclarationTag, Declarations, Expr};
 use roc_error_macros::{internal_error, user_error};
@@ -19,9 +19,10 @@ use roc_parse::header::parse_module_defs;
 use roc_parse::normalize::Normalize;
 use roc_parse::{header, parser::SyntaxError, state::State};
 use roc_problem::can::RuntimeError;
+use roc_region::all::{LineColumn, LineInfo};
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
 use roc_target::Target;
-use roc_types::subs::{Content, Subs, Variable};
+use roc_types::subs::{Subs, Variable};
 
 #[derive(Copy, Clone, Debug)]
 pub enum FormatMode {
@@ -273,7 +274,19 @@ fn fmt_all<'a>(buf: &mut Buf<'a>, ast: &'a FullAst) {
     buf.fmt_end_of_file();
 }
 
-pub fn annotate_file(arena: &Bump, file: PathBuf) -> Result<(), LoadingProblem> {
+#[derive(Debug)]
+pub enum AnnotationProblem<'a> {
+    Loading(LoadingProblem<'a>),
+    Type(TypeProblem),
+}
+
+#[derive(Debug)]
+pub struct TypeProblem {
+    pub name: String,
+    pub position: LineColumn,
+}
+
+pub fn annotate_file(arena: &Bump, file: PathBuf) -> Result<(), AnnotationProblem> {
     let load_config = LoadConfig {
         target: Target::default(),
         function_kind: FunctionKind::from_env(),
@@ -289,9 +302,10 @@ pub fn annotate_file(arena: &Bump, file: PathBuf) -> Result<(), LoadingProblem> 
         None,
         RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
         load_config,
-    )?;
+    )
+    .map_err(AnnotationProblem::Loading)?;
 
-    let buf = annotate_module(&mut loaded);
+    let buf = annotate_module(arena, &mut loaded)?;
 
     std::fs::write(&file, buf.as_str())
         .unwrap_or_else(|e| internal_error!("failed to write annotated file to {file:?}: {e}"));
@@ -299,7 +313,10 @@ pub fn annotate_file(arena: &Bump, file: PathBuf) -> Result<(), LoadingProblem> 
     Ok(())
 }
 
-fn annotate_module(loaded: &mut LoadedModule) -> String {
+fn annotate_module<'a>(
+    arena: &'a Bump,
+    loaded: &mut LoadedModule,
+) -> Result<BumpString<'a>, AnnotationProblem<'a>> {
     let (decls, subs, abilities) =
         if let Some(decls) = loaded.declarations_by_id.get(&loaded.module_id) {
             let subs = loaded.solved.inner_mut();
@@ -329,17 +346,14 @@ fn annotate_module(loaded: &mut LoadedModule) -> String {
         src,
         loaded.module_id,
         &loaded.interns,
-    );
+    )
+    .map_err(AnnotationProblem::Type)?;
     edits.sort_by_key(|(offset, _)| *offset);
 
-    let mut buffer = String::new();
+    let mut buffer = BumpString::new_in(arena);
     let mut file_progress = 0;
 
     for (position, edit) in edits {
-        if file_progress > position {
-            internal_error!("Module definitions are out of order");
-        };
-
         buffer.push_str(&src[file_progress..position]);
         buffer.push_str(&edit);
 
@@ -347,7 +361,7 @@ fn annotate_module(loaded: &mut LoadedModule) -> String {
     }
     buffer.push_str(&src[file_progress..]);
 
-    buffer
+    Ok(buffer)
 }
 
 pub fn annotation_edits(
@@ -357,39 +371,35 @@ pub fn annotation_edits(
     src: &str,
     module_id: ModuleId,
     interns: &Interns,
-) -> Vec<(usize, String)> {
-    decls
-        .iter_bottom_up()
-        .flat_map(|(index, tag)| {
-            let var = decls.variables[index];
-            let symbol = decls.symbols[index];
-            let expr = &decls.expressions[index].value;
+) -> Result<Vec<(usize, String)>, TypeProblem> {
+    let mut edits = Vec::with_capacity(decls.len());
 
-            if decls.annotations[index].is_some()
-                | matches!(
-                    *expr,
-                    Expr::RuntimeError(RuntimeError::ExposedButNotDefined(..))
-                        | Expr::ImportParams(..)
-                )
-                | abilities.is_specialization_name(symbol.value)
-                | matches!(subs.get_content_without_compacting(var), Content::Error)
-                | matches!(tag, DeclarationTag::MutualRecursion { .. })
-            {
-                return None;
-            }
+    for (index, tag) in decls.iter_bottom_up() {
+        let var = decls.variables[index];
+        let symbol = decls.symbols[index];
+        let expr = &decls.expressions[index].value;
 
-            let byte_range = match tag {
-                DeclarationTag::Destructure(i) => {
-                    decls.destructs[i.index()].loc_pattern.byte_range()
-                }
-                _ => symbol.byte_range(),
-            };
+        if decls.annotations[index].is_some()
+            | matches!(
+                *expr,
+                Expr::RuntimeError(RuntimeError::ExposedButNotDefined(..)) | Expr::ImportParams(..)
+            )
+            | abilities.is_specialization_name(symbol.value)
+            | matches!(tag, DeclarationTag::MutualRecursion { .. })
+        {
+            continue;
+        }
 
-            let edit = annotation_edit(src, subs, interns, module_id, var, byte_range);
+        let byte_range = match tag {
+            DeclarationTag::Destructure(i) => decls.destructs[i.index()].loc_pattern.byte_range(),
+            _ => symbol.byte_range(),
+        };
 
-            Some(edit)
-        })
-        .collect()
+        let edit = annotation_edit(src, subs, interns, module_id, var, byte_range)?;
+
+        edits.push(edit);
+    }
+    Ok(edits)
 }
 
 pub fn annotation_edit(
@@ -399,16 +409,24 @@ pub fn annotation_edit(
     module_id: ModuleId,
     var: Variable,
     symbol_range: Range<usize>,
-) -> (usize, String) {
+) -> Result<(usize, String), TypeProblem> {
+    let symbol_str = &src[symbol_range.clone()];
+    if subs.var_contains_error(var) {
+        let line_info = LineInfo::new(src);
+        let position = line_info.convert_offset(symbol_range.start as u32);
+        return Err(TypeProblem {
+            name: symbol_str.to_owned(),
+            position,
+        });
+    }
+
     let signature = roc_types::pretty_print::name_and_print_var(
         var,
         &mut subs.clone(),
         module_id,
         interns,
         roc_types::pretty_print::DebugPrint::NOTHING,
-    )
-    // Generated names for errors start with `#`
-    .replace('#', "");
+    );
 
     let line_start = src[..symbol_range.start]
         .rfind('\n')
@@ -417,10 +435,9 @@ pub fn annotation_edit(
         .split_once(|c: char| !c.is_ascii_whitespace())
         .map_or("", |pair| pair.0);
 
-    let symbol_str = &src[symbol_range.clone()];
     let edit = format!("{indent}{symbol_str} : {signature}\n");
 
-    (line_start, edit)
+    Ok((line_start, edit))
 }
 
 #[cfg(test)]

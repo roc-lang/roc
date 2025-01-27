@@ -43,7 +43,8 @@ use tempfile::TempDir;
 
 mod format;
 pub use format::{
-    annotate_file, annotation_edit, annotation_edits, format_files, format_src, FormatMode,
+    annotate_file, annotation_edit, annotation_edits, format_files, format_src, AnnotationProblem,
+    FormatMode,
 };
 
 pub const CMD_BUILD: &str = "build";
