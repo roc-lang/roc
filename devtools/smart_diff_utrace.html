@@ -8,7 +8,7 @@
             font-family: monospace;
             padding: 20px;
             background-color: #f5f5f5;
-            max-width: 1200px;
+            max-width: 2000px;
             margin: 0 auto;
         }
         
@@ -18,11 +18,13 @@
         }
 
         #input-area {
+            display: flex;
+            gap: 20px;
             margin-bottom: 20px;
         }
 
         #input-area textarea {
-            width: 100%;
+            flex: 1;
             height: 150px;
             margin-bottom: 10px;
             font-family: monospace;
@@ -30,13 +32,15 @@
         }
 
         button {
+            display: block;
+            width: 200px;
+            margin: 0 auto 20px;
             padding: 8px 16px;
             background-color: #4CAF50;
             color: white;
             border: none;
             border-radius: 4px;
             cursor: pointer;
-            margin-bottom: 20px;
         }
 
         button:hover {
@@ -57,6 +61,25 @@
             box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             white-space: pre;
             overflow-x: auto;
+            position: relative;
+        }
+
+        .line-numbers {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 30px;
+            background-color: #f0f0f0;
+            border-right: 1px solid #ddd;
+            text-align: right;
+            padding: 5px 5px 5px 0;
+            color: #666;
+            user-select: none;
+        }
+
+        .content-area {
+            margin-left: 35px;
         }
 
         .function-block {
@@ -126,8 +149,8 @@
     <div id="input-area">
         <textarea id="input1" placeholder="Enter first trace..."></textarea>
         <textarea id="input2" placeholder="Enter second trace..."></textarea>
-        <button onclick="compareTraces()">Compare</button>
     </div>
+    <button onclick="compareTraces()">Compare</button>
 
     <div id="result-area">
         <div id="result1"></div>
@@ -138,23 +161,27 @@
         function processTrace(trace, otherTrace, resultId) {
             const lines = trace.trim().split('\n');
             const otherLines = otherTrace.trim().split('\n');
-            let html = '';
+            let contentHtml = '';
+            let lineNumbersHtml = '';
             let indentLevel = 0;
             let blockStartLine = -1;
+            
+            // Generate line numbers
+            for (let i = 1; i <= lines.length; i++) {
+                lineNumbersHtml += `${i}\n`;
+            }
             
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 const shouldHighlight = !otherLines.some(otherLine => otherLine.trim() === line);
                 const highlightClass = shouldHighlight ? 'highlight' : '';
 
-                // Check if this line is the start of a block that has content
                 const isBlockStart = line.endsWith('{') && i < lines.length - 1;
                 
                 if (isBlockStart) {
                     blockStartLine = i;
-                    // Start of a function block with content
                     const functionName = line;
-                    html += `<div class="function-block" style="margin-left: ${indentLevel * 20}px">
+                    contentHtml += `<div class="function-block" style="margin-left: ${indentLevel * 20}px">
                         <div class="function-header ${highlightClass}">
                             <span class="toggle-btn">▼</span>
                             <span class="function-name">${functionName}</span>
@@ -162,25 +189,23 @@
                         <div class="function-content">`;
                     indentLevel++;
                 } else if (line.includes('}')) {
-                    // End of a block
                     if (indentLevel > 0) {
                         indentLevel--;
-                        html += `</div><span class="function-end ${highlightClass}">${line}</span></div>`;
+                        contentHtml += `</div><span class="function-end ${highlightClass}">${line}</span></div>`;
                     } else {
-                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
                     }
                 } else {
-                    // Regular line or a line ending with { at the end of input
                     const isLastLineBlock = line.endsWith('{') && i === lines.length - 1;
                     if (isLastLineBlock) {
-                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
                     } else {
-                        html += `<div class="line ${highlightClass}">${line}</div>`;
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
                     }
                 }
             }
             
-            return html;
+            return `<div class="line-numbers">${lineNumbersHtml}</div><div class="content-area">${contentHtml}</div>`;
         }
 
         function initializeCollapsible(containerId) {

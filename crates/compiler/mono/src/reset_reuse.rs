@@ -62,11 +62,11 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
-    mut symbol_layout: SymbolLayout<'a>,
+    mut symbol_layout_map: SymbolLayout<'a>,
     mut proc: Proc<'a>,
 ) -> Proc<'a> {
     for (layout, symbol) in proc.args {
-        symbol_layout.insert(*symbol, LayoutOption::Layout(layout));
+        symbol_layout_map.insert(*symbol, LayoutOption::Layout(layout));
     }
 
     let mut env = ReuseEnvironment {
@@ -74,7 +74,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
         symbol_tags: MutMap::default(),
         non_unique_symbols: MutSet::default(),
         reuse_tokens: MutMap::default(),
-        symbol_layouts: symbol_layout,
+        symbol_layouts: symbol_layout_map,
         joinpoint_reuse_tokens: MutMap::default(),
         jump_reuse_tokens: MutMap::default(),
     };
@@ -105,8 +105,11 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
     environment: &mut ReuseEnvironment<'a>,
     stmt: &'a Stmt<'a>,
 ) -> &'a Stmt<'a> {
+    dbg!(environment.symbol_layouts.keys());
+
     match stmt {
         Stmt::Let(_, _, _, _) => {
+            dbg!("let");
             // Collect all the subsequent let bindings (including the current one).
             // To prevent the stack from overflowing when there are many let bindings.
             let mut triples = vec![];
@@ -241,6 +244,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             default_branch,
             ret_layout,
         } => {
+            dbg!("switch");
             macro_rules! update_env_with_constructor {
                 ($branch_env:expr, $info:expr) => {{
                     match $info {
@@ -406,6 +410,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             })
         }
         Stmt::Refcounting(rc, continuation) => {
+            dbg!("refcounting");
             enum SymbolIsUnique {
                 Never,
                 Always(Symbol),
@@ -597,6 +602,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             arena.alloc(Stmt::Refcounting(*rc, new_continuation))
         }
         Stmt::Ret(_) => {
+            dbg!("ret");
             // The return statement just doesn't consume any tokens. Dropping these tokens will be handled before.
             stmt
         }
@@ -607,6 +613,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             variables,
             remainder,
         } => {
+            dbg!("expect");
             let new_remainder = insert_reset_reuse_operations_stmt(
                 arena,
                 layout_interner,
@@ -632,6 +639,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             variable,
             remainder,
         } => {
+            dbg!("dbg");
             let new_remainder = insert_reset_reuse_operations_stmt(
                 arena,
                 layout_interner,
@@ -656,6 +664,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             body,
             remainder,
         } => {
+            dbg!("Join");
             // First we evaluate the remainder, to see what reuse tokens are available at each jump. We generate code as if no reuse tokens are used.
             // Then we evaluate the body, to see what reuse tokens are consumed by the body.
             // - If no reuse tokens are consumed (or when there were no available in the previous step), we stop here and return the first pass symbols.
@@ -944,6 +953,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             })
         }
         Stmt::Jump(id, arguments) => {
+            dbg!("jump2");
             // TODO make sure that the reuse tokens that are provided by most jumps are the tokens that are used in most paths.
             let joinpoint_tokens = environment.get_joinpoint_reuse_tokens(*id);
 
@@ -1241,6 +1251,7 @@ impl<'a> ReuseEnvironment<'a> {
     Retrieve the layout of a symbol.
      */
     fn get_symbol_layout(&self, symbol: Symbol) -> &LayoutOption<'a> {
+        dbg!(symbol);
         self.symbol_layouts.get(&symbol).expect("Expected symbol to have a layout. It should have been inserted in the environment already.")
     }
 
