@@ -1,6 +1,6 @@
 procedure Bool.2 ():
-    let Bool.25 : Int1 = true;
-    ret Bool.25;
+    let Bool.23 : Int1 = true;
+    ret Bool.23;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.283 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;

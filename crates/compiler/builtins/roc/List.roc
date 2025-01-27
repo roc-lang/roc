@@ -227,7 +227,7 @@ import Num exposing [U64, Num, U8]
 ## List.is_empty([])
 ## ```
 is_empty : List * -> Bool
-is_empty = \list ->
+is_empty = |list|
     List.len(list) == 0
 
 # unsafe primitive that does not perform a bounds check
@@ -242,7 +242,7 @@ get_unsafe : List a, U64 -> a
 ## expect List.get([100, 200, 300], 5) == Err(OutOfBounds)
 ## ```
 get : List a, U64 -> Result a [OutOfBounds]
-get = \list, index ->
+get = |list, index|
     if index < List.len(list) then
         Ok(List.get_unsafe(list, index))
     else
@@ -253,7 +253,7 @@ get = \list, index ->
 replace_unsafe : List a, U64, a -> { list : List a, value : a }
 
 replace : List a, U64, a -> { list : List a, value : a }
-replace = \list, index, new_value ->
+replace = |list, index, new_value|
     if index < List.len(list) then
         List.replace_unsafe(list, index, new_value)
     else
@@ -268,7 +268,7 @@ replace = \list, index, new_value ->
 ##
 ## To drop the element at a given index, instead of replacing it, see [List.drop_at].
 set : List a, U64, a -> List a
-set = \list, index, value ->
+set = |list, index, value|
     (List.replace(list, index, value)).list
 
 ## Updates the element at the given index with the given function.
@@ -281,7 +281,7 @@ set = \list, index, value ->
 ## To replace the element at a given index, instead of updating based on the current value,
 ## see [List.set] and [List.replace]
 update : List a, U64, (a -> a) -> List a
-update = \list, index, func ->
+update = |list, index, func|
     when List.get(list, index) is
         Err(OutOfBounds) -> list
         Ok(value) ->
@@ -292,7 +292,7 @@ update = \list, index, func ->
 expect
     list : List U64
     list = [1, 2, 3]
-    got = update(list, 1, \x -> x + 42)
+    got = update(list, 1, |x| x + 42)
     want = [1, 44, 3]
     got == want
 
@@ -300,7 +300,7 @@ expect
 expect
     list : List U64
     list = [1, 2, 3]
-    got = update(list, 5, \x -> x + 42)
+    got = update(list, 5, |x| x + 42)
     got == list
 
 # Update chain
@@ -309,9 +309,9 @@ expect
     list = [1, 2, 3]
     got =
         list
-        |> update(0, \x -> x + 10)
-        |> update(1, \x -> x + 20)
-        |> update(2, \x -> x + 30)
+        |> update(0, |x| x + 10)
+        |> update(1, |x| x + 20)
+        |> update(2, |x| x + 30)
     want = [11, 22, 33]
     got == want
 
@@ -323,7 +323,7 @@ expect
 ##     |> List.append(3)
 ## ```
 append : List a, a -> List a
-append = \list, element ->
+append = |list, element|
     list
     |> List.reserve(1)
     |> List.append_unsafe(element)
@@ -338,7 +338,7 @@ append = \list, element ->
 ##     |> List.append_if_ok(Err(3))
 ## ```
 append_if_ok : List a, Result a * -> List a
-append_if_ok = \list, result ->
+append_if_ok = |list, result|
     when result is
         Ok(elem) -> append(list, elem)
         Err(_) -> list
@@ -369,7 +369,7 @@ prepend : List a, a -> List a
 ##     |> List.prepend(Err(1))
 ## ```
 prepend_if_ok : List a, Result a * -> List a
-prepend_if_ok = \list, result ->
+prepend_if_ok = |list, result|
     when result is
         Ok(elem) -> prepend(list, elem)
         Err(_) -> list
@@ -405,7 +405,7 @@ concat : List a, List a -> List a
 ## expect List.last([]) == Err(ListWasEmpty)
 ## ```
 last : List a -> Result a [ListWasEmpty]
-last = \list ->
+last = |list|
     when List.get(list, Num.sub_saturated(List.len(list), 1)) is
         Ok(v) -> Ok(v)
         Err(_) -> Err(ListWasEmpty)
@@ -419,15 +419,15 @@ last = \list ->
 ##         |> List.single
 ## ```
 single : a -> List a
-single = \x -> [x]
+single = |x| [x]
 
 ## Returns a list with the given length, where every element is the given value.
 repeat : a, U64 -> List a
-repeat = \value, count ->
+repeat = |value, count|
     repeat_help(value, count, List.with_capacity(count))
 
 repeat_help : a, U64, List a -> List a
-repeat_help = \value, count, accum ->
+repeat_help = |value, count, accum|
     if count > 0 then
         repeat_help(value, Num.sub_wrap(count, 1), List.append_unsafe(accum, value))
     else
@@ -438,11 +438,11 @@ repeat_help = \value, count, accum ->
 ## expect List.reverse([1, 2, 3]) == [3, 2, 1]
 ## ```
 reverse : List a -> List a
-reverse = \list ->
+reverse = |list|
     end = List.len(list) |> Num.sub_saturated(1)
     reverse_help(List.clone(list), 0, end)
 
-reverse_help = \list, left, right ->
+reverse_help = |list, left, right|
     if left < right then
         reverse_help(List.swap(list, left, right), Num.add_wrap(left, 1), Num.sub_wrap(right, 1))
     else
@@ -458,15 +458,15 @@ clone : List a -> List a
 ## expect List.join([]) == []
 ## ```
 join : List (List a) -> List a
-join = \lists ->
+join = |lists|
     total_length =
-        List.walk(lists, 0, \state, list -> Num.add_wrap(state, List.len(list)))
+        List.walk(lists, 0, |state, list| Num.add_wrap(state, List.len(list)))
 
-    List.walk(lists, List.with_capacity(total_length), \state, list -> List.concat(state, list))
+    List.walk(lists, List.with_capacity(total_length), |state, list| List.concat(state, list))
 
 contains : List a, a -> Bool where a implements Eq
-contains = \list, needle ->
-    List.any(list, \x -> x == needle)
+contains = |list, needle|
+    List.any(list, |x| x == needle)
 
 ## Build a value using each element in the list.
 ##
@@ -501,12 +501,12 @@ contains = \list, needle ->
 ## Note that in other languages, `walk` is sometimes called `reduce`,
 ## `fold`, `fold_left`, or `foldl`.
 walk : List elem, state, (state, elem -> state) -> state
-walk = \list, init, func ->
+walk = |list, init, func|
     walk_help(list, init, func, 0, List.len(list))
 
 ## internal helper
 walk_help : List elem, s, (s, elem -> s), U64, U64 -> s
-walk_help = \list, state, f, index, length ->
+walk_help = |list, state, f, index, length|
     if index < length then
         next_state = f(state, List.get_unsafe(list, index))
 
@@ -516,12 +516,12 @@ walk_help = \list, state, f, index, length ->
 
 ## Like [walk], but at each step the function also receives the index of the current element.
 walk_with_index : List elem, state, (state, elem, U64 -> state) -> state
-walk_with_index = \list, init, func ->
+walk_with_index = |list, init, func|
     walk_with_index_help(list, init, func, 0, List.len(list))
 
 ## internal helper
 walk_with_index_help : List elem, s, (s, elem, U64 -> s), U64, U64 -> s
-walk_with_index_help = \list, state, f, index, length ->
+walk_with_index_help = |list, state, f, index, length|
     if index < length then
         next_state = f(state, List.get_unsafe(list, index), index)
 
@@ -531,14 +531,14 @@ walk_with_index_help = \list, state, f, index, length ->
 
 ## Like [walk_until], but at each step the function also receives the index of the current element.
 walk_with_index_until : List elem, state, (state, elem, U64 -> [Continue state, Break state]) -> state
-walk_with_index_until = \list, state, f ->
+walk_with_index_until = |list, state, f|
     when walk_with_index_until_help(list, state, f, 0, List.len(list)) is
         Continue(new) -> new
         Break(new) -> new
 
 ## internal helper
 walk_with_index_until_help : List elem, s, (s, elem, U64 -> [Continue s, Break b]), U64, U64 -> [Continue s, Break b]
-walk_with_index_until_help = \list, state, f, index, length ->
+walk_with_index_until_help = |list, state, f, index, length|
     if index < length then
         when f(state, List.get_unsafe(list, index), index) is
             Continue(next_state) ->
@@ -551,12 +551,12 @@ walk_with_index_until_help = \list, state, f, index, length ->
 ## Note that in other languages, `walk_backwards` is sometimes called `reduce_right`,
 ## `fold`, `fold_right`, or `foldr`.
 walk_backwards : List elem, state, (state, elem -> state) -> state
-walk_backwards = \list, state, func ->
+walk_backwards = |list, state, func|
     walk_backwards_help(list, state, func, len(list))
 
 ## internal helper
 walk_backwards_help : List elem, state, (state, elem -> state), U64 -> state
-walk_backwards_help = \list, state, f, index_plus_one ->
+walk_backwards_help = |list, state, f, index_plus_one|
     if index_plus_one == 0 then
         state
     else
@@ -577,47 +577,47 @@ walk_backwards_help = \list, state, f, index_plus_one ->
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
 walk_until : List elem, state, (state, elem -> [Continue state, Break state]) -> state
-walk_until = \list, initial, step ->
+walk_until = |list, initial, step|
     when List.iterate(list, initial, step) is
         Continue(new) -> new
         Break(new) -> new
 
 ## Same as [List.walk_until], but does it from the end of the list instead.
 walk_backwards_until : List elem, state, (state, elem -> [Continue state, Break state]) -> state
-walk_backwards_until = \list, initial, func ->
+walk_backwards_until = |list, initial, func|
     when List.iterate_backwards(list, initial, func) is
         Continue(new) -> new
         Break(new) -> new
 
 ## Walks to the end of the list from a specified starting index
 walk_from : List elem, U64, state, (state, elem -> state) -> state
-walk_from = \list, index, state, func ->
+walk_from = |list, index, state, func|
     step : _, _ -> [Continue _, Break []]
-    step = \current_state, element -> Continue(func(current_state, element))
+    step = |current_state, element| Continue(func(current_state, element))
 
     when List.iter_help(list, state, step, index, List.len(list)) is
         Continue(new) -> new
 
 ## A combination of [List.walk_from] and [List.walk_until]
 walk_from_until : List elem, U64, state, (state, elem -> [Continue state, Break state]) -> state
-walk_from_until = \list, index, state, func ->
+walk_from_until = |list, index, state, func|
     when List.iter_help(list, state, func, index, List.len(list)) is
         Continue(new) -> new
         Break(new) -> new
 
 sum : List (Num a) -> Num a
-sum = \list ->
+sum = |list|
     List.walk(list, 0, Num.add)
 
 product : List (Num a) -> Num a
-product = \list ->
+product = |list|
     List.walk(list, 1, Num.mul)
 
 ## Run the given predicate on each element of the list, returning `Bool.true` if
 ## any of the elements satisfy it.
 any : List a, (a -> Bool) -> Bool
-any = \list, predicate ->
-    looper = \{}, element ->
+any = |list, predicate|
+    looper = |{}, element|
         if predicate(element) then
             Break({})
         else
@@ -630,8 +630,8 @@ any = \list, predicate ->
 ## Run the given predicate on each element of the list, returning `Bool.true` if
 ## all of the elements satisfy it.
 all : List a, (a -> Bool) -> Bool
-all = \list, predicate ->
-    looper = \{}, element ->
+all = |list, predicate|
+    looper = |{}, element|
         if predicate(element) then
             Continue({})
         else
@@ -663,13 +663,13 @@ all = \list, predicate ->
 ## list unaltered.
 ##
 keep_if : List a, (a -> Bool) -> List a
-keep_if = \list, predicate ->
+keep_if = |list, predicate|
     length = List.len(list)
 
     keep_if_help(list, predicate, 0, 0, length)
 
 keep_if_help : List a, (a -> Bool), U64, U64, U64 -> List a
-keep_if_help = \list, predicate, kept, index, length ->
+keep_if_help = |list, predicate, kept, index, length|
     if index < length then
         if predicate(List.get_unsafe(list, index)) then
             keep_if_help(List.swap(list, kept, index), predicate, Num.add_wrap(kept, 1), Num.add_wrap(index, 1), length)
@@ -688,8 +688,8 @@ keep_if_help = \list, predicate, kept, index, length ->
 ## `List.drop_if` has the same performance characteristics as [List.keep_if].
 ## See its documentation for details on those characteristics!
 drop_if : List a, (a -> Bool) -> List a
-drop_if = \list, predicate ->
-    List.keep_if(list, \e -> Bool.not(predicate(e)))
+drop_if = |list, predicate|
+    List.keep_if(list, |e| Bool.not(predicate(e)))
 
 ## Run the given function on each element of a list, and return the
 ## number of elements for which the function returned `Bool.true`.
@@ -698,8 +698,8 @@ drop_if = \list, predicate ->
 ## expect List.count_if([1, 2, 3], (\num -> num > 1)) == 2
 ## ```
 count_if : List a, (a -> Bool) -> U64
-count_if = \list, predicate ->
-    walk_state = \state, elem ->
+count_if = |list, predicate|
+    walk_state = |state, elem|
         if predicate(elem) then
             Num.add_wrap(state, 1)
         else
@@ -718,8 +718,8 @@ count_if = \list, predicate ->
 ## expect List.keep_oks(["", "a", "bc", "", "d", "ef", ""], fn) == ["a", "bc", "d", "ef"]
 ## ```
 keep_oks : List before, (before -> Result after *) -> List after
-keep_oks = \list, to_result ->
-    walker = \accum, element ->
+keep_oks = |list, to_result|
+    walker = |accum, element|
         when to_result(element) is
             Ok(keep) -> List.append(accum, keep)
             Err(_drop) -> accum
@@ -736,8 +736,8 @@ keep_oks = \list, to_result ->
 ## List.keep_errs(["", "a", "bc", "", "d", "ef", ""], fn)
 ## ```
 keep_errs : List before, (before -> Result * after) -> List after
-keep_errs = \list, to_result ->
-    walker = \accum, element ->
+keep_errs = |list, to_result|
+    walker = |accum, element|
         when to_result(element) is
             Ok(_drop) -> accum
             Err(keep) -> List.append(accum, keep)
@@ -752,14 +752,14 @@ keep_errs = \list, to_result ->
 ## expect List.map(["", "a", "bc"], Str.is_empty) == [Bool.true, Bool.false, Bool.false]
 ## ```
 map : List a, (a -> b) -> List b
-map = \list, mapper ->
+map = |list, mapper|
     # TODO: allow checking the refcounting and running the map inplace.
     # Preferably allow it even if the types are different (must be same size with padding though).
     length = List.len(list)
     List.walk(
         list,
         List.with_capacity(length),
-        \state, elem ->
+        |state, elem|
             List.append_unsafe(state, mapper(elem)),
     )
 
@@ -773,12 +773,12 @@ map = \list, mapper ->
 ## zipped = List.map2(["a", "b", "c"], [1, 2, 3], Pair)
 ## ```
 map2 : List a, List b, (a, b -> c) -> List c
-map2 = \list_a, list_b, mapper ->
+map2 = |list_a, list_b, mapper|
     length = Num.min(List.len(list_a), List.len(list_b))
     map2_help(list_a, list_b, List.with_capacity(length), mapper, 0, length)
 
 map2_help : List a, List b, List c, (a, b -> c), U64, U64 -> List c
-map2_help = \list_a, list_b, out, mapper, index, length ->
+map2_help = |list_a, list_b, out, mapper, index, length|
     if index < length then
         mapped = mapper(List.get_unsafe(list_a, index), List.get_unsafe(list_b, index))
 
@@ -790,7 +790,7 @@ map2_help = \list_a, list_b, out, mapper, index, length ->
 ## and use that as the first element in the returned list.
 ## Repeat until a list runs out of elements.
 map3 : List a, List b, List c, (a, b, c -> d) -> List d
-map3 = \list_a, list_b, list_c, mapper ->
+map3 = |list_a, list_b, list_c, mapper|
     length = Num.min(
         Num.min(List.len(list_a), List.len(list_b)),
         List.len(list_c),
@@ -798,7 +798,7 @@ map3 = \list_a, list_b, list_c, mapper ->
     map3_help(list_a, list_b, list_c, List.with_capacity(length), mapper, 0, length)
 
 map3_help : List a, List b, List c, List d, (a, b, c -> d), U64, U64 -> List d
-map3_help = \list_a, list_b, list_c, out, mapper, index, length ->
+map3_help = |list_a, list_b, list_c, out, mapper, index, length|
     if index < length then
         mapped = mapper(List.get_unsafe(list_a, index), List.get_unsafe(list_b, index), List.get_unsafe(list_c, index))
 
@@ -810,7 +810,7 @@ map3_help = \list_a, list_b, list_c, out, mapper, index, length ->
 ## and use that as the first element in the returned list.
 ## Repeat until a list runs out of elements.
 map4 : List a, List b, List c, List d, (a, b, c, d -> e) -> List e
-map4 = \list_a, list_b, list_c, list_d, mapper ->
+map4 = |list_a, list_b, list_c, list_d, mapper|
     length = Num.min(
         Num.min(List.len(list_a), List.len(list_b)),
         Num.min(List.len(list_c), List.len(list_d)),
@@ -818,7 +818,7 @@ map4 = \list_a, list_b, list_c, list_d, mapper ->
     map4_help(list_a, list_b, list_c, list_d, List.with_capacity(length), mapper, 0, length)
 
 map4_help : List a, List b, List c, List d, List e, (a, b, c, d -> e), U64, U64 -> List e
-map4_help = \list_a, list_b, list_c, list_d, out, mapper, index, length ->
+map4_help = |list_a, list_b, list_c, list_d, out, mapper, index, length|
     if index < length then
         mapped = mapper(List.get_unsafe(list_a, index), List.get_unsafe(list_b, index), List.get_unsafe(list_c, index), List.get_unsafe(list_d, index))
 
@@ -832,7 +832,7 @@ map4_help = \list_a, list_b, list_c, list_d, out, mapper, index, length ->
 ## expect List.map_with_index([10, 20, 30], (\num, index -> num + index)) == [10, 21, 32]
 ## ```
 map_with_index : List a, (a, U64 -> b) -> List b
-map_with_index = \src, func ->
+map_with_index = |src, func|
     length = len(src)
     dest = with_capacity(length)
 
@@ -840,7 +840,7 @@ map_with_index = \src, func ->
 
 # Internal helper
 map_with_index_help : List a, List b, (a, U64 -> b), U64, U64 -> List b
-map_with_index_help = \src, dest, func, index, length ->
+map_with_index_help = |src, dest, func, index, length|
     if index < length then
         elem = get_unsafe(src, index)
         mapped_elem = func(elem, index)
@@ -875,30 +875,30 @@ map_with_index_help = \src, dest, func, index, length ->
 ## All of these options are compatible with the others. For example, you can use `At` or `After`
 ## with `start` regardless of what `end` and `step` are set to.
 range : _
-range = \{ start, end, step ?? 0 } ->
+range = |{ start, end, step ?? 0 }|
     { calc_next, step_is_positive } =
         if step == 0 then
             when T(start, end) is
                 T(At(x), At(y)) | T(At(x), Before(y)) | T(After(x), At(y)) | T(After(x), Before(y)) ->
                     if x < y then
                         {
-                            calc_next: \i -> Num.add_checked(i, 1),
+                            calc_next: |i| Num.add_checked(i, 1),
                             step_is_positive: Bool.true,
                         }
                     else
                         {
-                            calc_next: \i -> Num.sub_checked(i, 1),
+                            calc_next: |i| Num.sub_checked(i, 1),
                             step_is_positive: Bool.false,
                         }
 
                 T(At(_), Length(_)) | T(After(_), Length(_)) ->
                     {
-                        calc_next: \i -> Num.add_checked(i, 1),
+                        calc_next: |i| Num.add_checked(i, 1),
                         step_is_positive: Bool.true,
                     }
         else
             {
-                calc_next: \i -> Num.add_checked(i, step),
+                calc_next: |i| Num.add_checked(i, step),
                 step_is_positive: step > 0,
             }
 
@@ -911,9 +911,9 @@ range = \{ start, end, step ?? 0 } ->
         At(at) ->
             is_valid =
                 if step_is_positive then
-                    \i -> i <= at
+                    |i| i <= at
                 else
-                    \i -> i >= at
+                    |i| i >= at
 
             # TODO: switch to List.with_capacity
             range_help([], inclusive_start, calc_next, is_valid)
@@ -921,9 +921,9 @@ range = \{ start, end, step ?? 0 } ->
         Before(before) ->
             is_valid =
                 if step_is_positive then
-                    \i -> i < before
+                    |i| i < before
                 else
-                    \i -> i > before
+                    |i| i > before
 
             # TODO: switch to List.with_capacity
             range_help([], inclusive_start, calc_next, is_valid)
@@ -931,7 +931,7 @@ range = \{ start, end, step ?? 0 } ->
         Length(l) ->
             range_length_help(List.with_capacity(l), inclusive_start, l, calc_next)
 
-range_help = \accum, i, calc_next, is_valid ->
+range_help = |accum, i, calc_next, is_valid|
     when i is
         Ok(val) ->
             if is_valid(val) then
@@ -945,7 +945,7 @@ range_help = \accum, i, calc_next, is_valid ->
             # return the generated list.
             accum
 
-range_length_help = \accum, i, remaining, calc_next ->
+range_length_help = |accum, i, remaining, calc_next|
     if remaining == 0 then
         accum
     else
@@ -1004,19 +1004,19 @@ sort_with : List a, (a, a -> [LT, EQ, GT]) -> List a
 ##
 ## To sort in descending order (highest to lowest), use [List.sort_desc] instead.
 sort_asc : List (Num a) -> List (Num a)
-sort_asc = \list -> List.sort_with(list, Num.compare)
+sort_asc = |list| List.sort_with(list, Num.compare)
 
 ## Sorts a list of numbers in descending order (highest to lowest).
 ##
 ## To sort in ascending order (lowest to highest), use [List.sort_asc] instead.
 sort_desc : List (Num a) -> List (Num a)
-sort_desc = \list -> List.sort_with(list, \a, b -> Num.compare(b, a))
+sort_desc = |list| List.sort_with(list, |a, b| Num.compare(b, a))
 
 swap : List a, U64, U64 -> List a
 
 ## Returns the first element in the list, or `ListWasEmpty` if it was empty.
 first : List a -> Result a [ListWasEmpty]
-first = \list ->
+first = |list|
     when List.get(list, 0) is
         Ok(v) -> Ok(v)
         Err(_) -> Err(ListWasEmpty)
@@ -1038,7 +1038,7 @@ first = \list ->
 ## To split the list into two lists, use `List.split_at`.
 ##
 take_first : List elem, U64 -> List elem
-take_first = \list, output_length ->
+take_first = |list, output_length|
     List.sublist(list, { start: 0, len: output_length })
 
 ## Returns the given number of elements from the end of the list.
@@ -1058,19 +1058,19 @@ take_first = \list, output_length ->
 ## To split the list into two lists, use `List.split_at`.
 ##
 take_last : List elem, U64 -> List elem
-take_last = \list, output_length ->
+take_last = |list, output_length|
     List.sublist(list, { start: Num.sub_saturated(List.len(list), output_length), len: output_length })
 
 ## Drops n elements from the beginning of the list.
 drop_first : List elem, U64 -> List elem
-drop_first = \list, n ->
+drop_first = |list, n|
     remaining = Num.sub_saturated(List.len(list), n)
 
     List.take_last(list, remaining)
 
 ## Drops n elements from the end of the list.
 drop_last : List elem, U64 -> List elem
-drop_last = \list, n ->
+drop_last = |list, n|
     remaining = Num.sub_saturated(List.len(list), n)
 
     List.take_first(list, remaining)
@@ -1083,7 +1083,7 @@ drop_last = \list, n ->
 drop_at : List elem, U64 -> List elem
 
 min : List (Num a) -> Result (Num a) [ListWasEmpty]
-min = \list ->
+min = |list|
     when List.first(list) is
         Ok(initial) ->
             Ok(min_help(list, initial))
@@ -1092,11 +1092,11 @@ min = \list ->
             Err(ListWasEmpty)
 
 min_help : List (Num a), Num a -> Num a
-min_help = \list, initial ->
+min_help = |list, initial|
     List.walk(
         list,
         initial,
-        \best_so_far, current ->
+        |best_so_far, current|
             if current < best_so_far then
                 current
             else
@@ -1104,7 +1104,7 @@ min_help = \list, initial ->
     )
 
 max : List (Num a) -> Result (Num a) [ListWasEmpty]
-max = \list ->
+max = |list|
     when List.first(list) is
         Ok(initial) ->
             Ok(max_help(list, initial))
@@ -1113,11 +1113,11 @@ max = \list ->
             Err(ListWasEmpty)
 
 max_help : List (Num a), Num a -> Num a
-max_help = \list, initial ->
+max_help = |list, initial|
     List.walk(
         list,
         initial,
-        \best_so_far, current ->
+        |best_so_far, current|
             if current > best_so_far then
                 current
             else
@@ -1129,14 +1129,14 @@ max_help = \list, initial ->
 ##
 ## You may know a similar function named `concat_map` in other languages.
 join_map : List a, (a -> List b) -> List b
-join_map = \list, mapper ->
-    List.walk(list, [], \state, elem -> List.concat(state, mapper(elem)))
+join_map = |list, mapper|
+    List.walk(list, [], |state, elem| List.concat(state, mapper(elem)))
 
 ## Returns the first element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_first : List elem, (elem -> Bool) -> Result elem [NotFound]
-find_first = \list, pred ->
-    callback = \_, elem ->
+find_first = |list, pred|
+    callback = |_, elem|
         if pred(elem) then
             Break(elem)
         else
@@ -1149,8 +1149,8 @@ find_first = \list, pred ->
 ## Returns the last element of the list satisfying a predicate function.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_last : List elem, (elem -> Bool) -> Result elem [NotFound]
-find_last = \list, pred ->
-    callback = \_, elem ->
+find_last = |list, pred|
+    callback = |_, elem|
         if pred(elem) then
             Break(elem)
         else
@@ -1164,11 +1164,11 @@ find_last = \list, pred ->
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_first_index : List elem, (elem -> Bool) -> Result U64 [NotFound]
-find_first_index = \list, matcher ->
+find_first_index = |list, matcher|
     found_index = List.iterate(
         list,
         0,
-        \index, elem ->
+        |index, elem|
             if matcher(elem) then
                 Break(index)
             else
@@ -1183,11 +1183,11 @@ find_first_index = \list, matcher ->
 ## satisfying a predicate function can be found.
 ## If no satisfying element is found, an `Err NotFound` is returned.
 find_last_index : List elem, (elem -> Bool) -> Result U64 [NotFound]
-find_last_index = \list, matches ->
+find_last_index = |list, matches|
     found_index = List.iterate_backwards(
         list,
         List.len(list),
-        \prev_index, elem ->
+        |prev_index, elem|
             answer = Num.sub_wrap(prev_index, 1)
 
             if matches(elem) then
@@ -1216,7 +1216,7 @@ find_last_index = \list, matches ->
 ##
 ## Some languages have a function called **`slice`** which works similarly to this.
 sublist : List elem, { start : U64, len : U64 } -> List elem
-sublist = \list, config ->
+sublist = |list, config|
     sublist_lowlevel(list, config.start, config.len)
 
 ## low-level slicing operation that does no bounds checking
@@ -1227,14 +1227,14 @@ sublist_lowlevel : List elem, U64, U64 -> List elem
 ## List.intersperse([1, 2, 3], 9) == [1, 9, 2, 9, 3]
 ## ```
 intersperse : List elem, elem -> List elem
-intersperse = \list, sep ->
+intersperse = |list, sep|
     capacity = 2 * List.len(list)
     init = List.with_capacity(capacity)
     new_list =
         List.walk(
             list,
             init,
-            \acc, elem ->
+            |acc, elem|
                 acc
                 |> List.append_unsafe(elem)
                 |> List.append_unsafe(sep),
@@ -1249,7 +1249,7 @@ intersperse = \list, sep ->
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
 starts_with : List elem, List elem -> Bool where elem implements Eq
-starts_with = \list, prefix ->
+starts_with = |list, prefix|
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compare_sublists
     prefix == List.sublist(list, { start: 0, len: List.len(prefix) })
@@ -1261,7 +1261,7 @@ starts_with = \list, prefix ->
 ##
 ## If the first list is empty, this only returns `Bool.true` if the second list is empty.
 ends_with : List elem, List elem -> Bool where elem implements Eq
-ends_with = \list, suffix ->
+ends_with = |list, suffix|
     # TODO once we have seamless slices, verify that this wouldn't
     # have better performance with a function like List.compare_sublists
     length = List.len(suffix)
@@ -1277,7 +1277,7 @@ ends_with = \list, suffix ->
 ## means if you give an index of 0, the `before` list will be empty and the
 ## `others` list will have the same elements as the original list.)
 split_at : List elem, U64 -> { before : List elem, others : List elem }
-split_at = \elements, user_split_index ->
+split_at = |elements, user_split_index|
     length = List.len(elements)
     split_index = if length > user_split_index then user_split_index else length
     before = List.sublist(elements, { start: 0, len: split_index })
@@ -1291,8 +1291,8 @@ split_at = \elements, user_split_index ->
 ## List.split_on([1, 2, 3], 2) == [[1], [3]]
 ## ```
 split_on : List a, a -> List (List a) where a implements Eq
-split_on = \elements, delimiter ->
-    help = \remaining, chunks, current_chunk ->
+split_on = |elements, delimiter|
+    help = |remaining, chunks, current_chunk|
         when remaining is
             [] -> List.append(chunks, current_chunk)
             [x, .. as rest] if x == delimiter ->
@@ -1308,8 +1308,8 @@ split_on = \elements, delimiter ->
 ## List.split_on_list([1, 2, 3], [1, 2]) == [[], [3]]
 ## ```
 split_on_list : List a, List a -> List (List a) where a implements Eq
-split_on_list = \elements, delimiter ->
-    help = \remaining, chunks, current_chunk ->
+split_on_list = |elements, delimiter|
+    help = |remaining, chunks, current_chunk|
         when remaining is
             [] -> List.append(chunks, current_chunk)
             [x, .. as rest] ->
@@ -1329,8 +1329,8 @@ split_on_list = \elements, delimiter ->
 ## List.split_first([Foo, Z, Bar, Z, Baz], Z) == Ok({ before: [Foo], after: [Bar, Z, Baz] })
 ## ```
 split_first : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
-split_first = \list, delimiter ->
-    when List.find_first_index(list, \elem -> elem == delimiter) is
+split_first = |list, delimiter|
+    when List.find_first_index(list, |elem| elem == delimiter) is
         Ok(index) ->
             before = List.sublist(list, { start: 0, len: index })
             after = List.sublist(list, { start: Num.add_wrap(index, 1), len: Num.sub_wrap(List.len(list), index) |> Num.sub_wrap(1) })
@@ -1345,8 +1345,8 @@ split_first = \list, delimiter ->
 ## List.split_last([Foo, Z, Bar, Z, Baz], Z) == Ok({ before: [Foo, Z, Bar], after: [Baz] })
 ## ```
 split_last : List elem, elem -> Result { before : List elem, after : List elem } [NotFound] where elem implements Eq
-split_last = \list, delimiter ->
-    when List.find_last_index(list, \elem -> elem == delimiter) is
+split_last = |list, delimiter|
+    when List.find_last_index(list, |elem| elem == delimiter) is
         Ok(index) ->
             before = List.sublist(list, { start: 0, len: index })
             after = List.sublist(list, { start: Num.add_wrap(index, 1), len: Num.sub_wrap(List.len(list), index) |> Num.sub_wrap(1) })
@@ -1360,15 +1360,15 @@ split_last = \list, delimiter ->
 ## chunk size. If the provided list is empty or if the chunk size is 0 then the
 ## result is an empty list.
 chunks_of : List a, U64 -> List (List a)
-chunks_of = \list, chunk_size ->
-    if chunk_size == 0 || List.is_empty(list) then
+chunks_of = |list, chunk_size|
+    if chunk_size == 0 or List.is_empty(list) then
         []
     else
         chunk_capacity = Num.div_ceil(List.len(list), chunk_size)
         chunks_of_help(list, chunk_size, List.with_capacity(chunk_capacity))
 
 chunks_of_help : List a, U64, List (List a) -> List (List a)
-chunks_of_help = \list_rest, chunk_size, chunks ->
+chunks_of_help = |list_rest, chunk_size, chunks|
     if List.is_empty(list_rest) then
         chunks
     else
@@ -1379,14 +1379,14 @@ chunks_of_help = \list_rest, chunk_size, chunks ->
 ## If that function ever returns `Err`, [map_try] immediately returns that `Err`.
 ## If it returns `Ok` for every element, [map_try] returns `Ok` with the transformed list.
 map_try : List elem, (elem -> Result ok err) -> Result (List ok) err
-map_try = \list, to_result ->
+map_try = |list, to_result|
     walk_try(
         list,
         [],
-        \state, elem ->
+        |state, elem|
             Result.map_ok(
                 to_result(elem),
-                \ok ->
+                |ok|
                     List.append(state, ok),
             ),
     )
@@ -1403,12 +1403,12 @@ map_try = \list, to_result ->
 ## As such, it is typically better for performance to use this over [List.walk]
 ## if returning `Break` earlier than the last element is expected to be common.
 walk_try : List elem, state, (state, elem -> Result state err) -> Result state err
-walk_try = \list, init, func ->
+walk_try = |list, init, func|
     walk_try_help(list, init, func, 0, List.len(list))
 
 ## internal helper
 walk_try_help : List elem, state, (state, elem -> Result state err), U64, U64 -> Result state err
-walk_try_help = \list, state, f, index, length ->
+walk_try_help = |list, state, f, index, length|
     if index < length then
         when f(state, List.get_unsafe(list, index)) is
             Ok(next_state) -> walk_try_help(list, next_state, f, Num.add_wrap(index, 1), length)
@@ -1418,12 +1418,12 @@ walk_try_help = \list, state, f, index, length ->
 
 ## Primitive for iterating over a List, being able to decide at every element whether to continue
 iterate : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
-iterate = \list, init, func ->
+iterate = |list, init, func|
     iter_help(list, init, func, 0, List.len(list))
 
 ## internal helper
 iter_help : List elem, s, (s, elem -> [Continue s, Break b]), U64, U64 -> [Continue s, Break b]
-iter_help = \list, state, f, index, length ->
+iter_help = |list, state, f, index, length|
     if index < length then
         when f(state, List.get_unsafe(list, index)) is
             Continue(next_state) -> iter_help(list, next_state, f, Num.add_wrap(index, 1), length)
@@ -1434,12 +1434,12 @@ iter_help = \list, state, f, index, length ->
 ## Primitive for iterating over a List from back to front, being able to decide at every
 ## element whether to continue
 iterate_backwards : List elem, s, (s, elem -> [Continue s, Break b]) -> [Continue s, Break b]
-iterate_backwards = \list, init, func ->
+iterate_backwards = |list, init, func|
     iter_backwards_help(list, init, func, List.len(list))
 
 ## internal helper
 iter_backwards_help : List elem, s, (s, elem -> [Continue s, Break b]), U64 -> [Continue s, Break b]
-iter_backwards_help = \list, state, f, prev_index ->
+iter_backwards_help = |list, state, f, prev_index|
     if prev_index > 0 then
         index = Num.sub_wrap(prev_index, 1)
 
@@ -1468,7 +1468,7 @@ expect (List.concat_utf8([1, 2, 3, 4], "🐦")) == [1, 2, 3, 4, 240, 159, 144, 1
 ##
 ## If the function might fail or you need to return early, use [for_each_try!].
 for_each! : List a, (a => {}) => {}
-for_each! = \list, func! ->
+for_each! = |list, func!|
     when list is
         [] ->
             {}
@@ -1489,7 +1489,7 @@ for_each! = \list, func! ->
 ## )
 ## ```
 for_each_try! : List a, (a => Result {} err) => Result {} err
-for_each_try! = \list, func! ->
+for_each_try! = |list, func!|
     when list is
         [] ->
             Ok({})
@@ -1513,7 +1513,7 @@ for_each_try! = \list, func! ->
 ##
 ## This is the same as [walk], except that the step function can have effects.
 walk! : List elem, state, (state, elem => state) => state
-walk! = \list, state, func! ->
+walk! = |list, state, func!|
     when list is
         [] ->
             state
@@ -1540,7 +1540,7 @@ walk! = \list, state, func! ->
 ##
 ## This is the same as [walk_try], except that the step function can have effects.
 walk_try! : List elem, state, (state, elem => Result state err) => Result state err
-walk_try! = \list, state, func! ->
+walk_try! = |list, state, func!|
     when list is
         [] ->
             Ok(state)

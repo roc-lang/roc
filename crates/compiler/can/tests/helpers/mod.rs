@@ -1,10 +1,11 @@
 extern crate bumpalo;
 
 use self::bumpalo::Bump;
-use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expr::{canonicalize_expr, Expr};
 use roc_can::scope::Scope;
+use roc_can_solo::env::SoloEnv;
+use roc_can_solo::scope::SoloScope;
 use roc_collections::all::MutMap;
 use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
 use roc_problem::can::Problem;
@@ -65,7 +66,9 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
+    let mut solo_env = SoloEnv::new(arena, expr_str, Path::new("Test.roc"));
+    let mut solo_scope = SoloScope::new();
+    let loc_expr = roc_can_solo::desugar::desugar_expr(&mut solo_env, &mut solo_scope, &loc_expr);
 
     scope.add_alias(
         Symbol::NUM_INT,

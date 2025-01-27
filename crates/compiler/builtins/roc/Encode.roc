@@ -84,10 +84,10 @@ EncoderFormatting implements
 ##     actual == expected
 ## ```
 custom : (List U8, fmt -> List U8) -> Encoder fmt where fmt implements EncoderFormatting
-custom = \encoder -> @Encoder(encoder)
+custom = |encoder| @Encoder(encoder)
 
 append_with : List U8, Encoder fmt, fmt -> List U8 where fmt implements EncoderFormatting
-append_with = \lst, @Encoder(do_encoding), fmt -> do_encoding(lst, fmt)
+append_with = |lst, @Encoder(do_encoding), fmt| do_encoding(lst, fmt)
 
 ## Appends the encoded representation of a value to an existing list of bytes.
 ##
@@ -99,7 +99,7 @@ append_with = \lst, @Encoder(do_encoding), fmt -> do_encoding(lst, fmt)
 ##     actual == expected
 ## ```
 append : List U8, val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
-append = \lst, val, fmt -> append_with(lst, to_encoder(val), fmt)
+append = |lst, val, fmt| append_with(lst, to_encoder(val), fmt)
 
 ## Encodes a value to a list of bytes (`List U8`) according to the specified format.
 ##
@@ -113,4 +113,4 @@ append = \lst, val, fmt -> append_with(lst, to_encoder(val), fmt)
 ##     actual == expected
 ## ```
 to_bytes : val, fmt -> List U8 where val implements Encoding, fmt implements EncoderFormatting
-to_bytes = \val, fmt -> append_with([], to_encoder(val), fmt)
+to_bytes = |val, fmt| append_with([], to_encoder(val), fmt)

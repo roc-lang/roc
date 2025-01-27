@@ -25,8 +25,8 @@ procedure Dep.0 ():
 procedure Test.0 ():
     let Test.6 : {Str, Str} = CallByName Dep.0;
     let Test.3 : Str = StructAtIndex 0 Test.6;
-    let #Derived_gen.0 : Str = StructAtIndex 1 Test.6;
-    dec #Derived_gen.0;
+    let Bool.21 : Str = StructAtIndex 1 Test.6;
+    dec Bool.21;
     let Test.5 : Str = "http://www.example.com";
     let Test.2 : {Str, Str} = Struct {Test.3, Test.5};
     ret Test.2;

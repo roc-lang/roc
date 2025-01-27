@@ -1,6 +1,6 @@
 procedure Bool.1 ():
-    let Bool.23 : Int1 = false;
-    ret Bool.23;
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
@@ -9,7 +9,7 @@ procedure Num.19 (#Attr.2, #Attr.3):
 procedure Test.3 (Test.4):
     ret Test.4;
 
-procedure Test.0 (#Derived_gen.0):
+procedure Test.0 (Bool.22):
     joinpoint Test.5 Test.1:
         joinpoint Test.10 Test.2:
             let Test.8 : I64 = 1i64;
@@ -31,4 +31,4 @@ procedure Test.0 (#Derived_gen.0):
             let Test.9 : Int1 = true;
             jump Test.10 Test.9;
     in
-    jump Test.5 #Derived_gen.0;
+    jump Test.5 Bool.22;

@@ -3,7 +3,7 @@ use self::BinOp::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-const PRECEDENCES: [(BinOp, u8); 17] = [
+const PRECEDENCES: [(BinOp, u8); 18] = [
     (Caret, 8),
     (Star, 7),
     (Slash, 7),
@@ -12,6 +12,7 @@ const PRECEDENCES: [(BinOp, u8); 17] = [
     (Plus, 5),
     (Minus, 5),
     (DoubleQuestion, 5),
+    (SingleQuestion, 5),
     (Pizza, 4),
     (Equals, 3),
     (NotEquals, 3),
@@ -23,7 +24,7 @@ const PRECEDENCES: [(BinOp, u8); 17] = [
     (Or, 0),
 ];
 
-const ASSOCIATIVITIES: [(BinOp, Associativity); 17] = [
+const ASSOCIATIVITIES: [(BinOp, Associativity); 18] = [
     (Caret, RightAssociative),
     (Star, LeftAssociative),
     (Slash, LeftAssociative),
@@ -32,6 +33,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 17] = [
     (Plus, LeftAssociative),
     (Minus, LeftAssociative),
     (DoubleQuestion, LeftAssociative),
+    (SingleQuestion, LeftAssociative),
     (Pizza, LeftAssociative),
     (Equals, NonAssociative),
     (NotEquals, NonAssociative),
@@ -43,7 +45,7 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 17] = [
     (Or, RightAssociative),
 ];
 
-const DISPLAY_STRINGS: [(BinOp, &str); 17] = [
+const DISPLAY_STRINGS: [(BinOp, &str); 18] = [
     (Caret, "^"),
     (Star, "*"),
     (Slash, "/"),
@@ -52,6 +54,7 @@ const DISPLAY_STRINGS: [(BinOp, &str); 17] = [
     (Plus, "+"),
     (Minus, "-"),
     (DoubleQuestion, "??"),
+    (SingleQuestion, "?"),
     (Pizza, "|>"),
     (Equals, "=="),
     (NotEquals, "!="),
@@ -59,8 +62,8 @@ const DISPLAY_STRINGS: [(BinOp, &str); 17] = [
     (GreaterThan, ">"),
     (LessThanOrEq, "<="),
     (GreaterThanOrEq, ">="),
-    (And, "&&"),
-    (Or, "||"),
+    (And, "and"),
+    (Or, "or"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -154,6 +157,7 @@ pub enum BinOp {
     Plus,
     Minus,
     DoubleQuestion,
+    SingleQuestion,
     Pizza,
     Equals,
     NotEquals,
@@ -170,7 +174,8 @@ impl BinOp {
     /// how wide this operator is when typed out
     pub fn width(self) -> u16 {
         match self {
-            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan
+            | SingleQuestion => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
             | Pizza | DoubleQuestion => 2,
         }
@@ -194,7 +199,7 @@ pub enum Associativity {
     /// right-associative operators:
     ///
     /// exponentiation: ^
-    /// boolean: && ||
+    /// boolean: and or
     /// application: <|
     RightAssociative,
 
@@ -206,13 +211,13 @@ pub enum Associativity {
 
 impl BinOp {
     pub fn associativity(self) -> Associativity {
-        const ASSOCIATIVITY_TABLE: [Associativity; 17] = generate_associativity_table();
+        const ASSOCIATIVITY_TABLE: [Associativity; 18] = generate_associativity_table();
 
         ASSOCIATIVITY_TABLE[self as usize]
     }
 
     fn precedence(self) -> u8 {
-        const PRECEDENCE_TABLE: [u8; 17] = generate_precedence_table();
+        const PRECEDENCE_TABLE: [u8; 18] = generate_precedence_table();
 
         PRECEDENCE_TABLE[self as usize]
     }
@@ -232,14 +237,14 @@ impl Ord for BinOp {
 
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        const DISPLAY_TABLE: [&str; 17] = generate_display_table();
+        const DISPLAY_TABLE: [&str; 18] = generate_display_table();
 
         write!(f, "{}", DISPLAY_TABLE[*self as usize])
     }
 }
 
-const fn generate_precedence_table() -> [u8; 17] {
-    let mut table = [0u8; 17];
+const fn generate_precedence_table() -> [u8; 18] {
+    let mut table = [0u8; 18];
     let mut i = 0;
 
     while i < PRECEDENCES.len() {
@@ -250,8 +255,8 @@ const fn generate_precedence_table() -> [u8; 17] {
     table
 }
 
-const fn generate_associativity_table() -> [Associativity; 17] {
-    let mut table = [NonAssociative; 17];
+const fn generate_associativity_table() -> [Associativity; 18] {
+    let mut table = [NonAssociative; 18];
     let mut i = 0;
 
     while i < ASSOCIATIVITIES.len() {
@@ -262,8 +267,8 @@ const fn generate_associativity_table() -> [Associativity; 17] {
     table
 }
 
-const fn generate_display_table() -> [&'static str; 17] {
-    let mut table = [""; 17];
+const fn generate_display_table() -> [&'static str; 18] {
+    let mut table = [""; 18];
     let mut i = 0;
 
     while i < DISPLAY_STRINGS.len() {

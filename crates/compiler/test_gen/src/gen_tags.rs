@@ -158,19 +158,19 @@ fn even_odd() {
     assert_evals_to!(
         indoc!(
             r"
-                even = \n ->
+                even = |n|
                     when n is
                         0 -> Bool.true
                         1 -> Bool.false
-                        _ -> odd (n - 1)
+                        _ -> odd(n - 1)
 
-                odd = \n ->
+                odd = |n|
                     when n is
                         0 -> Bool.false
                         1 -> Bool.true
-                        _ -> even (n - 1)
+                        _ -> even(n - 1)
 
-                odd 5 && even 42
+                odd(5) and even(42)
                 "
         ),
         true,
@@ -1075,7 +1075,7 @@ fn applied_tag_function_result() {
     assert_evals_to!(
         indoc!(
             r#"
-            x : List (Result Str *)
+            x : List (Result Str _)
             x = List.map ["a", "b"] Ok
 
             List.keep_oks x (\y -> y)
@@ -2315,12 +2315,12 @@ fn recursive_tag_id_in_allocation_eq() {
             ]
 
             x : Value
-            x = G 42
+            x = G(42)
 
             y : Value
-            y = H 42
+            y = H(42)
 
-            main = (x == x) && (x != y) && (y == y)
+            main = x == x and x != y and y == y
             "#
         ),
         true,

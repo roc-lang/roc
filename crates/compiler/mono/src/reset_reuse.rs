@@ -1241,7 +1241,13 @@ impl<'a> ReuseEnvironment<'a> {
     Retrieve the layout of a symbol.
      */
     fn get_symbol_layout(&self, symbol: Symbol) -> &LayoutOption<'a> {
-        self.symbol_layouts.get(&symbol).expect("Expected symbol to have a layout. It should have been inserted in the environment already.")
+        self.symbol_layouts
+            .get(&symbol)
+            .expect(
+            "Expected symbol to have a layout. \
+            It should have been inserted in the environment already. \
+            We are investigating this issue, follow github.com/roc-lang/roc/issues/7461 for updates.",
+        )
     }
 
     /**

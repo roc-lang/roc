@@ -1,0 +1,71 @@
+@0-29 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-27,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "2",
+                    ),
+                    @2-27 Where(
+                        @2-6 Tuple {
+                            elems: Collection {
+                                items: [],
+                                final_comments: [
+                                    Newline,
+                                ],
+                            },
+                            ext: Some(
+                                @5-6 BoundVariable(
+                                    "e",
+                                ),
+                            ),
+                        },
+                        [
+                            @13-27 ImplementsClause {
+                                var: @13-14 SpaceBefore(
+                                    "p",
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                abilities: [
+                                    @26-27 Apply(
+                                        "",
+                                        "T",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @28-29 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "e",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

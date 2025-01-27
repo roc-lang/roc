@@ -4,6 +4,7 @@ use crate::types::{
     Polarity, RecordField, RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
 use crate::unification_table::{self, UnificationTable};
+use bitflags::bitflags;
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -50,10 +51,23 @@ impl fmt::Debug for Mark {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ErrorTypeContext {
-    None,
-    ExpandRanges,
+bitflags! {
+    pub struct ErrorTypeContext : u8 {
+        /// List all number types that satisfy number range constraints.
+        const EXPAND_RANGES = 1 << 0;
+        /// Re-write non-generalized types like to inference variables.
+        const NON_GENERALIZED_AS_INFERRED = 1 << 1;
+    }
+}
+
+impl ErrorTypeContext {
+    fn expand_ranges(&self) -> bool {
+        self.contains(Self::EXPAND_RANGES)
+    }
+
+    fn non_generalized_as_inferred(&self) -> bool {
+        self.contains(Self::NON_GENERALIZED_AS_INFERRED)
+    }
 }
 
 struct ErrorTypeState {
@@ -2055,7 +2069,7 @@ impl Subs {
     }
 
     pub fn var_to_error_type(&mut self, var: Variable, observed_pol: Polarity) -> ErrorType {
-        self.var_to_error_type_contextual(var, ErrorTypeContext::None, observed_pol)
+        self.var_to_error_type_contextual(var, ErrorTypeContext::empty(), observed_pol)
     }
 
     pub fn var_to_error_type_contextual(
@@ -4112,6 +4126,13 @@ fn content_to_err_type(
     match content {
         Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type, pol),
 
+        RigidVar(..) | RigidAbleVar(..)
+            if state.context.non_generalized_as_inferred()
+                && subs.get_rank(var) != Rank::GENERALIZED =>
+        {
+            ErrorType::InferenceVar
+        }
+
         FlexVar(opt_name) => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index()].clone(),
@@ -4215,7 +4236,7 @@ fn content_to_err_type(
         }
 
         RangedNumber(range) => {
-            if state.context == ErrorTypeContext::ExpandRanges {
+            if state.context.expand_ranges() {
                 let mut types = Vec::new();
                 for var in range.variable_slice() {
                     types.push(var_to_err_type(subs, state, *var, pol));

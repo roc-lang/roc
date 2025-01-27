@@ -3,7 +3,7 @@ procedure Test.2 (Test.5):
     let Test.16 : [<rnu><null>, C I64 *self] = CallByName Test.3 Test.17 Test.5;
     ret Test.16;
 
-procedure Test.3 (#Derived_gen.0, #Derived_gen.1):
+procedure Test.3 (Bool.21, Bool.22):
     joinpoint Test.18 Test.7 Test.8:
         let Test.22 : U8 = 1i64;
         let Test.23 : U8 = GetTagId Test.8;
@@ -13,20 +13,20 @@ procedure Test.3 (#Derived_gen.0, #Derived_gen.1):
         else
             let Test.9 : I64 = UnionAtIndex (Id 0) (Index 0) Test.8;
             let Test.10 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.8;
-            joinpoint #Derived_gen.2 #Derived_gen.4:
-                let Test.21 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.4 UpdateModeId { id: 1 } TagId(0) Test.9 Test.7;
+            joinpoint Bool.23 Bool.25:
+                let Test.21 : [<rnu><null>, C I64 *self] = Reuse Bool.25 UpdateModeId { id: 1 } TagId(0) Test.9 Test.7;
                 jump Test.18 Test.21 Test.10;
             in
-            let #Derived_gen.3 : Int1 = lowlevel RefCountIsUnique Test.8;
-            if #Derived_gen.3 then
-                jump #Derived_gen.2 Test.8;
+            let Bool.24 : Int1 = lowlevel RefCountIsUnique Test.8;
+            if Bool.24 then
+                jump Bool.23 Test.8;
             else
                 inc Test.10;
                 decref Test.8;
-                let #Derived_gen.5 : [<rnu><null>, C I64 *self] = NullPointer;
-                jump #Derived_gen.2 #Derived_gen.5;
+                let Bool.26 : [<rnu><null>, C I64 *self] = NullPointer;
+                jump Bool.23 Bool.26;
     in
-    jump Test.18 #Derived_gen.0 #Derived_gen.1;
+    jump Test.18 Bool.21 Bool.22;
 
 procedure Test.0 ():
     let Test.25 : I64 = 42i64;

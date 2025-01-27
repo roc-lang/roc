@@ -328,7 +328,6 @@
 ## Currently, the only way to get seamless slices of strings is by calling certain `Str` functions which return them. In general, `Str` functions which accept a string and return a subset of that string tend to do this. [`Str.trim`](https://www.roc-lang.org/builtins/Str#trim) is another example of a function which returns a seamless slice.
 module [
     Utf8Problem,
-    Utf8ByteProblem,
     concat,
     is_empty,
     join_with,
@@ -337,6 +336,11 @@ module [
     count_utf8_bytes,
     to_utf8,
     from_utf8,
+    from_utf16,
+    from_utf32,
+    from_utf8_lossy,
+    from_utf16_lossy,
+    from_utf32_lossy,
     starts_with,
     ends_with,
     trim,
@@ -369,6 +373,9 @@ module [
     contains,
     drop_prefix,
     drop_suffix,
+    with_ascii_lowercased,
+    with_ascii_uppercased,
+    caseless_ascii_equals,
 ]
 
 import Bool exposing [Bool]
@@ -376,7 +383,7 @@ import Result exposing [Result]
 import List
 import Num exposing [Num, U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, F32, F64, Dec]
 
-Utf8ByteProblem : [
+Utf8Problem : [
     InvalidStartByte,
     UnexpectedEndOfSequence,
     ExpectedContinuation,
@@ -384,8 +391,6 @@ Utf8ByteProblem : [
     CodepointTooLarge,
     EncodesSurrogateHalf,
 ]
-
-Utf8Problem : { byte_index : U64, problem : Utf8ByteProblem }
 
 ## Returns [Bool.true] if the string is empty, and [Bool.false] otherwise.
 ## ```roc
@@ -538,8 +543,8 @@ to_utf8 : Str -> List U8
 ## expect Str.from_utf8([]) == Ok("")
 ## expect Str.from_utf8([255]) |> Result.is_err
 ## ```
-from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8ByteProblem, index : U64 }]
-from_utf8 = \bytes ->
+from_utf8 : List U8 -> Result Str [BadUtf8 { problem : Utf8Problem, index : U64 }]
+from_utf8 = |bytes|
     result = from_utf8_lowlevel bytes
 
     if result.c_is_ok then
@@ -557,10 +562,241 @@ FromUtf8Result : {
     a_byte_index : U64,
     b_string : Str,
     c_is_ok : Bool,
-    d_problem_code : Utf8ByteProblem,
+    d_problem_code : Utf8Problem,
 }
 
 from_utf8_lowlevel : List U8 -> FromUtf8Result
+
+## Converts a [List] of [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any grouping of invalid byte sequences are replaced with a single unicode replacement character '�'.
+##
+## An invalid byte sequence is defined as
+## - a 2-byte-sequence starting byte, followed by less than 1 continuation byte
+## - a 3-byte-sequence starting byte, followed by less than 2 continuation bytes
+## - a 4-byte-sequence starting byte, followed by less than 3 continuation bytes
+## - an invalid codepoint from the surrogate pair block
+## - an invalid codepoint greater than 0x110000 encoded as a 4-byte sequence
+## - any valid codepoint encoded as an incorrect sequence, for instance a codepoint that should be a 2-byte sequence encoded as a 3- or 4-byte sequence
+##
+## ```roc
+## expect (Str.from_utf8_lossy [82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
+## expect (Str.from_utf8_lossy [82, 255, 99]) == "R�c"
+## expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
+## ```
+from_utf8_lossy : List U8 -> Str
+
+expect (Str.from_utf8_lossy [82, 111, 99, 240, 159, 144, 166]) == "Roc🐦"
+expect (Str.from_utf8_lossy [82, 255, 99]) == "R�c"
+expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
+
+## Converts a [List] of [U16] UTF-16 (little-endian) [code units](https://unicode.org/glossary/#code_unit) to a string.
+##
+## ```roc
+## expect Str.from_utf16([82, 111, 99]) == Ok("Roc")
+## expect Str.from_utf16([0xb9a, 0xbbf]) == Ok("சி")
+## expect Str.from_utf16([0xd83d, 0xdc26]) == Ok("🐦")
+## expect Str.from_utf16([]) == Ok("")
+## # unpaired surrogates, first and second halves
+## expect Str.from_utf16([82, 0xd83d, 99]) |> Result.isErr
+## expect Str.from_utf16([82, 0xdc96, 99]) |> Result.isErr
+## ```
+from_utf16 : List U16 -> Result Str [BadUtf16 { problem : Utf8Problem, index : U64 }]
+from_utf16 = |codeunits|
+    mk_err = |problem, index|
+        Err(BadUtf16({ problem, index }))
+
+    step = |state, unit|
+        c : U32
+        c = Num.int_cast(unit)
+        when state is
+            ExpectFirst(i, utf8) ->
+                if unit < 0xd800 then
+                    when encode_utf8(utf8, c) is
+                        Ok(utf8_next) -> ExpectFirst(i + 1, utf8_next)
+                        Err(err) -> mk_err(err, i)
+                else
+                    ExpectSecond(i, utf8, c)
+
+            ExpectSecond(i, utf8, first) ->
+                if unit < 0xdc00 then
+                    mk_err(EncodesSurrogateHalf, i)
+                else
+                    joined = ((first - 0xd800) * 0x400) + (c - 0xdc00) + 0x10000
+                    when encode_utf8(utf8, joined) is
+                        Ok(utf8_next) -> ExpectFirst(i + 2, utf8_next)
+                        Err(err) -> mk_err(err, i)
+
+            Err(err) -> Err(err)
+
+    decode_res = List.walk(codeunits, ExpectFirst(0, []), step)
+
+    when decode_res is
+        ExpectFirst(_, utf8) ->
+            from_utf8(utf8)
+            |> Result.map_err(|BadUtf8(err)| BadUtf16(err))
+
+        ExpectSecond(i, _, _) ->
+            mk_err(EncodesSurrogateHalf, i)
+
+        Err(err) -> Err(err)
+
+expect Str.from_utf16([82, 111, 99]) == Ok("Roc")
+expect Str.from_utf16([0xb9a, 0xbbf]) == Ok("சி")
+expect Str.from_utf16([0xd83d, 0xdc26]) == Ok("🐦")
+expect Str.from_utf16([]) == Ok("")
+# unpaired surrogates, first and second halves
+expect Str.from_utf16([82, 0xd83d, 99]) == Err(BadUtf16({ index: 1, problem: EncodesSurrogateHalf }))
+expect Str.from_utf16([82, 0xdc96, 99]) == Err(BadUtf16({ index: 1, problem: EncodesSurrogateHalf }))
+
+## Converts a [List] of [U16] UTF-16 (little-endian) [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any unpaired surrogate code unit is replaced with a single unicode replacement character '�'.
+##
+## ```roc
+## expect Str.from_utf16_lossy([82, 111, 99, 0xd83d, 0xdc26]) == "Roc🐦"
+## expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
+## ```
+from_utf16_lossy : List U16 -> Str
+from_utf16_lossy = |codeunits|
+    utf8_replacement = [0xef, 0xbf, 0xbd]
+    encode_lossy = |utf8, c|
+        when encode_utf8(utf8, c) is
+            Ok(utf8_next) -> utf8_next
+            Err(_) -> List.concat(utf8, utf8_replacement)
+
+    step = |state, unit|
+        c : U32
+        c = Num.int_cast(unit)
+        when state is
+            ExpectFirst(utf8) ->
+                if unit < 0xd800 then
+                    ExpectFirst(encode_lossy(utf8, c))
+                else
+                    ExpectSecond(utf8, c)
+
+            ExpectSecond(utf8, first) ->
+                if c < 0xd800 then
+                    ExpectFirst(
+                        List.concat(utf8, utf8_replacement)
+                        |> encode_lossy(c),
+                    )
+                else if c < 0xdc00 then
+                    ExpectSecond(List.concat(utf8, utf8_replacement), c)
+                else
+                    joined = ((first - 0xd800) * 0x400) + (c - 0xdc00) + 0x10000
+                    ExpectFirst(encode_lossy(utf8, joined))
+
+    result = List.walk(codeunits, ExpectFirst([]), step)
+    when result is
+        ExpectFirst(utf8) -> from_utf8_lossy(utf8)
+        ExpectSecond(utf8, _) -> from_utf8_lossy(List.concat(utf8, utf8_replacement))
+
+expect Str.from_utf16_lossy([82, 111, 99, 0xd83d, 0xdc26]) == "Roc🐦"
+expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
+
+## Converts a [List] of [U32] UTF-32 [code units](https://unicode.org/glossary/#code_unit) to a string.
+##
+## ```roc
+## expect Str.from_utf32([82, 111, 99]) == Ok("Roc")
+## expect Str.from_utf32([0xb9a, 0xbbf]) == Ok("சி")
+## expect Str.from_utf32([0x1f426]) == Ok("🐦")
+## # unpaired surrogates, first and second halves
+## expect Str.from_utf32([82, 0xd83d, 99]) |> Result.isErr
+## expect Str.from_utf32([82, 0xdc96, 99]) |> Result.isErr
+## # invalid codepoint
+## expect Str.from_utf32([82, 0x110000, 99]) |> Result.isErr
+## ```
+
+from_utf32 : List U32 -> Result Str [BadUtf32 { problem : Utf8Problem, index : U64 }]
+from_utf32 = |codepoints|
+    step = |state, c|
+        when state is
+            Ok({ i, utf8 }) ->
+                when encode_utf8(utf8, c) is
+                    Ok(utf8_next) -> Ok({ i: i + 1, utf8: utf8_next })
+                    Err(problem) -> Err(BadUtf32({ problem, index: i }))
+
+            Err(err) -> Err(err)
+
+    List.walk(codepoints, Ok({ i: 0, utf8: [] }), step)
+    |> Result.try(
+        |state|
+            when from_utf8(state.utf8) is
+                Ok(str) -> Ok(str)
+                Err(BadUtf8(err)) -> Err(BadUtf32(err)),
+    )
+
+encode_utf8 : List U8, U32 -> Result (List U8) [EncodesSurrogateHalf, CodepointTooLarge]
+encode_utf8 = |list, c|
+    if c < 0x80 then
+        Ok(List.append(list, Num.int_cast(c)))
+    else if c < 0x800 then
+        Ok(
+            List.concat(
+                list,
+                [
+                    Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 6), 0b110_00000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                ],
+            ),
+        )
+    else if c < 0x10000 then
+        if (c >= 0xd800) and (c < 0xe000) then
+            Err(EncodesSurrogateHalf)
+        else
+            Ok(
+                List.concat(
+                    list,
+                    [
+                        Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 12), 0b1110_0000)),
+                        Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 6), 0b111111), 0b10_000000)),
+                        Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                    ],
+                ),
+            )
+    else if c < 0x110000 then
+        Ok(
+            List.concat(
+                list,
+                [
+                    Num.int_cast(Num.bitwise_or(Num.shift_right_by(c, 18), 0b11110_000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 12), 0b111111), 0b10_000000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(Num.shift_right_by(c, 6), 0b111111), 0b10_000000)),
+                    Num.int_cast(Num.bitwise_or(Num.bitwise_and(c, 0b111111), 0b10_000000)),
+                ],
+            ),
+        )
+    else
+        Err(CodepointTooLarge)
+
+expect Str.from_utf32([82, 111, 99]) == Ok("Roc")
+expect Str.from_utf32([0xb9a, 0xbbf]) == Ok("சி")
+expect Str.from_utf32([0x1f426]) == Ok("🐦")
+expect Str.from_utf32([]) == Ok("")
+# unpaired surrogates, first and second halves
+expect Str.from_utf32([82, 0xd83d, 99]) |> Result.is_err
+expect Str.from_utf32([82, 0xdc96, 99]) |> Result.is_err
+# codepoint out of valid range
+expect Str.from_utf32([82, 0x110000, 99]) |> Result.is_err
+
+## Converts a [List] of [U32] UTF-32 [code units](https://unicode.org/glossary/#code_unit) to a string.
+## Any invalid code points are replaced with a single unicode replacement character '�'.
+## ```roc
+## expect Str.from_utf32_lossy([82, 111, 99, 0x1f426]) == "Roc🐦"
+## expect Str.from_utf32_lossy([82, 0x110000, 99]) == "R�c"
+## ```
+from_utf32_lossy : List U32 -> Str
+from_utf32_lossy = |codepoints|
+    step = |utf8, c|
+        when encode_utf8(utf8, c) is
+            Ok(utf8_next) -> utf8_next
+            # utf-8 encoded replacement character
+            Err(_) -> List.concat(utf8, [0xef, 0xbf, 0xbd])
+
+    List.walk(codepoints, [], step)
+    |> from_utf8_lossy()
+
+expect Str.from_utf32_lossy([82, 111, 99, 0x1f426]) == "Roc🐦"
+expect Str.from_utf32_lossy([82, 0x110000, 99]) == "R�c"
 
 ## Check if the given [Str] starts with a value.
 ## ```roc
@@ -603,7 +839,7 @@ trim_end : Str -> Str
 ## expect Str.to_dec("not a number") == Err(InvalidNumStr)
 ## ```
 to_dec : Str -> Result Dec [InvalidNumStr]
-to_dec = \string -> str_to_num_help(string)
+to_dec = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a [F64]. A [F64] value is a 64-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
@@ -613,7 +849,7 @@ to_dec = \string -> str_to_num_help(string)
 ## expect Str.to_f64("not a number") == Err(InvalidNumStr)
 ## ```
 to_f64 : Str -> Result F64 [InvalidNumStr]
-to_f64 = \string -> str_to_num_help(string)
+to_f64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a [F32].A [F32] value is a 32-bit
 ## [floating-point number](https://en.wikipedia.org/wiki/IEEE_754) and can be
@@ -623,7 +859,7 @@ to_f64 = \string -> str_to_num_help(string)
 ## expect Str.to_f32("not a number") == Err(InvalidNumStr)
 ## ```
 to_f32 : Str -> Result F32 [InvalidNumStr]
-to_f32 = \string -> str_to_num_help(string)
+to_f32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U128] integer. A [U128] value can hold numbers
 ## from `0` to `340_282_366_920_938_463_463_374_607_431_768_211_455` (over
@@ -635,7 +871,7 @@ to_f32 = \string -> str_to_num_help(string)
 ## expect Str.to_u128("not a number") == Err(InvalidNumStr)
 ## ```
 to_u128 : Str -> Result U128 [InvalidNumStr]
-to_u128 = \string -> str_to_num_help(string)
+to_u128 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I128] integer. A [I128] value can hold numbers
 ## from `-170_141_183_460_469_231_731_687_303_715_884_105_728` to
@@ -648,7 +884,7 @@ to_u128 = \string -> str_to_num_help(string)
 ## expect Str.to_i128("not a number") == Err(InvalidNumStr)
 ## ```
 to_i128 : Str -> Result I128 [InvalidNumStr]
-to_i128 = \string -> str_to_num_help(string)
+to_i128 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U64] integer. A [U64] value can hold numbers
 ## from `0` to `18_446_744_073_709_551_615` (over 18 quintillion). It
@@ -660,7 +896,7 @@ to_i128 = \string -> str_to_num_help(string)
 ## expect Str.to_u64("not a number") == Err(InvalidNumStr)
 ## ```
 to_u64 : Str -> Result U64 [InvalidNumStr]
-to_u64 = \string -> str_to_num_help(string)
+to_u64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I64] integer. A [I64] value can hold numbers
 ## from `-9_223_372_036_854_775_808` to `9_223_372_036_854_775_807`. It can be
@@ -672,7 +908,7 @@ to_u64 = \string -> str_to_num_help(string)
 ## expect Str.to_i64("not a number") == Err(InvalidNumStr)
 ## ```
 to_i64 : Str -> Result I64 [InvalidNumStr]
-to_i64 = \string -> str_to_num_help(string)
+to_i64 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U32] integer. A [U32] value can hold numbers
 ## from `0` to `4_294_967_295` (over 4 billion). It can be specified with
@@ -684,7 +920,7 @@ to_i64 = \string -> str_to_num_help(string)
 ## expect Str.to_u32("not a number") == Err(InvalidNumStr)
 ## ```
 to_u32 : Str -> Result U32 [InvalidNumStr]
-to_u32 = \string -> str_to_num_help(string)
+to_u32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I32] integer. A [I32] value can hold numbers
 ## from `-2_147_483_648` to `2_147_483_647`. It can be
@@ -696,7 +932,7 @@ to_u32 = \string -> str_to_num_help(string)
 ## expect Str.to_i32("not a number") == Err(InvalidNumStr)
 ## ```
 to_i32 : Str -> Result I32 [InvalidNumStr]
-to_i32 = \string -> str_to_num_help(string)
+to_i32 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U16] integer. A [U16] value can hold numbers
 ## from `0` to `65_535`. It can be specified with a u16 suffix.
@@ -707,7 +943,7 @@ to_i32 = \string -> str_to_num_help(string)
 ## expect Str.to_u16("not a number") == Err(InvalidNumStr)
 ## ```
 to_u16 : Str -> Result U16 [InvalidNumStr]
-to_u16 = \string -> str_to_num_help(string)
+to_u16 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I16] integer. A [I16] value can hold numbers
 ## from `-32_768` to `32_767`. It can be
@@ -719,7 +955,7 @@ to_u16 = \string -> str_to_num_help(string)
 ## expect Str.to_i16("not a number") == Err(InvalidNumStr)
 ## ```
 to_i16 : Str -> Result I16 [InvalidNumStr]
-to_i16 = \string -> str_to_num_help(string)
+to_i16 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to an unsigned [U8] integer. A [U8] value can hold numbers
 ## from `0` to `255`. It can be specified with a u8 suffix.
@@ -730,7 +966,7 @@ to_i16 = \string -> str_to_num_help(string)
 ## expect Str.to_u8("1500") == Err(InvalidNumStr)
 ## ```
 to_u8 : Str -> Result U8 [InvalidNumStr]
-to_u8 = \string -> str_to_num_help(string)
+to_u8 = |string| str_to_num_help(string)
 
 ## Encode a [Str] to a signed [I8] integer. A [I8] value can hold numbers
 ## from `-128` to `127`. It can be
@@ -741,7 +977,7 @@ to_u8 = \string -> str_to_num_help(string)
 ## expect Str.to_i8("not a number") == Err(InvalidNumStr)
 ## ```
 to_i8 : Str -> Result I8 [InvalidNumStr]
-to_i8 = \string -> str_to_num_help(string)
+to_i8 = |string| str_to_num_help(string)
 
 ## Get the byte at the given index, without performing a bounds check.
 get_unsafe : Str, U64 -> U8
@@ -763,7 +999,7 @@ substring_unsafe : Str, U64, U64 -> Str
 ## expect Str.replace_each("not here", "/", "_") == "not here"
 ## ```
 replace_each : Str, Str, Str -> Str
-replace_each = \haystack, needle, flower ->
+replace_each = |haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             # We found at least one needle, so start the buffer off with
@@ -776,7 +1012,7 @@ replace_each = \haystack, needle, flower ->
         Err(NotFound) -> haystack
 
 replace_each_help : Str, Str, Str, Str -> Str
-replace_each_help = \buf, haystack, needle, flower ->
+replace_each_help = |buf, haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             buf
@@ -797,7 +1033,7 @@ expect Str.replace_each("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.replace_first("no slashes here", "/", "_") == "no slashes here"
 ## ```
 replace_first : Str, Str, Str -> Str
-replace_first = \haystack, needle, flower ->
+replace_first = |haystack, needle, flower|
     when split_first(haystack, needle) is
         Ok({ before, after }) ->
             "${before}${flower}${after}"
@@ -815,7 +1051,7 @@ expect Str.replace_first("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.replace_last("no slashes here", "/", "_") == "no slashes here"
 ## ```
 replace_last : Str, Str, Str -> Str
-replace_last = \haystack, needle, flower ->
+replace_last = |haystack, needle, flower|
     when split_last(haystack, needle) is
         Ok({ before, after }) ->
             "${before}${flower}${after}"
@@ -833,7 +1069,7 @@ expect Str.replace_last("abcdefg", "nothing", "_") == "abcdefg"
 ## expect Str.split_first("no slashes here", "/") == Err(NotFound)
 ## ```
 split_first : Str, Str -> Result { before : Str, after : Str } [NotFound]
-split_first = \haystack, needle ->
+split_first = |haystack, needle|
     when first_match(haystack, needle) is
         Some(index) ->
             remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
@@ -862,7 +1098,7 @@ expect split_first("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" })
 expect split_first("foo", "foo") == Ok({ before: "", after: "" })
 
 first_match : Str, Str -> [Some U64, None]
-first_match = \haystack, needle ->
+first_match = |haystack, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     last_possible = Num.sub_saturated(haystack_length, needle_length)
@@ -870,7 +1106,7 @@ first_match = \haystack, needle ->
     first_match_help(haystack, needle, 0, last_possible)
 
 first_match_help : Str, Str, U64, U64 -> [Some U64, None]
-first_match_help = \haystack, needle, index, last_possible ->
+first_match_help = |haystack, needle, index, last_possible|
     if index <= last_possible then
         if matches_at(haystack, index, needle) then
             Some(index)
@@ -887,7 +1123,7 @@ first_match_help = \haystack, needle, index, last_possible ->
 ## expect Str.split_last("no slashes here", "/") == Err(NotFound)
 ## ```
 split_last : Str, Str -> Result { before : Str, after : Str } [NotFound]
-split_last = \haystack, needle ->
+split_last = |haystack, needle|
     when last_match(haystack, needle) is
         Some(index) ->
             remaining = Str.count_utf8_bytes(haystack) - Str.count_utf8_bytes(needle) - index
@@ -913,7 +1149,7 @@ expect Str.split_last("hullabaloo", "ab") == Ok({ before: "hull", after: "aloo" 
 expect Str.split_last("foo", "foo") == Ok({ before: "", after: "" })
 
 last_match : Str, Str -> [Some U64, None]
-last_match = \haystack, needle ->
+last_match = |haystack, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     last_possible_index = Num.sub_saturated(haystack_length, needle_length)
@@ -921,7 +1157,7 @@ last_match = \haystack, needle ->
     last_match_help(haystack, needle, last_possible_index)
 
 last_match_help : Str, Str, U64 -> [Some U64, None]
-last_match_help = \haystack, needle, index ->
+last_match_help = |haystack, needle, index|
     if matches_at(haystack, index, needle) then
         Some(index)
     else
@@ -932,10 +1168,10 @@ last_match_help = \haystack, needle, index ->
             Err(_) ->
                 None
 
-min = \x, y -> if x < y then x else y
+min = |x, y| if x < y then x else y
 
 matches_at : Str, U64, Str -> Bool
-matches_at = \haystack, haystack_index, needle ->
+matches_at = |haystack, haystack_index, needle|
     haystack_length = Str.count_utf8_bytes(haystack)
     needle_length = Str.count_utf8_bytes(needle)
     end_index = min(Num.add_saturated(haystack_index, needle_length), haystack_length)
@@ -951,7 +1187,7 @@ matches_at = \haystack, haystack_index, needle ->
         },
     )
 
-matches_at_help = \state ->
+matches_at_help = |state|
     { haystack, haystack_index, needle, needle_index, needle_length, end_index } = state
     is_at_end_of_haystack = haystack_index >= end_index
 
@@ -972,7 +1208,7 @@ matches_at_help = \state ->
                 },
             )
 
-        does_this_match && does_rest_match
+        does_this_match and does_rest_match
 
 ## Walks over the `UTF-8` bytes of the given [Str] and calls a function to update
 ## state for each byte. The index for that byte in the string is provided
@@ -983,11 +1219,11 @@ matches_at_help = \state ->
 ## expect Str.walk_utf8_with_index("ABC", [], f) == [65, 66, 67]
 ## ```
 walk_utf8_with_index : Str, state, (state, U8, U64 -> state) -> state
-walk_utf8_with_index = \string, state, step ->
+walk_utf8_with_index = |string, state, step|
     walk_utf8_with_index_help(string, state, step, 0, Str.count_utf8_bytes(string))
 
 walk_utf8_with_index_help : Str, state, (state, U8, U64 -> state), U64, U64 -> state
-walk_utf8_with_index_help = \string, state, step, index, length ->
+walk_utf8_with_index_help = |string, state, step, index, length|
     if index < length then
         byte = Str.get_unsafe(string, index)
         new_state = step(state, byte, index)
@@ -1008,11 +1244,11 @@ walk_utf8_with_index_help = \string, state, step, index, length ->
 ## expect sum_of_utf8_bytes == 105
 ## ```
 walk_utf8 : Str, state, (state, U8 -> state) -> state
-walk_utf8 = \str, initial, step ->
+walk_utf8 = |str, initial, step|
     walk_utf8_help(str, initial, step, 0, Str.count_utf8_bytes(str))
 
 walk_utf8_help : Str, state, (state, U8 -> state), U64, U64 -> state
-walk_utf8_help = \str, state, step, index, length ->
+walk_utf8_help = |str, state, step, index, length|
     if index < length then
         byte = Str.get_unsafe(str, index)
         new_state = step(state, byte)
@@ -1031,7 +1267,7 @@ release_excess_capacity : Str -> Str
 str_to_num : Str -> { berrorcode : U8, aresult : Num * }
 
 str_to_num_help : Str -> Result (Num a) [InvalidNumStr]
-str_to_num_help = \string ->
+str_to_num_help = |string|
     result : { berrorcode : U8, aresult : Num a }
     result = str_to_num(string)
 
@@ -1045,7 +1281,7 @@ str_to_num_help = \string ->
 ## expect Str.with_prefix("Awesome", "Roc") == "RocAwesome"
 ## ```
 with_prefix : Str, Str -> Str
-with_prefix = \str, prefix -> Str.concat(prefix, str)
+with_prefix = |str, prefix| Str.concat(prefix, str)
 
 ## Determines whether or not the first Str contains the second.
 ## ```roc
@@ -1054,7 +1290,7 @@ with_prefix = \str, prefix -> Str.concat(prefix, str)
 ## expect Str.contains("anything", "")
 ## ```
 contains : Str, Str -> Bool
-contains = \haystack, needle ->
+contains = |haystack, needle|
     when first_match(haystack, needle) is
         Some(_index) -> Bool.true
         None -> Bool.false
@@ -1067,7 +1303,7 @@ contains = \haystack, needle ->
 ## expect Str.drop_prefix("foobar", "foo") == "bar"
 ## ```
 drop_prefix : Str, Str -> Str
-drop_prefix = \haystack, prefix ->
+drop_prefix = |haystack, prefix|
     if Str.starts_with(haystack, prefix) then
         start = Str.count_utf8_bytes(prefix)
         len = Num.sub_wrap(Str.count_utf8_bytes(haystack), start)
@@ -1084,7 +1320,7 @@ drop_prefix = \haystack, prefix ->
 ## expect Str.drop_suffix("barfoo", "foo") == "bar"
 ## ```
 drop_suffix : Str, Str -> Str
-drop_suffix = \haystack, suffix ->
+drop_suffix = |haystack, suffix|
     if Str.ends_with(haystack, suffix) then
         start = 0
         len = Num.sub_wrap(Str.count_utf8_bytes(haystack), Str.count_utf8_bytes(suffix))
@@ -1092,3 +1328,93 @@ drop_suffix = \haystack, suffix ->
         substring_unsafe(haystack, start, len)
     else
         haystack
+
+## Returns a version of the string with all [ASCII characters](https://en.wikipedia.org/wiki/ASCII) lowercased.
+## Non-ASCII characters are left unmodified. For example:
+##
+## ```roc
+## expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
+## ```
+##
+## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
+## where you know in advance that you're dealing with a string containing only ASCII characters.
+## It has better performance than lowercasing operations which take Unicode into account.
+##
+## That said, strings received from user input can always contain
+## non-ASCII Unicode characters, and lowercasing [Unicode](https://unicode.org) works
+## differently in different languages. For example, the string `"I"` lowercases to `"i"`
+## in English and to `"ı"` (a [dotless i](https://en.wikipedia.org/wiki/Dotless_I))
+## in Turkish. These rules can also change in each [Unicode release](https://www.unicode.org/releases/),
+## so we have separate [`unicode` package](https://github.com/roc-lang/unicode)
+## for Unicode capitalization that can be upgraded independently from the language's builtins.
+##
+## To do a case-insensitive comparison of the ASCII characters in a string,
+## you can use [Str.caseless_ascii_equals].
+with_ascii_lowercased : Str -> Str
+
+expect Str.with_ascii_lowercased("CAFÉ") == "cafÉ"
+
+## Returns a version of the string with all [ASCII characters](https://en.wikipedia.org/wiki/ASCII) uppercased.
+## Non-ASCII characters are left unmodified. For example:
+##
+## ```roc
+##  expect Str.with_ascii_uppercased("café") == "CAFé"
+## ```
+##
+## This function is useful for things like
+## [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
+## where you know in advance that you're dealing with a string containing only ASCII characters.
+## It has better performance than lowercasing operations which take Unicode into account.
+##
+## That said, strings received from user input can always contain
+## non-ASCII Unicode characters, and uppercasing [Unicode](https://unicode.org)
+## works differently in different languages.
+## For example, the string `"i"` uppercases to `"I"` in English and to `"İ"`
+## (a [dotted I](https://en.wikipedia.org/wiki/%C4%B0)) in Turkish.
+## These rules can also change in each Unicode release,
+## so we have a separate [`unicode` package](https://github.com/roc-lang/unicode) for Unicode capitalization
+## that can be upgraded independently from the language's builtins.
+##
+## To do a case-insensitive comparison of the ASCII characters in a string,
+## you can use [Str.caseless_ascii_equals].
+with_ascii_uppercased : Str -> Str
+
+expect Str.with_ascii_uppercased("café") == "CAFé"
+
+## Returns `True` if all the [ASCII characters](https://en.wikipedia.org/wiki/ASCII) in the string are the same
+## when ignoring differences in capitalization.
+## Non-ASCII characters must all be exactly the same,
+## including capitalization. For example:
+##
+## ```roc
+##  expect Str.caseless_ascii_equals("café", "CAFé")
+##
+##  expect !Str.caseless_ascii_equals("café", "CAFÉ")
+## ```
+##
+## The first call returns `True` because all the ASCII characters are the same
+## when ignoring differences in capitalization, and the only non-ASCII character
+## (`é`) is the same in both strings. The second call returns `False`because
+## `é` and `É` are not ASCII characters, and they are different.
+##
+## This function is useful for things like [command-line flags](https://en.wikipedia.org/wiki/Command-line_interface#Command-line_option)
+## and [environment variable names](https://en.wikipedia.org/wiki/Environment_variable)
+## where you know in advance that you're dealing with a string containing only ASCII characters.
+## It has better performance than lowercasing operations which take Unicode into account.
+##
+## That said, strings received from user input can always contain
+## non-ASCII Unicode characters, and lowercasing [Unicode](https://unicode.org) works
+## differently in different languages. For example, the string `"I"` lowercases to `"i"`
+## in English and to `"ı"` (a [dotless i](https://en.wikipedia.org/wiki/Dotless_I))
+## in Turkish. These rules can also change in each [Unicode release](https://www.unicode.org/releases/),
+## so we have separate [`unicode` package](https://github.com/roc-lang/unicode)
+## for Unicode capitalization that can be upgraded independently from the language's builtins.
+##
+## To convert a string's ASCII characters to uppercase or lowercase, you can use [Str.with_ascii_uppercased]
+## or [Str.with_ascii_lowercased].
+caseless_ascii_equals : Str, Str -> Bool
+
+expect Str.caseless_ascii_equals("café", "CAFé")
+expect !Str.caseless_ascii_equals("café", "CAFÉ")

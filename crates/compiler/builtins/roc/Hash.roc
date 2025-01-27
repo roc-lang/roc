@@ -74,56 +74,56 @@ Hasher implements
     complete : a -> U64 where a implements Hasher
 
 ## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
-hash_str_bytes = \hasher, s ->
+hash_str_bytes = |hasher, s|
     add_bytes(hasher, Str.to_utf8(s))
 
 ## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
-hash_list = \hasher, lst ->
+hash_list = |hasher, lst|
     List.walk(
         lst,
         hasher,
-        \accum_hasher, elem ->
+        |accum_hasher, elem|
             hash(accum_hasher, elem),
     )
 
 ## Adds a single [Bool] to a hasher.
 hash_bool : a, Bool -> a where a implements Hasher
-hash_bool = \hasher, b ->
+hash_bool = |hasher, b|
     as_u8 = if b then 1 else 0
     add_u8(hasher, as_u8)
 
 ## Adds a single I8 to a hasher.
 hash_i8 : a, I8 -> a where a implements Hasher
-hash_i8 = \hasher, n -> add_u8(hasher, Num.to_u8(n))
+hash_i8 = |hasher, n| add_u8(hasher, Num.to_u8(n))
 
 ## Adds a single I16 to a hasher.
 hash_i16 : a, I16 -> a where a implements Hasher
-hash_i16 = \hasher, n -> add_u16(hasher, Num.to_u16(n))
+hash_i16 = |hasher, n| add_u16(hasher, Num.to_u16(n))
 
 ## Adds a single I32 to a hasher.
 hash_i32 : a, I32 -> a where a implements Hasher
-hash_i32 = \hasher, n -> add_u32(hasher, Num.to_u32(n))
+hash_i32 = |hasher, n| add_u32(hasher, Num.to_u32(n))
 
 ## Adds a single I64 to a hasher.
 hash_i64 : a, I64 -> a where a implements Hasher
-hash_i64 = \hasher, n -> add_u64(hasher, Num.to_u64(n))
+hash_i64 = |hasher, n| add_u64(hasher, Num.to_u64(n))
 
 ## Adds a single I128 to a hasher.
 hash_i128 : a, I128 -> a where a implements Hasher
-hash_i128 = \hasher, n -> add_u128(hasher, Num.to_u128(n))
+hash_i128 = |hasher, n| add_u128(hasher, Num.to_u128(n))
 
 ## Adds a single [Dec] to a hasher.
 hash_dec : a, Dec -> a where a implements Hasher
-hash_dec = \hasher, n -> hash_i128(hasher, Num.without_decimal_point(n))
+hash_dec = |hasher, n| hash_i128(hasher, Num.without_decimal_point(n))
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
 ## The container is iterated using the walk method passed in.
 ## The order of the elements does not affect the final hash.
-hash_unordered = \hasher, container, walk ->
+hash_unordered = |hasher, container, walk|
     walk(
         container,
         0,
-        \accum, elem ->
+        |accum, elem|
             x =
                 # Note, we intentionally copy the hasher in every iteration.
                 # Having the same base state is required for unordered hashing.
@@ -138,4 +138,4 @@ hash_unordered = \hasher, container, walk ->
             else
                 next_accum,
     )
-    |> \accum -> add_u64(hasher, accum)
+    |> |accum| add_u64(hasher, accum)

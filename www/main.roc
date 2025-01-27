@@ -64,11 +64,11 @@ get_page_info = \page_path_str ->
                 Str.split_on(page_path_str, "/")
                 |> List.take_last(2)
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
-                |> unwrap_or_crash("This List.first should never fail. page_path_str (${page_path_str}) did not contain any `/`.")
+                |> unwrap_or_crash("This List.first should never fail. pagePathStr ($(page_path_str)) did not contain any `/`.")
                 |> (\page_title ->
-                    { title: "${page_title} | Roc", description: "${page_title} example in the Roc programming language." })
+                    { title: "$(page_title) | Roc", description: "$(page_title) example in the Roc programming language." })
             else
-                crash("Web page ${page_path_str} did not have a title and description specified in the pageData Dict. Please add one.")
+                crash("Web page $(page_path_str) did not have a title and description specified in the pageData Dict. Please add one.")
 
 unwrap_or_crash : Result a b, Str -> a where b implements Inspect
 unwrap_or_crash = \result, error_msg ->
@@ -77,7 +77,7 @@ unwrap_or_crash = \result, error_msg ->
             val
 
         Err(err) ->
-            crash("${Inspect.to_str(err)}: ${error_msg}")
+            crash("$(Inspect.to_str(err)): $(error_msg)")
 
 transform : Str, Str -> Str
 transform = \page_path_str, html_content ->

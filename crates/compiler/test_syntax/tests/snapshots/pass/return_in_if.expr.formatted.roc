@@ -1,4 +1,4 @@
-maybeEarlyReturn = \x ->
+maybeEarlyReturn = |x|
     y =
         if x > 5 then
             return "abc"

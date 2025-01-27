@@ -1,4 +1,4 @@
-module [Bool, Eq, true, false, and, or, not, is_eq, is_not_eq]
+module [Bool, Eq, true, false, not, is_eq, is_not_eq]
 
 ## Defines a type that can be compared for total equality.
 ##
@@ -34,7 +34,7 @@ Eq implements
 ## `Bool` implements the `Eq` ability.
 Bool := [True, False] implements [Eq { is_eq: bool_is_eq }]
 
-bool_is_eq = \@Bool(b1), @Bool(b2) -> structural_eq(b1, b2)
+bool_is_eq = |@Bool(b1), @Bool(b2)| structural_eq(b1, b2)
 
 ## The boolean true value.
 true : Bool
@@ -43,55 +43,6 @@ true = @Bool(True)
 ## The boolean false value.
 false : Bool
 false = @Bool(False)
-
-## Returns `Bool.true` when both inputs are `Bool.true`. This is equivalent to
-## the logic [AND](https://en.wikipedia.org/wiki/Logical_conjunction)
-## gate. The infix operator `&&` can also be used as shorthand for
-## `Bool.and`.
-##
-## ```roc
-## expect Bool.and(Bool.true, Bool.true) == Bool.true
-## expect (Bool.true && Bool.true) == Bool.true
-## expect (Bool.false && Bool.true) == Bool.false
-## expect (Bool.true && Bool.false) == Bool.false
-## expect (Bool.false && Bool.false) == Bool.false
-## ```
-##
-## ## Performance Details
-##
-## In Roc the `&&` and `||` work the same way as any
-## other function. However, in some languages `&&` and `||` are special-cased.
-## In these languages the compiler will skip evaluating the expression after the
-## first operator under certain circumstances. For example an expression like
-## `enable_pets && likes_dogs(user)` would compile to.
-## ```roc
-## if enable_pets then
-##     likes_dogs(user)
-## else
-##     Bool.false
-## ```
-## Roc does not do this because conditionals like `if` and `when` have a
-## performance cost. Calling a function can sometimes be faster across the board
-## than doing an `if` to decide whether to skip calling it.
-and : Bool, Bool -> Bool
-
-## Returns `Bool.true` when either input is a `Bool.true`. This is equivalent to
-## the logic [OR](https://en.wikipedia.org/wiki/Logical_disjunction) gate.
-## The infix operator `||` can also be used as shorthand for `Bool.or`.
-## ```roc
-## expect Bool.or(Bool.false, Bool.true) == Bool.true
-## expect (Bool.true || Bool.true) == Bool.true
-## expect (Bool.false || Bool.true) == Bool.true
-## expect (Bool.true || Bool.false) == Bool.true
-## expect (Bool.false || Bool.false) == Bool.false
-## ```
-##
-## ## Performance Details
-##
-## In Roc the `&&` and `||` work the same way as any
-## other functions. However, in some languages `&&` and `||` are special-cased.
-## Refer to the note in `Bool.and` for more detail.
-or : Bool, Bool -> Bool
 
 ## Returns `Bool.false` when given `Bool.true`, and vice versa. This is
 ## equivalent to the logic [NOT](https://en.wikipedia.org/wiki/Negation)
@@ -115,7 +66,7 @@ not : Bool -> Bool
 ## expect "Apples" != "Oranges"
 ## ```
 is_not_eq : a, a -> Bool where a implements Eq
-is_not_eq = \a, b -> structural_not_eq(a, b)
+is_not_eq = |a, b| structural_not_eq(a, b)
 
 # INTERNAL COMPILER USE ONLY: used to lower calls to `is_eq` to structural
 # equality via the `Eq` low-level for derived types.

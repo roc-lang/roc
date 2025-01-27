@@ -1797,7 +1797,7 @@ generate_derive_str = \buf, types, type, include_debug ->
 
 can_support_eq_hash_ord : Types, Shape -> Bool
 can_support_eq_hash_ord = \types, type ->
-    !(has_float(types, type)) && (can_support_partial_eq_ord(types, type))
+    !(has_float(types, type)) and (can_support_partial_eq_ord(types, type))
 
 can_support_partial_eq_ord : Types, Shape -> Bool
 can_support_partial_eq_ord = \types, type ->
@@ -1817,7 +1817,7 @@ can_support_partial_eq_ord = \types, type ->
             k_type = Types.shape(types, k)
             v_type = Types.shape(types, v)
 
-            can_support_partial_eq_ord(types, k_type) && can_support_partial_eq_ord(types, v_type)
+            can_support_partial_eq_ord(types, k_type) and can_support_partial_eq_ord(types, v_type)
 
         TagUnion(Recursive({ tags })) ->
             List.all(tags, \{ payload } ->
@@ -1854,7 +1854,7 @@ can_support_partial_eq_ord = \types, type ->
             ok_shape = Types.shape(types, ok_id)
             err_shape = Types.shape(types, err_id)
 
-            can_support_partial_eq_ord(types, ok_shape) && can_support_partial_eq_ord(types, err_shape)
+            can_support_partial_eq_ord(types, ok_shape) and can_support_partial_eq_ord(types, err_shape)
 
         Struct({ fields: HasNoClosure(fields) }) | TagUnionPayload({ fields: HasNoClosure(fields) }) ->
             List.all(fields, \{ id } -> can_support_partial_eq_ord(types, Types.shape(types, id)))
@@ -1891,7 +1891,7 @@ can_derive_copy = \types, type ->
 
         RocResult(ok_id, err_id) ->
             can_derive_copy(types, Types.shape(types, ok_id))
-            && can_derive_copy(types, Types.shape(types, err_id))
+            and can_derive_copy(types, Types.shape(types, err_id))
 
         Struct({ fields: HasNoClosure(fields) }) | TagUnionPayload({ fields: HasNoClosure(fields) }) ->
             List.all(fields, \{ id } -> can_derive_copy(types, Types.shape(types, id)))
@@ -1909,7 +1909,7 @@ cannot_support_default = \types, type ->
         TagUnionPayload({ fields: HasClosure(_) }) -> Bool.true
         RocDict(key_id, val_id) ->
             cannot_support_copy(types, Types.shape(types, key_id))
-            || cannot_support_copy(types, Types.shape(types, val_id))
+            or cannot_support_copy(types, Types.shape(types, val_id))
 
         Struct({ fields: HasClosure(_) }) -> Bool.true
         Struct({ fields: HasNoClosure(fields) }) | TagUnionPayload({ fields: HasNoClosure(fields) }) ->
@@ -1934,7 +1934,7 @@ has_float_help = \types, type, do_not_recurse ->
 
         RocDict(id0, id1) | RocResult(id0, id1) ->
             has_float_help(types, Types.shape(types, id0), do_not_recurse)
-            || has_float_help(types, Types.shape(types, id1), do_not_recurse)
+            or has_float_help(types, Types.shape(types, id1), do_not_recurse)
 
         Struct({ fields: HasNoClosure(fields) }) | TagUnionPayload({ fields: HasNoClosure(fields) }) ->
             List.any(fields, \{ id } -> has_float_help(types, Types.shape(types, id), do_not_recurse))
@@ -2160,7 +2160,7 @@ contains_refcounted_help = \types, type, do_not_recurse ->
 
         RocResult(id0, id1) ->
             contains_refcounted_help(types, Types.shape(types, id0), do_not_recurse)
-            || contains_refcounted_help(types, Types.shape(types, id1), do_not_recurse)
+            or contains_refcounted_help(types, Types.shape(types, id1), do_not_recurse)
 
         Struct({ fields: HasNoClosure(fields) }) | TagUnionPayload({ fields: HasNoClosure(fields) }) ->
             List.any(fields, \{ id } -> contains_refcounted_help(types, Types.shape(types, id), do_not_recurse))

@@ -1,10 +1,11 @@
 use std::path::Path;
 
 use bumpalo::Bump;
-use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expr::canonicalize_expr;
 use roc_can::scope::Scope;
+use roc_can_solo::env::SoloEnv;
+use roc_can_solo::scope::SoloScope;
 use roc_error_macros::set_panic_not_exit;
 use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
 use roc_module::ident::QualifiedModuleName;
@@ -217,7 +218,10 @@ impl<'a> Output<'a> {
                 // visited a BinOp node we'd recursively try to apply this to each of its nested
                 // operators, and then again on *their* nested operators, ultimately applying the
                 // rules multiple times unnecessarily.
-                let loc_expr = desugar::desugar_expr(&mut env, &mut scope, loc_expr);
+                let mut solo_env = SoloEnv::new(arena, src, Path::new("Test.roc"));
+                let mut solo_scope = SoloScope::new();
+                let loc_expr =
+                    roc_can_solo::desugar::desugar_expr(&mut solo_env, &mut solo_scope, loc_expr);
 
                 scope.add_alias(
                     Symbol::NUM_INT,

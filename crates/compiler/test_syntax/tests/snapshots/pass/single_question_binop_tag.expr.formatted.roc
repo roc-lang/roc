@@ -1,0 +1,1 @@
+fallible!(args) ? WrapOverErr

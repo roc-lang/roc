@@ -112,14 +112,14 @@ Dict k v := {
     ]
 
 is_eq : Dict k v, Dict k v -> Bool where v implements Eq
-is_eq = \xs, ys ->
+is_eq = |xs, ys|
     if len(xs) != len(ys) then
         Bool.false
     else
         walk_until(
             xs,
             Bool.true,
-            \_, k, x_val ->
+            |_, k, x_val|
                 when get(ys, k) is
                     Ok(y_val) if y_val == x_val ->
                         Continue(Bool.true)
@@ -129,12 +129,12 @@ is_eq = \xs, ys ->
         )
 
 hash_dict : hasher, Dict k v -> hasher where v implements Hash, hasher implements Hasher
-hash_dict = \hasher, dict -> Hash.hash_unordered(hasher, to_list(dict), List.walk)
+hash_dict = |hasher, dict| Hash.hash_unordered(hasher, to_list(dict), List.walk)
 
 to_inspector_dict : Dict k v -> Inspector f where k implements Inspect & Hash & Eq, v implements Inspect, f implements InspectFormatter
-to_inspector_dict = \dict ->
+to_inspector_dict = |dict|
     Inspect.custom(
-        \fmt ->
+        |fmt|
             Inspect.apply(Inspect.dict(dict, walk, Inspect.to_inspector, Inspect.to_inspector), fmt),
     )
 
@@ -143,7 +143,7 @@ to_inspector_dict = \dict ->
 ## empty_dict = Dict.empty({})
 ## ```
 empty : {} -> Dict * *
-empty = \{} ->
+empty = |{}|
     @Dict(
         {
             buckets: [],
@@ -158,19 +158,19 @@ empty = \{} ->
 ## may provide a performance optimization if you know how many entries will be
 ## inserted.
 with_capacity : U64 -> Dict * *
-with_capacity = \requested ->
+with_capacity = |requested|
     empty({})
     |> reserve(requested)
 
 ## Enlarge the dictionary for at least capacity additional elements
 reserve : Dict k v, U64 -> Dict k v
-reserve = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }), requested ->
+reserve = |@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }), requested|
     current_size = List.len(data)
     requested_size = Num.add_wrap(current_size, requested)
     size = Num.min(requested_size, max_size)
 
     requested_shifts = calc_shifts_for_size(size, max_load_factor)
-    if List.is_empty(buckets) || requested_shifts > shifts then
+    if List.is_empty(buckets) or requested_shifts > shifts then
         (buckets0, max_bucket_capacity) = alloc_buckets_from_shift(requested_shifts, max_load_factor)
         buckets1 = fill_buckets_from_data(buckets0, data, requested_shifts)
         @Dict(
@@ -189,7 +189,7 @@ reserve = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capac
 ## This function will require regenerating the metadata if the size changes.
 ## There will still be some overhead due to dictionary metadata always being a power of 2.
 release_excess_capacity : Dict k v -> Dict k v
-release_excess_capacity = \@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts }) ->
+release_excess_capacity = |@Dict({ buckets, data, max_bucket_capacity: original_max_bucket_capacity, max_load_factor, shifts })|
     size = List.len(data)
 
     # NOTE: If we want, we technically could increase the load factor here to potentially minimize size more.
@@ -218,7 +218,7 @@ release_excess_capacity = \@Dict({ buckets, data, max_bucket_capacity: original_
 ## capacity_of_dict = Dict.capacity(food_dict)
 ## ```
 capacity : Dict * * -> U64
-capacity = \@Dict({ max_bucket_capacity }) ->
+capacity = |@Dict({ max_bucket_capacity })|
     max_bucket_capacity
 
 ## Returns a dictionary containing the key and value provided as input.
@@ -228,7 +228,7 @@ capacity = \@Dict({ max_bucket_capacity }) ->
 ##     |> Bool.is_eq(Dict.empty({}) |> Dict.insert("A", "B"))
 ## ```
 single : k, v -> Dict k v
-single = \k, v ->
+single = |k, v|
     insert(empty({}), k, v)
 
 ## Returns dictionary with the keys and values specified by the input [List].
@@ -247,8 +247,8 @@ single = \k, v ->
 ## If the list has few duplicate keys, it would be faster to allocate a dictionary
 ## with the same capacity of the list and walk it calling [Dict.insert]
 from_list : List (k, v) -> Dict k v
-from_list = \data ->
-    List.walk(data, empty({}), \dict, (k, v) -> insert(dict, k, v))
+from_list = |data|
+    List.walk(data, empty({}), |dict, (k, v)| insert(dict, k, v))
 
 ## Returns the number of values in the dictionary.
 ## ```roc
@@ -261,7 +261,7 @@ from_list = \data ->
 ##     |> Bool.is_eq(3)
 ## ```
 len : Dict * * -> U64
-len = \@Dict({ data }) ->
+len = |@Dict({ data })|
     List.len(data)
 
 ## Check if the dictionary is empty.
@@ -271,7 +271,7 @@ len = \@Dict({ data }) ->
 ## Dict.is_empty(Dict.empty({}))
 ## ```
 is_empty : Dict * * -> Bool
-is_empty = \@Dict({ data }) ->
+is_empty = |@Dict({ data })|
     List.is_empty(data)
 
 ## Clears all elements from a dictionary keeping around the allocation if it isn't huge.
@@ -287,10 +287,10 @@ is_empty = \@Dict({ data }) ->
 ## expect Dict.len(clear_songs) == 0
 ## ```
 clear : Dict k v -> Dict k v
-clear = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }) ->
+clear = |@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })|
     @Dict(
         {
-            buckets: List.map(buckets, \_ -> empty_bucket),
+            buckets: List.map(buckets, |_| empty_bucket),
             # use take_first to keep around the capacity
             data: List.take_first(data, 0),
             max_bucket_capacity,
@@ -303,13 +303,13 @@ clear = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }) 
 ## function on each of them which receives both the key and the old value. Then return a
 ## new dictionary containing the same keys and the converted values.
 map : Dict k a, (k, a -> b) -> Dict k b
-map = \dict, transform ->
+map = |dict, transform|
     init = with_capacity(capacity(dict))
 
     walk(
         dict,
         init,
-        \answer, k, v ->
+        |answer, k, v|
             insert(answer, k, transform(k, v)),
     )
 
@@ -319,13 +319,13 @@ map = \dict, transform ->
 ##
 ## You may know a similar function named `concat_map` in other languages.
 join_map : Dict a b, (a, b -> Dict x y) -> Dict x y
-join_map = \dict, transform ->
+join_map = |dict, transform|
     init = with_capacity(capacity(dict)) # Might be a pessimization
 
     walk(
         dict,
         init,
-        \answer, k, v ->
+        |answer, k, v|
             insert_all(answer, transform(k, v)),
     )
 
@@ -341,8 +341,8 @@ join_map = \dict, transform ->
 ##     |> Bool.is_eq(36)
 ## ```
 walk : Dict k v, state, (state, k, v -> state) -> state
-walk = \@Dict({ data }), initial_state, transform ->
-    List.walk(data, initial_state, \state, (k, v) -> transform(state, k, v))
+walk = |@Dict({ data }), initial_state, transform|
+    List.walk(data, initial_state, |state, (k, v)| transform(state, k, v))
 
 ## Same as [Dict.walk], except you can stop walking early.
 ##
@@ -373,8 +373,8 @@ walk = \@Dict({ data }), initial_state, transform ->
 ## expect someone_is_an_adult == Bool.true
 ## ```
 walk_until : Dict k v, state, (state, k, v -> [Continue state, Break state]) -> state
-walk_until = \@Dict({ data }), initial_state, transform ->
-    List.walk_until(data, initial_state, \state, (k, v) -> transform(state, k, v))
+walk_until = |@Dict({ data }), initial_state, transform|
+    List.walk_until(data, initial_state, |state, (k, v)| transform(state, k, v))
 
 ## Run the given function on each key-value pair of a dictionary, and return
 ## a dictionary with just the pairs for which the function returned `Bool.true`.
@@ -388,11 +388,11 @@ walk_until = \@Dict({ data }), initial_state, transform ->
 ##     |> Bool.is_eq(2)
 ## ```
 keep_if : Dict k v, ((k, v) -> Bool) -> Dict k v
-keep_if = \dict, predicate ->
+keep_if = |dict, predicate|
     keep_if_help(dict, predicate, 0, Dict.len(dict))
 
 keep_if_help : Dict k v, ((k, v) -> Bool), U64, U64 -> Dict k v
-keep_if_help = \@Dict(dict), predicate, index, length ->
+keep_if_help = |@Dict(dict), predicate, index, length|
     if index < length then
         (key, value) = list_get_unsafe(dict.data, index)
         if predicate((key, value)) then
@@ -414,8 +414,8 @@ keep_if_help = \@Dict(dict), predicate, index, length ->
 ##     |> Bool.is_eq(1)
 ## ```
 drop_if : Dict k v, ((k, v) -> Bool) -> Dict k v
-drop_if = \dict, predicate ->
-    Dict.keep_if(dict, \e -> Bool.not(predicate(e)))
+drop_if = |dict, predicate|
+    Dict.keep_if(dict, |e| Bool.not(predicate(e)))
 
 ## Get the value for a given key. If there is a value for the specified key it
 ## will return [Ok value], otherwise return [Err KeyNotFound].
@@ -429,7 +429,7 @@ drop_if = \dict, predicate ->
 ## expect Dict.get(dictionary, 2000) == Err(KeyNotFound)
 ## ```
 get : Dict k v, k -> Result v [KeyNotFound]
-get = \dict, key ->
+get = |dict, key|
     find(dict, key)
     |> .result
 
@@ -442,7 +442,7 @@ get = \dict, key ->
 ##     |> Bool.is_eq(Bool.true)
 ## ```
 contains : Dict k v, k -> Bool
-contains = \dict, key ->
+contains = |dict, key|
     find(dict, key)
     |> .result
     |> Result.is_ok
@@ -456,7 +456,7 @@ contains = \dict, key ->
 ##     |> Bool.is_eq(Ok(12))
 ## ```
 insert : Dict k v, k, v -> Dict k v
-insert = \dict, key, value ->
+insert = |dict, key, value|
     @Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }) =
         if len(dict) < capacity(dict) then
             dict
@@ -471,7 +471,7 @@ insert = \dict, key, value ->
     insert_helper(buckets, data, bucket_index, dist_and_fingerprint, key, value, max_bucket_capacity, max_load_factor, shifts)
 
 insert_helper : List Bucket, List (k, v), U64, U32, k, v, U64, F32, U8 -> Dict k v
-insert_helper = \buckets0, data0, bucket_index0, dist_and_fingerprint0, key, value, max_bucket_capacity, max_load_factor, shifts ->
+insert_helper = |buckets0, data0, bucket_index0, dist_and_fingerprint0, key, value, max_bucket_capacity, max_load_factor, shifts|
     loaded = list_get_unsafe(buckets0, bucket_index0)
     if dist_and_fingerprint0 == loaded.dist_and_fingerprint then
         (found_key, _) = list_get_unsafe(data0, Num.to_u64(loaded.data_index))
@@ -502,7 +502,7 @@ insert_helper = \buckets0, data0, bucket_index0, dist_and_fingerprint0, key, val
 ##     |> Bool.is_eq(0)
 ## ```
 remove : Dict k v, k -> Dict k v
-remove = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key ->
+remove = |@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key|
     if !(List.is_empty(data)) then
         (bucket_index0, dist_and_fingerprint0) = next_while_less(buckets, key, shifts)
         (bucket_index1, dist_and_fingerprint1) = remove_helper(buckets, bucket_index0, dist_and_fingerprint0, data, key)
@@ -516,7 +516,7 @@ remove = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })
         @Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })
 
 remove_helper : List Bucket, U64, U32, List (k, *), k -> (U64, U32) where k implements Eq
-remove_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
+remove_helper = |buckets, bucket_index, dist_and_fingerprint, data, key|
     bucket = list_get_unsafe(buckets, bucket_index)
     if dist_and_fingerprint == bucket.dist_and_fingerprint then
         (found_key, _) = list_get_unsafe(data, Num.to_u64(bucket.data_index))
@@ -543,7 +543,7 @@ remove_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
 ## expect Dict.update(Dict.single("a", Bool.true), "a", alter_value) == Dict.empty({})
 ## ```
 update : Dict k v, k, (Result v [Missing] -> Result v [Missing]) -> Dict k v
-update = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key, alter ->
+update = |@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key, alter|
     { bucket_index, result } = find(@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts }), key)
     when result is
         Ok(value) ->
@@ -582,7 +582,7 @@ update = \@Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })
                 Err(Missing) ->
                     @Dict({ buckets, data, max_bucket_capacity, max_load_factor, shifts })
 
-circular_dist = \start, end, size ->
+circular_dist = |start, end, size|
     correction =
         if start > end then
             size
@@ -604,7 +604,7 @@ circular_dist = \start, end, size ->
 ##     |> Bool.is_eq([(1, "One"), (2, "Two"), (3, "Three"), (4, "Four")])
 ## ```
 to_list : Dict k v -> List (k, v)
-to_list = \@Dict({ data }) ->
+to_list = |@Dict({ data })|
     data
 
 ## Returns the keys of a dictionary as a [List].
@@ -619,8 +619,8 @@ to_list = \@Dict({ data }) ->
 ##     |> Bool.is_eq([1,2,3,4])
 ## ```
 keys : Dict k v -> List k
-keys = \@Dict({ data }) ->
-    List.map(data, \(k, _) -> k)
+keys = |@Dict({ data })|
+    List.map(data, |(k, _)| k)
 
 ## Returns the values of a dictionary as a [List].
 ## This requires allocating a temporary [List], prefer using [Dict.to_list] or [Dict.walk] instead.
@@ -634,8 +634,8 @@ keys = \@Dict({ data }) ->
 ##     |> Bool.is_eq(["One","Two","Three","Four"])
 ## ```
 values : Dict k v -> List v
-values = \@Dict({ data }) ->
-    List.map(data, \(_, v) -> v)
+values = |@Dict({ data })|
+    List.map(data, |(_, v)| v)
 
 ## Combine two dictionaries by keeping the [union](https://en.wikipedia.org/wiki/Union_(set_theory))
 ## of all the key-value pairs. This means that all the key-value pairs in
@@ -662,7 +662,7 @@ values = \@Dict({ data }) ->
 ##     Dict.insert_all(first, second) == expected
 ## ```
 insert_all : Dict k v, Dict k v -> Dict k v
-insert_all = \xs, ys ->
+insert_all = |xs, ys|
     if len(ys) > len(xs) then
         insert_all(ys, xs)
     else
@@ -690,7 +690,7 @@ insert_all = \xs, ys ->
 ## expect Dict.keep_shared(first, second) == expected
 ## ```
 keep_shared : Dict k v, Dict k v -> Dict k v where v implements Eq
-keep_shared = \xs0, ys0 ->
+keep_shared = |xs0, ys0|
     (xs1, ys1) =
         if len(ys0) < len(xs0) then
             (ys0, xs0)
@@ -700,7 +700,7 @@ keep_shared = \xs0, ys0 ->
     walk(
         xs1,
         with_capacity(len(xs1)),
-        \state, k, v ->
+        |state, k, v|
             when get(ys1, k) is
                 Ok(yv) if v == yv ->
                     insert(state, k, v)
@@ -730,8 +730,8 @@ keep_shared = \xs0, ys0 ->
 ## expect Dict.remove_all(first, second) == expected
 ## ```
 remove_all : Dict k v, Dict k v -> Dict k v
-remove_all = \xs, ys ->
-    walk(ys, xs, \state, k, _ -> remove(state, k))
+remove_all = |xs, ys|
+    walk(ys, xs, |state, k, _| remove(state, k))
 
 # Below here is a list of generic helpers and internal data types for Dict
 Bucket : {
@@ -747,17 +747,17 @@ initial_shifts = Num.sub_wrap(64, 3) # 2^(64-shifts) number of buckets
 max_size = Num.shift_left_by(1u64, 32)
 max_bucket_count = max_size
 
-increment_dist = \dist_and_fingerprint ->
+increment_dist = |dist_and_fingerprint|
     Num.add_wrap(dist_and_fingerprint, dist_inc)
 
-increment_dist_n = \dist_and_fingerprint, n ->
+increment_dist_n = |dist_and_fingerprint, n|
     Num.add_wrap(dist_and_fingerprint, Num.mul_wrap(n, dist_inc))
 
-decrement_dist = \dist_and_fingerprint ->
+decrement_dist = |dist_and_fingerprint|
     Num.sub_wrap(dist_and_fingerprint, dist_inc)
 
 find : Dict k v, k -> { bucket_index : U64, result : Result v [KeyNotFound] }
-find = \@Dict({ buckets, data, shifts }), key ->
+find = |@Dict({ buckets, data, shifts }), key|
     hash = hash_key(key)
     dist_and_fingerprint = dist_and_fingerprint_from_hash(hash)
     bucket_index = bucket_index_from_hash(hash, shifts)
@@ -772,7 +772,7 @@ find = \@Dict({ buckets, data, shifts }), key ->
 find_manual_unrolls = 2
 
 find_first_unroll : List Bucket, U64, U32, List (k, v), k -> { bucket_index : U64, result : Result v [KeyNotFound] } where k implements Eq
-find_first_unroll = \buckets, bucket_index, dist_and_fingerprint, data, key ->
+find_first_unroll = |buckets, bucket_index, dist_and_fingerprint, data, key|
     # TODO: once we have short circuit evaluation, use it here and other similar locations in this file.
     # Avoid the nested if with else block inconvenience.
     bucket = list_get_unsafe(buckets, bucket_index)
@@ -786,7 +786,7 @@ find_first_unroll = \buckets, bucket_index, dist_and_fingerprint, data, key ->
         find_second_unroll(buckets, next_bucket_index(bucket_index, List.len(buckets)), increment_dist(dist_and_fingerprint), data, key)
 
 find_second_unroll : List Bucket, U64, U32, List (k, v), k -> { bucket_index : U64, result : Result v [KeyNotFound] } where k implements Eq
-find_second_unroll = \buckets, bucket_index, dist_and_fingerprint, data, key ->
+find_second_unroll = |buckets, bucket_index, dist_and_fingerprint, data, key|
     bucket = list_get_unsafe(buckets, bucket_index)
     if dist_and_fingerprint == bucket.dist_and_fingerprint then
         (found_key, value) = list_get_unsafe(data, Num.to_u64(bucket.data_index))
@@ -798,7 +798,7 @@ find_second_unroll = \buckets, bucket_index, dist_and_fingerprint, data, key ->
         find_helper(buckets, next_bucket_index(bucket_index, List.len(buckets)), increment_dist(dist_and_fingerprint), data, key)
 
 find_helper : List Bucket, U64, U32, List (k, v), k -> { bucket_index : U64, result : Result v [KeyNotFound] } where k implements Eq
-find_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
+find_helper = |buckets, bucket_index, dist_and_fingerprint, data, key|
     bucket = list_get_unsafe(buckets, bucket_index)
     if dist_and_fingerprint == bucket.dist_and_fingerprint then
         (found_key, value) = list_get_unsafe(data, Num.to_u64(bucket.data_index))
@@ -812,7 +812,7 @@ find_helper = \buckets, bucket_index, dist_and_fingerprint, data, key ->
         find_helper(buckets, next_bucket_index(bucket_index, List.len(buckets)), increment_dist(dist_and_fingerprint), data, key)
 
 remove_bucket : Dict k v, U64 -> Dict k v
-remove_bucket = \@Dict({ buckets: buckets0, data: data0, max_bucket_capacity, max_load_factor, shifts }), bucket_index0 ->
+remove_bucket = |@Dict({ buckets: buckets0, data: data0, max_bucket_capacity, max_load_factor, shifts }), bucket_index0|
     data_index_to_remove = list_get_unsafe(buckets0, bucket_index0) |> .data_index
     data_index_to_remove_u64 = Num.to_u64(data_index_to_remove)
 
@@ -853,7 +853,7 @@ remove_bucket = \@Dict({ buckets: buckets0, data: data0, max_bucket_capacity, ma
         )
 
 scan_for_index : List Bucket, U64, U32 -> U64
-scan_for_index = \buckets, bucket_index, data_index ->
+scan_for_index = |buckets, bucket_index, data_index|
     bucket = list_get_unsafe(buckets, bucket_index)
     if bucket.data_index != data_index then
         scan_for_index(buckets, next_bucket_index(bucket_index, List.len(buckets)), data_index)
@@ -861,7 +861,7 @@ scan_for_index = \buckets, bucket_index, data_index ->
         bucket_index
 
 remove_bucket_helper : List Bucket, U64 -> (List Bucket, U64)
-remove_bucket_helper = \buckets, bucket_index ->
+remove_bucket_helper = |buckets, bucket_index|
     next_index = next_bucket_index(bucket_index, List.len(buckets))
     next_bucket = list_get_unsafe(buckets, next_index)
     # shift down until either empty or an element with correct spot is found
@@ -872,7 +872,7 @@ remove_bucket_helper = \buckets, bucket_index ->
         (buckets, bucket_index)
 
 increase_size : Dict k v -> Dict k v
-increase_size = \@Dict({ data, max_bucket_capacity, max_load_factor, shifts }) ->
+increase_size = |@Dict({ data, max_bucket_capacity, max_load_factor, shifts })|
     if max_bucket_capacity != max_bucket_count then
         new_shifts = shifts |> Num.sub_wrap(1)
         (buckets0, new_max_bucket_capacity) = alloc_buckets_from_shift(new_shifts, max_load_factor)
@@ -890,7 +890,7 @@ increase_size = \@Dict({ data, max_bucket_capacity, max_load_factor, shifts }) -
         crash("Dict hit limit of ${Num.to_str(max_bucket_count)} elements. Unable to grow more.")
 
 alloc_buckets_from_shift : U8, F32 -> (List Bucket, U64)
-alloc_buckets_from_shift = \shifts, max_load_factor ->
+alloc_buckets_from_shift = |shifts, max_load_factor|
     bucket_count = calc_num_buckets(shifts)
     if bucket_count == max_bucket_count then
         # reached the maximum, make sure we can use each bucket
@@ -905,49 +905,49 @@ alloc_buckets_from_shift = \shifts, max_load_factor ->
         (List.repeat(empty_bucket, bucket_count), max_bucket_capacity)
 
 calc_shifts_for_size : U64, F32 -> U8
-calc_shifts_for_size = \size, max_load_factor ->
+calc_shifts_for_size = |size, max_load_factor|
     calc_shifts_for_size_helper(initial_shifts, size, max_load_factor)
 
-calc_shifts_for_size_helper = \shifts, size, max_load_factor ->
+calc_shifts_for_size_helper = |shifts, size, max_load_factor|
     max_bucket_capacity =
         shifts
         |> calc_num_buckets
         |> Num.to_f32
         |> Num.mul(max_load_factor)
         |> Num.floor
-    if shifts > 0 && max_bucket_capacity < size then
+    if shifts > 0 and max_bucket_capacity < size then
         calc_shifts_for_size_helper(Num.sub_wrap(shifts, 1), size, max_load_factor)
     else
         shifts
 
-calc_num_buckets = \shifts ->
+calc_num_buckets = |shifts|
     Num.min(Num.shift_left_by(1, Num.sub_wrap(64, shifts)), max_bucket_count)
 
-fill_buckets_from_data = \buckets0, data, shifts ->
+fill_buckets_from_data = |buckets0, data, shifts|
     List.walk_with_index(
         data,
         buckets0,
-        \buckets1, (key, _), data_index ->
+        |buckets1, (key, _), data_index|
             (bucket_index, dist_and_fingerprint) = next_while_less(buckets1, key, shifts)
             place_and_shift_up(buckets1, { dist_and_fingerprint, data_index: Num.to_u32(data_index) }, bucket_index),
     )
 
 next_while_less : List Bucket, k, U8 -> (U64, U32) where k implements Hash & Eq
-next_while_less = \buckets, key, shifts ->
+next_while_less = |buckets, key, shifts|
     hash = hash_key(key)
     dist_and_fingerprint = dist_and_fingerprint_from_hash(hash)
     bucket_index = bucket_index_from_hash(hash, shifts)
 
     next_while_less_helper(buckets, bucket_index, dist_and_fingerprint)
 
-next_while_less_helper = \buckets, bucket_index, dist_and_fingerprint ->
+next_while_less_helper = |buckets, bucket_index, dist_and_fingerprint|
     loaded = list_get_unsafe(buckets, bucket_index)
     if dist_and_fingerprint < loaded.dist_and_fingerprint then
         next_while_less_helper(buckets, next_bucket_index(bucket_index, List.len(buckets)), increment_dist(dist_and_fingerprint))
     else
         (bucket_index, dist_and_fingerprint)
 
-place_and_shift_up = \buckets0, bucket, bucket_index ->
+place_and_shift_up = |buckets0, bucket, bucket_index|
     loaded = list_get_unsafe(buckets0, bucket_index)
     if loaded.dist_and_fingerprint != 0 then
         buckets1 = List.set(buckets0, bucket_index, bucket)
@@ -959,7 +959,7 @@ place_and_shift_up = \buckets0, bucket, bucket_index ->
     else
         List.set(buckets0, bucket_index, bucket)
 
-next_bucket_index = \bucket_index, max_buckets ->
+next_bucket_index = |bucket_index, max_buckets|
     # I just ported this impl directly.
     # I am a bit confused why it is using an if over a mask.
     # Maybe compilers are smart enough to optimize this well.
@@ -969,20 +969,20 @@ next_bucket_index = \bucket_index, max_buckets ->
     else
         0
 
-hash_key = \key ->
+hash_key = |key|
     create_low_level_hasher(PseudoRandSeed)
     |> Hash.hash(key)
     |> complete
 
 dist_and_fingerprint_from_hash : U64 -> U32
-dist_and_fingerprint_from_hash = \hash ->
+dist_and_fingerprint_from_hash = |hash|
     hash
     |> Num.to_u32
     |> Num.bitwise_and(fingerprint_mask)
     |> Num.bitwise_or(dist_inc)
 
 bucket_index_from_hash : U64, U8 -> U64
-bucket_index_from_hash = \hash, shifts ->
+bucket_index_from_hash = |hash, shifts|
     Num.shift_right_zf_by(hash, shifts)
 
 expect
@@ -1087,7 +1087,7 @@ expect
         |> insert("bar", {})
         |> insert("baz", {})
 
-    contains(dict, "baz") && !(contains(dict, "other"))
+    contains(dict, "baz") and !(contains(dict, "other"))
 
 expect
     dict =
@@ -1145,17 +1145,17 @@ expect
         |> insert("l", 11)
 
     (get(dict, "a") == Ok(0))
-    && (get(dict, "b") == Ok(1))
-    && (get(dict, "c") == Ok(2))
-    && (get(dict, "d") == Ok(3))
-    && (get(dict, "e") == Ok(4))
-    && (get(dict, "f") == Ok(5))
-    && (get(dict, "g") == Ok(6))
-    && (get(dict, "h") == Ok(7))
-    && (get(dict, "i") == Ok(8))
-    && (get(dict, "j") == Ok(9))
-    && (get(dict, "k") == Ok(10))
-    && (get(dict, "l") == Ok(11))
+    and (get(dict, "b") == Ok(1))
+    and (get(dict, "c") == Ok(2))
+    and (get(dict, "d") == Ok(3))
+    and (get(dict, "e") == Ok(4))
+    and (get(dict, "f") == Ok(5))
+    and (get(dict, "g") == Ok(6))
+    and (get(dict, "h") == Ok(7))
+    and (get(dict, "i") == Ok(8))
+    and (get(dict, "j") == Ok(9))
+    and (get(dict, "k") == Ok(10))
+    and (get(dict, "l") == Ok(11))
 
 # Force rehash.
 expect
@@ -1197,18 +1197,18 @@ expect
         |> insert("m", 12)
 
     (get(dict, "a") == Ok(0))
-    && (get(dict, "b") == Ok(1))
-    && (get(dict, "c") == Ok(2))
-    && (get(dict, "d") == Ok(3))
-    && (get(dict, "e") == Ok(4))
-    && (get(dict, "f") == Ok(5))
-    && (get(dict, "g") == Ok(6))
-    && (get(dict, "h") == Ok(7))
-    && (get(dict, "i") == Ok(8))
-    && (get(dict, "j") == Ok(9))
-    && (get(dict, "k") == Ok(10))
-    && (get(dict, "l") == Ok(11))
-    && (get(dict, "m") == Ok(12))
+    and (get(dict, "b") == Ok(1))
+    and (get(dict, "c") == Ok(2))
+    and (get(dict, "d") == Ok(3))
+    and (get(dict, "e") == Ok(4))
+    and (get(dict, "f") == Ok(5))
+    and (get(dict, "g") == Ok(6))
+    and (get(dict, "h") == Ok(7))
+    and (get(dict, "i") == Ok(8))
+    and (get(dict, "j") == Ok(9))
+    and (get(dict, "k") == Ok(10))
+    and (get(dict, "l") == Ok(11))
+    and (get(dict, "m") == Ok(12))
 
 expect
     empty({})
@@ -1227,7 +1227,7 @@ BadKey := U64 implements [
     ]
 
 hash_bad_key : hasher, BadKey -> hasher where hasher implements Hasher
-hash_bad_key = \hasher, _ -> Hash.hash(hasher, 0)
+hash_bad_key = |hasher, _| Hash.hash(hasher, 0)
 
 expect
     bad_keys = [
@@ -1250,11 +1250,11 @@ expect
         List.walk(
             bad_keys,
             Dict.empty({}),
-            \acc, k ->
+            |acc, k|
                 Dict.update(
                     acc,
                     k,
-                    \val ->
+                    |val|
                         when val is
                             Ok(p) -> Ok(Num.add_wrap(p, 1))
                             Err(Missing) -> Ok(0),
@@ -1265,8 +1265,8 @@ expect
         List.walk(
             bad_keys,
             Bool.true,
-            \acc, k ->
-                acc && Dict.contains(dict, k),
+            |acc, k|
+                acc and Dict.contains(dict, k),
         )
 
     all_inserted_correctly
@@ -1299,7 +1299,7 @@ LowLevelHasher := { initialized_seed : U64, state : U64 } implements [
 pseudo_seed : {} -> U64
 
 create_low_level_hasher : [PseudoRandSeed, WithSeed U64] -> LowLevelHasher
-create_low_level_hasher = \seed_opt ->
+create_low_level_hasher = |seed_opt|
     seed =
         when seed_opt is
             PseudoRandSeed -> pseudo_seed({})
@@ -1307,7 +1307,7 @@ create_low_level_hasher = \seed_opt ->
     @LowLevelHasher({ initialized_seed: init_seed(seed), state: seed })
 
 combine_state : LowLevelHasher, { a : U64, b : U64, seed : U64, length : U64 } -> LowLevelHasher
-combine_state = \@LowLevelHasher({ initialized_seed, state }), { a, b, seed, length } ->
+combine_state = |@LowLevelHasher({ initialized_seed, state }), { a, b, seed, length }|
     mum =
         a
         |> Num.bitwise_xor(wyp1)
@@ -1323,20 +1323,20 @@ combine_state = \@LowLevelHasher({ initialized_seed, state }), { a, b, seed, len
 
     @LowLevelHasher({ initialized_seed, state: wymix(state, hash) })
 
-init_seed = \seed ->
+init_seed = |seed|
     seed
     |> Num.bitwise_xor(wyp0)
     |> wymix(wyp1)
     |> Num.bitwise_xor(seed)
 
-complete = \@LowLevelHasher({ state }) -> state
+complete = |@LowLevelHasher({ state })| state
 
 # These implementations hash each value individually with the seed and then mix
 # the resulting hash with the state. There are other options that may be faster
 # like using the output of the last hash as the seed to the current hash.
 # I am simply not sure the tradeoffs here. Theoretically this method is more sound.
 # Either way, the performance will be similar and we can change this later.
-add_u8 = \@LowLevelHasher({ initialized_seed, state }), u8 ->
+add_u8 = |@LowLevelHasher({ initialized_seed, state }), u8|
     p0 = Num.to_u64(u8)
     a =
         Num.shift_left_by(p0, 16)
@@ -1346,7 +1346,7 @@ add_u8 = \@LowLevelHasher({ initialized_seed, state }), u8 ->
 
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b, seed: initialized_seed, length: 1 })
 
-add_u16 = \@LowLevelHasher({ initialized_seed, state }), u16 ->
+add_u16 = |@LowLevelHasher({ initialized_seed, state }), u16|
     p0 = Num.bitwise_and(u16, 0xFF) |> Num.to_u64
     p1 = Num.shift_right_zf_by(u16, 8) |> Num.to_u64
     a =
@@ -1357,13 +1357,13 @@ add_u16 = \@LowLevelHasher({ initialized_seed, state }), u16 ->
 
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b, seed: initialized_seed, length: 2 })
 
-add_u32 = \@LowLevelHasher({ initialized_seed, state }), u32 ->
+add_u32 = |@LowLevelHasher({ initialized_seed, state }), u32|
     p0 = Num.to_u64(u32)
     a = Num.shift_left_by(p0, 32) |> Num.bitwise_or(p0)
 
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b: a, seed: initialized_seed, length: 4 })
 
-add_u64 = \@LowLevelHasher({ initialized_seed, state }), u64 ->
+add_u64 = |@LowLevelHasher({ initialized_seed, state }), u64|
     p0 = Num.bitwise_and(0xFFFF_FFFF, u64)
     p1 = Num.shift_right_zf_by(u64, 32)
     a = Num.shift_left_by(p0, 32) |> Num.bitwise_or(p1)
@@ -1371,7 +1371,7 @@ add_u64 = \@LowLevelHasher({ initialized_seed, state }), u64 ->
 
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b, seed: initialized_seed, length: 8 })
 
-add_u128 = \@LowLevelHasher({ initialized_seed, state }), u128 ->
+add_u128 = |@LowLevelHasher({ initialized_seed, state }), u128|
     lower = u128 |> Num.to_u64
     upper = Num.shift_right_zf_by(u128, 64) |> Num.to_u64
     p0 = Num.bitwise_and(0xFFFF_FFFF, lower)
@@ -1384,7 +1384,7 @@ add_u128 = \@LowLevelHasher({ initialized_seed, state }), u128 ->
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a, b, seed: initialized_seed, length: 16 })
 
 add_bytes : LowLevelHasher, List U8 -> LowLevelHasher
-add_bytes = \@LowLevelHasher({ initialized_seed, state }), list ->
+add_bytes = |@LowLevelHasher({ initialized_seed, state }), list|
     length = List.len(list)
     abs =
         if length <= 16 then
@@ -1409,7 +1409,7 @@ add_bytes = \@LowLevelHasher({ initialized_seed, state }), list ->
     combine_state(@LowLevelHasher({ initialized_seed, state }), { a: abs.a, b: abs.b, seed: abs.seed, length })
 
 hash_bytes_helper48 : U64, U64, U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
-hash_bytes_helper48 = \seed, see1, see2, list, index, remaining ->
+hash_bytes_helper48 = |seed, see1, see2, list, index, remaining|
     new_seed = wymix(Num.bitwise_xor(wyr8(list, index), wyp1), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 8)), seed))
     new_see1 = wymix(Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 16)), wyp2), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 24)), see1))
     new_see2 = wymix(Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 32)), wyp3), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 40)), see2))
@@ -1428,7 +1428,7 @@ hash_bytes_helper48 = \seed, see1, see2, list, index, remaining ->
         { a: wyr8(list, (Num.sub_wrap(new_remaining, 16) |> Num.add_wrap(new_index))), b: wyr8(list, (Num.sub_wrap(new_remaining, 8) |> Num.add_wrap(new_index))), seed: final_seed }
 
 hash_bytes_helper16 : U64, List U8, U64, U64 -> { a : U64, b : U64, seed : U64 }
-hash_bytes_helper16 = \seed, list, index, remaining ->
+hash_bytes_helper16 = |seed, list, index, remaining|
     new_seed = wymix(Num.bitwise_xor(wyr8(list, index), wyp1), Num.bitwise_xor(wyr8(list, Num.add_wrap(index, 8)), seed))
     new_remaining = Num.sub_wrap(remaining, 16)
     new_index = Num.add_wrap(index, 16)
@@ -1448,13 +1448,13 @@ wyp3 : U64
 wyp3 = 0x589965cc75374cc3
 
 wymix : U64, U64 -> U64
-wymix = \a, b ->
+wymix = |a, b|
     { lower, upper } = wymum(a, b)
 
     Num.bitwise_xor(lower, upper)
 
 wymum : U64, U64 -> { lower : U64, upper : U64 }
-wymum = \a, b ->
+wymum = |a, b|
     r = Num.mul_wrap(Num.to_u128(a), Num.to_u128(b))
     lower = Num.to_u64(r)
     upper = Num.shift_right_zf_by(r, 64) |> Num.to_u64
@@ -1465,7 +1465,7 @@ wymum = \a, b ->
 
 # Get the next 8 bytes as a U64
 wyr8 : List U8, U64 -> U64
-wyr8 = \list, index ->
+wyr8 = |list, index|
     # With seamless slices and Num.from_bytes, this should be possible to make faster and nicer.
     # It would also deal with the fact that on big endian systems we want to invert the order here.
     # Without seamless slices, we would need from_bytes to take an index.
@@ -1486,7 +1486,7 @@ wyr8 = \list, index ->
 
 # Get the next 4 bytes as a U64 with some shifting.
 wyr4 : List U8, U64 -> U64
-wyr4 = \list, index ->
+wyr4 = |list, index|
     p1 = list_get_unsafe(list, index) |> Num.to_u64
     p2 = list_get_unsafe(list, Num.add_wrap(index, 1)) |> Num.to_u64
     p3 = list_get_unsafe(list, Num.add_wrap(index, 2)) |> Num.to_u64
@@ -1499,7 +1499,7 @@ wyr4 = \list, index ->
 # Get the next K bytes with some shifting.
 # K must be 3 or less.
 wyr3 : List U8, U64, U64 -> U64
-wyr3 = \list, index, k ->
+wyr3 = |list, index, k|
     # ((uint64_t)p[0])<<16)|(((uint64_t)p[k>>1])<<8)|p[k-1]
     p1 = list_get_unsafe(list, index) |> Num.to_u64
     p2 = list_get_unsafe(list, Num.shift_right_zf_by(k, 1) |> Num.add_wrap(index)) |> Num.to_u64
@@ -1704,7 +1704,7 @@ expect
     |> Dict.insert("Alice", 17)
     |> Dict.insert("Bob", 18)
     |> Dict.insert("Charlie", 19)
-    |> Dict.walk_until(Bool.false, \_, _, age -> if age >= 18 then Break(Bool.true) else Continue(Bool.false))
+    |> Dict.walk_until(Bool.false, |_, _, age| if age >= 18 then Break(Bool.true) else Continue(Bool.false))
     |> Bool.is_eq(Bool.true)
 
 expect
@@ -1713,7 +1713,7 @@ expect
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
-        |> Dict.keep_if(\(_k, v) -> v >= 18)
+        |> Dict.keep_if(|(_k, v)| v >= 18)
 
     d2 =
         Dict.empty({})
@@ -1728,7 +1728,7 @@ expect
         |> Dict.insert("Alice", 17)
         |> Dict.insert("Bob", 18)
         |> Dict.insert("Charlie", 19)
-        |> Dict.keep_if(\(k, _v) -> Str.ends_with(k, "e"))
+        |> Dict.keep_if(|(k, _v)| Str.ends_with(k, "e"))
 
     d2 =
         Dict.empty({})
@@ -1746,7 +1746,7 @@ expect
         |> Dict.insert(2, 2)
         |> Dict.insert(3, 3)
         |> Dict.insert(4, 4)
-        |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
+        |> Dict.keep_if(|(k, _v)| !(List.contains(keys_to_delete, k)))
 
     d2 =
         Dict.empty({})
@@ -1765,7 +1765,7 @@ expect
         |> Dict.insert(2, 2)
         |> Dict.insert(3, 3)
         |> Dict.insert(4, 4)
-        |> Dict.keep_if(\(k, _v) -> !(List.contains(keys_to_delete, k)))
+        |> Dict.keep_if(|(k, _v)| !(List.contains(keys_to_delete, k)))
 
     d2 =
         Dict.empty({})

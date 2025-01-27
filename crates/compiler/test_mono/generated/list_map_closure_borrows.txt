@@ -1,4 +1,4 @@
-procedure List.101 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen.6, #Derived_gen.7):
+procedure List.101 (Bool.21, Bool.22, Bool.23, Bool.24, Bool.25):
     joinpoint List.689 List.175 List.176 List.177 List.178 List.179:
         let List.691 : Int1 = CallByName Num.22 List.178 List.179;
         if List.691 then
@@ -13,8 +13,8 @@ procedure List.101 (#Derived_gen.3, #Derived_gen.4, #Derived_gen.5, #Derived_gen
             dec List.175;
             ret List.176;
     in
-    inc #Derived_gen.3;
-    jump List.689 #Derived_gen.3 #Derived_gen.4 #Derived_gen.5 #Derived_gen.6 #Derived_gen.7;
+    inc Bool.21;
+    jump List.689 Bool.21 Bool.22 Bool.23 Bool.24 Bool.25;
 
 procedure List.18 (List.172, List.173, List.174):
     let List.687 : U64 = 0i64;
@@ -71,12 +71,12 @@ procedure Num.51 (#Attr.2, #Attr.3):
     ret Num.285;
 
 procedure Str.16 (#Attr.2, #Attr.3):
-    let Str.246 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
-    ret Str.246;
+    let Str.385 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
+    ret Str.385;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.247 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.247;
+    let Str.386 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.386;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

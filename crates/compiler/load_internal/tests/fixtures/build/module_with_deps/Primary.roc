@@ -24,7 +24,7 @@ succeed = \x -> Identity(x)
 
 with_default = Res.with_default
 
-yay : Res.Res {} err
+yay : Res.Res {} _
 yay =
     ok = Ok("foo")
 

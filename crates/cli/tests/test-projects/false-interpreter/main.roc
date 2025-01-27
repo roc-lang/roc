@@ -457,21 +457,15 @@ pop_variable = \ctx ->
 
 is_digit : U8 -> Bool
 is_digit = \char ->
-    char
-    >= 0x30 # `0`
-    && char
-    <= 0x39 # `0`
+    char >= 0x30 # `0`
+    and char <= 0x39 # `0`
 
 is_whitespace : U8 -> Bool
 is_whitespace = \char ->
-    char
-    == 0xA # new line
-    || char
-    == 0xD # carriage return
-    || char
-    == 0x20 # space
-    || char
-    == 0x9 # tab
+    char == 0xA # new line
+    or char == 0xD # carriage return
+    or char == 0x20 # space
+    or char == 0x9 # tab
 
 end_unexpected = \err ->
     when err is

@@ -986,6 +986,10 @@ macro_rules! define_builtins {
                 self.to_zero_indexed() < $total
             }
 
+            pub const fn first_after_builtins() -> Self {
+                ModuleId::from_zero_indexed($total)
+            }
+
             $(
                 pub const $module_const: ModuleId = ModuleId::from_zero_indexed($module_id);
             )+
@@ -1355,16 +1359,14 @@ define_builtins! {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias
         1 BOOL_FALSE: "false"
         2 BOOL_TRUE: "true"
-        3 BOOL_AND: "and"
-        4 BOOL_OR: "or"
-        5 BOOL_NOT: "not"
-        6 BOOL_XOR: "xor"
-        7 BOOL_NEQ: "is_not_eq"
-        8 BOOL_EQ: "Eq" exposed_type=true
-        9 BOOL_IS_EQ: "is_eq"
-        10 BOOL_IS_EQ_IMPL: "bool_is_eq"
-        unexposed 11 BOOL_STRUCTURAL_EQ: "structural_eq"
-        unexposed 12 BOOL_STRUCTURAL_NOT_EQ: "structural_not_eq"
+        3 BOOL_NOT: "not"
+        4 BOOL_XOR: "xor"
+        5 BOOL_NEQ: "is_not_eq"
+        6 BOOL_EQ: "Eq" exposed_type=true
+        7 BOOL_IS_EQ: "is_eq"
+        8 BOOL_IS_EQ_IMPL: "bool_is_eq"
+        unexposed 9 BOOL_STRUCTURAL_EQ: "structural_eq"
+        unexposed 10 BOOL_STRUCTURAL_NOT_EQ: "structural_not_eq"
     }
     5 STR: "Str" => {
         0 STR_STR: "Str" exposed_apply_type=true // the Str.Str type alias
@@ -1377,8 +1379,8 @@ define_builtins! {
         7 STR_STARTS_WITH: "starts_with"
         8 STR_ENDS_WITH: "ends_with"
         9 STR_FROM_UTF8: "from_utf8"
-        10 STR_UT8_PROBLEM: "Utf8Problem" // the Utf8Problem type alias
-        11 STR_UT8_BYTE_PROBLEM: "Utf8ByteProblem" // the Utf8ByteProblem type alias
+        10 STR_FROM_UTF8_LOSSY: "from_utf8_lossy"
+        11 STR_UTF8_BYTE_PROBLEM: "Utf8Problem"
         12 STR_TO_UTF8: "to_utf8"
         13 STR_WALK_UTF8: "walk_utf8"
         14 STR_ALIAS_ANALYSIS_STATIC: "#aliasAnalysisStatic" // string with the static lifetime
@@ -1418,6 +1420,13 @@ define_builtins! {
         48 STR_RELEASE_EXCESS_CAPACITY: "release_excess_capacity"
         49 STR_DROP_PREFIX: "drop_prefix"
         50 STR_DROP_SUFFIX: "drop_suffix"
+        51 STR_WITH_ASCII_LOWERCASED: "with_ascii_lowercased"
+        52 STR_WITH_ASCII_UPPERCASED: "with_ascii_uppercased"
+        53 STR_CASELESS_ASCII_EQUALS: "caseless_ascii_equals"
+        54 STR_FROM_UTF16: "from_utf16"
+        55 STR_FROM_UTF16_LOSSY: "from_utf16_lossy"
+        56 STR_FROM_UTF32: "from_utf32"
+        57 STR_FROM_UTF32_LOSSY: "from_utf32_lossy"
     }
     6 LIST: "List" => {
         0 LIST_LIST: "List" exposed_apply_type=true // the List.List type alias

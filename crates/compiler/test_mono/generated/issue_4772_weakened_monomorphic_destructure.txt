@@ -1,10 +1,10 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.24;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.22 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.22;
 
 procedure Decode.24 (Decode.105):
     ret Decode.105;
@@ -19,30 +19,30 @@ procedure Decode.26 (Decode.109, Decode.110):
     ret Decode.126;
 
 procedure Str.12 (#Attr.2):
-    let Str.255 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.255;
+    let Str.394 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.394;
 
-procedure Str.27 (Str.84):
-    let Str.246 : [C {}, C I64] = CallByName Str.66 Str.84;
-    ret Str.246;
+procedure Str.27 (Str.185):
+    let Str.385 : [C {}, C I64] = CallByName Str.74 Str.185;
+    ret Str.385;
 
 procedure Str.42 (#Attr.2):
-    let Str.254 : {I64, U8} = lowlevel StrToNum #Attr.2;
-    ret Str.254;
+    let Str.393 : {I64, U8} = lowlevel StrToNum #Attr.2;
+    ret Str.393;
 
-procedure Str.66 (Str.191):
-    let Str.192 : {I64, U8} = CallByName Str.42 Str.191;
-    let Str.252 : U8 = StructAtIndex 1 Str.192;
-    let Str.253 : U8 = 0i64;
-    let Str.249 : Int1 = CallByName Bool.11 Str.252 Str.253;
-    if Str.249 then
-        let Str.251 : I64 = StructAtIndex 0 Str.192;
-        let Str.250 : [C {}, C I64] = TagId(1) Str.251;
-        ret Str.250;
+procedure Str.74 (Str.292):
+    let Str.293 : {I64, U8} = CallByName Str.42 Str.292;
+    let Str.391 : U8 = StructAtIndex 1 Str.293;
+    let Str.392 : U8 = 0i64;
+    let Str.388 : Int1 = CallByName Bool.9 Str.391 Str.392;
+    if Str.388 then
+        let Str.390 : I64 = StructAtIndex 0 Str.293;
+        let Str.389 : [C {}, C I64] = TagId(1) Str.390;
+        ret Str.389;
     else
-        let Str.248 : {} = Struct {};
-        let Str.247 : [C {}, C I64] = TagId(0) Str.248;
-        ret Str.247;
+        let Str.387 : {} = Struct {};
+        let Str.386 : [C {}, C I64] = TagId(0) Str.387;
+        ret Str.386;
 
 procedure Test.103 ():
     let Test.101 : [C Str, C {List U8, I64}] = CallByName Test.19;
@@ -50,7 +50,7 @@ procedure Test.103 ():
     let Test.116 : I64 = -1234i64;
     let Test.114 : {List U8, I64} = Struct {Test.115, Test.116};
     let Test.113 : [C Str, C {List U8, I64}] = TagId(1) Test.114;
-    let Test.112 : Int1 = CallByName Bool.11 Test.101 Test.113;
+    let Test.112 : Int1 = CallByName Bool.9 Test.101 Test.113;
     dec Test.114;
     expect Test.112;
     dec Test.101;

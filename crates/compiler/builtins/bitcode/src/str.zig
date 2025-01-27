@@ -2,6 +2,7 @@ const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
+const ascii = std.ascii;
 const mem = std.mem;
 const unicode = std.unicode;
 const testing = std.testing;
@@ -178,7 +179,7 @@ pub const RocStr = extern struct {
 
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self.bytes == other.bytes and self.length == other.length and self.capacity_or_alloc_ptr == other.capacity_or_alloc_ptr) {
+        if (self.bytes == other.bytes and self.length == other.length) {
             return true;
         }
 
@@ -370,11 +371,17 @@ pub const RocStr = extern struct {
     }
 
     fn refcount(self: RocStr) usize {
-        if ((self.getCapacity() == 0 and !self.isSeamlessSlice()) or self.isSmallStr()) {
+        const is_seamless_slice = self.isSeamlessSlice();
+        if ((self.getCapacity() == 0 and !is_seamless_slice) or self.isSmallStr()) {
             return 1;
         }
 
-        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.bytes)));
+        const data_ptr = if (is_seamless_slice)
+            self.getAllocationPtr()
+        else
+            self.bytes;
+
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
         return (ptr - 1)[0];
     }
 
@@ -609,16 +616,6 @@ pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
 
 fn initFromSmallStr(slice_bytes: [*]u8, len: usize, _: usize) RocStr {
     return RocStr.init(slice_bytes, len);
-}
-
-// The alloc_ptr must already be shifted to be ready for storing in a seamless slice.
-fn initFromBigStr(slice_bytes: [*]u8, len: usize, alloc_ptr: usize) RocStr {
-    // Here we can make seamless slices instead of copying to a new small str.
-    return RocStr{
-        .bytes = slice_bytes,
-        .length = len | SEAMLESS_SLICE_BIT,
-        .capacity_or_alloc_ptr = alloc_ptr,
-    };
 }
 
 fn strSplitOnHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
@@ -1449,6 +1446,105 @@ pub fn fromUtf8C(
     return fromUtf8(list, update_mode);
 }
 
+const UNICODE_REPLACEMENT: u21 = 0xfffd;
+
+const Utf8Iterator = struct {
+    bytes: []u8,
+    i: usize,
+
+    pub fn init(list: RocList) Utf8Iterator {
+        const bytes = @as([*]u8, @ptrCast(list.bytes))[0..list.length];
+        return Utf8Iterator{
+            .bytes = bytes,
+            .i = 0,
+        };
+    }
+
+    pub fn nextLossy(it: *Utf8Iterator) ?u32 {
+        if (it.bytes.len <= it.i) {
+            return null;
+        }
+
+        const rest = it.bytes[it.i..];
+        const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
+            // invalid start byte
+            it.i += 1;
+            return UNICODE_REPLACEMENT;
+        };
+
+        for (1..n) |i| {
+            if (rest.len == i) {
+                // unexpected end
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+            if (rest[i] < 0x70) {
+                // expected continuation byte (>= 0x70)
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+        }
+
+        it.i += n;
+        return unicode.utf8Decode(rest[0..n]) catch {
+            return UNICODE_REPLACEMENT;
+        };
+    }
+
+    pub fn reset(it: *Utf8Iterator) void {
+        it.i = 0;
+    }
+};
+
+fn codepointSeqLengthLossy(c: u32) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8CodepointSequenceLength(@intCast(c))) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable;
+}
+
+fn utf8EncodeLossy(c: u32, out: []u8) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8Encode(@intCast(c), out)) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+}
+
+pub fn fromUtf8Lossy(
+    list: RocList,
+) callconv(.C) RocStr {
+    if (list.len() == 0) {
+        return RocStr.empty();
+    }
+
+    // PERF: we could try to reuse the input list if it's already valid utf-8, similar to fromUtf8
+
+    var it = Utf8Iterator.init(list);
+
+    var enc_len: usize = 0;
+    while (it.nextLossy()) |c| {
+        enc_len += codepointSeqLengthLossy(c);
+    }
+
+    var str = RocStr.allocate(enc_len);
+    const ptr = str.asU8ptrMut()[0..enc_len];
+    var end_index: usize = 0;
+    it.reset();
+    while (it.nextLossy()) |c| {
+        end_index += utf8EncodeLossy(c, ptr[end_index..]);
+    }
+    str.setLen(end_index);
+    return str;
+}
+
 pub fn fromUtf8(
     list: RocList,
     update_mode: UpdateMode,
@@ -1667,6 +1763,17 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     try expectOk(str_result);
 }
 
+test "fromUtf8Lossy: ascii, emoji" {
+    var list = RocList.fromSlice(u8, "r💖c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
 fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
     const str_ptr = @as([*]u8, @ptrCast(list.bytes));
     const len = list.length;
@@ -1763,6 +1870,66 @@ test "validateUtf8Bytes: surrogate halves" {
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+test "fromUtf8Lossy: invalid start byte" {
+    var list = RocList.fromSlice(u8, "r\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: overlong encoding" {
+    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: expected continuation" {
+    var list = RocList.fromSlice(u8, "r\xCFc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: unexpected end" {
+    var list = RocList.fromSlice(u8, "r\xCF", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: encodes surrogate" {
+    // 0xd83d == 0b1101_1000_0011_1101
+    //             wwww xxxx yyyy zzzz
+    // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
+    //           1110_wwww   10_xxxx_yy   10_yy_zzzz
+    //         0xED        0x90         0xBD
+    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
 }
 
 fn isWhitespace(codepoint: u21) bool {
@@ -1966,6 +2133,194 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     }
 
     return byte_count;
+}
+
+// Str.with_ascii_lowercased
+pub fn strWithAsciiLowercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toLower(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiLowercased: small str" {
+    const original = RocStr.fromSlice("cOFFÉ");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: non small str" {
+    const original = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: seamless slice" {
+    const l = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("offÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+// Str.with_ascii_uppercased
+pub fn strWithAsciiUppercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toUpper(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiUppercased: small str" {
+    const original = RocStr.fromSlice("coffé");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: non small str" {
+    const original = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
+    if (self.bytes == other.bytes and self.length == other.length) {
+        return true;
+    }
+
+    return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
+}
+
+test "caselessAsciiEquals: same str" {
+    const str1 = RocStr.fromSlice("coFféÉ");
+    defer str1.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str1);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: differently capitalized non-ascii char" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("coffÉ");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(!are_equal);
+}
+
+test "caselessAsciiEquals: small str" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: non small str" {
+    const str1 = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer str1.decref();
+    try expect(!str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const str1 = substringUnsafeC(l, 1, l.len() - 1);
+    defer str1.decref();
+
+    try expect(str1.isSeamlessSlice());
+
+    const str2 = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
 }
 
 fn rcNone(_: ?[*]u8) callconv(.C) void {}

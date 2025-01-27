@@ -14,6 +14,7 @@ pub enum LowLevel {
     StrCountUtf8Bytes,
     StrFromInt,
     StrFromUtf8,
+    StrFromUtf8Lossy,
     StrToUtf8,
     StrRepeat,
     StrFromFloat,
@@ -26,6 +27,9 @@ pub enum LowLevel {
     StrReserve,
     StrWithCapacity,
     StrReleaseExcessCapacity,
+    StrWithAsciiLowercased,
+    StrWithAsciiUppercased,
+    StrCaselessAsciiEquals,
     ListLenUsize,
     ListLenU64,
     ListWithCapacity,
@@ -109,8 +113,6 @@ pub enum LowLevel {
     NumF64FromParts,
     Eq,
     NotEq,
-    And,
-    Or,
     Not,
     Hash,
     PtrCast,
@@ -256,6 +258,7 @@ map_symbol_to_lowlevel! {
     StrSplitOn <= STR_SPLIT_ON;
     StrCountUtf8Bytes <= STR_COUNT_UTF8_BYTES;
     StrFromUtf8 <= STR_FROM_UTF8_LOWLEVEL;
+    StrFromUtf8Lossy <= STR_FROM_UTF8_LOSSY;
     StrToUtf8 <= STR_TO_UTF8;
     StrRepeat <= STR_REPEAT;
     StrTrim <= STR_TRIM;
@@ -267,6 +270,9 @@ map_symbol_to_lowlevel! {
     StrToNum <= STR_TO_NUM;
     StrWithCapacity <= STR_WITH_CAPACITY;
     StrReleaseExcessCapacity <= STR_RELEASE_EXCESS_CAPACITY;
+    StrWithAsciiLowercased <= STR_WITH_ASCII_LOWERCASED;
+    StrWithAsciiUppercased <= STR_WITH_ASCII_UPPERCASED;
+    StrCaselessAsciiEquals <= STR_CASELESS_ASCII_EQUALS;
     ListLenU64 <= LIST_LEN_U64;
     ListLenUsize <= LIST_LEN_USIZE;
     ListGetCapacity <= LIST_CAPACITY;
@@ -343,8 +349,6 @@ map_symbol_to_lowlevel! {
     NumF64FromParts <= NUM_F64_FROM_PARTS;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
-    And <= BOOL_AND;
-    Or <= BOOL_OR;
     Not <= BOOL_NOT;
     Unreachable <= LIST_UNREACHABLE;
     DictPseudoSeed <= DICT_PSEUDO_SEED;

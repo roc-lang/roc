@@ -1,4 +1,4 @@
-maybeEarlyReturn = \x ->
+maybeEarlyReturn = |x|
     y =
         when x is
             5 ->

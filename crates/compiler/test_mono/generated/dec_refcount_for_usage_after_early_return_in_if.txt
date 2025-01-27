@@ -1,6 +1,6 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.24 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.24;
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.22 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.22;
 
 procedure Num.19 (#Attr.2, #Attr.3):
     let Num.285 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
@@ -11,8 +11,8 @@ procedure Num.96 (#Attr.2):
     ret Num.284;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.247 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.247;
+    let Str.386 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.386;
 
 procedure Test.1 (Test.2):
     let Test.3 : Str = CallByName Num.96 Test.2;
@@ -25,7 +25,7 @@ procedure Test.1 (Test.2):
         ret Test.8;
     in
     let Test.22 : I64 = 1i64;
-    let Test.20 : Int1 = CallByName Bool.11 Test.2 Test.22;
+    let Test.20 : Int1 = CallByName Bool.9 Test.2 Test.22;
     if Test.20 then
         dec Test.3;
         let Test.21 : Str = "early 1";
@@ -38,7 +38,7 @@ procedure Test.1 (Test.2):
             jump Test.12 Test.11;
         in
         let Test.17 : I64 = 2i64;
-        let Test.15 : Int1 = CallByName Bool.11 Test.2 Test.17;
+        let Test.15 : Int1 = CallByName Bool.9 Test.2 Test.17;
         if Test.15 then
             dec Test.3;
             dec Test.5;

@@ -1549,6 +1549,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,
         ListSortWith => RC::Rc,
+        StrWithAsciiLowercased => RC::Rc,
+        StrWithAsciiUppercased => RC::Rc,
+        StrCaselessAsciiEquals => RC::NoRc,
 
         ListAppendUnsafe
         | ListReserve
@@ -1562,7 +1565,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
         Eq | NotEq => RC::NoRc,
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
         | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
@@ -1603,6 +1606,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,
+        StrFromUtf8Lossy => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
         StrFromInt | StrFromFloat => RC::NoRc,

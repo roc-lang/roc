@@ -738,7 +738,7 @@ fn parse_stmt_operator_chain<'a>(
                     | Expr::Apply(
                         Loc {
                             region: _,
-                            value: Expr::Tag(..)
+                            value: Expr::Tag(_)
                         },
                         &[],
                         _
@@ -1902,6 +1902,10 @@ fn parse_stmt_after_apply<'a>(
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
     let before_op = state.clone();
     match loc(operator()).parse(arena, state.clone(), call_min_indent) {
+        Err((MadeProgress, EExpr::BadOperator("|", _))) => {
+            let expr = parse_expr_final(expr_state, arena);
+            return Ok((MadeProgress, Stmt::Expr(expr), state));
+        }
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, loc_op, state)) => {
             expr_state.consume_spaces(arena);
@@ -1929,43 +1933,6 @@ fn parse_stmt_after_apply<'a>(
         }
     }
 }
-
-// #[allow(clippy::too_many_arguments)]
-// fn parse_expr_after_apply<'a>(
-//     arena: &'a Bump,
-//     state: State<'a>,
-//     min_indent: u32,
-//     call_min_indent: u32,
-//     check_for_arrow: CheckForArrow,
-//     check_for_defs: bool,
-//     mut expr_state: ExprState<'a>,
-//     before_op: State<'a>,
-//     initial_state: State<'a>,
-// ) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
-//     match loc(bin_op(check_for_defs)).parse(arena, state.clone(), call_min_indent) {
-//         Err((MadeProgress, f)) => Err((MadeProgress, f)),
-//         Ok((_, loc_op, state)) => {
-//             expr_state.consume_spaces(arena);
-//             let initial_state = before_op;
-//             parse_expr_operator(
-//                 arena,
-//                 state,
-//                 min_indent,
-//                 call_min_indent,
-//                 options,
-//                 check_for_defs,
-//                 expr_state,
-//                 loc_op,
-//                 initial_state,
-//             )
-//         }
-//         Err((NoProgress, _)) => {
-//             let expr = parse_expr_final(expr_state, arena);
-//             // roll back space parsing
-//             Ok((MadeProgress, expr, initial_state))
-//         }
-//     }
-// }
 
 #[allow(clippy::too_many_arguments)]
 fn parse_apply_arg<'a>(
@@ -2336,47 +2303,41 @@ pub fn parse_top_level_defs<'a>(
 
 fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     one_of!(
-        closure_new_syntax_help(),
+        closure_new_syntax_help(check_for_arrow),
         closure_old_syntax_help(check_for_arrow),
     )
 }
 
-fn closure_new_syntax_help<'a>() -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
-    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        let parser = map_with_arena(
-            indented_seq_skip_first(
-                error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
-                and(
-                    sep_by1_e(
-                        byte_indent(b',', EClosure::Comma),
-                        space0_around_ee(
-                            specialize_err(EClosure::Pattern, closure_param()),
-                            EClosure::IndentArg,
-                            EClosure::IndentArrow,
-                        ),
-                        EClosure::Arg,
+fn closure_new_syntax_help<'a>(
+    check_for_arrow: CheckForArrow,
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+    map_with_arena(
+        skip_first(
+            error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
+            reset_min_indent(and(
+                sep_by1_e(
+                    byte_indent(b',', EClosure::Comma),
+                    space0_around_ee(
+                        specialize_err(EClosure::Pattern, closure_param()),
+                        EClosure::IndentArg,
+                        EClosure::IndentArrow,
                     ),
-                    skip_first(
-                        // Parse the -> which separates params from body
-                        byte(b'|', EClosure::Bar),
-                        // Parse the body
-                        block(
-                            CheckForArrow(false),
-                            true,
-                            EClosure::IndentBody,
-                            EClosure::Body,
-                        ),
-                    ),
+                    EClosure::Arg,
                 ),
-            ),
-            |arena: &'a Bump, (params, body)| {
-                let params: Vec<'a, Loc<Pattern<'a>>> = params;
-                let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
-                Expr::Closure(params, arena.alloc(body))
-            },
-        );
-        parser.parse(arena, state, min_indent)
-    }
+                skip_first(
+                    // Parse the -> which separates params from body
+                    byte(b'|', EClosure::Bar),
+                    // Parse the body
+                    block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
+                ),
+            )),
+        ),
+        |arena: &'a Bump, (params, body)| {
+            let params: Vec<'a, Loc<Pattern<'a>>> = params;
+            let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
+            Expr::Closure(params, arena.alloc(body))
+        },
+    )
 }
 
 fn closure_old_syntax_help<'a>(
@@ -2385,12 +2346,12 @@ fn closure_old_syntax_help<'a>(
     // closure_help_help(options)
     map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq_skip_first(
+        skip_first(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
-            and(
+            reset_min_indent(and(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
@@ -2408,7 +2369,7 @@ fn closure_old_syntax_help<'a>(
                     // Parse the body
                     block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
                 ),
-            ),
+            )),
         ),
         |arena: &'a Bump, (params, body)| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
@@ -3073,6 +3034,11 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
                         break;
                     }
 
+                    if new_state.bytes().starts_with(b"|") {
+                        state = state_before_space;
+                        break;
+                    }
+
                     return Err((
                         MadeProgress,
                         wrap_error(arena.alloc(EExpr::BadExprEnd(state.pos())), state.pos()),
@@ -3424,7 +3390,7 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
 }
 
 fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>) -> bool {
-    match pat {
+    match pat.without_spaces() {
         Pattern::Apply(func, args) => {
             if !matches!(func.value, Pattern::Tag(tag) if header.name.value == tag) {
                 return false;
@@ -3433,7 +3399,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
                 return false;
             }
             for (arg, var) in (*args).iter().zip(header.vars) {
-                match (arg.value, var.value) {
+                match (arg.value.without_spaces(), var.value.without_spaces()) {
                     (Pattern::Identifier { ident: left }, TypeVar::Identifier(right)) => {
                         if left != right {
                             return false;
@@ -3444,7 +3410,7 @@ fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>)
             }
             true
         }
-        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == *tag,
+        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == tag,
         _ => false,
     }
 }
@@ -4025,9 +3991,10 @@ enum OperatorOrDef {
 }
 
 fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
-    move |_, state: State<'a>, min_indent| {
+    (move |arena: &'a Bump, state: State<'a>, min_indent| {
         let start = state.pos();
-        let (_, op, state) = operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent)?;
+        let (_, op, state) =
+            operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)?;
         let err_progress = if check_for_defs {
             MadeProgress
         } else {
@@ -4043,16 +4010,20 @@ fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
                 Err((err_progress, EExpr::BadOperator(":=", start)))
             }
         }
-    }
+    })
+    .trace("bin_op")
 }
 
 fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
-    (move |_, state, min_indent| operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent))
-        .trace("operator")
+    (move |arena: &'a Bump, state, min_indent| {
+        operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)
+    })
+    .trace("operator")
 }
 
 #[inline(always)]
 fn operator_help<'a, F, G, E>(
+    arena: &'a Bump,
     to_expectation: F,
     to_error: G,
     mut state: State<'a>,
@@ -4063,6 +4034,21 @@ where
     G: Fn(&'a str, Position) -> E,
     E: 'a,
 {
+    let and_or = either(
+        parser::keyword(keyword::AND, EExpr::End),
+        parser::keyword(keyword::OR, EExpr::End),
+    );
+
+    match and_or.parse(arena, state.clone(), min_indent) {
+        Ok((MadeProgress, Either::First(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::And), state))
+        }
+        Ok((MadeProgress, Either::Second(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::Or), state))
+        }
+        _ => {}
+    }
+
     let chomped = chomp_ops(state.bytes());
 
     macro_rules! good {
@@ -4097,6 +4083,7 @@ where
 
             good!(OperatorOrDef::BinOp(BinOp::Minus), 1)
         }
+        "?" => good!(OperatorOrDef::BinOp(BinOp::SingleQuestion), 1),
         "*" => good!(OperatorOrDef::BinOp(BinOp::Star), 1),
         "/" => good!(OperatorOrDef::BinOp(BinOp::Slash), 1),
         "%" => good!(OperatorOrDef::BinOp(BinOp::Percent), 1),
@@ -4118,6 +4105,7 @@ where
         "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
         "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
         "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
+        "|" => Err((NoProgress, to_error("|", state.pos()))),
         "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`
