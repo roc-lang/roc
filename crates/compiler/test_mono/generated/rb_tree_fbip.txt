@@ -30,13 +30,13 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                 let Test.18 : I64 = UnionAtIndex (Id 1) (Index 1) Test.9;
                 let Test.19 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.9;
                 let Test.17 : I32 = UnionAtIndex (Id 1) (Index 3) Test.9;
-                joinpoint Bool.135 Bool.139:
+                joinpoint Bool.143 Bool.147:
                     let Test.179 : Int1 = CallByName Num.22 Test.10 Test.17;
                     if Test.179 then
-                        joinpoint Test.238 Bool.187:
+                        joinpoint Test.238 Bool.195:
                             let Test.232 : Int1 = false;
                             let Bool.31 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.187 UpdateModeId { id: 56 } TagId(1) Bool.31 Test.18 Test.19 Test.17 Test.232;
+                            let Test.231 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.195 UpdateModeId { id: 56 } TagId(1) Bool.31 Test.18 Test.19 Test.17 Test.232;
                             let Bool.32 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.231;
                             let Bool.33 : {} = lowlevel PtrStore Bool.27 Test.231;
                             jump Bool.26 Test.16 Test.10 Test.11 Bool.32 Bool.28;
@@ -50,7 +50,7 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                             let Test.239 : Int1 = lowlevel Eq Test.235 Test.234;
                             if Test.239 then
                                 let Test.180 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.16 Test.10 Test.11;
-                                joinpoint Test.199 Bool.208:
+                                joinpoint Test.199 Bool.216:
                                     let Test.198 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                     let Test.20 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.198;
                                     inc Test.20;
@@ -61,55 +61,55 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                     let Test.25 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                     let Test.26 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                     let Test.24 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                    joinpoint Bool.93 Bool.210 Bool.211 Bool.212:
+                                    joinpoint Bool.97 Bool.218 Bool.219 Bool.220:
                                         let Test.186 : Int1 = false;
-                                        let Test.183 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.212 UpdateModeId { id: 85 } TagId(1) Test.20 Test.22 Test.23 Test.21 Test.186;
+                                        let Test.183 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.220 UpdateModeId { id: 85 } TagId(1) Test.20 Test.22 Test.23 Test.21 Test.186;
                                         let Test.185 : Int1 = false;
-                                        let Test.184 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.211 UpdateModeId { id: 84 } TagId(1) Test.26 Test.18 Test.19 Test.17 Test.185;
+                                        let Test.184 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.219 UpdateModeId { id: 84 } TagId(1) Test.26 Test.18 Test.19 Test.17 Test.185;
                                         let Test.182 : Int1 = true;
-                                        let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.210 UpdateModeId { id: 83 } TagId(1) Test.183 Test.25 Test.184 Test.24 Test.182;
+                                        let Test.181 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.218 UpdateModeId { id: 83 } TagId(1) Test.183 Test.25 Test.184 Test.24 Test.182;
                                         let Bool.35 : {} = lowlevel PtrStore Bool.27 Test.181;
                                         let Bool.34 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                         ret Bool.34;
                                     in
-                                    let Bool.94 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                    if Bool.94 then
-                                        let Bool.213 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.198, id: UpdateModeId { id: 86 } };
-                                        jump Bool.93 Bool.208 Bool.213 Test.180;
+                                    let Bool.98 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                    if Bool.98 then
+                                        let Bool.221 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.198, id: UpdateModeId { id: 86 } };
+                                        jump Bool.97 Bool.216 Bool.221 Test.180;
                                     else
                                         inc Test.26;
                                         decref Test.180;
-                                        let Bool.214 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                        jump Bool.93 Bool.214 Bool.214 Bool.208;
+                                        let Bool.222 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                        jump Bool.97 Bool.222 Bool.222 Bool.216;
                                 in
                                 let Test.228 : U8 = 1i64;
                                 let Test.229 : U8 = GetTagId Test.180;
                                 let Test.230 : Int1 = lowlevel Eq Test.228 Test.229;
                                 if Test.230 then
-                                    joinpoint Test.225 Bool.222:
-                                        joinpoint Test.216 Bool.223:
+                                    joinpoint Test.225 Bool.230:
+                                        joinpoint Test.216 Bool.231:
                                             let Test.46 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                             let Test.48 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                             let Test.49 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                             let Test.47 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                            joinpoint Bool.87 Bool.224 Bool.225:
+                                            joinpoint Bool.91 Bool.232 Bool.233:
                                                 let Test.196 : Int1 = true;
-                                                let Test.195 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.225 UpdateModeId { id: 100 } TagId(1) Test.46 Test.48 Test.49 Test.47 Test.196;
+                                                let Test.195 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.233 UpdateModeId { id: 100 } TagId(1) Test.46 Test.48 Test.49 Test.47 Test.196;
                                                 let Test.194 : Int1 = false;
-                                                let Test.193 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.224 UpdateModeId { id: 99 } TagId(1) Test.195 Test.18 Test.19 Test.17 Test.194;
+                                                let Test.193 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.232 UpdateModeId { id: 99 } TagId(1) Test.195 Test.18 Test.19 Test.17 Test.194;
                                                 let Bool.37 : {} = lowlevel PtrStore Bool.27 Test.193;
                                                 let Bool.36 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                                 ret Bool.36;
                                             in
-                                            let Bool.88 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                            if Bool.88 then
-                                                jump Bool.87 Bool.223 Test.180;
+                                            let Bool.92 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                            if Bool.92 then
+                                                jump Bool.91 Bool.231 Test.180;
                                             else
                                                 inc Test.46;
                                                 inc Test.49;
                                                 decref Test.180;
-                                                let Bool.226 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                jump Bool.87 Bool.226 Bool.223;
+                                                let Bool.234 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                                jump Bool.91 Bool.234 Bool.231;
                                         in
                                         let Test.213 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                         let Test.214 : U8 = 1i64;
@@ -121,11 +121,11 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                             let Test.212 : Int1 = true;
                                             let Test.217 : Int1 = lowlevel Eq Test.212 Test.211;
                                             if Test.217 then
-                                                jump Test.199 Bool.222;
+                                                jump Test.199 Bool.230;
                                             else
-                                                jump Test.216 Bool.222;
+                                                jump Test.216 Bool.230;
                                         else
-                                            jump Test.216 Bool.222;
+                                            jump Test.216 Bool.230;
                                     in
                                     let Test.222 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
                                     let Test.223 : U8 = 1i64;
@@ -137,7 +137,7 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                         let Test.221 : Int1 = true;
                                         let Test.226 : Int1 = lowlevel Eq Test.221 Test.220;
                                         if Test.226 then
-                                            joinpoint Test.207 Bool.227:
+                                            joinpoint Test.207 Bool.235:
                                                 let Test.33 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                                 let Test.35 : I64 = UnionAtIndex (Id 1) (Index 1) Test.180;
                                                 let Test.200 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.180;
@@ -148,26 +148,26 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                                 inc Test.39;
                                                 let Test.37 : I32 = UnionAtIndex (Id 1) (Index 3) Test.200;
                                                 let Test.34 : I32 = UnionAtIndex (Id 1) (Index 3) Test.180;
-                                                joinpoint Bool.91 Bool.229 Bool.230 Bool.231:
+                                                joinpoint Bool.95 Bool.237 Bool.238 Bool.239:
                                                     let Test.192 : Int1 = false;
-                                                    let Test.189 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.231 UpdateModeId { id: 107 } TagId(1) Test.33 Test.35 Test.36 Test.34 Test.192;
+                                                    let Test.189 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.239 UpdateModeId { id: 107 } TagId(1) Test.33 Test.35 Test.36 Test.34 Test.192;
                                                     let Test.191 : Int1 = false;
-                                                    let Test.190 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.230 UpdateModeId { id: 106 } TagId(1) Test.39 Test.18 Test.19 Test.17 Test.191;
+                                                    let Test.190 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.238 UpdateModeId { id: 106 } TagId(1) Test.39 Test.18 Test.19 Test.17 Test.191;
                                                     let Test.188 : Int1 = true;
-                                                    let Test.187 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.229 UpdateModeId { id: 105 } TagId(1) Test.189 Test.38 Test.190 Test.37 Test.188;
+                                                    let Test.187 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.237 UpdateModeId { id: 105 } TagId(1) Test.189 Test.38 Test.190 Test.37 Test.188;
                                                     let Bool.39 : {} = lowlevel PtrStore Bool.27 Test.187;
                                                     let Bool.38 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                                     ret Bool.38;
                                                 in
-                                                let Bool.92 : Int1 = lowlevel RefCountIsUnique Test.180;
-                                                if Bool.92 then
-                                                    let Bool.232 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.200, id: UpdateModeId { id: 108 } };
-                                                    jump Bool.91 Bool.227 Bool.232 Test.180;
+                                                let Bool.96 : Int1 = lowlevel RefCountIsUnique Test.180;
+                                                if Bool.96 then
+                                                    let Bool.240 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.200, id: UpdateModeId { id: 108 } };
+                                                    jump Bool.95 Bool.235 Bool.240 Test.180;
                                                 else
                                                     inc Test.33;
                                                     decref Test.180;
-                                                    let Bool.233 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                    jump Bool.91 Bool.233 Bool.233 Bool.227;
+                                                    let Bool.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                                    jump Bool.95 Bool.241 Bool.241 Bool.235;
                                             in
                                             let Test.204 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.180;
                                             let Test.205 : U8 = 1i64;
@@ -179,33 +179,33 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                                 let Test.203 : Int1 = true;
                                                 let Test.208 : Int1 = lowlevel Eq Test.203 Test.202;
                                                 if Test.208 then
-                                                    jump Test.199 Bool.139;
+                                                    jump Test.199 Bool.147;
                                                 else
-                                                    jump Test.207 Bool.139;
+                                                    jump Test.207 Bool.147;
                                             else
-                                                jump Test.207 Bool.139;
+                                                jump Test.207 Bool.147;
                                         else
-                                            jump Test.225 Bool.139;
+                                            jump Test.225 Bool.147;
                                     else
-                                        jump Test.225 Bool.139;
+                                        jump Test.225 Bool.147;
                                 else
-                                    decref Bool.139;
+                                    decref Bool.147;
                                     dec Test.19;
                                     let Test.197 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                     let Bool.41 : {} = lowlevel PtrStore Bool.27 Test.197;
                                     let Bool.40 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                     ret Bool.40;
                             else
-                                jump Test.238 Bool.139;
+                                jump Test.238 Bool.147;
                         else
-                            jump Test.238 Bool.139;
+                            jump Test.238 Bool.147;
                     else
                         let Test.117 : Int1 = CallByName Num.24 Test.10 Test.17;
                         if Test.117 then
-                            joinpoint Test.176 Bool.309:
+                            joinpoint Test.176 Bool.317:
                                 let Test.170 : Int1 = false;
                                 let Bool.42 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.309 UpdateModeId { id: 196 } TagId(1) Test.16 Test.18 Bool.42 Test.17 Test.170;
+                                let Test.169 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.317 UpdateModeId { id: 196 } TagId(1) Test.16 Test.18 Bool.42 Test.17 Test.170;
                                 let Bool.43 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.169;
                                 let Bool.44 : {} = lowlevel PtrStore Bool.27 Test.169;
                                 jump Bool.26 Test.19 Test.10 Test.11 Bool.43 Bool.28;
@@ -219,9 +219,9 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                 let Test.177 : Int1 = lowlevel Eq Test.173 Test.172;
                                 if Test.177 then
                                     inc Test.19;
-                                    let Bool.310 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 197 } };
+                                    let Bool.318 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.16, id: UpdateModeId { id: 197 } };
                                     let Test.118 : [<rnu>C *self I64 *self I32 Int1, <null>] = CallByName Test.3 Test.19 Test.10 Test.11;
-                                    joinpoint Test.137 Bool.343 Bool.344:
+                                    joinpoint Test.137 Bool.351 Bool.352:
                                         let Test.136 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                         let Test.57 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.136;
                                         inc Test.57;
@@ -232,56 +232,56 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                         let Test.62 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                         let Test.63 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                         let Test.61 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                        joinpoint Bool.133 Bool.347 Bool.348 Bool.349:
+                                        joinpoint Bool.141 Bool.355 Bool.356 Bool.357:
                                             let Test.124 : Int1 = false;
-                                            let Test.121 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.349 UpdateModeId { id: 242 } TagId(1) Test.57 Test.59 Test.60 Test.58 Test.124;
+                                            let Test.121 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.357 UpdateModeId { id: 242 } TagId(1) Test.57 Test.59 Test.60 Test.58 Test.124;
                                             let Test.123 : Int1 = false;
-                                            let Test.122 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.348 UpdateModeId { id: 241 } TagId(1) Test.63 Test.18 Test.19 Test.17 Test.123;
+                                            let Test.122 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.356 UpdateModeId { id: 241 } TagId(1) Test.63 Test.18 Test.19 Test.17 Test.123;
                                             let Test.120 : Int1 = true;
-                                            let Test.119 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.347 UpdateModeId { id: 240 } TagId(1) Test.121 Test.62 Test.122 Test.61 Test.120;
+                                            let Test.119 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.355 UpdateModeId { id: 240 } TagId(1) Test.121 Test.62 Test.122 Test.61 Test.120;
                                             let Bool.46 : {} = lowlevel PtrStore Bool.27 Test.119;
                                             let Bool.45 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                             ret Bool.45;
                                         in
-                                        let Bool.134 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                        if Bool.134 then
-                                            decref Bool.343;
-                                            let Bool.350 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 243 } };
-                                            jump Bool.133 Bool.344 Bool.350 Test.118;
+                                        let Bool.142 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                        if Bool.142 then
+                                            decref Bool.351;
+                                            let Bool.358 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.136, id: UpdateModeId { id: 243 } };
+                                            jump Bool.141 Bool.352 Bool.358 Test.118;
                                         else
                                             inc Test.63;
                                             decref Test.118;
-                                            let Bool.351 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                            jump Bool.133 Bool.351 Bool.343 Bool.344;
+                                            let Bool.359 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                            jump Bool.141 Bool.359 Bool.351 Bool.352;
                                     in
                                     let Test.166 : U8 = 1i64;
                                     let Test.167 : U8 = GetTagId Test.118;
                                     let Test.168 : Int1 = lowlevel Eq Test.166 Test.167;
                                     if Test.168 then
-                                        joinpoint Test.163 Bool.361 Bool.362:
-                                            joinpoint Test.154 Bool.363 Bool.364:
+                                        joinpoint Test.163 Bool.369 Bool.370:
+                                            joinpoint Test.154 Bool.371 Bool.372:
                                                 let Test.83 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                                 let Test.85 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                                 let Test.86 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                                 let Test.84 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                                joinpoint Bool.123 Bool.366 Bool.367:
+                                                joinpoint Bool.131 Bool.374 Bool.375:
                                                     let Test.134 : Int1 = true;
-                                                    let Test.133 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.367 UpdateModeId { id: 262 } TagId(1) Test.83 Test.85 Test.86 Test.84 Test.134;
+                                                    let Test.133 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.375 UpdateModeId { id: 262 } TagId(1) Test.83 Test.85 Test.86 Test.84 Test.134;
                                                     let Test.132 : Int1 = false;
-                                                    let Test.131 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.366 UpdateModeId { id: 261 } TagId(1) Test.133 Test.18 Test.19 Test.17 Test.132;
+                                                    let Test.131 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.374 UpdateModeId { id: 261 } TagId(1) Test.133 Test.18 Test.19 Test.17 Test.132;
                                                     let Bool.48 : {} = lowlevel PtrStore Bool.27 Test.131;
                                                     let Bool.47 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                                     ret Bool.47;
                                                 in
-                                                let Bool.124 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                                if Bool.124 then
-                                                    decref Bool.363;
-                                                    jump Bool.123 Bool.364 Test.118;
+                                                let Bool.132 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                                if Bool.132 then
+                                                    decref Bool.371;
+                                                    jump Bool.131 Bool.372 Test.118;
                                                 else
                                                     inc Test.83;
                                                     inc Test.86;
                                                     decref Test.118;
-                                                    jump Bool.123 Bool.363 Bool.364;
+                                                    jump Bool.131 Bool.371 Bool.372;
                                             in
                                             let Test.151 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                             let Test.152 : U8 = 1i64;
@@ -293,11 +293,11 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                                 let Test.150 : Int1 = true;
                                                 let Test.155 : Int1 = lowlevel Eq Test.150 Test.149;
                                                 if Test.155 then
-                                                    jump Test.137 Bool.361 Bool.362;
+                                                    jump Test.137 Bool.369 Bool.370;
                                                 else
-                                                    jump Test.154 Bool.361 Bool.362;
+                                                    jump Test.154 Bool.369 Bool.370;
                                             else
-                                                jump Test.154 Bool.361 Bool.362;
+                                                jump Test.154 Bool.369 Bool.370;
                                         in
                                         let Test.160 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
                                         let Test.161 : U8 = 1i64;
@@ -309,7 +309,7 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                             let Test.159 : Int1 = true;
                                             let Test.164 : Int1 = lowlevel Eq Test.159 Test.158;
                                             if Test.164 then
-                                                joinpoint Test.145 Bool.368 Bool.369:
+                                                joinpoint Test.145 Bool.376 Bool.377:
                                                     let Test.70 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                                     let Test.72 : I64 = UnionAtIndex (Id 1) (Index 1) Test.118;
                                                     let Test.138 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.118;
@@ -320,27 +320,27 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                                     inc Test.76;
                                                     let Test.74 : I32 = UnionAtIndex (Id 1) (Index 3) Test.138;
                                                     let Test.71 : I32 = UnionAtIndex (Id 1) (Index 3) Test.118;
-                                                    joinpoint Bool.127 Bool.372 Bool.373 Bool.374:
+                                                    joinpoint Bool.135 Bool.380 Bool.381 Bool.382:
                                                         let Test.130 : Int1 = false;
-                                                        let Test.127 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.374 UpdateModeId { id: 271 } TagId(1) Test.70 Test.72 Test.73 Test.71 Test.130;
+                                                        let Test.127 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.382 UpdateModeId { id: 271 } TagId(1) Test.70 Test.72 Test.73 Test.71 Test.130;
                                                         let Test.129 : Int1 = false;
-                                                        let Test.128 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.373 UpdateModeId { id: 270 } TagId(1) Test.76 Test.18 Test.19 Test.17 Test.129;
+                                                        let Test.128 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.381 UpdateModeId { id: 270 } TagId(1) Test.76 Test.18 Test.19 Test.17 Test.129;
                                                         let Test.126 : Int1 = true;
-                                                        let Test.125 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.372 UpdateModeId { id: 269 } TagId(1) Test.127 Test.75 Test.128 Test.74 Test.126;
+                                                        let Test.125 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.380 UpdateModeId { id: 269 } TagId(1) Test.127 Test.75 Test.128 Test.74 Test.126;
                                                         let Bool.50 : {} = lowlevel PtrStore Bool.27 Test.125;
                                                         let Bool.49 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                                         ret Bool.49;
                                                     in
-                                                    let Bool.128 : Int1 = lowlevel RefCountIsUnique Test.118;
-                                                    if Bool.128 then
-                                                        decref Bool.368;
-                                                        let Bool.375 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 272 } };
-                                                        jump Bool.127 Bool.369 Bool.375 Test.118;
+                                                    let Bool.136 : Int1 = lowlevel RefCountIsUnique Test.118;
+                                                    if Bool.136 then
+                                                        decref Bool.376;
+                                                        let Bool.383 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reset { symbol: Test.138, id: UpdateModeId { id: 272 } };
+                                                        jump Bool.135 Bool.377 Bool.383 Test.118;
                                                     else
                                                         inc Test.70;
                                                         decref Test.118;
-                                                        let Bool.376 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                                                        jump Bool.127 Bool.376 Bool.368 Bool.369;
+                                                        let Bool.384 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                                                        jump Bool.135 Bool.384 Bool.376 Bool.377;
                                                 in
                                                 let Test.142 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.118;
                                                 let Test.143 : U8 = 1i64;
@@ -352,66 +352,66 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                                                     let Test.141 : Int1 = true;
                                                     let Test.146 : Int1 = lowlevel Eq Test.141 Test.140;
                                                     if Test.146 then
-                                                        jump Test.137 Bool.139 Bool.310;
+                                                        jump Test.137 Bool.147 Bool.318;
                                                     else
-                                                        jump Test.145 Bool.139 Bool.310;
+                                                        jump Test.145 Bool.147 Bool.318;
                                                 else
-                                                    jump Test.145 Bool.139 Bool.310;
+                                                    jump Test.145 Bool.147 Bool.318;
                                             else
-                                                jump Test.163 Bool.139 Bool.310;
+                                                jump Test.163 Bool.147 Bool.318;
                                         else
-                                            jump Test.163 Bool.139 Bool.310;
+                                            jump Test.163 Bool.147 Bool.318;
                                     else
-                                        decref Bool.310;
-                                        decref Bool.139;
-                                        joinpoint Bool.129:
+                                        decref Bool.318;
+                                        decref Bool.147;
+                                        joinpoint Bool.137:
                                             let Test.135 : [<rnu>C *self I64 *self I32 Int1, <null>] = TagId(0) ;
                                             let Bool.52 : {} = lowlevel PtrStore Bool.27 Test.135;
                                             let Bool.51 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                                             ret Bool.51;
                                         in
-                                        let Bool.132 : Int1 = lowlevel RefCountIsUnique Test.19;
-                                        if Bool.132 then
-                                            let Bool.131 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.19;
-                                            dec Bool.131;
-                                            let Bool.130 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.19;
-                                            dec Bool.130;
+                                        let Bool.140 : Int1 = lowlevel RefCountIsUnique Test.19;
+                                        if Bool.140 then
+                                            let Bool.139 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.19;
+                                            dec Bool.139;
+                                            let Bool.138 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.19;
+                                            dec Bool.138;
                                             free Test.19;
-                                            jump Bool.129;
+                                            jump Bool.137;
                                         else
                                             decref Test.19;
-                                            jump Bool.129;
+                                            jump Bool.137;
                                 else
-                                    jump Test.176 Bool.139;
+                                    jump Test.176 Bool.147;
                             else
-                                jump Test.176 Bool.139;
+                                jump Test.176 Bool.147;
                         else
                             let Test.116 : Int1 = false;
-                            let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.139 UpdateModeId { id: 1 } TagId(1) Test.16 Test.11 Test.19 Test.10 Test.116;
+                            let Test.115 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.147 UpdateModeId { id: 1 } TagId(1) Test.16 Test.11 Test.19 Test.10 Test.116;
                             let Bool.54 : {} = lowlevel PtrStore Bool.27 Test.115;
                             let Bool.53 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                             ret Bool.53;
                 in
-                let Bool.136 : Int1 = lowlevel RefCountIsUnique Test.9;
-                if Bool.136 then
-                    jump Bool.135 Test.9;
+                let Bool.144 : Int1 = lowlevel RefCountIsUnique Test.9;
+                if Bool.144 then
+                    jump Bool.143 Test.9;
                 else
                     inc Test.16;
                     inc Test.19;
                     decref Test.9;
-                    let Bool.384 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                    jump Bool.135 Bool.384;
+                    let Bool.392 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                    jump Bool.143 Bool.392;
             else
                 let Test.96 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 0) Test.9;
                 let Test.98 : I64 = UnionAtIndex (Id 1) (Index 1) Test.9;
                 let Test.99 : [<rnu>C *self I64 *self I32 Int1, <null>] = UnionAtIndex (Id 1) (Index 2) Test.9;
                 let Test.97 : I32 = UnionAtIndex (Id 1) (Index 3) Test.9;
-                joinpoint Bool.137 Bool.385:
+                joinpoint Bool.145 Bool.393:
                     let Test.247 : Int1 = CallByName Num.22 Test.10 Test.97;
                     if Test.247 then
                         let Test.249 : Int1 = true;
                         let Bool.55 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.385 UpdateModeId { id: 284 } TagId(1) Bool.55 Test.98 Test.99 Test.97 Test.249;
+                        let Test.248 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.393 UpdateModeId { id: 284 } TagId(1) Bool.55 Test.98 Test.99 Test.97 Test.249;
                         let Bool.56 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 0]) Test.248;
                         let Bool.57 : {} = lowlevel PtrStore Bool.27 Test.248;
                         jump Bool.26 Test.96 Test.10 Test.11 Bool.56 Bool.28;
@@ -420,26 +420,26 @@ procedure Test.3 (Bool.21, Bool.22, Bool.23):
                         if Test.243 then
                             let Test.245 : Int1 = true;
                             let Bool.58 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.385 UpdateModeId { id: 284 } TagId(1) Test.96 Test.98 Bool.58 Test.97 Test.245;
+                            let Test.244 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.393 UpdateModeId { id: 284 } TagId(1) Test.96 Test.98 Bool.58 Test.97 Test.245;
                             let Bool.59 : Ptr([<rnu>C *self I64 *self I32 Int1, <null>]) = GetElementPointer (Indices [1, 2]) Test.244;
                             let Bool.60 : {} = lowlevel PtrStore Bool.27 Test.244;
                             jump Bool.26 Test.99 Test.10 Test.11 Bool.59 Bool.28;
                         else
                             let Test.242 : Int1 = true;
-                            let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.385 UpdateModeId { id: 284 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
+                            let Test.241 : [<rnu>C *self I64 *self I32 Int1, <null>] = Reuse Bool.393 UpdateModeId { id: 284 } TagId(1) Test.96 Test.11 Test.99 Test.10 Test.242;
                             let Bool.62 : {} = lowlevel PtrStore Bool.27 Test.241;
                             let Bool.61 : [<rnu>C *self I64 *self I32 Int1, <null>] = lowlevel PtrLoad Bool.28;
                             ret Bool.61;
                 in
-                let Bool.138 : Int1 = lowlevel RefCountIsUnique Test.9;
-                if Bool.138 then
-                    jump Bool.137 Test.9;
+                let Bool.146 : Int1 = lowlevel RefCountIsUnique Test.9;
+                if Bool.146 then
+                    jump Bool.145 Test.9;
                 else
                     inc Test.96;
                     inc Test.99;
                     decref Test.9;
-                    let Bool.386 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
-                    jump Bool.137 Bool.386;
+                    let Bool.394 : [<rnu>C *self I64 *self I32 Int1, <null>] = NullPointer;
+                    jump Bool.145 Bool.394;
     in
     jump Bool.26 Bool.21 Bool.22 Bool.23 Bool.24 Bool.24;
 

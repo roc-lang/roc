@@ -319,7 +319,7 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn roc_check_markdown_docs() {
-            let cli_build = ExecCli::new(
+            let cli_check = ExecCli::new(
                 CMD_CHECK,
                 file_from_root("crates/cli/tests/markdown", "form.md"),
             );
@@ -327,13 +327,13 @@ mod cli_tests {
             let expected_out =
                 "0 errors and 0 warnings found in <ignored for test> ms.\n\n0 errors and 0 warnings found in <ignored for test> ms.\n\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_check.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn import_in_expect() {
-            let cli_build = ExecCli::new(
+            let cli_test = ExecCli::new(
                 CMD_TEST,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
@@ -343,7 +343,23 @@ mod cli_tests {
 
             let expected_out = "0 failed and 3 passed in <ignored for test> ms.\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_test.run().assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        // https://github.com/roc-lang/roc/issues/7461
+        fn issue7461() {
+            let cli_test = ExecCli::new(
+                CMD_TEST,
+                file_from_root("crates/cli/tests/test-projects/", "issue7461.roc"),
+            );
+
+            let expected_out = "0 failed and 1 passed in <ignored for test> ms.\n";
+
+            cli_test
+                .run()
+                .assert_stdout_and_stderr_ends_with(expected_out);
         }
     }
 
