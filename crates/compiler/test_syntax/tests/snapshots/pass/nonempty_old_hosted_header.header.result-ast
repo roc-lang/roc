@@ -1,0 +1,88 @@
+SpacesBefore {
+    before: [],
+    item: Hosted(
+        HostedHeader {
+            before_exposes: [],
+            exposes: Collection {
+                items: [
+                    @45-50 SpaceBefore(
+                        ExposedName(
+                            "Stuff",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @64-70 SpaceBefore(
+                        ExposedName(
+                            "Things",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @84-97 SpaceBefore(
+                        ExposedName(
+                            "somethingElse",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                final_comments: [
+                    Newline,
+                ],
+            },
+            old_imports: Some(
+                KeywordItem {
+                    keyword: Spaces {
+                        before: [
+                            Newline,
+                        ],
+                        item: ImportsKeyword,
+                        after: [
+                            Newline,
+                        ],
+                    },
+                    item: Collection {
+                        items: [
+                            @143-147 SpaceBefore(
+                                Module(
+                                    ModuleName(
+                                        "Blah",
+                                    ),
+                                    [],
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @161-182 SpaceBefore(
+                                Module(
+                                    ModuleName(
+                                        "Baz",
+                                    ),
+                                    [
+                                        @167-172 ExposedName(
+                                            "stuff",
+                                        ),
+                                        @174-180 ExposedName(
+                                            "things",
+                                        ),
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                },
+            ),
+        },
+    ),
+}

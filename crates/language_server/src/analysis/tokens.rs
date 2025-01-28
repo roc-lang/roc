@@ -299,15 +299,13 @@ impl IterTokens for PlatformHeader<'_> {
 impl IterTokens for HostedHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
+            before_exposes: _,
             exposes,
-            imports,
+            old_imports,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(exposes.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
+        (exposes.iter_tokens(arena).into_iter())
+            .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
 }

@@ -5813,27 +5813,40 @@ mod test_fmt {
 
     #[test]
     fn single_line_hosted() {
-        module_formats_same(indoc!(
-            r"
-                hosted Foo exposes [] imports []"
-        ));
+        module_formats_to(
+            indoc!(
+                r"
+                    hosted Foo exposes [] imports []"
+            ),
+            indoc!(
+                r"
+                    hosted []"
+            ),
+        );
     }
 
     #[test]
     fn multi_line_hosted() {
-        module_formats_same(indoc!(
-            r"
-                hosted Foo
-                    exposes [
+        module_formats_to(
+            indoc!(
+                r"
+                    hosted Foo
+                        exposes [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                        imports []"
+            ),
+            indoc!(
+                r"
+                    hosted [
                         Stuff,
                         Things,
                         somethingElse,
-                    ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
                     ]"
-        ));
+            ),
+        );
     }
 
     /// Annotations and aliases

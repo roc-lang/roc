@@ -3952,17 +3952,25 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            let module_name = match opt_expected_module_name {
+                Some(pq_name) => arena.alloc_str(pq_name.as_inner().as_str()),
+                None => {
+                    // [modules-revamp] [privacy-changes] TODO: Support test/check on nested modules
+                    arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap())
+                }
+            };
+
             let info = HeaderInfo {
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 header_type: HeaderType::Hosted {
-                    name: header.name.value,
-                    exposes: unspace(arena, header.exposes.item.items),
+                    name: roc_parse::header::ModuleName::new(module_name),
+                    exposes: unspace(arena, header.exposes.items),
                 },
                 module_comments: comments,
-                header_imports: Some(header.imports),
+                header_imports: header.old_imports,
             };
 
             let (module_id, _, header) =
