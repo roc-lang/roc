@@ -671,6 +671,10 @@ fn specialize_drops_stmt<'a, 'i>(
                 // Meaning we can pass the incremented_symbols from the remainder to the body.
                 (Some(jump_info), None) if !jump_info.is_empty() => {
                     // Update body with incremented symbols from remainder
+                    let mut body_environment = environment.clone();
+                    for param in parameters.iter() {
+                        body_environment.add_symbol_layout(param.symbol, param.layout);
+                    }
                     body_environment.incremented_symbols = jump_info.clone();
 
                     let newer_body = specialize_drops_stmt(
