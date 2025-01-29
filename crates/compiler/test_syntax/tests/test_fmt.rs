@@ -5603,6 +5603,30 @@ mod test_fmt {
     }
 
     #[test]
+    fn pnc_apply_with_try_suffix_after_fn() {
+        expr_formats_to_with_flags(
+            indoc!("some_fn?(arg1, arg2)"),
+            indoc!("some_fn(arg1, arg2)?"),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
+    }
+
+    #[test]
+    fn ws_apply_with_try_suffix_after_fn() {
+        expr_formats_to_with_flags(
+            indoc!("some_fn? arg1 arg2"),
+            indoc!("some_fn(arg1, arg2)?"),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
+    }
+
+    #[test]
     fn func_call_trailing_multiline_lambda() {
         // New syntax
         expr_formats_same(indoc!(
