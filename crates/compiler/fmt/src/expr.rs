@@ -92,14 +92,62 @@ fn format_expr_only(
             buf.indent(indent);
             buf.push_str("try");
         }
+        Expr::PncApply(
+            Loc {
+                value: Expr::TrySuffix(expr),
+                region,
+            },
+            loc_args,
+        ) => {
+            let arena = buf.text.bump();
+            let apply = arena.alloc(Expr::PncApply(
+                arena.alloc(Loc {
+                    value: **expr,
+                    region: *region,
+                }),
+                *loc_args,
+            ));
+            format_expr_only(
+                arena.alloc(Expr::TrySuffix(apply)),
+                buf,
+                parens,
+                newlines,
+                indent,
+            );
+        }
         Expr::PncApply(loc_expr, loc_args) => {
             fmt_pnc_apply(loc_expr, loc_args, indent, buf);
         }
+        Expr::Apply(
+            Loc {
+                value: Expr::TrySuffix(expr),
+                region,
+            },
+            loc_args,
+            _,
+        ) if buf.flags().parens_and_commas => {
+            let arena = buf.text.bump();
+            let apply = arena.alloc(Expr::PncApply(
+                arena.alloc(Loc {
+                    value: **expr,
+                    region: *region,
+                }),
+                Collection::with_items(loc_args),
+            ));
+            format_expr_only(
+                arena.alloc(Expr::TrySuffix(apply)),
+                buf,
+                parens,
+                newlines,
+                indent,
+            );
+        }
+        Expr::Apply(loc_expr, loc_args, _) if buf.flags().parens_and_commas => {
+            fmt_pnc_apply(loc_expr, &Collection::with_items(loc_args), indent, buf);
+        }
         Expr::Apply(loc_expr, loc_args, _) => {
             let apply_needs_parens = parens == Parens::InApply || parens == Parens::InApplyLastArg;
-            if buf.flags().parens_and_commas {
-                fmt_pnc_apply(loc_expr, &Collection::with_items(loc_args), indent, buf);
-            } else if !apply_needs_parens || loc_args.is_empty() {
+            if !apply_needs_parens || loc_args.is_empty() {
                 fmt_apply(loc_expr, loc_args, indent, buf);
             } else {
                 fmt_parens(item, buf, indent);
