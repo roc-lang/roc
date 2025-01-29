@@ -18,5 +18,6 @@ jobs:
         run: |
           cargo +nightly-2024-02-03 install --locked cargo-fuzz
           cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60 || true
-          cd crates/compiler/test_syntax && for x in fuzz/artifacts/fuzz_expr/crash-*; do cargo run --bin minimize expr $x; done
-          cd crates/compiler/test_syntax && if ls fuzz/artifacts/fuzz_expr/ | grep crash-; then exit 1; fi
+          cd ..
+          for x in fuzz/artifacts/fuzz_expr/crash-*; do cargo run --bin minimize expr $x; done
+          if ls fuzz/artifacts/fuzz_expr/ | grep crash-; then exit 1; fi
