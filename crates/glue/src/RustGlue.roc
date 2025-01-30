@@ -172,7 +172,7 @@ generate_entry_point = \buf, types, name, id ->
     extern_arguments =
         when Types.shape(types, id) is
             Function(roc_fn) ->
-                to_arg_str(roc_fn.args, types, \_argId, shape, index ->
+                to_arg_str(roc_fn.args, types, \_arg_id, shape, index ->
                     index_str = Num.to_str(index)
 
                     if can_derive_copy(types, shape) then
@@ -254,7 +254,7 @@ generate_function = \buf, types, roc_fn ->
 
     extern_call_arguments =
         without_unit =
-            to_arg_str(roc_fn.args, types, \_argId, _shape, index ->
+            to_arg_str(roc_fn.args, types, \_arg_id, _shape, index ->
                 index_str = Num.to_str(index)
 
                 "&arg${index_str}")
@@ -814,7 +814,7 @@ generate_non_recursive_tag_union = \buf, types, id, name, tags, discriminant_siz
             b
     |> generate_roc_refcounted(types, union_type, escaped_name)
 
-generate_non_nullable_unwrapped = \buf, types, name, tag_name, payload, discriminant_size, _discriminant_offset, _null_tagIndex ->
+generate_non_nullable_unwrapped = \buf, types, name, tag_name, payload, discriminant_size, _discriminant_offset, _null_tag_index ->
     escaped_name = escape_kw(name)
     discriminant_name = "discriminant_${escaped_name}"
 
