@@ -879,7 +879,7 @@ generate_recursive_tag_union = \buf, types, id, tag_union_name, tags, discrimina
     discriminant_name = "discriminant_${escaped_name}"
     tag_names = List.map(tags, \{ name: n } -> n)
     # self = "(&*self.union_pointer())"
-    # selfMut = "(&mut *self.union_pointer())"
+    # self_mut = "(&mut *self.union_pointer())"
     # other = "(&*other.union_pointer())"
     union_name = "union_${escaped_name}"
 
@@ -1919,9 +1919,9 @@ has_float = \types, type ->
     has_float_help(types, type, Set.empty({}))
 
 has_float_help = \types, type, do_not_recurse ->
-    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # TODO: is do_not_recurse problematic? Do we need an updated do_not_recurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
-    # Otherwise we need to deal with threading through updates to doNotRecurse
+    # Otherwise we need to deal with threading through updates to do_not_recurse
     when type is
         Num(kind) ->
             when kind is
@@ -2145,9 +2145,9 @@ contains_refcounted = \types, type ->
     contains_refcounted_help(types, type, Set.empty({}))
 
 contains_refcounted_help = \types, type, do_not_recurse ->
-    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # TODO: is do_not_recurse problematic? Do we need an updated do_not_recurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
-    # Otherwise we need to deal with threading through updates to doNotRecurse
+    # Otherwise we need to deal with threading through updates to do_not_recurse
     when type is
         RocStr | RocList(_) | RocSet(_) | RocDict(_, _) | RocBox(_) | RecursivePointer(_) ->
             Bool.true
