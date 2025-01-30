@@ -31,13 +31,13 @@ cd roc_nightly
 # test rust platform (first prebuild the host)
 # temp disabled
 # examples/platform-switching/rust-platform/build.sh
-# ./roc examples/platform-switching/rocLovesRust.roc
+# ./roc examples/platform-switching/roc_loves_Rust.roc
 
 # test zig platform
-./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
+./roc --build-host --suppress-build-host-warning examples/platform-switching/roc_loves_zig.roc
 
 # test C platform
-./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesC.roc
+./roc --build-host --suppress-build-host-warning examples/platform-switching/roc_loves_c.roc
 
 # test repl
 cd ../ci/repl_basic_test

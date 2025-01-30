@@ -12,8 +12,8 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Update PATH to use zig 13
-        run:  echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
-      
+        run: echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+
       - run: zig version
 
       - name: get the latest release archive
@@ -32,10 +32,10 @@ jobs:
         run: mv roc_nightly* roc_nightly
 
       - name: test platform switching zig
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc --build-host --suppress-build-host-warning
+        run: cd roc_nightly && ./roc examples/platform-switching/roc_loves_zig.roc --build-host --suppress-build-host-warning
 
       - name: test platform switching c
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc --build-host --suppress-build-host-warning
+        run: cd roc_nightly && ./roc examples/platform-switching/roc_loves_c.roc --build-host --suppress-build-host-warning
 
       - name: test repl
         run: |
