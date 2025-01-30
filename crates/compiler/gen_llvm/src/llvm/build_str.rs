@@ -1,35 +1,72 @@
-use crate::llvm::build::Env;
 use inkwell::values::{BasicValueEnum, PointerValue};
 use roc_builtins::bitcode;
 use roc_mono::layout::{InLayout, Layout, LayoutRepr, STLayoutInterner};
 
-use super::bitcode::{call_str_bitcode_fn, BitcodeReturns};
-use super::build::load_roc_value;
+use super::bitcode::{
+    call_str_bitcode_fn, call_void_bitcode_fn, pass_list_or_string_to_zig_32bit,
+    pass_list_to_zig_64bit, pass_list_to_zig_wasm, BitcodeReturns,
+};
+use super::build::{create_entry_block_alloca, load_roc_value, Env};
+use bumpalo::collections::Vec;
 
 pub static CHAR_LAYOUT: InLayout = Layout::U8;
 
-pub(crate) fn decode_from_utf8_result<'a, 'ctx>(
+pub(crate) fn call_str_from_utf_bitcode_fn<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
-    pointer: PointerValue<'ctx>,
+    args: &[BasicValueEnum<'ctx>],
+    result_struct_name: &str,
+    fn_name: &str,
 ) -> BasicValueEnum<'ctx> {
-    let layout = LayoutRepr::Struct(env.arena.alloc([
-        Layout::usize(env.target_info),
-        Layout::STR,
-        Layout::BOOL,
-        Layout::U8,
-    ]));
+    let result_type = env.module.get_struct_type(result_struct_name).unwrap();
+    let result_ptr = create_entry_block_alloca(env, result_type, "alloca_from_utf_result");
+    // FromUtf8Result, FromUtf16Result, FromUtf32Result all have the same layout of
+    // - index: u64
+    // - string: RocStr
+    // - is_ok: bool
+    // - problem_code: u8
+    let layout =
+        LayoutRepr::Struct(
+            env.arena
+                .alloc([Layout::U64, Layout::STR, Layout::BOOL, Layout::U8]),
+        );
+
+    let list = args[0];
+    let argn = &args[1..];
+    let mut args: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity_in(args.len() + 2, env.arena);
+    args.push(result_ptr.into());
+
+    use roc_target::Architecture::*;
+    match env.target.architecture() {
+        Aarch32 | X86_32 => {
+            let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
+            args.push(a.into());
+            args.push(b.into());
+        }
+        Aarch64 | X86_64 => {
+            let list = pass_list_to_zig_64bit(env, list);
+            args.push(list.into());
+        }
+        Wasm32 => {
+            let list = pass_list_to_zig_wasm(env, list);
+            args.push(list.into());
+        }
+    };
+
+    args.extend(argn);
+
+    call_void_bitcode_fn(env, &args, fn_name);
 
     load_roc_value(
         env,
         layout_interner,
         layout,
-        pointer,
-        "load_decode_from_utf8_result",
+        result_ptr,
+        "load_from_utf_result",
     )
 }
 
-/// Dec.toStr : Dec -> Str
+/// Dec.to_str : Dec -> Str
 
 /// Str.equal : Str, Str -> Bool
 pub(crate) fn str_equal<'ctx>(
@@ -48,7 +85,7 @@ pub(crate) fn str_equal<'ctx>(
 
 // Gets a pointer to just after the refcount for a list or seamless slice.
 // The value is just after the refcount so that normal lists and seamless slices can share code paths easily.
-pub(crate) fn str_refcount_ptr<'ctx>(
+pub(crate) fn str_allocation_ptr<'ctx>(
     env: &Env<'_, 'ctx, '_>,
     value: BasicValueEnum<'ctx>,
 ) -> PointerValue<'ctx> {
@@ -57,7 +94,7 @@ pub(crate) fn str_refcount_ptr<'ctx>(
         &[value],
         &[],
         BitcodeReturns::Basic,
-        bitcode::STR_REFCOUNT_PTR,
+        bitcode::STR_ALLOCATION_PTR,
     )
     .into_pointer_value()
 }

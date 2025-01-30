@@ -1,0 +1,11 @@
+SpacesBefore {
+    before: [],
+    item: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: None,
+            exposes: [],
+            interface_imports: None,
+        },
+    ),
+}

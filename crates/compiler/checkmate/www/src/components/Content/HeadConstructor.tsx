@@ -221,9 +221,6 @@ export default function DrawHeadConstructor({
     case "EmptyRecord": {
       return <>{"{}"}</>;
     }
-    case "EmptyTuple": {
-      return <>()</>;
-    }
     case "EmptyTagUnion": {
       return <>[]</>;
     }

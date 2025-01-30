@@ -1,16 +1,16 @@
+use bitvec::vec::BitVec;
 use bumpalo::collections::vec::Vec;
 use bumpalo::Bump;
-use core::panic;
 use roc_wasm_module::linking::IndexRelocType;
 
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
 use roc_wasm_module::opcodes::{OpCode, OpCode::*};
 use roc_wasm_module::serialize::SerialBuffer;
 use roc_wasm_module::{
     round_up_to_alignment, Align, LocalId, RelocationEntry, ValueType, WasmModule,
     FRAME_ALIGNMENT_BYTES, STACK_POINTER_GLOBAL_ID,
 };
+use std::iter::repeat;
 
 use crate::DEBUG_SETTINGS;
 
@@ -18,36 +18,6 @@ macro_rules! log_instruction {
     ($($x: expr),+) => {
         if DEBUG_SETTINGS.instructions { println!($($x,)*); }
     };
-}
-
-/// A control block in our model of the VM
-/// Child blocks cannot "see" values from their parent block
-struct VmBlock<'a> {
-    /// opcode indicating what kind of block this is
-    opcode: OpCode,
-    /// the stack of values for this block
-    value_stack: Vec<'a, Symbol>,
-}
-
-impl std::fmt::Debug for VmBlock<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_fmt(format_args!("{:?} {:?}", self.opcode, self.value_stack))
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Copy)]
-pub enum VmSymbolState {
-    /// Value doesn't exist yet
-    NotYetPushed,
-
-    /// Value has been pushed onto the VM stack but not yet popped
-    /// Remember where it was pushed, in case we need to insert another instruction there later
-    Pushed { pushed_at: usize },
-
-    /// Value has been pushed and popped, so it's not on the VM stack any more.
-    /// If we want to use it again later, we will have to create a local for it,
-    /// by going back to insert a local.tee instruction at pushed_at
-    Popped { pushed_at: usize },
 }
 
 // An instruction (local.set or local.tee) to be inserted into the function code
@@ -59,25 +29,23 @@ struct Insertion {
 }
 
 macro_rules! instruction_no_args {
-    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
+    ($method_name: ident, $opcode: expr) => {
         pub fn $method_name(&mut self) {
-            self.inst($opcode, $pops, $push);
+            self.inst($opcode);
         }
     };
 }
 
 macro_rules! instruction_memargs {
-    ($method_name: ident, $opcode: expr, $pops: expr, $push: expr) => {
+    ($method_name: ident, $opcode: expr) => {
         pub fn $method_name(&mut self, align: Align, offset: u32) {
-            self.inst_mem($opcode, $pops, $push, align, offset);
+            self.inst_mem($opcode, align, offset);
         }
     };
 }
 
 #[derive(Debug)]
 pub struct CodeBuilder<'a> {
-    pub arena: &'a Bump,
-
     /// The main container for the instructions
     code: Vec<'a, u8>,
 
@@ -99,34 +67,25 @@ pub struct CodeBuilder<'a> {
     /// but it goes before them in the binary, so it's a separate vector.
     inner_length: Vec<'a, u8>,
 
-    /// Our simulation model of the Wasm stack machine
-    /// Nested blocks of instructions. A child block can't "see" the stack of its parent block
-    vm_block_stack: Vec<'a, VmBlock<'a>>,
-
     /// Relocations for calls to JS imports
     /// When we remove unused imports, the live ones are re-indexed
     import_relocations: Vec<'a, (usize, u32)>,
+
+    /// Keep track of which local variables have been set
+    set_locals: BitVec<u32>,
 }
 
 #[allow(clippy::new_without_default)]
 impl<'a> CodeBuilder<'a> {
     pub fn new(arena: &'a Bump) -> Self {
-        let mut vm_block_stack = Vec::with_capacity_in(8, arena);
-        let function_block = VmBlock {
-            opcode: BLOCK,
-            value_stack: Vec::with_capacity_in(8, arena),
-        };
-        vm_block_stack.push(function_block);
-
         CodeBuilder {
-            arena,
             code: Vec::with_capacity_in(1024, arena),
             insertions: Vec::with_capacity_in(32, arena),
             insert_bytes: Vec::with_capacity_in(64, arena),
             preamble: Vec::with_capacity_in(32, arena),
             inner_length: Vec::with_capacity_in(5, arena),
-            vm_block_stack,
             import_relocations: Vec::with_capacity_in(0, arena),
+            set_locals: BitVec::with_capacity(64),
         }
     }
 
@@ -137,195 +96,7 @@ impl<'a> CodeBuilder<'a> {
         self.preamble.clear();
         self.inner_length.clear();
         self.import_relocations.clear();
-
-        self.vm_block_stack.truncate(1);
-        self.vm_block_stack[0].value_stack.clear();
-    }
-
-    /**********************************************************
-
-        SYMBOLS
-
-        The Wasm VM stores temporary values in its stack machine.
-        We track which stack positions correspond to IR Symbols,
-        because it helps to generate more efficient code.
-
-    ***********************************************************/
-
-    fn current_stack(&self) -> &Vec<'a, Symbol> {
-        let block = self.vm_block_stack.last().unwrap();
-        &block.value_stack
-    }
-
-    fn current_stack_mut(&mut self) -> &mut Vec<'a, Symbol> {
-        let block = self.vm_block_stack.last_mut().unwrap();
-        &mut block.value_stack
-    }
-
-    /// Set the Symbol that is at the top of the VM stack right now
-    /// We will use this later when we need to load the Symbol
-    pub fn set_top_symbol(&mut self, sym: Symbol) -> VmSymbolState {
-        let current_stack = &mut self.vm_block_stack.last_mut().unwrap().value_stack;
-        let pushed_at = self.code.len();
-        let top_symbol: &mut Symbol = current_stack
-            .last_mut()
-            .unwrap_or_else(|| internal_error!("Empty stack when trying to set Symbol {:?}", sym));
-        *top_symbol = sym;
-
-        VmSymbolState::Pushed { pushed_at }
-    }
-
-    /// Verify if a sequence of symbols is at the top of the stack
-    pub fn verify_stack_match(&self, symbols: &[Symbol]) -> bool {
-        let current_stack = self.current_stack();
-        let n_symbols = symbols.len();
-        let stack_depth = current_stack.len();
-        if n_symbols > stack_depth {
-            return false;
-        }
-        let offset = stack_depth - n_symbols;
-
-        for (i, sym) in symbols.iter().enumerate() {
-            if current_stack[offset + i] != *sym {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn add_insertion(&mut self, insert_at: usize, opcode: OpCode, immediate: u32) {
-        let start = self.insert_bytes.len();
-
-        self.insert_bytes.push(opcode as u8);
-        self.insert_bytes.encode_u32(immediate);
-
-        self.insertions.push(Insertion {
-            at: insert_at,
-            start,
-            end: self.insert_bytes.len(),
-        });
-
-        log_instruction!(
-            "**insert {:?} {} at byte offset {}**",
-            opcode,
-            immediate,
-            insert_at
-        );
-    }
-
-    /// Load a Symbol that is stored in the VM stack
-    /// If it's already at the top of the stack, no code will be generated.
-    /// Otherwise, local.set and local.get instructions will be inserted, using the LocalId provided.
-    ///
-    /// If the return value is `Some(s)`, `s` should be stored by the caller, and provided in the next call.
-    /// If the return value is `None`, the Symbol is no longer stored in the VM stack, but in a local.
-    /// (In this case, the caller must remember to declare the local in the function header.)
-    pub fn load_symbol(
-        &mut self,
-        symbol: Symbol,
-        vm_state: VmSymbolState,
-        next_local_id: LocalId,
-    ) -> Option<VmSymbolState> {
-        use VmSymbolState::*;
-
-        match vm_state {
-            NotYetPushed => {
-                internal_error!("Symbol {:?} has no value yet. Nothing to load.", symbol)
-            }
-
-            Pushed { pushed_at } => {
-                match self.current_stack().last() {
-                    Some(top_symbol) if *top_symbol == symbol => {
-                        // We're lucky, the symbol is already on top of the current block's stack.
-                        // No code to generate! (This reduces code size by up to 25% in tests.)
-                        // Just let the caller know what happened
-                        Some(Popped { pushed_at })
-                    }
-                    _ => {
-                        // Symbol is not on top of the stack.
-                        // We should have saved it to a local, so go back and do that now.
-                        self.store_pushed_symbol_to_local(
-                            symbol,
-                            vm_state,
-                            pushed_at,
-                            next_local_id,
-                        );
-
-                        // Recover the value again at the current position
-                        self.get_local(next_local_id);
-                        self.set_top_symbol(symbol);
-
-                        // This Symbol is no longer stored in the VM stack, but in a local
-                        None
-                    }
-                }
-            }
-
-            Popped { pushed_at } => {
-                // This Symbol is being used for a second time
-                // Insert a local.tee where it was pushed, so we don't interfere with the first usage
-                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
-
-                // Insert a local.get at the current position
-                self.get_local(next_local_id);
-                self.set_top_symbol(symbol);
-
-                // This symbol has been promoted to a Local
-                // Tell the caller it no longer has a VirtualMachineSymbolState
-                None
-            }
-        }
-    }
-
-    /// Go back and store a Symbol in a local variable, without loading it at the current position
-    pub fn store_symbol_to_local(
-        &mut self,
-        symbol: Symbol,
-        vm_state: VmSymbolState,
-        next_local_id: LocalId,
-    ) {
-        use VmSymbolState::*;
-
-        match vm_state {
-            NotYetPushed => {
-                // Nothing to do
-            }
-            Pushed { pushed_at } => {
-                self.store_pushed_symbol_to_local(symbol, vm_state, pushed_at, next_local_id)
-            }
-            Popped { pushed_at } => {
-                self.add_insertion(pushed_at, TEELOCAL, next_local_id.0);
-            }
-        }
-    }
-
-    fn store_pushed_symbol_to_local(
-        &mut self,
-        symbol: Symbol,
-        vm_state: VmSymbolState,
-        pushed_at: usize,
-        local_id: LocalId,
-    ) {
-        debug_assert!(matches!(vm_state, VmSymbolState::Pushed { .. }));
-
-        // Update our stack model at the position where we're going to set the SETLOCAL
-        let mut found = false;
-        for block in self.vm_block_stack.iter_mut() {
-            if let Some(found_index) = block.value_stack.iter().position(|&s| s == symbol) {
-                block.value_stack.remove(found_index);
-                found = true;
-            }
-        }
-
-        // Go back to the code position where it was pushed, and save it to a local
-        if found {
-            self.add_insertion(pushed_at, SETLOCAL, local_id.0);
-        } else {
-            if DEBUG_SETTINGS.instructions {
-                println!("{symbol:?} has been popped implicitly. Leaving it on the stack.");
-            }
-            self.add_insertion(pushed_at, TEELOCAL, local_id.0);
-        }
+        self.set_locals.clear();
     }
 
     /**********************************************************
@@ -492,68 +263,38 @@ impl<'a> CodeBuilder<'a> {
 
     /// Base method for generating instructions
     /// Emits the opcode and simulates VM stack push/pop
-    fn inst_base(&mut self, opcode: OpCode, pops: usize, push: bool) {
-        let current_stack = self.current_stack_mut();
-        let stack_size = current_stack.len();
-
-        debug_assert!(
-            stack_size >= pops,
-            "Wasm value stack underflow. Tried to pop {pops} but only {stack_size} available"
-        );
-
-        let new_len = stack_size - pops;
-        current_stack.truncate(new_len);
-        if push {
-            current_stack.push(Symbol::WASM_TMP);
-        }
+    fn inst_base(&mut self, opcode: OpCode) {
         self.code.push(opcode as u8);
     }
 
     /// Plain instruction without any immediates
-    fn inst(&mut self, opcode: OpCode, pops: usize, push: bool) {
-        self.inst_base(opcode, pops, push);
-        log_instruction!("{:10}\t\t{:?}", format!("{opcode:?}"), self.vm_block_stack);
+    fn inst(&mut self, opcode: OpCode) {
+        self.inst_base(opcode);
+        log_instruction!("{opcode:?}");
     }
 
     /// Block instruction
-    fn inst_block(&mut self, opcode: OpCode, pops: usize) {
-        self.inst_base(opcode, pops, false);
+    fn inst_block(&mut self, opcode: OpCode) {
+        self.inst_base(opcode);
 
         // We don't support block result types. Too hard to track types through arbitrary control flow.
         // This results in slightly more instructions but not much. (Rust does the same thing!)
         self.code.push(ValueType::VOID);
 
-        // Start a new block with a fresh value stack
-        self.vm_block_stack.push(VmBlock {
-            opcode,
-            value_stack: Vec::with_capacity_in(8, self.arena),
-        });
-
-        log_instruction!("{:10}\t{:?}", format!("{opcode:?}"), &self.vm_block_stack);
+        log_instruction!("{opcode:?}");
     }
 
-    fn inst_imm32(&mut self, opcode: OpCode, pops: usize, push: bool, immediate: u32) {
-        self.inst_base(opcode, pops, push);
+    fn inst_imm32(&mut self, opcode: OpCode, immediate: u32) {
+        self.inst_base(opcode);
         self.code.encode_u32(immediate);
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{opcode:?}"),
-            immediate,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{}", format!("{opcode:?}"), immediate);
     }
 
-    fn inst_mem(&mut self, opcode: OpCode, pops: usize, push: bool, align: Align, offset: u32) {
-        self.inst_base(opcode, pops, push);
+    fn inst_mem(&mut self, opcode: OpCode, align: Align, offset: u32) {
+        self.inst_base(opcode);
         self.code.push(align as u8);
         self.code.encode_u32(offset);
-        log_instruction!(
-            "{:10} {:?} {}\t{:?}",
-            format!("{opcode:?}"),
-            align,
-            offset,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10} {:?} {}", format!("{opcode:?}"), align, offset);
     }
 
     /**********************************************************
@@ -566,89 +307,47 @@ impl<'a> CodeBuilder<'a> {
 
     ***********************************************************/
 
-    instruction_no_args!(unreachable_, UNREACHABLE, 0, false);
-    instruction_no_args!(nop, NOP, 0, false);
+    instruction_no_args!(unreachable_, UNREACHABLE);
+    instruction_no_args!(nop, NOP);
 
     pub fn block(&mut self) {
-        self.inst_block(BLOCK, 0);
+        self.inst_block(BLOCK);
     }
     pub fn loop_(&mut self) {
-        self.inst_block(LOOP, 0);
+        self.inst_block(LOOP);
     }
     pub fn if_(&mut self) {
-        self.inst_block(IF, 1);
+        self.inst_block(IF);
     }
     pub fn else_(&mut self) {
-        // Reuse the 'then' block but clear its value stack
-        self.current_stack_mut().clear();
-        self.inst(ELSE, 0, false);
+        self.inst(ELSE);
     }
-
     pub fn end(&mut self) {
-        // We need to drop any unused values from the VM stack in order to pass Wasm validation.
-        // This happens, for example, in test `gen_tags::if_guard_exhaustiveness`
-        let n_unused = self
-            .vm_block_stack
-            .last()
-            .map(|block| block.value_stack.len())
-            .unwrap_or(0);
-
-        for _ in 0..n_unused {
-            self.drop_();
-        }
-
-        self.inst_base(END, 0, false);
-        self.vm_block_stack.pop();
-
-        log_instruction!("END       \t\t{:?}", &self.vm_block_stack);
+        self.inst(END);
     }
     pub fn br(&mut self, levels: u32) {
-        self.inst_imm32(BR, 0, false, levels);
+        self.inst_imm32(BR, levels);
     }
     pub fn br_if(&mut self, levels: u32) {
-        // In dynamic execution, br_if can pop 2 values if condition is true and the target block has a result.
-        // But our stack model is for *static* analysis and we need it to be correct at the next instruction,
-        // where the branch was not taken. So we only pop 1 value, the condition.
-        self.inst_imm32(BRIF, 1, false, levels);
+        self.inst_imm32(BRIF, levels);
     }
     #[allow(dead_code)]
     fn br_table() {
-        todo!("br instruction");
+        unimplemented!("br_table instruction is not currently used");
     }
 
-    instruction_no_args!(return_, RETURN, 0, false);
+    instruction_no_args!(return_, RETURN);
 
-    pub fn call(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
-        self.call_impl(function_index, n_args, has_return_val, false)
-    }
-
-    pub fn call_import(&mut self, function_index: u32, n_args: usize, has_return_val: bool) {
-        self.call_impl(function_index, n_args, has_return_val, true)
-    }
-
-    #[inline(always)]
-    fn call_impl(
-        &mut self,
-        function_index: u32,
-        n_args: usize,
-        has_return_val: bool,
-        is_import: bool,
-    ) {
-        self.inst_base(CALL, n_args, has_return_val);
-
-        if is_import {
-            self.import_relocations
-                .push((self.code.len(), function_index));
-        }
-
+    pub fn call(&mut self, function_index: u32) {
+        self.inst_base(CALL);
         self.code.encode_padded_u32(function_index);
+        log_instruction!("{:10}\t{}", format!("{CALL:?}"), function_index);
+    }
 
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{CALL:?}"),
-            function_index,
-            self.vm_block_stack
-        );
+    pub fn call_import(&mut self, function_index: u32) {
+        self.import_relocations
+            .push((self.code.len(), function_index));
+        self.call(function_index)
     }
 
     #[allow(dead_code)]
@@ -658,55 +357,67 @@ impl<'a> CodeBuilder<'a> {
         );
     }
 
-    instruction_no_args!(drop_, DROP, 1, false);
-    instruction_no_args!(select, SELECT, 3, true);
+    instruction_no_args!(drop_, DROP);
+    instruction_no_args!(select, SELECT);
 
     pub fn get_local(&mut self, id: LocalId) {
-        self.inst_imm32(GETLOCAL, 0, true, id.0);
+        self.inst_imm32(GETLOCAL, id.0);
     }
     pub fn set_local(&mut self, id: LocalId) {
-        self.inst_imm32(SETLOCAL, 1, false, id.0);
+        self.inst_imm32(SETLOCAL, id.0);
+        let index = id.0 as usize;
+        let len = self.set_locals.len();
+        if index >= len {
+            self.set_locals.extend(repeat(false).take(index + 1 - len));
+        }
+        self.set_locals.set(index, true);
+    }
+    /// Check if a local variable has been set
+    /// This is not a Wasm instruction, just a helper method
+    pub fn is_set(&self, id: LocalId) -> bool {
+        let index = id.0 as usize;
+        (index < self.set_locals.len()) && self.set_locals[index]
     }
     pub fn tee_local(&mut self, id: LocalId) {
-        self.inst_imm32(TEELOCAL, 0, false, id.0);
+        self.inst_imm32(TEELOCAL, id.0);
     }
     pub fn get_global(&mut self, id: u32) {
-        self.inst_imm32(GETGLOBAL, 0, true, id);
+        self.inst_imm32(GETGLOBAL, id);
     }
     pub fn set_global(&mut self, id: u32) {
-        self.inst_imm32(SETGLOBAL, 1, false, id);
+        self.inst_imm32(SETGLOBAL, id);
     }
 
-    instruction_memargs!(i32_load, I32LOAD, 1, true);
-    instruction_memargs!(i64_load, I64LOAD, 1, true);
-    instruction_memargs!(f32_load, F32LOAD, 1, true);
-    instruction_memargs!(f64_load, F64LOAD, 1, true);
-    instruction_memargs!(i32_load8_s, I32LOAD8S, 1, true);
-    instruction_memargs!(i32_load8_u, I32LOAD8U, 1, true);
-    instruction_memargs!(i32_load16_s, I32LOAD16S, 1, true);
-    instruction_memargs!(i32_load16_u, I32LOAD16U, 1, true);
-    instruction_memargs!(i64_load8_s, I64LOAD8S, 1, true);
-    instruction_memargs!(i64_load8_u, I64LOAD8U, 1, true);
-    instruction_memargs!(i64_load16_s, I64LOAD16S, 1, true);
-    instruction_memargs!(i64_load16_u, I64LOAD16U, 1, true);
-    instruction_memargs!(i64_load32_s, I64LOAD32S, 1, true);
-    instruction_memargs!(i64_load32_u, I64LOAD32U, 1, true);
-    instruction_memargs!(i32_store, I32STORE, 2, false);
-    instruction_memargs!(i64_store, I64STORE, 2, false);
-    instruction_memargs!(f32_store, F32STORE, 2, false);
-    instruction_memargs!(f64_store, F64STORE, 2, false);
-    instruction_memargs!(i32_store8, I32STORE8, 2, false);
-    instruction_memargs!(i32_store16, I32STORE16, 2, false);
-    instruction_memargs!(i64_store8, I64STORE8, 2, false);
-    instruction_memargs!(i64_store16, I64STORE16, 2, false);
-    instruction_memargs!(i64_store32, I64STORE32, 2, false);
+    instruction_memargs!(i32_load, I32LOAD);
+    instruction_memargs!(i64_load, I64LOAD);
+    instruction_memargs!(f32_load, F32LOAD);
+    instruction_memargs!(f64_load, F64LOAD);
+    instruction_memargs!(i32_load8_s, I32LOAD8S);
+    instruction_memargs!(i32_load8_u, I32LOAD8U);
+    instruction_memargs!(i32_load16_s, I32LOAD16S);
+    instruction_memargs!(i32_load16_u, I32LOAD16U);
+    instruction_memargs!(i64_load8_s, I64LOAD8S);
+    instruction_memargs!(i64_load8_u, I64LOAD8U);
+    instruction_memargs!(i64_load16_s, I64LOAD16S);
+    instruction_memargs!(i64_load16_u, I64LOAD16U);
+    instruction_memargs!(i64_load32_s, I64LOAD32S);
+    instruction_memargs!(i64_load32_u, I64LOAD32U);
+    instruction_memargs!(i32_store, I32STORE);
+    instruction_memargs!(i64_store, I64STORE);
+    instruction_memargs!(f32_store, F32STORE);
+    instruction_memargs!(f64_store, F64STORE);
+    instruction_memargs!(i32_store8, I32STORE8);
+    instruction_memargs!(i32_store16, I32STORE16);
+    instruction_memargs!(i64_store8, I64STORE8);
+    instruction_memargs!(i64_store16, I64STORE16);
+    instruction_memargs!(i64_store32, I64STORE32);
 
     pub fn memory_size(&mut self) {
-        self.inst(CURRENTMEMORY, 0, true);
+        self.inst(CURRENTMEMORY);
         self.code.push(0);
     }
     pub fn memory_grow(&mut self) {
-        self.inst(GROWMEMORY, 1, true);
+        self.inst(GROWMEMORY);
         self.code.push(0);
     }
 
@@ -714,157 +425,152 @@ impl<'a> CodeBuilder<'a> {
     where
         T: std::fmt::Debug + std::fmt::Display,
     {
-        log_instruction!(
-            "{:10}\t{}\t{:?}",
-            format!("{opcode:?}"),
-            x,
-            self.vm_block_stack
-        );
+        log_instruction!("{:10}\t{}", format!("{opcode:?}"), x);
     }
     pub fn i32_const(&mut self, x: i32) {
-        self.inst_base(I32CONST, 0, true);
+        self.inst_base(I32CONST);
         self.code.encode_i32(x);
         self.log_const(I32CONST, x);
     }
     pub fn i64_const(&mut self, x: i64) {
-        self.inst_base(I64CONST, 0, true);
+        self.inst_base(I64CONST);
         self.code.encode_i64(x);
         self.log_const(I64CONST, x);
     }
     pub fn f32_const(&mut self, x: f32) {
-        self.inst_base(F32CONST, 0, true);
+        self.inst_base(F32CONST);
         self.code.encode_f32(x);
         self.log_const(F32CONST, x);
     }
     pub fn f64_const(&mut self, x: f64) {
-        self.inst_base(F64CONST, 0, true);
+        self.inst_base(F64CONST);
         self.code.encode_f64(x);
         self.log_const(F64CONST, x);
     }
 
     // TODO: Consider creating unified methods for numerical ops like 'eq' and 'add',
     // passing the ValueType as an argument. Could simplify lowlevel code gen.
-    instruction_no_args!(i32_eqz, I32EQZ, 1, true);
-    instruction_no_args!(i32_eq, I32EQ, 2, true);
-    instruction_no_args!(i32_ne, I32NE, 2, true);
-    instruction_no_args!(i32_lt_s, I32LTS, 2, true);
-    instruction_no_args!(i32_lt_u, I32LTU, 2, true);
-    instruction_no_args!(i32_gt_s, I32GTS, 2, true);
-    instruction_no_args!(i32_gt_u, I32GTU, 2, true);
-    instruction_no_args!(i32_le_s, I32LES, 2, true);
-    instruction_no_args!(i32_le_u, I32LEU, 2, true);
-    instruction_no_args!(i32_ge_s, I32GES, 2, true);
-    instruction_no_args!(i32_ge_u, I32GEU, 2, true);
-    instruction_no_args!(i64_eqz, I64EQZ, 1, true);
-    instruction_no_args!(i64_eq, I64EQ, 2, true);
-    instruction_no_args!(i64_ne, I64NE, 2, true);
-    instruction_no_args!(i64_lt_s, I64LTS, 2, true);
-    instruction_no_args!(i64_lt_u, I64LTU, 2, true);
-    instruction_no_args!(i64_gt_s, I64GTS, 2, true);
-    instruction_no_args!(i64_gt_u, I64GTU, 2, true);
-    instruction_no_args!(i64_le_s, I64LES, 2, true);
-    instruction_no_args!(i64_le_u, I64LEU, 2, true);
-    instruction_no_args!(i64_ge_s, I64GES, 2, true);
-    instruction_no_args!(i64_ge_u, I64GEU, 2, true);
-    instruction_no_args!(f32_eq, F32EQ, 2, true);
-    instruction_no_args!(f32_ne, F32NE, 2, true);
-    instruction_no_args!(f32_lt, F32LT, 2, true);
-    instruction_no_args!(f32_gt, F32GT, 2, true);
-    instruction_no_args!(f32_le, F32LE, 2, true);
-    instruction_no_args!(f32_ge, F32GE, 2, true);
-    instruction_no_args!(f64_eq, F64EQ, 2, true);
-    instruction_no_args!(f64_ne, F64NE, 2, true);
-    instruction_no_args!(f64_lt, F64LT, 2, true);
-    instruction_no_args!(f64_gt, F64GT, 2, true);
-    instruction_no_args!(f64_le, F64LE, 2, true);
-    instruction_no_args!(f64_ge, F64GE, 2, true);
-    instruction_no_args!(i32_clz, I32CLZ, 1, true);
-    instruction_no_args!(i32_ctz, I32CTZ, 1, true);
-    instruction_no_args!(i32_popcnt, I32POPCNT, 1, true);
-    instruction_no_args!(i32_add, I32ADD, 2, true);
-    instruction_no_args!(i32_sub, I32SUB, 2, true);
-    instruction_no_args!(i32_mul, I32MUL, 2, true);
-    instruction_no_args!(i32_div_s, I32DIVS, 2, true);
-    instruction_no_args!(i32_div_u, I32DIVU, 2, true);
-    instruction_no_args!(i32_rem_s, I32REMS, 2, true);
-    instruction_no_args!(i32_rem_u, I32REMU, 2, true);
-    instruction_no_args!(i32_and, I32AND, 2, true);
-    instruction_no_args!(i32_or, I32OR, 2, true);
-    instruction_no_args!(i32_xor, I32XOR, 2, true);
-    instruction_no_args!(i32_shl, I32SHL, 2, true);
-    instruction_no_args!(i32_shr_s, I32SHRS, 2, true);
-    instruction_no_args!(i32_shr_u, I32SHRU, 2, true);
-    instruction_no_args!(i32_rotl, I32ROTL, 2, true);
-    instruction_no_args!(i32_rotr, I32ROTR, 2, true);
-    instruction_no_args!(i64_clz, I64CLZ, 1, true);
-    instruction_no_args!(i64_ctz, I64CTZ, 1, true);
-    instruction_no_args!(i64_popcnt, I64POPCNT, 1, true);
-    instruction_no_args!(i64_add, I64ADD, 2, true);
-    instruction_no_args!(i64_sub, I64SUB, 2, true);
-    instruction_no_args!(i64_mul, I64MUL, 2, true);
-    instruction_no_args!(i64_div_s, I64DIVS, 2, true);
-    instruction_no_args!(i64_div_u, I64DIVU, 2, true);
-    instruction_no_args!(i64_rem_s, I64REMS, 2, true);
-    instruction_no_args!(i64_rem_u, I64REMU, 2, true);
-    instruction_no_args!(i64_and, I64AND, 2, true);
-    instruction_no_args!(i64_or, I64OR, 2, true);
-    instruction_no_args!(i64_xor, I64XOR, 2, true);
-    instruction_no_args!(i64_shl, I64SHL, 2, true);
-    instruction_no_args!(i64_shr_s, I64SHRS, 2, true);
-    instruction_no_args!(i64_shr_u, I64SHRU, 2, true);
-    instruction_no_args!(i64_rotl, I64ROTL, 2, true);
-    instruction_no_args!(i64_rotr, I64ROTR, 2, true);
-    instruction_no_args!(f32_abs, F32ABS, 1, true);
-    instruction_no_args!(f32_neg, F32NEG, 1, true);
-    instruction_no_args!(f32_ceil, F32CEIL, 1, true);
-    instruction_no_args!(f32_floor, F32FLOOR, 1, true);
-    instruction_no_args!(f32_trunc, F32TRUNC, 1, true);
-    instruction_no_args!(f32_nearest, F32NEAREST, 1, true);
-    instruction_no_args!(f32_sqrt, F32SQRT, 1, true);
-    instruction_no_args!(f32_add, F32ADD, 2, true);
-    instruction_no_args!(f32_sub, F32SUB, 2, true);
-    instruction_no_args!(f32_mul, F32MUL, 2, true);
-    instruction_no_args!(f32_div, F32DIV, 2, true);
-    instruction_no_args!(f32_min, F32MIN, 2, true);
-    instruction_no_args!(f32_max, F32MAX, 2, true);
-    instruction_no_args!(f32_copysign, F32COPYSIGN, 2, true);
-    instruction_no_args!(f64_abs, F64ABS, 1, true);
-    instruction_no_args!(f64_neg, F64NEG, 1, true);
-    instruction_no_args!(f64_ceil, F64CEIL, 1, true);
-    instruction_no_args!(f64_floor, F64FLOOR, 1, true);
-    instruction_no_args!(f64_trunc, F64TRUNC, 1, true);
-    instruction_no_args!(f64_nearest, F64NEAREST, 1, true);
-    instruction_no_args!(f64_sqrt, F64SQRT, 1, true);
-    instruction_no_args!(f64_add, F64ADD, 2, true);
-    instruction_no_args!(f64_sub, F64SUB, 2, true);
-    instruction_no_args!(f64_mul, F64MUL, 2, true);
-    instruction_no_args!(f64_div, F64DIV, 2, true);
-    instruction_no_args!(f64_min, F64MIN, 2, true);
-    instruction_no_args!(f64_max, F64MAX, 2, true);
-    instruction_no_args!(f64_copysign, F64COPYSIGN, 2, true);
-    instruction_no_args!(i32_wrap_i64, I32WRAPI64, 1, true);
-    instruction_no_args!(i32_trunc_s_f32, I32TRUNCSF32, 1, true);
-    instruction_no_args!(i32_trunc_u_f32, I32TRUNCUF32, 1, true);
-    instruction_no_args!(i32_trunc_s_f64, I32TRUNCSF64, 1, true);
-    instruction_no_args!(i32_trunc_u_f64, I32TRUNCUF64, 1, true);
-    instruction_no_args!(i64_extend_s_i32, I64EXTENDSI32, 1, true);
-    instruction_no_args!(i64_extend_u_i32, I64EXTENDUI32, 1, true);
-    instruction_no_args!(i64_trunc_s_f32, I64TRUNCSF32, 1, true);
-    instruction_no_args!(i64_trunc_u_f32, I64TRUNCUF32, 1, true);
-    instruction_no_args!(i64_trunc_s_f64, I64TRUNCSF64, 1, true);
-    instruction_no_args!(i64_trunc_u_f64, I64TRUNCUF64, 1, true);
-    instruction_no_args!(f32_convert_s_i32, F32CONVERTSI32, 1, true);
-    instruction_no_args!(f32_convert_u_i32, F32CONVERTUI32, 1, true);
-    instruction_no_args!(f32_convert_s_i64, F32CONVERTSI64, 1, true);
-    instruction_no_args!(f32_convert_u_i64, F32CONVERTUI64, 1, true);
-    instruction_no_args!(f32_demote_f64, F32DEMOTEF64, 1, true);
-    instruction_no_args!(f64_convert_s_i32, F64CONVERTSI32, 1, true);
-    instruction_no_args!(f64_convert_u_i32, F64CONVERTUI32, 1, true);
-    instruction_no_args!(f64_convert_s_i64, F64CONVERTSI64, 1, true);
-    instruction_no_args!(f64_convert_u_i64, F64CONVERTUI64, 1, true);
-    instruction_no_args!(f64_promote_f32, F64PROMOTEF32, 1, true);
-    instruction_no_args!(i32_reinterpret_f32, I32REINTERPRETF32, 1, true);
-    instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64, 1, true);
-    instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32, 1, true);
-    instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64, 1, true);
+    instruction_no_args!(i32_eqz, I32EQZ);
+    instruction_no_args!(i32_eq, I32EQ);
+    instruction_no_args!(i32_ne, I32NE);
+    instruction_no_args!(i32_lt_s, I32LTS);
+    instruction_no_args!(i32_lt_u, I32LTU);
+    instruction_no_args!(i32_gt_s, I32GTS);
+    instruction_no_args!(i32_gt_u, I32GTU);
+    instruction_no_args!(i32_le_s, I32LES);
+    instruction_no_args!(i32_le_u, I32LEU);
+    instruction_no_args!(i32_ge_s, I32GES);
+    instruction_no_args!(i32_ge_u, I32GEU);
+    instruction_no_args!(i64_eqz, I64EQZ);
+    instruction_no_args!(i64_eq, I64EQ);
+    instruction_no_args!(i64_ne, I64NE);
+    instruction_no_args!(i64_lt_s, I64LTS);
+    instruction_no_args!(i64_lt_u, I64LTU);
+    instruction_no_args!(i64_gt_s, I64GTS);
+    instruction_no_args!(i64_gt_u, I64GTU);
+    instruction_no_args!(i64_le_s, I64LES);
+    instruction_no_args!(i64_le_u, I64LEU);
+    instruction_no_args!(i64_ge_s, I64GES);
+    instruction_no_args!(i64_ge_u, I64GEU);
+    instruction_no_args!(f32_eq, F32EQ);
+    instruction_no_args!(f32_ne, F32NE);
+    instruction_no_args!(f32_lt, F32LT);
+    instruction_no_args!(f32_gt, F32GT);
+    instruction_no_args!(f32_le, F32LE);
+    instruction_no_args!(f32_ge, F32GE);
+    instruction_no_args!(f64_eq, F64EQ);
+    instruction_no_args!(f64_ne, F64NE);
+    instruction_no_args!(f64_lt, F64LT);
+    instruction_no_args!(f64_gt, F64GT);
+    instruction_no_args!(f64_le, F64LE);
+    instruction_no_args!(f64_ge, F64GE);
+    instruction_no_args!(i32_clz, I32CLZ);
+    instruction_no_args!(i32_ctz, I32CTZ);
+    instruction_no_args!(i32_popcnt, I32POPCNT);
+    instruction_no_args!(i32_add, I32ADD);
+    instruction_no_args!(i32_sub, I32SUB);
+    instruction_no_args!(i32_mul, I32MUL);
+    instruction_no_args!(i32_div_s, I32DIVS);
+    instruction_no_args!(i32_div_u, I32DIVU);
+    instruction_no_args!(i32_rem_s, I32REMS);
+    instruction_no_args!(i32_rem_u, I32REMU);
+    instruction_no_args!(i32_and, I32AND);
+    instruction_no_args!(i32_or, I32OR);
+    instruction_no_args!(i32_xor, I32XOR);
+    instruction_no_args!(i32_shl, I32SHL);
+    instruction_no_args!(i32_shr_s, I32SHRS);
+    instruction_no_args!(i32_shr_u, I32SHRU);
+    instruction_no_args!(i32_rotl, I32ROTL);
+    instruction_no_args!(i32_rotr, I32ROTR);
+    instruction_no_args!(i64_clz, I64CLZ);
+    instruction_no_args!(i64_ctz, I64CTZ);
+    instruction_no_args!(i64_popcnt, I64POPCNT);
+    instruction_no_args!(i64_add, I64ADD);
+    instruction_no_args!(i64_sub, I64SUB);
+    instruction_no_args!(i64_mul, I64MUL);
+    instruction_no_args!(i64_div_s, I64DIVS);
+    instruction_no_args!(i64_div_u, I64DIVU);
+    instruction_no_args!(i64_rem_s, I64REMS);
+    instruction_no_args!(i64_rem_u, I64REMU);
+    instruction_no_args!(i64_and, I64AND);
+    instruction_no_args!(i64_or, I64OR);
+    instruction_no_args!(i64_xor, I64XOR);
+    instruction_no_args!(i64_shl, I64SHL);
+    instruction_no_args!(i64_shr_s, I64SHRS);
+    instruction_no_args!(i64_shr_u, I64SHRU);
+    instruction_no_args!(i64_rotl, I64ROTL);
+    instruction_no_args!(i64_rotr, I64ROTR);
+    instruction_no_args!(f32_abs, F32ABS);
+    instruction_no_args!(f32_neg, F32NEG);
+    instruction_no_args!(f32_ceil, F32CEIL);
+    instruction_no_args!(f32_floor, F32FLOOR);
+    instruction_no_args!(f32_trunc, F32TRUNC);
+    instruction_no_args!(f32_nearest, F32NEAREST);
+    instruction_no_args!(f32_sqrt, F32SQRT);
+    instruction_no_args!(f32_add, F32ADD);
+    instruction_no_args!(f32_sub, F32SUB);
+    instruction_no_args!(f32_mul, F32MUL);
+    instruction_no_args!(f32_div, F32DIV);
+    instruction_no_args!(f32_min, F32MIN);
+    instruction_no_args!(f32_max, F32MAX);
+    instruction_no_args!(f32_copysign, F32COPYSIGN);
+    instruction_no_args!(f64_abs, F64ABS);
+    instruction_no_args!(f64_neg, F64NEG);
+    instruction_no_args!(f64_ceil, F64CEIL);
+    instruction_no_args!(f64_floor, F64FLOOR);
+    instruction_no_args!(f64_trunc, F64TRUNC);
+    instruction_no_args!(f64_nearest, F64NEAREST);
+    instruction_no_args!(f64_sqrt, F64SQRT);
+    instruction_no_args!(f64_add, F64ADD);
+    instruction_no_args!(f64_sub, F64SUB);
+    instruction_no_args!(f64_mul, F64MUL);
+    instruction_no_args!(f64_div, F64DIV);
+    instruction_no_args!(f64_min, F64MIN);
+    instruction_no_args!(f64_max, F64MAX);
+    instruction_no_args!(f64_copysign, F64COPYSIGN);
+    instruction_no_args!(i32_wrap_i64, I32WRAPI64);
+    instruction_no_args!(i32_trunc_s_f32, I32TRUNCSF32);
+    instruction_no_args!(i32_trunc_u_f32, I32TRUNCUF32);
+    instruction_no_args!(i32_trunc_s_f64, I32TRUNCSF64);
+    instruction_no_args!(i32_trunc_u_f64, I32TRUNCUF64);
+    instruction_no_args!(i64_extend_s_i32, I64EXTENDSI32);
+    instruction_no_args!(i64_extend_u_i32, I64EXTENDUI32);
+    instruction_no_args!(i64_trunc_s_f32, I64TRUNCSF32);
+    instruction_no_args!(i64_trunc_u_f32, I64TRUNCUF32);
+    instruction_no_args!(i64_trunc_s_f64, I64TRUNCSF64);
+    instruction_no_args!(i64_trunc_u_f64, I64TRUNCUF64);
+    instruction_no_args!(f32_convert_s_i32, F32CONVERTSI32);
+    instruction_no_args!(f32_convert_u_i32, F32CONVERTUI32);
+    instruction_no_args!(f32_convert_s_i64, F32CONVERTSI64);
+    instruction_no_args!(f32_convert_u_i64, F32CONVERTUI64);
+    instruction_no_args!(f32_demote_f64, F32DEMOTEF64);
+    instruction_no_args!(f64_convert_s_i32, F64CONVERTSI32);
+    instruction_no_args!(f64_convert_u_i32, F64CONVERTUI32);
+    instruction_no_args!(f64_convert_s_i64, F64CONVERTSI64);
+    instruction_no_args!(f64_convert_u_i64, F64CONVERTUI64);
+    instruction_no_args!(f64_promote_f32, F64PROMOTEF32);
+    instruction_no_args!(i32_reinterpret_f32, I32REINTERPRETF32);
+    instruction_no_args!(i64_reinterpret_f64, I64REINTERPRETF64);
+    instruction_no_args!(f32_reinterpret_i32, F32REINTERPRETI32);
+    instruction_no_args!(f64_reinterpret_i64, F64REINTERPRETI64);
 }

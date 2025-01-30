@@ -20,7 +20,7 @@ use bumpalo::collections::CollectIn;
 use roc_collections::{MutMap, MutSet};
 use roc_module::low_level::LowLevel;
 use roc_module::symbol::{IdentIds, ModuleId, Symbol};
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 /**
  Insert reset and reuse operations into the IR.
@@ -30,7 +30,7 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i STLayoutInterner<'a>,
     home: ModuleId,
-    target_info: TargetInfo,
+    target: Target,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
     procs: &mut MutMap<(Symbol, ProcLayout<'a>), Proc<'a>>,
@@ -44,7 +44,7 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
         let new_proc = insert_reset_reuse_operations_proc(
             arena,
             layout_interner,
-            target_info,
+            target,
             home,
             ident_ids,
             update_mode_ids,
@@ -58,7 +58,7 @@ pub fn insert_reset_reuse_operations<'a, 'i>(
 fn insert_reset_reuse_operations_proc<'a, 'i>(
     arena: &'a Bump,
     layout_interner: &'i STLayoutInterner<'a>,
-    target_info: TargetInfo,
+    target: Target,
     home: ModuleId,
     ident_ids: &'i mut IdentIds,
     update_mode_ids: &'i mut UpdateModeIds,
@@ -70,7 +70,7 @@ fn insert_reset_reuse_operations_proc<'a, 'i>(
     }
 
     let mut env = ReuseEnvironment {
-        target_info,
+        target,
         symbol_tags: MutMap::default(),
         non_unique_symbols: MutSet::default(),
         reuse_tokens: MutMap::default(),
@@ -464,7 +464,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                                         ),
                                         ModifyRc::Free(_) => {
                                             if union_layout
-                                                .stores_tag_id_in_pointer(environment.target_info)
+                                                .stores_tag_id_in_pointer(environment.target)
                                             {
                                                 (
                                                     Symbol::new(home, ident_ids.gen_unique()),
@@ -625,32 +625,9 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
                 remainder: new_remainder,
             })
         }
-        Stmt::ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => {
-            let new_remainder = insert_reset_reuse_operations_stmt(
-                arena,
-                layout_interner,
-                home,
-                ident_ids,
-                update_mode_ids,
-                environment,
-                remainder,
-            );
-
-            arena.alloc(Stmt::ExpectFx {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: new_remainder,
-            })
-        }
         Stmt::Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -666,6 +643,8 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             );
 
             arena.alloc(Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: new_remainder,
@@ -757,7 +736,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
 
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut first_pass_body_environment = ReuseEnvironment {
-                    target_info: environment.target_info,
+                    target: environment.target,
                     symbol_tags: environment.symbol_tags.clone(),
                     non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: max_reuse_token_symbols.clone(),
@@ -920,7 +899,7 @@ fn insert_reset_reuse_operations_stmt<'a, 'i>(
             let (second_pass_body_environment, second_pass_body) = {
                 // Create a new environment for the body. With everything but the jump reuse tokens. As those should be given by the jump.
                 let mut body_environment = ReuseEnvironment {
-                    target_info: environment.target_info,
+                    target: environment.target,
                     symbol_tags: environment.symbol_tags.clone(),
                     non_unique_symbols: environment.non_unique_symbols.clone(),
                     reuse_tokens: used_reuse_tokens.clone(),
@@ -1178,7 +1157,7 @@ enum JoinPointReuseTokens<'a> {
 
 #[derive(Clone)]
 struct ReuseEnvironment<'a> {
-    target_info: TargetInfo,
+    target: Target,
     symbol_tags: MutMap<Symbol, Tag>,
     non_unique_symbols: MutSet<Symbol>,
     reuse_tokens: ReuseTokens<'a>,
@@ -1262,7 +1241,13 @@ impl<'a> ReuseEnvironment<'a> {
     Retrieve the layout of a symbol.
      */
     fn get_symbol_layout(&self, symbol: Symbol) -> &LayoutOption<'a> {
-        self.symbol_layouts.get(&symbol).expect("Expected symbol to have a layout. It should have been inserted in the environment already.")
+        self.symbol_layouts
+            .get(&symbol)
+            .expect(
+            "Expected symbol to have a layout. \
+            It should have been inserted in the environment already. \
+            We are investigating this issue, follow github.com/roc-lang/roc/issues/7461 for updates.",
+        )
     }
 
     /**

@@ -1,60 +1,65 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-33,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
-                @6-33 As(
-                    @6-21 Apply(
-                        "Foo.Bar",
-                        "Baz",
-                        [
-                            @18-19 BoundVariable(
-                                "x",
-                            ),
-                            @20-21 BoundVariable(
-                                "y",
-                            ),
-                        ],
-                    ),
-                    [],
-                    TypeHeader {
-                        name: @25-29 "Blah",
-                        vars: [
-                            @30-31 Identifier(
-                                "a",
-                            ),
-                            @32-33 Identifier(
-                                "b",
-                            ),
-                        ],
+@0-37 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-33,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-3 Identifier {
+                        ident: "foo",
                     },
+                    @6-33 As(
+                        @6-21 Apply(
+                            "Foo.Bar",
+                            "Baz",
+                            [
+                                @18-19 BoundVariable(
+                                    "x",
+                                ),
+                                @20-21 BoundVariable(
+                                    "y",
+                                ),
+                            ],
+                        ),
+                        [],
+                        TypeHeader {
+                            name: @25-29 "Blah",
+                            vars: [
+                                @30-31 Identifier(
+                                    "a",
+                                ),
+                                @32-33 Identifier(
+                                    "b",
+                                ),
+                            ],
+                        },
+                    ),
                 ),
+            ],
+        },
+        @35-37 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @35-37 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

@@ -9,7 +9,12 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Update PATH to use zig 13
+        run:  echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+      
+      - run: zig version
 
       - name: get the latest release archive
         run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
@@ -26,17 +31,11 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - name: test roc hello world
-        run: cd roc_nightly && ./roc examples/helloWorld.roc
-
-      - name: test platform switching rust
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesRust.roc
-
       - name: test platform switching zig
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesZig.roc --build-host --suppress-build-host-warning
 
       - name: test platform switching c
-        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc
+        run: cd roc_nightly && ./roc examples/platform-switching/rocLovesC.roc --build-host --suppress-build-host-warning
 
       - name: test repl
         run: |
@@ -45,6 +44,3 @@ jobs:
           cp target/release/repl_basic_test ../../roc_nightly
           cd ../../roc_nightly
           ./repl_basic_test
-
-
-        

@@ -8,7 +8,7 @@ use bumpalo::{collections::Vec, Bump};
 
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_mono::layout::{Builtin, InLayout, LayoutInterner, LayoutRepr, UnionLayout};
-use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocRefcounted, RocResult, RocStr, I128, U128};
 use roc_wasm_module::{
     linking::SymInfo, linking::WasmObjectSymbol, Align, Export, ExportType, LocalId, Signature,
     ValueType, WasmModule,
@@ -122,7 +122,7 @@ macro_rules! build_wrapper_body_primitive {
             let frame_size = 8;
 
             code_builder.get_local(frame_pointer_id);
-            code_builder.call(main_function_index, 0, true);
+            code_builder.call(main_function_index);
             code_builder.$store_instruction($align, 0);
             code_builder.get_local(frame_pointer_id);
 
@@ -149,7 +149,7 @@ fn build_wrapper_body_stack_memory(
     let frame_pointer = Some(local_id);
 
     code_builder.get_local(local_id);
-    code_builder.call(main_function_index, 0, true);
+    code_builder.call(main_function_index);
     code_builder.get_local(local_id);
     code_builder.build_fn_header_and_footer(local_types, size as i32, frame_pointer);
 }
@@ -197,13 +197,19 @@ impl Wasm32Result for RocStr {
     }
 }
 
-impl<T: Wasm32Result> Wasm32Result for RocList<T> {
+impl<T: Wasm32Result> Wasm32Result for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         build_wrapper_body_stack_memory(code_builder, main_function_index, 12)
     }
 }
 
-impl<T: Wasm32Result> Wasm32Result for RocBox<T> {
+impl<T: Wasm32Result> Wasm32Result for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
         // treat box as if it's just a isize value
         <i32 as Wasm32Result>::build_wrapper_body(code_builder, main_function_index)
@@ -236,7 +242,7 @@ where
 
 impl Wasm32Result for () {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        code_builder.call(main_function_index, 0, false);
+        code_builder.call(main_function_index);
         code_builder.get_global(0);
         code_builder.build_fn_header_and_footer(&[], 0, None);
     }
@@ -244,7 +250,7 @@ impl Wasm32Result for () {
 
 impl Wasm32Result for std::convert::Infallible {
     fn build_wrapper_body(code_builder: &mut CodeBuilder, main_function_index: u32) {
-        code_builder.call(main_function_index, 0, false);
+        code_builder.call(main_function_index);
         code_builder.get_global(0);
         code_builder.build_fn_header_and_footer(&[], 0, None);
     }

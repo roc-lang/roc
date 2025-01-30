@@ -1,0 +1,57 @@
+@0-15 SpaceAfter(
+    DbgStmt {
+        first: @6-14 SpaceBefore(
+            ParensAround(
+                Apply(
+                    @6-7 Var {
+                        module_name: "",
+                        ident: "q",
+                    },
+                    [
+                        @12-14 SpaceBefore(
+                            Var {
+                                module_name: "",
+                                ident: "qt",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    Space,
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+        extra_args: [],
+        continuation: @16-21 SpaceBefore(
+            Apply(
+                @16-17 Var {
+                    module_name: "",
+                    ident: "g",
+                },
+                [
+                    @19-21 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "qt",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+            ],
+        ),
+        pnc_style: false,
+    },
+    [
+        Newline,
+    ],
+)

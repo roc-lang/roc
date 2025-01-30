@@ -1,11 +1,12 @@
 use std::ops::ControlFlow;
 
 use bumpalo::Bump;
+use roc_collections::soa::slice_extend_new;
 use roc_error_macros::internal_error;
 use roc_types::{
     subs::{
         self, AliasVariables, Content, Descriptor, FlatType, GetSubsSlice, Mark, OptVariable, Rank,
-        RecordFields, Subs, SubsSlice, TagExt, TupleElems, UnionLabels, Variable,
+        RecordFields, Subs, TagExt, TupleElems, UnionLabels, Variable,
     },
     types::{RecordField, Uls},
 };
@@ -121,7 +122,7 @@ fn deep_copy_var_help(
 
     macro_rules! copy_sequence {
         ($length:expr, $variables:expr) => {{
-            let new_variables = SubsSlice::reserve_into_subs(subs, $length as _);
+            let new_variables = subs.reserve_into_vars($length as _);
             for (target_index, var_index) in (new_variables.indices()).zip($variables) {
                 let var = subs[var_index];
                 let copy_var = work!(var);
@@ -134,7 +135,7 @@ fn deep_copy_var_help(
 
     macro_rules! copy_union {
         ($tags:expr) => {{
-            let new_variable_slices = SubsSlice::reserve_variable_slices(subs, $tags.len());
+            let new_variable_slices = subs.reserve_variable_slices($tags.len());
 
             let it = (new_variable_slices.indices()).zip($tags.variables());
             for (target_index, index) in it {
@@ -176,16 +177,17 @@ fn deep_copy_var_help(
                         Apply(symbol, new_arguments)
                     }
 
-                    Func(arguments, closure_var, ret_var) => {
+                    Func(arguments, closure_var, ret_var, fx_var) => {
                         let new_ret_var = work!(ret_var);
                         let new_closure_var = work!(closure_var);
+                        let new_fx_var = work!(fx_var);
 
                         let new_arguments = copy_sequence!(arguments.len(), arguments);
 
-                        Func(new_arguments, new_closure_var, new_ret_var)
+                        Func(new_arguments, new_closure_var, new_ret_var, new_fx_var)
                     }
 
-                    same @ EmptyRecord | same @ EmptyTuple | same @ EmptyTagUnion => same,
+                    same @ (EmptyRecord | EmptyTagUnion | EffectfulFunc) => same,
 
                     Record(fields, ext_var) => {
                         let record_fields = {
@@ -201,7 +203,7 @@ fn deep_copy_var_help(
 
                             let new_field_types_start = if has_rigid_optional_field {
                                 let field_types = field_types.to_vec();
-                                let slice = SubsSlice::extend_new(
+                                let slice = slice_extend_new(
                                     &mut subs.record_fields,
                                     field_types.into_iter().map(|f| match f {
                                         RecordField::RigidOptional(())
@@ -212,7 +214,7 @@ fn deep_copy_var_help(
                                         | RecordField::Optional(_) => f,
                                     }),
                                 );
-                                slice.start
+                                slice.start()
                             } else {
                                 fields.field_types_start
                             };
@@ -220,7 +222,7 @@ fn deep_copy_var_help(
                             RecordFields {
                                 length: fields.length,
                                 field_names_start: fields.field_names_start,
-                                variables_start: new_variables.start,
+                                variables_start: new_variables.start(),
                                 field_types_start: new_field_types_start,
                             }
                         };
@@ -234,7 +236,7 @@ fn deep_copy_var_help(
 
                             TupleElems {
                                 length: elems.length,
-                                variables_start: new_variables.start,
+                                variables_start: new_variables.start(),
                                 elem_index_start: elems.elem_index_start,
                             }
                         };
@@ -262,7 +264,7 @@ fn deep_copy_var_help(
                 subs.set_content_unchecked(copy, Structure(new_flat_type));
             }
 
-            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda => {
+            FlexVar(_) | FlexAbleVar(_, _) | Error | ErasedLambda | Pure | Effectful => {
                 subs.set_content_unchecked(copy, content);
             }
 
@@ -291,7 +293,7 @@ fn deep_copy_var_help(
                     copy_sequence!(arguments.all_variables_len, arguments.all_variables());
 
                 let new_arguments = AliasVariables {
-                    variables_start: new_variables.start,
+                    variables_start: new_variables.start(),
                     ..arguments
                 };
 
@@ -311,7 +313,7 @@ fn deep_copy_var_help(
 
                 let new_solved = copy_union!(solved);
                 let new_rec_var = recursion_var.map(|v| work!(v));
-                let new_unspecialized = SubsSlice::reserve_uls_slice(subs, unspecialized.len());
+                let new_unspecialized = subs.reserve_uls_slice(unspecialized.len());
 
                 for (new_uls_index, uls_index) in
                     (new_unspecialized.into_iter()).zip(unspecialized.into_iter())
@@ -327,10 +329,6 @@ fn deep_copy_var_help(
                 }
 
                 let new_ambient_function_var = work!(ambient_function_var);
-                debug_assert_ne!(
-                    ambient_function_var, new_ambient_function_var,
-                    "lambda set cloned but its ambient function wasn't?"
-                );
 
                 subs.set_content_unchecked(
                     lambda_set_var,

@@ -1,14 +1,14 @@
-Closure(
+@0-14 Closure(
     [
-        @1-2 Identifier(
-            "a",
-        ),
-        @4-5 Identifier(
-            "b",
-        ),
-        @7-8 Identifier(
-            "c",
-        ),
+        @1-2 Identifier {
+            ident: "a",
+        },
+        @4-5 Identifier {
+            ident: "b",
+        },
+        @7-8 Identifier {
+            ident: "c",
+        },
     ],
     @12-14 Num(
         "42",

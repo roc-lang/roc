@@ -1,0 +1,12 @@
+[package]
+name = "soa"
+description = "Struct-of-Array helpers"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+
+[dev-dependencies]

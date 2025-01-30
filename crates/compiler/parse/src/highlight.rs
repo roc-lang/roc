@@ -59,7 +59,7 @@ pub enum Token {
     Paren,
     Arrow,
     Pipe,
-    Backpass,
+    BackArrow,
     Decimal,
     Multiply,
     Underscore,
@@ -74,7 +74,7 @@ pub fn highlight(text: &str) -> Vec<Loc<Token>> {
     let header_keywords = HEADER_KEYWORDS.iter().copied().collect::<HashSet<_>>();
     let body_keywords = KEYWORDS.iter().copied().collect::<HashSet<_>>();
 
-    if let Ok((_prog, _, new_state)) = crate::module::header().parse(&arena, state.clone(), 0) {
+    if let Ok((_prog, _, new_state)) = crate::header::header().parse(&arena, state.clone(), 0) {
         let inner_state =
             State::new(text[..state.bytes().len() - new_state.bytes().len()].as_bytes());
         highlight_inner(&arena, inner_state, &mut tokens, &header_keywords);
@@ -257,7 +257,7 @@ fn highlight_inner<'a>(
                         Token::LessThanEquals
                     } else if state.bytes().first() == Some(&b'-') {
                         state.advance_mut(1);
-                        Token::Backpass
+                        Token::BackArrow
                     } else {
                         Token::LessThan
                     };
@@ -365,7 +365,7 @@ fn fast_forward_to(
     tokens.push(Loc::at(Region::between(start, state.pos()), Token::Error));
 }
 
-pub const HEADER_KEYWORDS: [&str; 14] = [
+pub const HEADER_KEYWORDS: [&str; 12] = [
     "interface",
     "app",
     "package",
@@ -373,8 +373,6 @@ pub const HEADER_KEYWORDS: [&str; 14] = [
     "hosted",
     "exposes",
     "imports",
-    "with",
-    "generates",
     "package",
     "packages",
     "requires",
@@ -413,7 +411,7 @@ mod tests {
 
     #[test]
     fn test_highlight_doc_comments() {
-        let text = "## a\n##b\n##c";
+        let text = "## a\n##b\n##c\n##\n";
         let tokens = highlight(text);
         assert_eq!(
             tokens,
@@ -422,14 +420,17 @@ mod tests {
                     Region::between(Position::new(0), Position::new(4)),
                     Token::DocComment
                 ),
-                // the next two are line comments because there's not a space at the beginning
                 Loc::at(
                     Region::between(Position::new(5), Position::new(8)),
-                    Token::LineComment
+                    Token::DocComment
                 ),
                 Loc::at(
                     Region::between(Position::new(9), Position::new(12)),
-                    Token::LineComment
+                    Token::DocComment
+                ),
+                Loc::at(
+                    Region::between(Position::new(13), Position::new(15)),
+                    Token::DocComment
                 ),
             ]
         );
@@ -555,7 +556,7 @@ mod tests {
             ),
             Loc::at(
                 Region::between(Position::new(6), Position::new(8)),
-                Token::Backpass,
+                Token::BackArrow,
             ),
             Loc::at(
                 Region::between(Position::new(9), Position::new(11)),

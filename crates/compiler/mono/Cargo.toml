@@ -8,25 +8,25 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_builtins = { path = "../builtins" }
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_derive = { path = "../derive" }
-roc_derive_key = { path = "../derive_key" }
-roc_error_macros = { path = "../../error_macros" }
-roc_exhaustive = { path = "../exhaustive" }
-roc_late_solve = { path = "../late_solve" }
-roc_module = { path = "../module" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_std = { path = "../../roc_std" }
-roc_target = { path = "../roc_target" }
-roc_tracing = { path = "../../tracing" }
-roc_types = { path = "../types" }
-roc_solve_schema = { path = "../solve_schema" }
-roc_unify = { path = "../unify" }
-ven_pretty = { path = "../../vendor/pretty" }
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_debug_flags.workspace = true
+roc_derive.workspace = true
+roc_derive_key.workspace = true
+roc_error_macros.workspace = true
+roc_exhaustive.workspace = true
+roc_late_solve.workspace = true
+roc_module.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_tracing.workspace = true
+roc_types.workspace = true
+roc_solve_schema.workspace = true
+roc_unify.workspace = true
+ven_pretty.workspace = true
 
 bitvec.workspace = true
 arrayvec.workspace = true
@@ -34,3 +34,4 @@ bumpalo.workspace = true
 hashbrown.workspace = true
 parking_lot.workspace = true
 static_assertions.workspace = true
+indoc.workspace = true

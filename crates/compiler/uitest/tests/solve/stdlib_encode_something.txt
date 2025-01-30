@@ -1,0 +1,66 @@
+app "test"
+    imports []
+    provides [main] to "./platform"
+
+OnlyStrEncoder := {} implements [Encode.EncoderFormatting {
+            u8: encodeU8,
+            u16: encodeU16,
+            u32: encodeU32,
+            u64: encodeU64,
+            u128: encodeU128,
+            i8: encodeI8,
+            i16: encodeI16,
+            i32: encodeI32,
+            i64: encodeI64,
+            i128: encodeI128,
+            f32: encodeF32,
+            f64: encodeF64,
+            dec: encodeDec,
+            bool: encodeBool,
+            string: encodeString,
+            list: encodeList,
+            record: encodeRecord,
+            tuple: encodeTuple,
+            tag: encodeTag,
+}]
+
+encodeNothing = Encode.custom \bytes, @OnlyStrEncoder {} -> bytes
+encodeU8 = \_n -> encodeNothing
+encodeU16 = \_n -> encodeNothing
+encodeU32 = \_n -> encodeNothing
+encodeU64 = \_n -> encodeNothing
+encodeU128 = \_n -> encodeNothing
+encodeI8 = \_n -> encodeNothing
+encodeI16 = \_n -> encodeNothing
+encodeI32 = \_n -> encodeNothing
+encodeI64 = \_n -> encodeNothing
+encodeI128 = \_n -> encodeNothing
+encodeF32 = \_n -> encodeNothing
+encodeF64 = \_n -> encodeNothing
+encodeDec = \_n -> encodeNothing
+encodeBool = \_b -> encodeNothing
+encodeString = \str -> Encode.custom \bytes, @OnlyStrEncoder {} -> List.concat bytes (Str.to_utf8 str)
+encodeList : List elem, (elem -> Encoder OnlyStrEncoder) -> Encoder OnlyStrEncoder
+encodeList = \_lst, _encodeElem -> encodeNothing
+encodeRecord : List {key: Str, value: Encoder OnlyStrEncoder} -> Encoder OnlyStrEncoder
+encodeRecord = \_fields -> encodeNothing
+encodeTuple : List (Encoder OnlyStrEncoder) -> Encoder OnlyStrEncoder
+encodeTuple = \_elems -> encodeNothing
+encodeTag : Str, List (Encoder OnlyStrEncoder) -> Encoder OnlyStrEncoder
+encodeTag = \_name, _payload -> encodeNothing
+
+
+HelloWorld := {} implements [Encoding {to_encoder}]
+
+to_encoder = \@HelloWorld {} ->
+    Encode.custom \bytes, fmt ->
+        bytes
+        |> Encode.append_with (Encode.string "Hello, World!\n") fmt
+
+f =
+    when Str.from_utf8 (Encode.to_bytes (@HelloWorld {}) (@OnlyStrEncoder {})) is
+        Ok s -> s
+        _ -> "<bad>"
+
+main = f
+#      ^ Str

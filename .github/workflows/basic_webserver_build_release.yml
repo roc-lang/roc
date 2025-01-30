@@ -1,0 +1,174 @@
+on:
+  #pull_request:
+  workflow_dispatch:
+
+# this cancels workflows currently in progress if you start a new one
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # use .tar.gz for quick testing
+  ARCHIVE_FORMAT: .tar.br
+  RELEASE_TAG: 0.8.0
+
+jobs:
+  fetch-releases:
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      # get latest nightly releases
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
+
+      - name: Save roc_nightly archives
+        uses: actions/upload-artifact@v4
+        with:
+          path: roc_nightly-*
+
+  build-linux-x86_64-files:
+    runs-on: [ubuntu-20.04]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v4
+
+      - name: build basic-webserver with legacy linker
+        env:
+          CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
+        run: ./ci/build_basic_webserver.sh linux_x86_64
+
+      - name: Save .rh, .rm and .a file
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-x86_64-files
+          path: |
+            basic-webserver/platform/metadata_linux-x64.rm
+            basic-webserver/platform/linux-x64.rh
+            basic-webserver/platform/linux-x64.a
+
+  build-linux-arm64-files:
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v4
+
+      - name: build basic-webserver
+        env:
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
+          CC_aarch64_unknown_linux_musl: clang-18
+          AR_aarch64_unknown_linux_musl: llvm-ar-18
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+        run: ./ci/build_basic_webserver.sh linux_arm64
+
+      - name: Save .a file
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-files
+          path: |
+            basic-webserver/platform/linux-arm64.a
+
+  build-macos-x86_64-files:
+    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v4
+
+      - run: ./ci/build_basic_webserver.sh macos_x86_64
+
+      - name: Save .a files
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-x86_64-files
+          path: |
+            basic-webserver/platform/macos-x64.a
+
+  build-macos-apple-silicon-files:
+    name: build apple silicon .a file
+    runs-on: [self-hosted, macOS, ARM64]
+    needs: [fetch-releases]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v4
+
+      - run: ./ci/build_basic_webserver.sh macos_apple_silicon
+
+      - name: Save macos-arm64.a file
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-apple-silicon-files
+          path: |
+            basic-webserver/platform/macos-arm64.a
+
+  create-release-archive:
+    needs:
+      [
+        build-linux-x86_64-files,
+        build-linux-arm64-files,
+        build-macos-x86_64-files,
+        build-macos-apple-silicon-files,
+      ]
+    name: create release archive
+    runs-on: [ubuntu-20.04]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: remove all folders except the ci folder
+        run: ls | grep -v  ci | xargs rm -rf
+
+      - name: Download the previously uploaded files
+        uses: actions/download-artifact@v4
+
+      - name: mv roc nightly and simplify name
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzvf roc_nightly.tar.gz
+
+      - name: delete tar
+        run: rm roc_nightly.tar.gz
+
+      - name: rename nightly folder
+        run: mv roc_nightly* roc_nightly
+
+      - run: |
+          git clone https://github.com/roc-lang/basic-webserver.git
+          cd basic-webserver
+          git checkout ${{ env.RELEASE_TAG }}
+          cd ..
+
+      - run: cp macos-apple-silicon-files/* ./basic-webserver/platform
+
+      - run: cp linux-x86_64-files/* ./basic-webserver/platform
+
+      - run: cp linux-arm64-files/* ./basic-webserver/platform
+
+      - run: cp macos-x86_64-files/* ./basic-webserver/platform
+
+      - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-webserver/platform/main.roc
+
+      - run: echo "TAR_FILENAME=$(ls -d basic-webserver/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
+
+      - name: Upload platform archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: basic-webserver-platform
+          path: |
+            ${{ env.TAR_FILENAME }}

@@ -1,7 +1,7 @@
 app "test" provides [main] to "./platform"
 
 polyDbg = \x ->
-#^^^^^^^{-1} a -[[polyDbg(1)]]-> a
+#^^^^^^^{-1} val -[[polyDbg(1)]]-> val where val implements Inspect
     dbg x
     x
 

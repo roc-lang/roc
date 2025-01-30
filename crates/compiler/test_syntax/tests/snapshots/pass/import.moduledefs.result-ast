@@ -1,0 +1,34 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+    ],
+    regions: [
+        @0-12,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @8-12 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: None,
+            },
+        ),
+    ],
+}

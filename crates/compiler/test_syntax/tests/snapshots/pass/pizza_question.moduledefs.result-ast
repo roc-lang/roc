@@ -1,0 +1,154 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+    ],
+    regions: [
+        @0-167,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @11-167 SpaceBefore(
+                BinOps(
+                    [
+                        (
+                            @11-24 SpaceAfter(
+                                Apply(
+                                    @11-20 TrySuffix(
+                                        Var {
+                                            module_name: "",
+                                            ident: "parseArgs",
+                                        },
+                                    ),
+                                    [
+                                        @22-24 Record(
+                                            [],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @29-31 Pizza,
+                        ),
+                        (
+                            @32-48 SpaceAfter(
+                                Apply(
+                                    @32-46 Var {
+                                        module_name: "List",
+                                        ident: "dropFirst",
+                                    },
+                                    [
+                                        @47-48 Num(
+                                            "1",
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @53-55 Pizza,
+                        ),
+                        (
+                            @56-77 SpaceAfter(
+                                Apply(
+                                    @56-67 TrySuffix(
+                                        Var {
+                                            module_name: "List",
+                                            ident: "mapTry",
+                                        },
+                                    ),
+                                    [
+                                        @69-77 Var {
+                                            module_name: "Str",
+                                            ident: "toU8",
+                                        },
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @82-84 Pizza,
+                        ),
+                        (
+                            @85-93 SpaceAfter(
+                                Var {
+                                    module_name: "List",
+                                    ident: "sum",
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @98-100 Pizza,
+                        ),
+                        (
+                            @101-148 SpaceAfter(
+                                Closure(
+                                    [
+                                        @102-107 Identifier {
+                                            ident: "total",
+                                        },
+                                    ],
+                                    @111-148 Str(
+                                        Line(
+                                            [
+                                                Plaintext(
+                                                    "Sum of numbers: ",
+                                                ),
+                                                Interpolated(
+                                                    @130-146 Apply(
+                                                        @130-140 Var {
+                                                            module_name: "Num",
+                                                            ident: "to_str",
+                                                        },
+                                                        [
+                                                            @141-146 Var {
+                                                                module_name: "",
+                                                                ident: "total",
+                                                            },
+                                                        ],
+                                                        Space,
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @153-155 Pizza,
+                        ),
+                    ],
+                    @156-167 Var {
+                        module_name: "Str",
+                        ident: "toUpper",
+                    },
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

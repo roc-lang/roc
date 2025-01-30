@@ -1,0 +1,45 @@
+@0-84 SpaceAfter(
+    Return(
+        @0-84 SpaceBefore(
+            BinOps(
+                [
+                    (
+                        @15-24 SpaceAfter(
+                            Var {
+                                module_name: "",
+                                ident: "something",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @37-39 Pizza,
+                    ),
+                    (
+                        @40-54 SpaceAfter(
+                            Var {
+                                module_name: "",
+                                ident: "pipeToFunction",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @71-73 Pizza,
+                    ),
+                ],
+                @74-84 Var {
+                    module_name: "",
+                    ident: "andAnother",
+                },
+            ),
+            [
+                Newline,
+            ],
+        ),
+        None,
+    ),
+    [
+        Newline,
+    ],
+)

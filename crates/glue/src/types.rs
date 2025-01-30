@@ -8,7 +8,7 @@ use roc_builtins::bitcode::{
     IntWidth::{self, *},
 };
 use roc_collections::{MutMap, VecMap};
-use roc_error_macros::todo_lambda_erasure;
+use roc_error_macros::{internal_error, todo_lambda_erasure};
 use roc_module::{
     ident::TagName,
     symbol::{Interns, Symbol},
@@ -20,7 +20,7 @@ use roc_mono::{
         InLayout, Layout, LayoutCache, LayoutInterner, LayoutRepr, TLLayoutInterner, UnionLayout,
     },
 };
-use roc_target::{Architecture, OperatingSystem, TargetInfo};
+use roc_target::{Architecture, OperatingSystem, Target};
 use roc_types::{
     subs::{Content, FlatType, GetSubsSlice, Label, Subs, SubsSlice, UnionLabels, Variable},
     types::{AliasKind, RecordField},
@@ -65,13 +65,13 @@ pub struct Types {
     /// This is important for declaration order in C; we need to output a
     /// type declaration earlier in the file than where it gets referenced by another type.
     deps: VecMap<TypeId, Vec<TypeId>>,
-    target: TargetInfo,
+    target: Target,
 }
 
 impl Types {
     const UNIT: TypeId = TypeId(0);
 
-    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+    pub fn with_capacity(cap: usize, target: Target) -> Self {
         let mut types = Vec::with_capacity(cap);
         let mut sizes = Vec::with_capacity(cap);
         let mut aligns = Vec::with_capacity(cap);
@@ -81,7 +81,7 @@ impl Types {
         aligns.push(1);
 
         Self {
-            target: target_info,
+            target,
             types,
             sizes,
             aligns,
@@ -98,7 +98,7 @@ impl Types {
         interns: &'a Interns,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
         layout_cache: LayoutCache<'a>,
-        target: TargetInfo,
+        target: Target,
         mut entry_points: MutMap<Symbol, Variable>,
     ) -> Self {
         let mut types = Self::with_capacity(entry_points.len(), target);
@@ -639,7 +639,7 @@ impl Types {
         }
     }
 
-    pub fn target(&self) -> TargetInfo {
+    pub fn target(&self) -> Target {
         self.target
     }
 }
@@ -669,7 +669,7 @@ impl From<&Types> for roc_type::Types {
             entrypoints,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(roc_type::RocType::from).collect(),
-            typesByName: types_by_name,
+            types_by_name,
             target: types.target.into(),
         }
     }
@@ -708,11 +708,11 @@ impl From<&RocType> for roc_type::RocType {
                 is_toplevel,
             }) => roc_type::RocType::Function(roc_type::RocFn {
                 args: args.iter().map(|arg| arg.0 as _).collect(),
-                functionName: function_name.as_str().into(),
-                externName: extern_name.as_str().into(),
+                function_name: function_name.as_str().into(),
+                extern_name: extern_name.as_str().into(),
                 ret: ret.0 as _,
-                lambdaSet: lambda_set.0 as _,
-                isToplevel: *is_toplevel,
+                lambda_set: lambda_set.0 as _,
+                is_toplevel: *is_toplevel,
             }),
             RocType::Unit => roc_type::RocType::Unit,
             RocType::Unsized => roc_type::RocType::Unsized,
@@ -764,8 +764,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::Recursive {
                 name,
@@ -781,8 +781,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::NonNullableUnwrapped {
                 name,
@@ -790,7 +790,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 payload,
             } => roc_type::RocTagUnion::NonNullableUnwrapped(roc_type::R6 {
                 name: name.as_str().into(),
-                tagName: tag_name.as_str().into(),
+                tag_name: tag_name.as_str().into(),
                 payload: payload.0 as _,
             }),
             RocTagUnion::SingleTagStruct {
@@ -799,7 +799,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 payload,
             } => roc_type::RocTagUnion::SingleTagStruct(roc_type::R14 {
                 name: name.as_str().into(),
-                tagName: tag_name.as_str().into(),
+                tag_name: tag_name.as_str().into(),
                 payload: payload.into(),
             }),
             RocTagUnion::NullableWrapped {
@@ -810,7 +810,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 discriminant_offset,
             } => roc_type::RocTagUnion::NullableWrapped(roc_type::R10 {
                 name: name.as_str().into(),
-                indexOfNullTag: *index_of_null_tag,
+                index_of_null_tag: *index_of_null_tag,
                 tags: tags
                     .iter()
                     .map(|(name, payload)| roc_type::R8 {
@@ -818,8 +818,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::NullableUnwrapped {
                 name,
@@ -829,10 +829,10 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 null_represents_first_tag,
             } => roc_type::RocTagUnion::NullableUnwrapped(roc_type::R9 {
                 name: name.as_str().into(),
-                nonNullPayload: non_null_payload.0 as _,
-                nonNullTag: non_null_tag.as_str().into(),
-                nullTag: null_tag.as_str().into(),
-                whichTagIsNull: if *null_represents_first_tag {
+                non_null_payload: non_null_payload.0 as _,
+                non_null_tag: non_null_tag.as_str().into(),
+                null_tag: null_tag.as_str().into(),
+                which_tag_is_null: if *null_represents_first_tag {
                     roc_type::U2::FirstTagIsNull
                 } else {
                     roc_type::U2::SecondTagIsNull
@@ -905,11 +905,11 @@ impl From<&Option<TypeId>> for roc_type::U1 {
     }
 }
 
-impl From<TargetInfo> for roc_type::Target {
-    fn from(target: TargetInfo) -> Self {
+impl From<Target> for roc_type::Target {
+    fn from(target: Target) -> Self {
         roc_type::Target {
-            architecture: target.architecture.into(),
-            operatingSystem: target.operating_system.into(),
+            architecture: target.architecture().into(),
+            operating_system: target.operating_system().into(),
         }
     }
 }
@@ -928,10 +928,12 @@ impl From<Architecture> for roc_type::Architecture {
 
 impl From<OperatingSystem> for roc_type::OperatingSystem {
     fn from(os: OperatingSystem) -> Self {
+        // TODO: Update Glue to new OS Tags.
         match os {
             OperatingSystem::Windows => roc_type::OperatingSystem::Windows,
-            OperatingSystem::Unix => roc_type::OperatingSystem::Unix,
-            OperatingSystem::Wasi => roc_type::OperatingSystem::Wasi,
+            OperatingSystem::Linux => roc_type::OperatingSystem::Linux,
+            OperatingSystem::Mac => roc_type::OperatingSystem::Mac,
+            OperatingSystem::Freestanding => roc_type::OperatingSystem::Freestanding,
         }
     }
 }
@@ -1179,7 +1181,7 @@ impl<'a> Env<'a> {
         interns: &'a Interns,
         layout_interner: TLLayoutInterner<'a>,
         glue_procs_by_layout: MutMap<Layout<'a>, &'a [String]>,
-        target: TargetInfo,
+        target: Target,
     ) -> Self {
         Env {
             arena,
@@ -1234,7 +1236,7 @@ impl<'a> Env<'a> {
             .expect("Something weird ended up in the content");
 
         match self.subs.get_content_without_compacting(var) {
-            Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+            Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
                 // this is a toplevel type, so the closure must be empty
                 let is_toplevel = true;
                 add_function_type(
@@ -1267,7 +1269,7 @@ fn add_function_type<'a>(
     let name = format!("RocFunction_{closure_var:?}");
 
     let extern_name = match env.lambda_set_ids.get(&closure_var) {
-        Some(id) => format!("roc__mainForHost_{}_caller", id.0),
+        Some(id) => format!("roc__main_for_host_{}_caller", id.0),
         None => {
             debug_assert!(is_toplevel);
             String::from("this_extern_should_not_be_used_this_is_a_bug")
@@ -1338,7 +1340,8 @@ fn add_type_help<'a>(
         Content::FlexVar(_)
         | Content::RigidVar(_)
         | Content::FlexAbleVar(_, _)
-        | Content::RigidAbleVar(_, _) => {
+        | Content::RigidAbleVar(_, _)
+        | Content::Structure(FlatType::EffectfulFunc) => {
             todo!("TODO give a nice error message for a non-concrete type being passed to the host")
         }
         Content::Structure(FlatType::Tuple(..)) => {
@@ -1403,7 +1406,7 @@ fn add_type_help<'a>(
                 }
             }
         },
-        Content::Structure(FlatType::Func(args, closure_var, ret_var)) => {
+        Content::Structure(FlatType::Func(args, closure_var, ret_var, _fx_var)) => {
             let is_toplevel = false; // or in any case, we cannot assume that we are
 
             add_function_type(
@@ -1420,9 +1423,6 @@ fn add_type_help<'a>(
             todo!()
         }
         Content::Structure(FlatType::EmptyRecord) => {
-            types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
-        }
-        Content::Structure(FlatType::EmptyTuple) => {
             types.add_anonymous(&env.layout_cache.interner, RocType::Unit, layout)
         }
         Content::Structure(FlatType::EmptyTagUnion) => {
@@ -1572,6 +1572,7 @@ fn add_type_help<'a>(
             type_id
         }
         Content::ErasedLambda => todo_lambda_erasure!(),
+        Content::Pure | Content::Effectful => internal_error!("fx vars should not appear here"),
         Content::LambdaSet(lambda_set) => {
             let tags = lambda_set.solved;
 
@@ -2217,21 +2218,24 @@ fn single_tag_payload_fields<'a, 'b>(
     types: &mut Types,
 ) -> (String, RocSingleTagPayload) {
     let layout = env.layout_cache.interner.get(in_layout);
-    // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
-    // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
-    // anyway just so we have some warning in case that relationship somehow didn't hold!
-    debug_assert_eq!(
-        env.glue_procs_by_layout.get(&layout).is_some(),
-        env.layout_cache
-            .interner
-            .has_varying_stack_size(in_layout, env.arena),
-        "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
-            &layout,
-            env.glue_procs_by_layout.get(&layout),
+
+    if std::env::var("SINGLE_TAG_GLUE_CHECK_OFF").as_deref() != Ok("1") {
+        // There should be a glue_procs_by_layout entry iff this layout has a closure in it,
+        // so we shouldn't need to separately check that. Howeevr, we still do a debug_assert
+        // anyway just so we have some warning in case that relationship somehow didn't hold!
+        debug_assert_eq!(
+            env.glue_procs_by_layout.get(&layout).is_some(),
             env.layout_cache
                 .interner
-                .has_varying_stack_size(in_layout, env.arena)
-    );
+                .has_varying_stack_size(in_layout, env.arena),
+            "glue_procs_by_layout for {:?} was {:?}, but the layout cache said its has_varying_stack_size was {}",
+                &layout,
+                env.glue_procs_by_layout.get(&layout),
+                env.layout_cache
+                    .interner
+                    .has_varying_stack_size(in_layout, env.arena)
+        );
+    }
 
     let (tag_name, payload_vars) = single_tag_payload(union_tags, subs);
 
@@ -2282,7 +2286,7 @@ fn tag_to_type<'a, D: Display>(
             // this isn't recursive and there's 1 payload item, so it doesn't
             // need its own struct - e.g. for `[Foo Str, Bar Str]` both of them
             // can have payloads of plain old Str, no struct wrapper needed.
-            let payload_var = payload_vars.get(0).unwrap();
+            let payload_var = payload_vars.first().unwrap();
             let payload_layout = env
                 .layout_cache
                 .from_var(env.arena, *payload_var, env.subs)

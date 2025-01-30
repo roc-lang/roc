@@ -1,4 +1,4 @@
-use target_lexicon::Triple;
+use roc_target::{OperatingSystem, Target};
 
 mod elf64;
 mod macho;
@@ -12,11 +12,11 @@ pub(crate) use elf64::create_dylib_elf64;
 
 pub(crate) use pe::APP_DLL;
 
-pub fn generate(target: &Triple, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
-    match target.binary_format {
-        target_lexicon::BinaryFormat::Elf => elf64::create_dylib_elf64(custom_names),
-        target_lexicon::BinaryFormat::Macho => macho::create_dylib_macho(custom_names, target),
-        target_lexicon::BinaryFormat::Coff => Ok(pe::synthetic_dll(custom_names)),
+pub fn generate(target: Target, custom_names: &[String]) -> object::read::Result<Vec<u8>> {
+    match target.operating_system() {
+        OperatingSystem::Linux => elf64::create_dylib_elf64(custom_names),
+        OperatingSystem::Mac => macho::create_dylib_macho(custom_names, target),
+        OperatingSystem::Windows => Ok(pe::synthetic_dll(custom_names)),
         other => unimplemented!("dylib creation for {:?}", other),
     }
 }
@@ -26,8 +26,10 @@ mod tests {
     use super::*;
 
     use object::Object;
+    use target_lexicon::Triple;
 
-    fn check_exports(target: &Triple) {
+    fn check_exports(triple: &Triple) {
+        let target = triple.into();
         let custom_names = ["foo".to_string(), "bar".to_string()];
 
         let bytes = generate(target, &custom_names).unwrap();
@@ -75,16 +77,9 @@ mod tests {
 
     #[test]
     fn check_exports_coff_manual() {
-        let target = target_lexicon::Triple {
-            architecture: target_lexicon::Architecture::X86_64,
-            operating_system: target_lexicon::OperatingSystem::Windows,
-            binary_format: target_lexicon::BinaryFormat::Coff,
-            ..target_lexicon::Triple::host()
-        };
-
         let custom_names = ["foo".to_string(), "bar".to_string()];
 
-        let bytes = generate(&target, &custom_names).unwrap();
+        let bytes = generate(Target::WinX64, &custom_names).unwrap();
         let object = object::read::pe::PeFile64::parse(bytes.as_slice()).unwrap();
 
         let exports = {

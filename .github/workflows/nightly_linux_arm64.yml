@@ -1,46 +1,54 @@
 on:
+  #pull_request:
   workflow_dispatch:
   schedule:
-    - cron:  '0 9 * * *'
+    - cron: "0 9 * * *"
 
 name: Nightly Release Linux arm64/aarch64
-    
+
 jobs:
   build:
     name: build and package nightly release
     runs-on: [self-hosted, Linux, ARM64]
-    timeout-minutes: 90
+    timeout-minutes: 110
+
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      - name: Update PATH to use zig 13
+        run: |
+          echo "PATH=/home/username/Downloads/zig-linux-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+
+      - run: zig version
 
       - name: create version.txt
         run: ./ci/write_version.sh
 
       - name: build release with lto
-        run: cargo build --profile=release-with-lto --locked --bin roc 
+        run: cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
 
       - name: get commit SHA
-        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
-        
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
-        
+
       - name: build file name
         env:
-            DATE: ${{ env.DATE }}
-            SHA: ${{ env.SHA }}
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-linux_arm64-$DATE-$SHA" >> $GITHUB_ENV
 
       # this makes the roc binary a lot smaller
       - name: strip debug info
         run: strip ./target/release-with-lto/roc
-       
+
       - name: Make nightly release tar archive
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           retention-days: 4
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

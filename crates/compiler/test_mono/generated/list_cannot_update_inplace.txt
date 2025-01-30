@@ -1,33 +1,33 @@
-procedure List.3 (List.110, List.111, List.112):
-    let List.548 : {List I64, I64} = CallByName List.64 List.110 List.111 List.112;
-    let List.547 : List I64 = StructAtIndex 0 List.548;
-    ret List.547;
+procedure List.3 (List.128, List.129, List.130):
+    let List.678 : {List I64, I64} = CallByName List.64 List.128 List.129 List.130;
+    let List.677 : List I64 = StructAtIndex 0 List.678;
+    ret List.677;
 
 procedure List.6 (#Attr.2):
-    let List.546 : U64 = lowlevel ListLen #Attr.2;
-    ret List.546;
+    let List.676 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.676;
 
-procedure List.64 (List.107, List.108, List.109):
-    let List.553 : U64 = CallByName List.6 List.107;
-    let List.550 : Int1 = CallByName Num.22 List.108 List.553;
-    if List.550 then
-        let List.551 : {List I64, I64} = CallByName List.67 List.107 List.108 List.109;
-        ret List.551;
+procedure List.64 (List.125, List.126, List.127):
+    let List.683 : U64 = CallByName List.6 List.125;
+    let List.680 : Int1 = CallByName Num.22 List.126 List.683;
+    if List.680 then
+        let List.681 : {List I64, I64} = CallByName List.67 List.125 List.126 List.127;
+        ret List.681;
     else
-        let List.549 : {List I64, I64} = Struct {List.107, List.109};
-        ret List.549;
+        let List.679 : {List I64, I64} = Struct {List.125, List.127};
+        ret List.679;
 
 procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
-    let List.552 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
-    ret List.552;
+    let List.682 : {List I64, I64} = lowlevel ListReplaceUnsafe #Attr.2 #Attr.3 #Attr.4;
+    ret List.682;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.291 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.283 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.1 ():
     let Test.8 : List I64 = Array [1i64, 2i64, 3i64];

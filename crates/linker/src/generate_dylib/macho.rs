@@ -1,14 +1,14 @@
 use object::write;
 use object::{Architecture, BinaryFormat, Endianness, SymbolFlags, SymbolKind, SymbolScope};
 use roc_error_macros::internal_error;
+use roc_target::Target;
 use std::path::Path;
 use std::process::Command;
-use target_lexicon::Triple;
 
 // TODO: Eventually do this from scratch and in memory instead of with ld.
 pub fn create_dylib_macho(
     custom_names: &[String],
-    triple: &Triple,
+    target: Target,
 ) -> object::read::Result<Vec<u8>> {
     let dummy_obj_file = tempfile::Builder::new()
         .prefix("roc_lib")
@@ -19,9 +19,9 @@ pub fn create_dylib_macho(
     let dummy_lib_file = tmp.path().to_path_buf().with_file_name("libapp.so");
 
     let obj_target = BinaryFormat::MachO;
-    let obj_arch = match triple.architecture {
-        target_lexicon::Architecture::X86_64 => Architecture::X86_64,
-        target_lexicon::Architecture::Aarch64(_) => Architecture::Aarch64,
+    let obj_arch = match target.architecture() {
+        roc_target::Architecture::X86_64 => Architecture::X86_64,
+        roc_target::Architecture::Aarch64 => Architecture::Aarch64,
         _ => {
             // We should have verified this via supported() before calling this function
             unreachable!()
@@ -62,6 +62,7 @@ pub fn create_dylib_macho(
 
     let ld_flag_soname = "-install_name";
     let ld_prefix_args = [big_sur_fix, "-lSystem", "-dylib"];
+    let macos_version = get_macos_version();
 
     let output = Command::new("ld")
         .args(ld_prefix_args)
@@ -71,11 +72,17 @@ pub fn create_dylib_macho(
             dummy_obj_file.path().to_str().unwrap(),
             "-o",
             dummy_lib_file.to_str().unwrap(),
-            // Suppress warnings, because otherwise it prints:
-            //
-            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
-            //
-            // We can't disable that option without breaking either x64 mac or ARM mac
+            // Suppress fixup chains to ease working out dynamic relocs by the
+            // surgical linker. In my experience, working with dyld opcodes is
+            // slightly easier than unpacking compressed info from the __got section
+            // and fixups load command.
+            "-no_fixup_chains",
+            "-platform_version",
+            "macos",
+            &macos_version,
+            &macos_version,
+            // Suppress all warnings, at least for now. Ideally, there are no warnings
+            // from the linker.
             "-w",
         ])
         .output()
@@ -97,4 +104,24 @@ pub fn create_dylib_macho(
     }
 
     Ok(std::fs::read(dummy_lib_file).expect("Failed to load dummy library"))
+}
+
+fn get_macos_version() -> String {
+    let mut cmd = Command::new("sw_vers");
+    cmd.arg("-productVersion");
+
+    let cmd_stdout = cmd
+        .output()
+        .expect("Failed to execute command 'sw_vers -productVersion'")
+        .stdout;
+
+    let full_version_string = String::from_utf8(cmd_stdout)
+        .expect("Failed to convert output of command 'sw_vers -productVersion' into a utf8 string");
+
+    full_version_string
+        .trim_end()
+        .split('.')
+        .take(3)
+        .collect::<Vec<&str>>()
+        .join(".")
 }

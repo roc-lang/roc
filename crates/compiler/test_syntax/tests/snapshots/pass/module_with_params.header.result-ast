@@ -1,0 +1,28 @@
+SpacesBefore {
+    before: [],
+    item: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: Some(
+                ModuleParams {
+                    pattern: @7-20 [
+                        @8-12 Identifier {
+                            ident: "echo",
+                        },
+                        @14-18 Identifier {
+                            ident: "read",
+                        },
+                    ],
+                    before_arrow: [],
+                    after_arrow: [],
+                },
+            ),
+            exposes: [
+                @26-30 ExposedName(
+                    "menu",
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

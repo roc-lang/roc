@@ -69,10 +69,12 @@
       <h3>Steps</h3>
       <ul>
         <li>
-          In <code>gen_wasm/src/lib.rs</code>, set
-          <code>DEBUG_LOG_SETTINGS.keep_test_binary = true</code>
+          Run
+          <code
+            >ROC_WRITE_FINAL_WASM=1 cargo test-gen-wasm
+            my_test_function_name</code
+          >
         </li>
-        <li>Run <code>cargo test-gen-wasm my_test_function_name</code></li>
         <li>
           Look for the path written to the console for
           <code>final.wasm</code> and select it in the file picker below
@@ -80,9 +82,6 @@
         <li>
           Open the browser DevTools <br />
           <small> Control+Shift+I or Command+Option+I or F12 </small>
-        </li>
-        <li>
-          If your test is from <code>gen_refcount.rs</code>
         </li>
         <li>
           The debugger should pause just before entering the first Wasm call.
@@ -99,8 +98,8 @@
       <div class="controls">
         <div class="row">
           <label>
-            <input type="checkbox" id="refcount-test">
-            Check box if test is from <code>gen_refcount.rs</code>
+            <input type="checkbox" id="refcount-test" />
+            Check this box if your test is in <code>gen_refcount.rs</code>
           </label>
         </div>
         <div class="row row-file">
@@ -128,7 +127,7 @@
         } else {
           localStorage.removeItem("refcount-test");
         }
-      }
+      };
 
       button.onclick = function () {
         if (refcount_checkbox.checked) {
@@ -136,7 +135,7 @@
         } else {
           runExpressionTest();
         }
-      }
+      };
 
       file_input.onchange = function () {
         error_box.innerHTML = "";
@@ -175,7 +174,7 @@
 
         const rc_encoded = rc_pointers.map((ptr) => ptr && deref(ptr));
         const rc_encoded_hex = rc_encoded.map((x) =>
-          x ? x.toString(16) : "(deallocated)"
+          x ? x.to_string(16) : "(deallocated)"
         );
         const rc_values = rc_encoded.map((x) => x && x - 0x80000000 + 1);
 

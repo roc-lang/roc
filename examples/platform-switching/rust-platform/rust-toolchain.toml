@@ -1,9 +1,0 @@
-[toolchain]
-channel = "1.71.1"
-
-profile = "default"
-
-components = [
-    # for usages of rust-analyzer or similar tools inside `nix develop`
-    "rust-src"
-]

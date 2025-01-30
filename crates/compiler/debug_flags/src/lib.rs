@@ -95,22 +95,6 @@ flags! {
     /// Prints all type variables entered for fixpoint-fixing.
     ROC_PRINT_FIXPOINT_FIXING
 
-    /// Verifies that after let-generalization of a def, any rigid variables in the type annotation
-    /// of the def are indeed generalized.
-    ///
-    /// Note that rigids need not always be generalized in a def. For example, they may be
-    /// constrained by a type from a lower rank, as `b` is in the following def:
-    ///
-    ///   F a : { foo : a }
-    ///   foo = \arg ->
-    ///     x : F b
-    ///     x = arg
-    ///     x.foo
-    ///
-    /// Instead, this flag is useful for checking that in general, introduction is correct, when
-    /// chainging how defs are constrained.
-    ROC_VERIFY_RIGID_LET_GENERALIZED
-
     /// Verifies that an `occurs` check indeed only contains non-recursive types that need to be
     /// fixed-up with one new recursion variable.
     ///
@@ -173,4 +157,10 @@ flags! {
 
     /// Don't build and use the subs cache (speeds up compilation of load and previous crates)
     ROC_SKIP_SUBS_CACHE
+
+    /// Print out shell commands used to buid the Roc and host code
+    ROC_PRINT_BUILD_COMMANDS
+
+    /// Print out shell commands used to buid the Roc and host code along with used env vars
+    ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS
 }

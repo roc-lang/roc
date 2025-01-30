@@ -1,0 +1,8 @@
+version: "3"
+services:
+  roc:
+    build: .
+    entrypoint: roc
+    working_dir: /home/ubuntu/app
+    volumes:
+      - ../../:/home/ubuntu/app

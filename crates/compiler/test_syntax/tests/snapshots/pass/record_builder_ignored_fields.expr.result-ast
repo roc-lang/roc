@@ -1,0 +1,46 @@
+@0-42 SpaceAfter(
+    RecordBuilder {
+        mapper: @2-13 Var {
+            module_name: "Foo.Bar",
+            ident: "baz",
+        },
+        fields: [
+            @17-21 RequiredValue(
+                @17-18 "x",
+                [],
+                @20-21 Num(
+                    "5",
+                ),
+            ),
+            @23-27 RequiredValue(
+                @23-24 "y",
+                [],
+                @26-27 Num(
+                    "0",
+                ),
+            ),
+            @29-34 IgnoredValue(
+                @29-31 "z",
+                [],
+                @33-34 Num(
+                    "3",
+                ),
+            ),
+            @36-40 SpaceAfter(
+                IgnoredValue(
+                    @36-37 "",
+                    [],
+                    @39-40 Num(
+                        "2",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ],
+    },
+    [
+        Newline,
+    ],
+)

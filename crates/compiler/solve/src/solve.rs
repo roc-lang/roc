@@ -14,20 +14,23 @@ use crate::Aliases;
 use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
-use roc_can::constraint::{Cycle, LetConstraint, OpportunisticResolve};
+use roc_can::constraint::{
+    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, Generalizable, LetConstraint,
+    OpportunisticResolve, TryTargetConstraint,
+};
 use roc_can::expected::{Expected, PExpected};
-use roc_debug_flags::dbg_do;
-#[cfg(debug_assertions)]
-use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
+use roc_can::module::ModuleParams;
+use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
-use roc_module::symbol::Symbol;
+use roc_module::ident::IdentSuffix;
+use roc_module::symbol::{ModuleId, Symbol};
 use roc_problem::can::CycleEntry;
-use roc_region::all::Loc;
+use roc_region::all::{Loc, Region};
 use roc_solve_problem::TypeError;
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
-    Variable,
+    self, Content, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt,
+    UlsOfVar, Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
@@ -129,15 +132,14 @@ fn run_help(
         exposed_by_module,
         derived_module,
         function_kind,
+        module_params,
+        module_params_vars,
+        host_exposed_symbols,
         ..
     } = config;
 
     let mut pools = Pools::default();
 
-    let state = State {
-        scope: Scope::default(),
-        mark: Mark::NONE.next(),
-    };
     let rank = Rank::toplevel();
     let arena = Bump::new();
 
@@ -178,7 +180,6 @@ fn run_help(
     let state = solve(
         &mut env,
         types,
-        state,
         rank,
         problems,
         aliases,
@@ -186,6 +187,9 @@ fn run_help(
         abilities_store,
         &mut obligation_cache,
         &mut awaiting_specializations,
+        module_params,
+        module_params_vars,
+        host_exposed_symbols,
     );
 
     RunSolveOutput {
@@ -204,18 +208,7 @@ enum Work<'a> {
         constraint: &'a Constraint,
     },
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-    /// The ret_con part of a let constraint that does NOT introduces rigid and/or flex variables
-    LetConNoVariables {
-        scope: &'a Scope,
-        rank: Rank,
-        let_con: &'a LetConstraint,
-
-        /// The variables used to store imported types in the Subs.
-        /// The `Contents` are copied from the source module, but to
-        /// mimic `type_to_var`, we must add these variables to `Pools`
-        /// at the correct rank
-        pool_variables: &'a [Variable],
-    },
+    CheckSuffixFx(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
     /// These introduced variables must be generalized, hence this variant
@@ -236,7 +229,6 @@ enum Work<'a> {
 fn solve(
     env: &mut InferenceEnv,
     mut can_types: Types,
-    mut state: State,
     rank: Rank,
     problems: &mut Vec<TypeError>,
     aliases: &mut Aliases,
@@ -244,14 +236,24 @@ fn solve(
     abilities_store: &mut AbilitiesStore,
     obligation_cache: &mut ObligationCache,
     awaiting_specializations: &mut AwaitingSpecializations,
+    module_params: Option<ModuleParams>,
+    module_params_vars: VecMap<ModuleId, Variable>,
+    host_exposed_symbols: Option<&VecSet<Symbol>>,
 ) -> State {
+    let scope = Scope::new(module_params);
+
     let initial = Work::Constraint {
-        scope: &Scope::default(),
+        scope: &scope.clone(),
         rank,
         constraint,
     };
 
     let mut stack = vec![initial];
+
+    let mut state = State {
+        scope,
+        mark: Mark::NONE.next(),
+    };
 
     while let Some(work_item) = stack.pop() {
         let (scope, rank, constraint) = match work_item {
@@ -269,56 +271,6 @@ fn solve(
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(env, problems, *symbol, *loc_var);
                 }
-
-                continue;
-            }
-            Work::LetConNoVariables {
-                scope,
-                rank,
-                let_con,
-                pool_variables,
-            } => {
-                // NOTE be extremely careful with shadowing here
-                let offset = let_con.defs_and_ret_constraint.index();
-                let ret_constraint = &env.constraints.constraints[offset + 1];
-
-                // Add a variable for each def to new_vars_by_env.
-                let local_def_vars = LocalDefVarsVec::from_def_types(
-                    env,
-                    rank,
-                    problems,
-                    abilities_store,
-                    obligation_cache,
-                    &mut can_types,
-                    aliases,
-                    let_con.def_types,
-                );
-
-                env.pools.get_mut(rank).extend(pool_variables);
-
-                let mut new_scope = scope.clone();
-                for (symbol, loc_var) in local_def_vars.iter() {
-                    check_ability_specialization(
-                        env,
-                        rank,
-                        abilities_store,
-                        obligation_cache,
-                        awaiting_specializations,
-                        problems,
-                        *symbol,
-                        *loc_var,
-                    );
-
-                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
-                }
-
-                stack.push(Work::Constraint {
-                    scope: env.arena.alloc(new_scope),
-                    rank,
-                    constraint: ret_constraint,
-                });
-                // Check for infinite types first
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 continue;
             }
@@ -401,29 +353,13 @@ fn solve(
                 generalize(env, young_mark, visit_mark, rank.next());
                 debug_assert!(env.pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
-                // check that things went well
-                dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
-                    let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
-
-                    // NOTE the `subs.redundant` check does not come from elm.
-                    // It's unclear whether this is a bug with our implementation
-                    // (something is redundant that shouldn't be)
-                    // or that it just never came up in elm.
-                    let mut it = rigid_vars
-                        .iter()
-                        .filter(|&var| {
-                            !env.subs.redundant(*var)
-                                && env.subs.get_rank(*var) != Rank::GENERALIZED
-                        })
-                        .peekable();
-
-                    if it.peek().is_some() {
-                        let failing: Vec<_> = it.collect();
-                        println!("Rigids {:?}", &rigid_vars);
-                        println!("Failing {failing:?}");
-                        debug_assert!(false);
-                    }
-                });
+                let named_variables = &env.constraints[let_con.rigid_vars];
+                check_named_variables_are_generalized(
+                    env,
+                    problems,
+                    named_variables,
+                    let_con.generalizable,
+                );
 
                 let mut new_scope = scope.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
@@ -439,6 +375,9 @@ fn solve(
                     );
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
+
+                    // At the time of introduction, promote explicitly-effectful symbols.
+                    promote_effectful_symbol(env, FxSuffixKind::Let(*symbol), loc_var.value);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -448,18 +387,40 @@ fn solve(
                     mark: final_mark,
                 };
 
-                // Now solve the body, using the new vars_by_symbol which includes
-                // the assignments' name-to-variable mappings.
-                stack.push(Work::Constraint {
-                    scope: env.arena.alloc(new_scope),
-                    rank,
-                    constraint: ret_constraint,
-                });
-                // Check for infinite types first
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                let next_work = [
+                    // Check for infinite types first
+                    Work::CheckForInfiniteTypes(local_def_vars.clone()),
+                    // Now solve the body, using the new vars_by_symbol which includes
+                    // the assignments' name-to-variable mappings.
+                    Work::Constraint {
+                        scope: env.arena.alloc(new_scope),
+                        rank,
+                        constraint: ret_constraint,
+                    },
+                    // Finally, check the suffix fx, after we have solved all types.
+                    Work::CheckSuffixFx(local_def_vars),
+                ];
+
+                for work in next_work.into_iter().rev() {
+                    stack.push(work);
+                }
 
                 state = state_for_ret_con;
 
+                continue;
+            }
+
+            Work::CheckSuffixFx(local_def_vars) => {
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    solve_suffix_fx(
+                        env,
+                        problems,
+                        host_exposed_symbols,
+                        FxSuffixKind::Let(*symbol),
+                        loc_var.value,
+                        &loc_var.region,
+                    );
+                }
                 continue;
             }
         };
@@ -667,7 +628,7 @@ fn solve(
                         }
                     }
                     None => {
-                        problems.push(TypeError::UnexposedLookup(*symbol));
+                        problems.push(TypeError::UnexposedLookup(*region, *symbol));
 
                         state
                     }
@@ -768,105 +729,275 @@ fn solve(
                     }
                 }
             }
+            FxCall(index) => {
+                let FxCallConstraint {
+                    call_fx_var,
+                    call_kind,
+                    call_region,
+                    expectation,
+                } = &env.constraints.fx_call_constraints[index.index()];
+
+                let actual_desc = env.subs.get(*call_fx_var);
+
+                match (actual_desc.content, expectation) {
+                    (Content::Pure, _) | (Content::FlexVar(_), _) | (Content::Error, _) => state,
+                    (Content::Effectful, None) => {
+                        let problem = TypeError::FxInTopLevel(*call_region, *call_kind);
+                        problems.push(problem);
+                        state
+                    }
+                    (Content::Effectful, Some(expectation)) => {
+                        match env.subs.get_content_without_compacting(expectation.fx_var) {
+                            Content::Effectful | Content::Error => state,
+                            Content::FlexVar(_) => {
+                                env.subs
+                                    .union(expectation.fx_var, *call_fx_var, actual_desc);
+                                state
+                            }
+                            Content::Pure => {
+                                let problem = TypeError::FxInPureFunction(
+                                    *call_region,
+                                    *call_kind,
+                                    expectation.ann_region,
+                                );
+                                problems.push(problem);
+                                state
+                            }
+                            expected_content => {
+                                internal_error!(
+                                    "CallFx: unexpected content: {:?}",
+                                    expected_content
+                                )
+                            }
+                        }
+                    }
+                    actual_content => {
+                        internal_error!("CallFx: unexpected content: {:?}", actual_content)
+                    }
+                }
+            }
+            FxSuffix(constraint_index) => {
+                let FxSuffixConstraint {
+                    type_index,
+                    kind,
+                    region,
+                } = &env.constraints.fx_suffix_constraints[constraint_index.index()];
+
+                let actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *type_index,
+                );
+
+                solve_suffix_fx(env, problems, host_exposed_symbols, *kind, actual, region);
+                state
+            }
+            ExpectEffectful(variable, reason, region) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::Pure | Content::FlexVar(_) => {
+                        let problem = TypeError::ExpectedEffectful(*region, *reason);
+                        problems.push(problem);
+
+                        state
+                    }
+                    Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("ExpectEffectful: unexpected content: {:?}", content)
+                    }
+                }
+            }
+            FlexToPure(variable) => {
+                let content = env.subs.get_content_without_compacting(*variable);
+
+                match content {
+                    Content::FlexVar(_) => {
+                        let desc = env.subs.get(Variable::PURE);
+                        env.subs.union(*variable, Variable::PURE, desc);
+
+                        state
+                    }
+                    Content::Pure | Content::Effectful | Content::Error => state,
+                    Content::RigidVar(_)
+                    | Content::FlexAbleVar(_, _)
+                    | Content::RigidAbleVar(_, _)
+                    | Content::RecursionVar { .. }
+                    | Content::LambdaSet(_)
+                    | Content::ErasedLambda
+                    | Content::Structure(_)
+                    | Content::Alias(_, _, _, _)
+                    | Content::RangedNumber(_) => {
+                        internal_error!("FlexToPure: unexpected content: {:?}", content)
+                    }
+                }
+            }
+            TryTarget(index) => {
+                let try_target_constraint = &env.constraints.try_target_constraints[index.index()];
+
+                let TryTargetConstraint {
+                    target_type_index,
+                    ok_payload_var,
+                    err_payload_var,
+                    region,
+                    kind,
+                } = try_target_constraint;
+
+                let target_actual = either_type_index_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    *target_type_index,
+                );
+
+                let wanted_result_ty = can_types.from_old_type(&Type::TagUnion(
+                    vec![
+                        ("Ok".into(), vec![Type::Variable(*ok_payload_var)]),
+                        ("Err".into(), vec![Type::Variable(*err_payload_var)]),
+                    ],
+                    TypeExtension::Closed,
+                ));
+                let wanted_result_var = type_to_var(
+                    env,
+                    rank,
+                    problems,
+                    abilities_store,
+                    obligation_cache,
+                    &mut can_types,
+                    aliases,
+                    wanted_result_ty,
+                );
+
+                match unify(
+                    &mut env.uenv(),
+                    target_actual,
+                    wanted_result_var,
+                    UnificationMode::EQ,
+                    Polarity::OF_VALUE,
+                ) {
+                    Success {
+                        vars,
+                        must_implement_ability,
+                        lambda_sets_to_specialize,
+                        extra_metadata: _,
+                    } => {
+                        env.introduce(rank, &vars);
+
+                        if !must_implement_ability.is_empty() {
+                            let new_problems = obligation_cache.check_obligations(
+                                env.subs,
+                                abilities_store,
+                                must_implement_ability,
+                                AbilityImplError::BadExpr(
+                                    *region,
+                                    Category::TryTarget,
+                                    target_actual,
+                                ),
+                            );
+                            problems.extend(new_problems);
+                        }
+                        compact_lambdas_and_check_obligations(
+                            env,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            awaiting_specializations,
+                            lambda_sets_to_specialize,
+                        );
+
+                        state
+                    }
+                    Failure(vars, actual_type, _expected_type, _bad_impls) => {
+                        env.introduce(rank, &vars);
+
+                        let problem = TypeError::InvalidTryTarget(*region, actual_type, *kind);
+
+                        problems.push(problem);
+
+                        state
+                    }
+                }
+            }
             Let(index, pool_slice) => {
                 let let_con = &env.constraints.let_constraints[index.index()];
 
                 let offset = let_con.defs_and_ret_constraint.index();
                 let defs_constraint = &env.constraints.constraints[offset];
-                let ret_constraint = &env.constraints.constraints[offset + 1];
 
                 let flex_vars = &env.constraints.variables[let_con.flex_vars.indices()];
-                let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
+                let rigid_vars = &env.constraints[let_con.rigid_vars];
 
                 let pool_variables = &env.constraints.variables[pool_slice.indices()];
 
-                if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
-                    debug_assert!(pool_variables.is_empty());
-
-                    env.introduce(rank, flex_vars);
-
-                    // If the return expression is guaranteed to solve,
-                    // solve the assignments themselves and move on.
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
-                } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
-                    // items are popped from the stack in reverse order. That means that we'll
-                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
-                    //
-                    // Note that the LetConSimple gets the current env and rank,
-                    // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConNoVariables {
-                        scope,
-                        rank,
-                        let_con,
-                        pool_variables,
-                    });
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
+                // If the let-binding is generalizable, work at the next rank (which will be
+                // the rank at which introduced variables will become generalized, if they end up
+                // staying there); otherwise, stay at the current level.
+                let binding_rank = if let_con.generalizable.0 {
+                    rank.next()
                 } else {
-                    // If the let-binding is generalizable, work at the next rank (which will be
-                    // the rank at which introduced variables will become generalized, if they end up
-                    // staying there); otherwise, stay at the current level.
-                    let binding_rank = if let_con.generalizable.0 {
-                        rank.next()
-                    } else {
-                        rank
-                    };
+                    rank
+                };
 
-                    // determine the next pool
-                    if binding_rank.into_usize() < env.pools.len() {
-                        // Nothing to do, we already accounted for the next rank, no need to
-                        // adjust the pools
-                    } else {
-                        // we should be off by one at this point
-                        debug_assert_eq!(binding_rank.into_usize(), 1 + env.pools.len());
-                        env.pools.extend_to(binding_rank.into_usize());
-                    }
-
-                    let pool: &mut Vec<Variable> = env.pools.get_mut(binding_rank);
-
-                    // Introduce the variables of this binding, and extend the pool at our binding
-                    // rank.
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        env.subs.set_rank(var, binding_rank);
-                    }
-                    pool.reserve(rigid_vars.len() + flex_vars.len());
-                    pool.extend(rigid_vars.iter());
-                    pool.extend(flex_vars.iter());
-
-                    // Now, run our binding constraint, generalize, then solve the rest of the
-                    // program.
-                    //
-                    // Items are popped from the stack in reverse order. That means that we'll
-                    // first solve the defs_constraint, and then (eventually) the ret_constraint.
-                    //
-                    // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
-                    // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
-                    // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
-                    stack.push(Work::LetConIntroducesVariables {
-                        scope,
-                        rank,
-                        let_con,
-                        pool_variables,
-                    });
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank: binding_rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
+                // determine the next pool
+                if binding_rank.into_usize() < env.pools.len() {
+                    // Nothing to do, we already accounted for the next rank, no need to
+                    // adjust the pools
+                } else {
+                    // we should be off by one at this point
+                    debug_assert_eq!(binding_rank.into_usize(), 1 + env.pools.len());
+                    env.pools.extend_to(binding_rank.into_usize());
                 }
+
+                let pool: &mut Vec<Variable> = env.pools.get_mut(binding_rank);
+
+                // Introduce the variables of this binding, and extend the pool at our binding
+                // rank.
+                for &var in rigid_vars.iter().map(|v| &v.value).chain(flex_vars.iter()) {
+                    env.subs.set_rank(var, binding_rank);
+                }
+                pool.reserve(rigid_vars.len() + flex_vars.len());
+                pool.extend(rigid_vars.iter().map(|v| &v.value));
+                pool.extend(flex_vars.iter());
+
+                // Now, run our binding constraint, generalize, then solve the rest of the
+                // program.
+                //
+                // Items are popped from the stack in reverse order. That means that we'll
+                // first solve the defs_constraint, and then (eventually) the ret_constraint.
+                //
+                // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
+                // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
+                // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
+                stack.push(Work::LetConIntroducesVariables {
+                    scope,
+                    rank,
+                    let_con,
+                    pool_variables,
+                });
+                stack.push(Work::Constraint {
+                    scope,
+                    rank: binding_rank,
+                    constraint: defs_constraint,
+                });
+
+                state
             }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
@@ -1392,10 +1523,192 @@ fn solve(
                     }
                 }
             }
+            ImportParams(opt_provided, module_id, region) => {
+                match (module_params_vars.get(module_id), opt_provided) {
+                    (Some(expected_og), Some(provided)) => {
+                        let actual = either_type_index_to_var(
+                            env,
+                            rank,
+                            problems,
+                            abilities_store,
+                            obligation_cache,
+                            &mut can_types,
+                            aliases,
+                            *provided,
+                        );
+
+                        let expected = {
+                            // Similar to Lookup, we need to unify on a copy of the module params variable
+                            // Otherwise, this import might make it less general than it really is
+                            let mut solve_env = env.as_solve_env();
+                            let solve_env = &mut solve_env;
+                            deep_copy_var_in(solve_env, rank, *expected_og, solve_env.arena)
+                        };
+
+                        match unify(
+                            &mut env.uenv(),
+                            actual,
+                            expected,
+                            UnificationMode::EQ,
+                            Polarity::OF_VALUE,
+                        ) {
+                            Success {
+                                vars,
+                                must_implement_ability,
+                                lambda_sets_to_specialize,
+                                extra_metadata: _,
+                            } => {
+                                env.introduce(rank, &vars);
+
+                                problems.extend(obligation_cache.check_obligations(
+                                    env.subs,
+                                    abilities_store,
+                                    must_implement_ability,
+                                    AbilityImplError::DoesNotImplement,
+                                ));
+                                compact_lambdas_and_check_obligations(
+                                    env,
+                                    problems,
+                                    abilities_store,
+                                    obligation_cache,
+                                    awaiting_specializations,
+                                    lambda_sets_to_specialize,
+                                );
+
+                                state
+                            }
+
+                            Failure(vars, actual_type, expected_type, _) => {
+                                env.introduce(rank, &vars);
+
+                                problems.push(TypeError::ModuleParamsMismatch(
+                                    *region,
+                                    *module_id,
+                                    actual_type,
+                                    expected_type,
+                                ));
+
+                                state
+                            }
+                        }
+                    }
+                    (Some(expected), None) => {
+                        let expected_type = env.uenv().var_to_error_type(*expected, Polarity::Neg);
+
+                        problems.push(TypeError::MissingModuleParams(
+                            *region,
+                            *module_id,
+                            expected_type,
+                        ));
+
+                        state
+                    }
+                    (None, Some(_)) => {
+                        problems.push(TypeError::UnexpectedModuleParams(*region, *module_id));
+
+                        state
+                    }
+                    (None, None) => state,
+                }
+            }
         };
     }
 
     state
+}
+
+fn check_named_variables_are_generalized(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    named_variables: &[Loc<Variable>],
+    generalizable: Generalizable,
+) {
+    for loc_var in named_variables {
+        let is_generalized = env.subs.get_rank(loc_var.value) == Rank::GENERALIZED;
+        if !is_generalized {
+            // TODO: should be OF_PATTERN if on the LHS of a function, otherwise OF_VALUE.
+            let polarity = Polarity::OF_VALUE;
+            let ctx = ErrorTypeContext::NON_GENERALIZED_AS_INFERRED;
+            let error_type = env
+                .subs
+                .var_to_error_type_contextual(loc_var.value, ctx, polarity);
+            problems.push(TypeError::TypeIsNotGeneralized(
+                loc_var.region,
+                error_type,
+                generalizable,
+            ));
+        }
+    }
+}
+
+fn solve_suffix_fx(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    host_exposed_symbols: Option<&VecSet<Symbol>>,
+    kind: FxSuffixKind,
+    variable: Variable,
+    region: &Region,
+) {
+    match kind.suffix() {
+        IdentSuffix::None => {
+            if let Content::Structure(FlatType::Func(_, _, _, fx)) =
+                env.subs.get_content_without_compacting(variable)
+            {
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Effectful => {
+                        problems.push(TypeError::UnsuffixedEffectfulFunction(*region, kind));
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Pure);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        IdentSuffix::Bang => match env.subs.get_content_without_compacting(variable) {
+            Content::Structure(FlatType::Func(_, _, _, fx)) => {
+                let fx = *fx;
+                match env.subs.get_content_without_compacting(fx) {
+                    Content::Pure => {
+                        match (kind.symbol(), host_exposed_symbols) {
+                            (Some(sym), Some(host_exposed)) if host_exposed.contains(sym) => {
+                                // If exposed to the platform, it's allowed to be suffixed but pure
+                                // The platform might require a `main!` function that could perform
+                                // effects, but that's not a requirement.
+                            }
+                            _ => {
+                                problems.push(TypeError::SuffixedPureFunction(*region, kind));
+                            }
+                        }
+                    }
+                    Content::FlexVar(_) => {
+                        env.subs.set_content(fx, Content::Effectful);
+                    }
+                    _ => {}
+                }
+            }
+            Content::FlexVar(_) => {
+                env.subs
+                    .set_content(variable, Content::Structure(FlatType::EffectfulFunc));
+            }
+            _ => {}
+        },
+    }
+}
+
+fn promote_effectful_symbol(env: &mut InferenceEnv<'_>, kind: FxSuffixKind, variable: Variable) {
+    if kind.suffix() != IdentSuffix::Bang {
+        return;
+    }
+    if !matches!(
+        env.subs.get_content_without_compacting(variable),
+        Content::FlexVar(_)
+    ) {
+        return;
+    }
+    env.subs
+        .set_content(variable, Content::Structure(FlatType::EffectfulFunc));
 }
 
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
@@ -1772,7 +2085,7 @@ fn check_ability_specialization(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum LocalDefVarsVec<T> {
     Stack(arrayvec::ArrayVec<T, 32>),
     Heap(Vec<T>),
@@ -2069,7 +2382,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                Func(arg_vars, closure_var, ret_var) => {
+                Func(arg_vars, closure_var, ret_var, _fx_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ret_var);
 
                     // TODO investigate further.
@@ -2095,7 +2408,7 @@ fn adjust_rank_content(
                     rank
                 }
 
-                EmptyRecord | EmptyTuple => {
+                EmptyRecord => {
                     // from elm-compiler: THEORY: an empty record never needs to get generalized
                     //
                     // But for us, that theory does not hold, because there might be type variables hidden
@@ -2109,6 +2422,8 @@ fn adjust_rank_content(
 
                 // THEORY: an empty tag never needs to get generalized
                 EmptyTagUnion => Rank::toplevel(),
+
+                EffectfulFunc => Rank::toplevel(),
 
                 Record(fields, ext_var) => {
                     let mut rank = adjust_rank(subs, young_mark, visit_mark, group_rank, *ext_var);
@@ -2331,6 +2646,8 @@ fn adjust_rank_content(
         }
 
         ErasedLambda => group_rank,
+
+        Pure | Effectful => group_rank,
 
         RangedNumber(_) => group_rank,
     }

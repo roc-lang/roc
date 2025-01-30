@@ -1,0 +1,10 @@
+@0-7 ParensAround(
+    UnaryOp(
+        @3-5 ParensAround(
+            Num(
+                "-6",
+            ),
+        ),
+        @1-2 Negate,
+    ),
+)

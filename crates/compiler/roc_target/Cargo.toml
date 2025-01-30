@@ -8,6 +8,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+roc_error_macros.workspace = true
+
 strum.workspace = true
 strum_macros.workspace = true
 target-lexicon.workspace = true

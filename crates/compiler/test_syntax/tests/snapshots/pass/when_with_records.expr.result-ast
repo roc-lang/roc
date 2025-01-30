@@ -1,51 +1,56 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
+@0-36 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @11-16 SpaceBefore(
+                        RecordDestructure(
+                            [
+                                @13-14 Identifier {
+                                    ident: "y",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @20-21 Num(
+                    "2",
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @23-31 SpaceBefore(
+                        RecordDestructure(
+                            [
+                                @25-26 Identifier {
+                                    ident: "z",
+                                },
+                                @28-29 Identifier {
+                                    ident: "w",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @35-36 Num(
+                    "4",
+                ),
+                guard: None,
+            },
+        ],
+    ),
     [
-        WhenBranch {
-            patterns: [
-                @11-16 SpaceBefore(
-                    RecordDestructure(
-                        [
-                            @13-14 Identifier(
-                                "y",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @20-21 Num(
-                "2",
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @23-31 SpaceBefore(
-                    RecordDestructure(
-                        [
-                            @25-26 Identifier(
-                                "z",
-                            ),
-                            @28-29 Identifier(
-                                "w",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @35-36 Num(
-                "4",
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

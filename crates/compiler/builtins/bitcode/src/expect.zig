@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-const Atomic = std.atomic.Atomic;
+const Atomic = std.atomic.Value;
 
 const O_RDWR: c_int = 2;
 const O_CREAT: c_int = 64;
@@ -29,7 +29,7 @@ pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
     _ = std.fmt.bufPrint(name[0..100], "/roc_expect_buffer_{}\x00", .{roc_getppid()}) catch unreachable;
 
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const shared_fd = roc_shm_open(@ptrCast(*const i8, &name), O_RDWR | O_CREAT, 0o666);
+        const shared_fd = roc_shm_open(@as(*const i8, @ptrCast(&name)), O_RDWR | O_CREAT, 0o666);
 
         const length = 4096;
 
@@ -42,7 +42,7 @@ pub fn expectFailedStartSharedFile() callconv(.C) [*]u8 {
             0,
         );
 
-        const ptr = @ptrCast([*]u8, shared_ptr);
+        const ptr = @as([*]u8, @ptrCast(shared_ptr));
 
         return ptr;
     } else {
@@ -61,7 +61,7 @@ pub fn readSharedBufferEnv() callconv(.C) void {
         var name: [100]u8 = undefined;
         _ = std.fmt.bufPrint(name[0..100], "/roc_expect_buffer_{}\x00", .{roc_getppid()}) catch unreachable;
 
-        const shared_fd = roc_shm_open(@ptrCast(*const i8, &name), O_RDWR | O_CREAT, 0o666);
+        const shared_fd = roc_shm_open(@as(*const i8, @ptrCast(&name)), O_RDWR | O_CREAT, 0o666);
         const length = 4096;
 
         const shared_ptr = roc_mmap(
@@ -73,7 +73,7 @@ pub fn readSharedBufferEnv() callconv(.C) void {
             0,
         );
 
-        const ptr = @ptrCast([*]u8, shared_ptr);
+        const ptr = @as([*]u8, @ptrCast(shared_ptr));
 
         SHARED_BUFFER = ptr[0..length];
     }
@@ -81,13 +81,12 @@ pub fn readSharedBufferEnv() callconv(.C) void {
 
 pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        const usize_ptr = @ptrCast([*]u32, @alignCast(@alignOf(usize), shared_buffer));
-        const atomic_ptr = @ptrCast(*Atomic(u32), &usize_ptr[5]);
-        atomic_ptr.storeUnchecked(tag);
+        const usize_ptr = @as([*]u32, @ptrCast(@alignCast(shared_buffer)));
+        const atomic_ptr = @as(*Atomic(u32), @ptrCast(&usize_ptr[5]));
+        atomic_ptr.store(tag, .unordered);
 
         // wait till the parent is done before proceeding
-        const Ordering = std.atomic.Ordering;
-        while (atomic_ptr.load(Ordering.Acquire) != 0) {
+        while (atomic_ptr.load(.acquire) != 0) {
             std.atomic.spinLoopHint();
         }
     }
@@ -95,8 +94,4 @@ pub fn notifyParent(shared_buffer: [*]u8, tag: u32) callconv(.C) void {
 
 pub fn notifyParentExpect(shared_buffer: [*]u8) callconv(.C) void {
     notifyParent(shared_buffer, 1);
-}
-
-pub fn notifyParentDbg(shared_buffer: [*]u8) callconv(.C) void {
-    notifyParent(shared_buffer, 2);
 }

@@ -12,8 +12,7 @@ name = "roc_wasm_interp"
 path = "src/main.rs"
 
 [dependencies]
-roc_wasm_module = { path = "../wasm_module" }
-
+roc_wasm_module.workspace = true
 bitvec.workspace = true
 bumpalo.workspace = true
 clap.workspace = true

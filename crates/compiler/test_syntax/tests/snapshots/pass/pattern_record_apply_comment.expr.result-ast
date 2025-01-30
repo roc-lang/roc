@@ -1,0 +1,62 @@
+@0-10 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-8,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Apply(
+                        @0-1 Identifier {
+                            ident: "s",
+                        },
+                        [
+                            @1-6 RecordDestructure(
+                                [
+                                    @2-5 SpaceAfter(
+                                        Identifier {
+                                            ident: "t",
+                                        },
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            ),
+                        ],
+                    ),
+                    @7-8 BoundVariable(
+                        "s",
+                    ),
+                ),
+            ],
+        },
+        @9-10 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "p",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "",
+        ),
+    ],
+)

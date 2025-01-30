@@ -1,0 +1,46 @@
+@0-10 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 Var {
+                    module_name: "",
+                    ident: "x",
+                },
+                @1-2 GreaterThan,
+            ),
+            (
+                @3-8 Apply(
+                    @3-4 SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "x",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
+                        @4-8 Record(
+                            Collection {
+                                items: [],
+                                final_comments: [
+                                    Newline,
+                                    Newline,
+                                ],
+                            },
+                        ),
+                    ],
+                    Space,
+                ),
+                @8-9 LessThan,
+            ),
+        ],
+        @9-10 Var {
+            module_name: "",
+            ident: "r",
+        },
+    ),
+    [
+        Newline,
+    ],
+)

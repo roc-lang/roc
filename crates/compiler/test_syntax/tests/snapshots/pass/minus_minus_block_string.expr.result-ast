@@ -1,0 +1,11 @@
+@0-8 UnaryOp(
+    @1-8 UnaryOp(
+        @2-8 Str(
+            Block(
+                [],
+            ),
+        ),
+        @1-2 Negate,
+    ),
+    @0-1 Negate,
+)

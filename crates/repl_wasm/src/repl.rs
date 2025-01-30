@@ -16,7 +16,7 @@ use roc_repl_ui::{
     repl_state::{ReplAction, ReplState},
     TIPS,
 };
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_types::pretty_print::{name_and_print_var, DebugPrint};
 
 use crate::{js_create_app, js_get_result_and_memory, js_run_app};
@@ -87,7 +87,8 @@ impl<'a> ReplAppMemory for WasmMemory<'a> {
             &self.copied_bytes[addr..][..len]
         } else {
             let chars_index = self.deref_usize(addr);
-            let len = self.deref_usize(addr + 4);
+            let seamless_slice_mask = u32::MAX as usize >> 1;
+            let len = self.deref_usize(addr + 4) & seamless_slice_mask;
             &self.copied_bytes[chars_index..][..len]
         };
 
@@ -159,7 +160,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         _main_fn_name: &str,
         _ret_bytes: usize,
         mut transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
@@ -171,7 +172,7 @@ impl<'a> ReplApp<'a> for WasmReplApp<'a> {
         let app_result_addr = js_get_result_and_memory(copied_bytes.as_mut_ptr());
         let mem = self.arena.alloc(WasmMemory { copied_bytes });
 
-        transform(mem, app_result_addr)
+        Some(transform(mem, app_result_addr))
     }
 }
 
@@ -188,12 +189,12 @@ pub async fn entrypoint_from_js(src: String) -> String {
     let arena = &Bump::new();
 
     // Compile the app
-    let target_info = TargetInfo::default_wasm32();
+    let target = Target::Wasm32;
 
     // Advance the REPL state machine
     let action = REPL_STATE.with(|repl_state_cell| {
         let mut repl_state = repl_state_cell.borrow_mut();
-        repl_state.step(arena, &src, target_info, DEFAULT_PALETTE_HTML)
+        repl_state.step(arena, &src, target, DEFAULT_PALETTE_HTML)
     });
 
     // Perform the action the state machine asked for, and return the appropriate output string
@@ -202,10 +203,13 @@ pub async fn entrypoint_from_js(src: String) -> String {
         ReplAction::Exit => {
             "To exit the web version of the REPL, just close the browser tab!".to_string()
         }
+        ReplAction::FileProblem { .. } => {
+            "The web version of the REPL cannot import files... for now!".to_string()
+        }
         ReplAction::Nothing => String::new(),
         ReplAction::Eval { opt_mono, problems } => {
             let opt_output = match opt_mono {
-                Some(mono) => eval_wasm(arena, target_info, mono).await,
+                Some(mono) => eval_wasm(arena, target, mono).await,
                 None => None,
             };
 
@@ -216,7 +220,7 @@ pub async fn entrypoint_from_js(src: String) -> String {
 
 async fn eval_wasm<'a>(
     arena: &'a Bump,
-    target_info: TargetInfo,
+    target: Target,
     mono: MonomorphizedModule<'a>,
 ) -> Option<ReplOutput> {
     let MonomorphizedModule {
@@ -310,7 +314,7 @@ async fn eval_wasm<'a>(
         &subs,
         &interns,
         layout_interner.into_global().fork(),
-        target_info,
+        target,
     );
 
     // Transform the Expr to a string

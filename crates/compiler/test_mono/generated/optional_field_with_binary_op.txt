@@ -1,0 +1,10 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
+
+procedure Test.0 ():
+    let Test.5 : {} = Struct {};
+    let Test.3 : I64 = 1i64;
+    let Test.4 : I64 = 1i64;
+    let Test.1 : I64 = CallByName Num.19 Test.3 Test.4;
+    ret Test.1;

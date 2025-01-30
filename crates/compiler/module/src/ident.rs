@@ -1,5 +1,8 @@
 pub use roc_ident::IdentStr;
-use std::fmt::{self, Debug};
+use std::{
+    fmt::{self, Debug},
+    path::{Path, PathBuf},
+};
 
 use crate::symbol::PQModuleName;
 
@@ -44,6 +47,19 @@ impl<'a> QualifiedModuleName<'a> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ModuleName(IdentStr);
+
+impl ModuleName {
+    /// Given the root module's path, infer this module's path based on its name.
+    pub fn filename(&self, root_filename: impl AsRef<Path>) -> PathBuf {
+        let mut answer = root_filename.as_ref().with_file_name("");
+
+        for part in self.split('.') {
+            answer = answer.join(part);
+        }
+
+        answer.with_extension("roc")
+    }
+}
 
 impl std::ops::Deref for ModuleName {
     type Target = str;
@@ -114,7 +130,6 @@ impl ModuleName {
     pub const DECODE: &'static str = "Decode";
     pub const HASH: &'static str = "Hash";
     pub const INSPECT: &'static str = "Inspect";
-    pub const JSON: &'static str = "TotallyNotJson";
 
     pub fn as_str(&self) -> &str {
         self.0.as_str()
@@ -219,6 +234,10 @@ impl From<String> for Uppercase {
 impl Lowercase {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
+    }
+
+    pub fn suffix(&self) -> IdentSuffix {
+        IdentSuffix::from_name(self.0.as_str())
     }
 }
 
@@ -344,5 +363,69 @@ impl fmt::Debug for Uppercase {
 impl fmt::Display for Uppercase {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         fmt::Display::fmt(&self.0, f)
+    }
+}
+
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub enum IdentSuffix {
+    None,
+    Bang,
+}
+
+impl IdentSuffix {
+    #[inline(always)]
+    pub const fn from_name(name: &str) -> Self {
+        // Checking bytes directly so it can be const.
+        // This should be fine since the suffix is ASCII.
+        let bytes = name.as_bytes();
+        let len = bytes.len();
+
+        debug_assert!(len > 0, "Ident name must not be empty");
+
+        if bytes[len - 1] == b'!' {
+            IdentSuffix::Bang
+        } else {
+            IdentSuffix::None
+        }
+    }
+
+    pub fn is_none(&self) -> bool {
+        match self {
+            IdentSuffix::None => true,
+            IdentSuffix::Bang => false,
+        }
+    }
+
+    pub fn is_bang(&self) -> bool {
+        match self {
+            IdentSuffix::None => false,
+            IdentSuffix::Bang => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod suffix_test {
+    use crate::ident::IdentSuffix;
+
+    #[test]
+    fn ends_with_bang() {
+        assert_eq!(IdentSuffix::from_name("foo!"), IdentSuffix::Bang)
+    }
+
+    #[test]
+    fn ends_without_bang() {
+        assert_eq!(IdentSuffix::from_name("foo"), IdentSuffix::None)
+    }
+
+    #[test]
+    fn invalid() {
+        assert_eq!(IdentSuffix::from_name("foo!bar"), IdentSuffix::None)
+    }
+
+    #[test]
+    #[should_panic]
+    fn empty_panics() {
+        IdentSuffix::from_name("");
     }
 }

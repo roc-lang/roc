@@ -2,18 +2,21 @@
 name = "test_syntax-fuzz"
 publish = false
 
-authors.workspace = true
-edition.workspace = true
-version.workspace = true
+version = "0.0.0"
+authors = ["Automatically generated"]
+edition = "2021"
 
 [package.metadata]
 cargo-fuzz = true
 
 [dependencies]
+# WARNING! Do not update these dependencies to use the dot workspace syntax.
+# this crate is intentionally not a part of the overall workspace, so making changes here
+# is neither necessary nor desired.
 test_syntax = { path = "../../test_syntax" }
-
-bumpalo.workspace = true
-libfuzzer-sys.workspace = true
+roc_parse = { path = "../../parse" }
+bumpalo = { version = "3.12.0", features = ["collections"] }
+libfuzzer-sys = "0.4"
 
 # Prevent this from interfering with workspaces
 [workspace]

@@ -8,8 +8,8 @@ set -euxo pipefail
 rustup update
 rustup default stable
 
-ZIG_DIRNAME="zig-linux-x86_64-0.9.1"
-wget https://ziglang.org/download/0.9.1/${ZIG_DIRNAME}.tar.xz
+ZIG_DIRNAME="zig-linux-x86_64-0.11.0"
+wget https://ziglang.org/download/0.11.0/${ZIG_DIRNAME}.tar.xz
 tar --extract --xz --file=${ZIG_DIRNAME}.tar.xz
 PATH="$(pwd)/${ZIG_DIRNAME}:${PATH}"
 

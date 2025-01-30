@@ -1,0 +1,42 @@
+@0-13 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-10 SpaceAfter(
+                    Apply(
+                        @0-3 TrySuffix(
+                            RecordUpdater(
+                                "rm",
+                            ),
+                        ),
+                        [
+                            @4-10 Closure(
+                                [
+                                    @5-7 Tag(
+                                        "L2",
+                                    ),
+                                ],
+                                @9-10 Var {
+                                    module_name: "",
+                                    ident: "t",
+                                },
+                            ),
+                        ],
+                        Space,
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @11-12 Plus,
+            ),
+        ],
+        @12-13 Var {
+            module_name: "",
+            ident: "c",
+        },
+    ),
+    [
+        Newline,
+    ],
+)

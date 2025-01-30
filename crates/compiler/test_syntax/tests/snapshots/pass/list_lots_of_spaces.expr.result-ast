@@ -1,0 +1,28 @@
+@0-12 List(
+    [
+        @1-2 SpaceAfter(
+            Tag(
+                "J",
+            ),
+            [
+                Newline,
+                LineComment(
+                    "",
+                ),
+            ],
+        ),
+        @10-11 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "u",
+            },
+            [
+                Newline,
+                Newline,
+                LineComment(
+                    "",
+                ),
+            ],
+        ),
+    ],
+)

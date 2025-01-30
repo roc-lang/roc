@@ -1,0 +1,86 @@
+@0-48 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-42,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-4 Identifier {
+                        ident: "data",
+                    },
+                    @11-42 SpaceBefore(
+                        BinOps(
+                            [
+                                (
+                                    @11-25 SpaceAfter(
+                                        Record(
+                                            [
+                                                @13-17 RequiredValue(
+                                                    @13-14 "x",
+                                                    [],
+                                                    @16-17 Num(
+                                                        "5",
+                                                    ),
+                                                ),
+                                                @19-23 RequiredValue(
+                                                    @19-20 "y",
+                                                    [],
+                                                    @22-23 Num(
+                                                        "0",
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    @34-36 Pizza,
+                                ),
+                            ],
+                            @37-42 Apply(
+                                @37-39 RecordUpdater(
+                                    "y",
+                                ),
+                                [
+                                    @41-42 Num(
+                                        "3",
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @44-48 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "data",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -1,0 +1,81 @@
+@0-38 SpaceAfter(
+    When(
+        @5-6 SpaceAfter(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+            ],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-11 SpaceBefore(
+                        Identifier {
+                            ident: "s",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @37-38 Var {
+                    module_name: "",
+                    ident: "m",
+                },
+                guard: Some(
+                    @14-35 Closure(
+                        [
+                            @15-16 Identifier {
+                                ident: "t",
+                            },
+                        ],
+                        @18-35 When(
+                            @23-24 SpaceAfter(
+                                Num(
+                                    "0",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            [
+                                WhenBranch {
+                                    patterns: [
+                                        @28-29 Identifier {
+                                            ident: "z",
+                                        },
+                                    ],
+                                    value: @31-35 Apply(
+                                        @31-32 Var {
+                                            module_name: "",
+                                            ident: "f",
+                                        },
+                                        [
+                                            @34-35 SpaceBefore(
+                                                Var {
+                                                    module_name: "",
+                                                    ident: "z",
+                                                },
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                    guard: None,
+                                },
+                            ],
+                        ),
+                    ),
+                ),
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

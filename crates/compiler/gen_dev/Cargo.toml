@@ -8,28 +8,26 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_builtins = { path = "../builtins" }
-roc_collections = { path = "../collections" }
-roc_error_macros = { path = "../../error_macros" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_solve = { path = "../solve" }
-roc_target = { path = "../roc_target" }
-roc_types = { path = "../types" }
-roc_unify = { path = "../unify" }
-
+roc_builtins.workspace = true
+roc_collections.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_solve.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
+roc_unify.workspace = true
 bumpalo.workspace = true
 object.workspace = true
 packed_struct.workspace = true
 target-lexicon.workspace = true
 
 [dev-dependencies]
-roc_can = { path = "../can" }
-roc_parse = { path = "../parse" }
-roc_std = { path = "../../roc_std" }
-
+roc_can.workspace = true
+roc_parse.workspace = true
+roc_std.workspace = true
 bumpalo.workspace = true
 capstone.workspace = true
 

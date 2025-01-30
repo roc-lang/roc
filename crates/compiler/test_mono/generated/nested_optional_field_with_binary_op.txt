@@ -1,0 +1,23 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
+
+procedure Test.0 ():
+    let Test.17 : {} = Struct {};
+    let Test.15 : List {} = Array [Test.17];
+    let Test.16 : Str = "foo";
+    let Test.14 : {List {}, Str} = Struct {Test.15, Test.16};
+    let Test.10 : List {} = StructAtIndex 0 Test.14;
+    dec Test.16;
+    let Test.11 : U64 = lowlevel ListLenUsize Test.10;
+    dec Test.10;
+    let Test.12 : U64 = 1i64;
+    let Test.13 : Int1 = lowlevel Eq Test.11 Test.12;
+    if Test.13 then
+        let Test.5 : I64 = 1i64;
+        let Test.6 : I64 = 1i64;
+        let Test.2 : I64 = CallByName Num.19 Test.5 Test.6;
+        ret Test.2;
+    else
+        let Test.7 : I64 = 0i64;
+        ret Test.7;

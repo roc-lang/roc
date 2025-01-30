@@ -1,0 +1,268 @@
+@0-489 When(
+    @9-38 SpaceBefore(
+        SpaceAfter(
+            BinOps(
+                [
+                    (
+                        @9-10 SpaceAfter(
+                            Var {
+                                module_name: "",
+                                ident: "x",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        @15-16 Plus,
+                    ),
+                    (
+                        @17-18 SpaceAfter(
+                            Num(
+                                "1",
+                            ),
+                            [
+                                LineComment(
+                                    " comment 1",
+                                ),
+                            ],
+                        ),
+                        @35-36 GreaterThan,
+                    ),
+                ],
+                @37-38 Num(
+                    "0",
+                ),
+            ),
+            [
+                LineComment(
+                    " comment 2",
+                ),
+            ],
+        ),
+        [
+            Newline,
+        ],
+    ),
+    [
+        WhenBranch {
+            patterns: [
+                @58-59 SpaceBefore(
+                    Identifier {
+                        ident: "y",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @71-108 SpaceBefore(
+                BinOps(
+                    [
+                        (
+                            @71-72 SpaceAfter(
+                                Num(
+                                    "3",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @81-82 Star,
+                        ),
+                        (
+                            @83-84 SpaceAfter(
+                                Num(
+                                    "2",
+                                ),
+                                [
+                                    LineComment(
+                                        " comment 3",
+                                    ),
+                                ],
+                            ),
+                            @105-106 LessThan,
+                        ),
+                    ],
+                    @107-108 Num(
+                        "1",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                @126-127 SpaceBefore(
+                    Identifier {
+                        ident: "z",
+                    },
+                    [
+                        LineComment(
+                            " comment 4",
+                        ),
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @139-189 SpaceBefore(
+                BinOps(
+                    [
+                        (
+                            @139-140 SpaceAfter(
+                                Num(
+                                    "4",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @153-154 Slash,
+                        ),
+                        (
+                            @155-156 SpaceAfter(
+                                Num(
+                                    "5",
+                                ),
+                                [
+                                    LineComment(
+                                        " comment 5",
+                                    ),
+                                ],
+                            ),
+                            @186-187 LessThan,
+                        ),
+                    ],
+                    @188-189 Num(
+                        "1",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                @210-212 SpaceBefore(
+                    SpaceAfter(
+                        NumLiteral(
+                            "46",
+                        ),
+                        [
+                            LineComment(
+                                " first pattern comment",
+                            ),
+                        ],
+                    ),
+                    [
+                        LineComment(
+                            " comment 6",
+                        ),
+                        Newline,
+                    ],
+                ),
+                @243-245 SpaceAfter(
+                    NumLiteral(
+                        "95",
+                    ),
+                    [
+                        LineComment(
+                            " alternative comment 1",
+                        ),
+                    ],
+                ),
+                @276-279 SpaceAfter(
+                    NumLiteral(
+                        "126",
+                    ),
+                    [
+                        LineComment(
+                            " alternative comment 2",
+                        ),
+                    ],
+                ),
+                @310-313 NumLiteral(
+                    "150",
+                ),
+            ],
+            value: @401-449 SpaceBefore(
+                BinOps(
+                    [
+                        (
+                            @401-408 SpaceAfter(
+                                Apply(
+                                    @401-404 Var {
+                                        module_name: "",
+                                        ident: "foo",
+                                    },
+                                    [
+                                        @405-408 Var {
+                                            module_name: "",
+                                            ident: "bar",
+                                        },
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            @425-427 Pizza,
+                        ),
+                    ],
+                    @428-449 Apply(
+                        @428-446 Var {
+                            module_name: "Result",
+                            ident: "withDefault",
+                        },
+                        [
+                            @447-449 Str(
+                                PlainLine(
+                                    "",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+                [
+                    LineComment(
+                        " This comment came after the ->",
+                    ),
+                    LineComment(
+                        " This comment is for the expr",
+                    ),
+                ],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                @474-475 SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        LineComment(
+                            " one last comment",
+                        ),
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @487-489 SpaceBefore(
+                Num(
+                    "42",
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            guard: None,
+        },
+    ],
+)

@@ -77,6 +77,14 @@ fn collect_uitest_files() -> io::Result<Vec<PathBuf>> {
             }
 
             if path.extension() == Some(OsStr::new("txt")) {
+                // see issue 6947
+                if cfg!(debug_assertions)
+                    && path.to_string_lossy().contains(
+                        "match_on_result_with_uninhabited_error_destructuring_in_lambda_syntax",
+                    )
+                {
+                    continue;
+                }
                 tests.push(path);
             }
         }

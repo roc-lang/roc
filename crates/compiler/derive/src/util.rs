@@ -1,10 +1,16 @@
-use roc_can::{abilities::SpecializationLambdaSets, module::ExposedByModule};
+use roc_can::{
+    abilities::SpecializationLambdaSets,
+    expr::{Expr, WhenBranch, WhenBranchPattern},
+    module::ExposedByModule,
+    pattern::Pattern,
+};
 use roc_checkmate::with_checkmate;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{IdentIds, Symbol};
+use roc_region::all::Loc;
 use roc_solve_schema::UnificationMode;
 use roc_types::{
-    subs::{instantiate_rigids, Subs, Variable},
+    subs::{instantiate_rigids, RedundantMark, Subs, Variable},
     types::Polarity,
 };
 
@@ -201,4 +207,43 @@ impl Env<'_> {
 pub(crate) enum ExtensionKind {
     Record,
     TagUnion,
+}
+
+/// Ok a -> Ok a
+/// A `when ... is` branch that matches `Ok a` and returns `Ok a`
+pub(crate) fn ok_to_ok_branch(
+    pattern_var: Variable,
+    result_var: Variable,
+    field_var: Variable,
+    symbol: &Symbol,
+    env: &mut Env<'_>,
+) -> WhenBranch {
+    WhenBranch {
+        patterns: vec![WhenBranchPattern {
+            pattern: Loc::at_zero(Pattern::AppliedTag {
+                whole_var: pattern_var,
+                ext_var: Variable::EMPTY_TAG_UNION,
+                tag_name: "Ok".into(),
+                arguments: vec![(field_var, Loc::at_zero(Pattern::Identifier(*symbol)))],
+            }),
+            degenerate: false,
+        }],
+        value: Loc::at_zero(Expr::Tag {
+            tag_union_var: result_var,
+            ext_var: env.new_ext_var(ExtensionKind::TagUnion),
+            name: "Ok".into(),
+            arguments: vec![(field_var, Loc::at_zero(Expr::Var(*symbol, field_var)))],
+        }),
+        guard: None,
+        redundant: RedundantMark::known_non_redundant(),
+    }
+}
+
+/// `[]`
+/// Creates an empty list of the type provided.
+pub(crate) fn empty_list(var: Variable) -> Expr {
+    Expr::List {
+        elem_var: var,
+        loc_elems: vec![],
+    }
 }

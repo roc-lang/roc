@@ -1,0 +1,68 @@
+@0-24 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-22,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-1 "A",
+                        vars: [],
+                    },
+                    loc_implements: @2-12 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @13-14 "q",
+                            typ: @15-22 Function(
+                                [
+                                    @15-19 Apply(
+                                        "",
+                                        "U",
+                                        [
+                                            @18-19 SpaceBefore(
+                                                BoundVariable(
+                                                    "e",
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                                Pure,
+                                @21-22 BoundVariable(
+                                    "p",
+                                ),
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @23-24 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "d",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

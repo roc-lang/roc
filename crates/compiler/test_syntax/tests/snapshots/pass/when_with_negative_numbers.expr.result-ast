@@ -1,40 +1,45 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
+@0-26 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @11-12 SpaceBefore(
+                        NumLiteral(
+                            "1",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @16-17 Num(
+                    "2",
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @19-21 SpaceBefore(
+                        NumLiteral(
+                            "-3",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @25-26 Num(
+                    "4",
+                ),
+                guard: None,
+            },
+        ],
+    ),
     [
-        WhenBranch {
-            patterns: [
-                @11-12 SpaceBefore(
-                    NumLiteral(
-                        "1",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @16-17 Num(
-                "2",
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @19-21 SpaceBefore(
-                    NumLiteral(
-                        "-3",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @25-26 Num(
-                "4",
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

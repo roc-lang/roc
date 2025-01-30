@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Platform(
+SpacesBefore {
+    before: [],
+    item: Platform(
         PlatformHeader {
             before_name: [],
             name: @9-21 PackageName(
@@ -23,26 +23,28 @@ Module {
                             "Model",
                         ),
                     ],
-                    signature: @55-77 TypedIdent {
-                        ident: @55-59 "main",
-                        spaces_before_colon: [],
-                        ann: @62-77 Apply(
-                            "",
-                            "App",
-                            [
-                                @66-71 Apply(
-                                    "",
-                                    "Flags",
-                                    [],
-                                ),
-                                @72-77 Apply(
-                                    "",
-                                    "Model",
-                                    [],
-                                ),
-                            ],
-                        ),
-                    },
+                    signatures: [
+                        @55-77 TypedIdent {
+                            ident: @55-59 "main",
+                            spaces_before_colon: [],
+                            ann: @62-77 Apply(
+                                "",
+                                "App",
+                                [
+                                    @66-71 Apply(
+                                        "",
+                                        "Flags",
+                                        [],
+                                    ),
+                                    @72-77 Apply(
+                                        "",
+                                        "Model",
+                                        [],
+                                    ),
+                                ],
+                            ),
+                        },
+                    ],
                 },
             },
             exposes: KeywordItem {
@@ -84,8 +86,8 @@ Module {
                     after: [],
                 },
                 item: [
-                    @141-152 ExposedName(
-                        "mainForHost",
+                    @141-154 ExposedName(
+                        "main_for_host",
                     ),
                 ],
             },

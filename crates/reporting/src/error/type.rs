@@ -4,7 +4,9 @@ use crate::error::canonicalize::{to_circular_def_doc, CIRCULAR_DEF};
 use crate::report::{Annotation, Report, RocDocAllocator, RocDocBuilder};
 use itertools::EitherOrBoth;
 use itertools::Itertools;
+use roc_can::constraint::{ExpectEffectfulReason, FxCallKind, FxSuffixKind};
 use roc_can::expected::{Expected, PExpected};
+use roc_can::expr::TryKind;
 use roc_collections::all::{HumanIndex, MutSet, SendMap};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
@@ -15,14 +17,13 @@ use roc_module::symbol::Symbol;
 use roc_problem::Severity;
 use roc_region::all::{LineInfo, Region};
 use roc_solve_problem::{
-    NotDerivableContext, NotDerivableDecode, NotDerivableEncode, NotDerivableEq, TypeError,
-    UnderivableReason, Unfulfilled,
+    NotDerivableContext, NotDerivableEq, TypeError, UnderivableReason, Unfulfilled,
 };
 use roc_std::RocDec;
 use roc_types::pretty_print::{Parens, WILDCARD};
 use roc_types::types::{
-    AbilitySet, AliasKind, Category, ErrorType, IndexOrField, PatternCategory, Polarity, Reason,
-    RecordField, TypeExt,
+    AbilitySet, AliasKind, Category, EarlyReturnKind, ErrorType, IndexOrField, PatternCategory,
+    Polarity, Reason, RecordField, TypeExt,
 };
 use std::path::PathBuf;
 use ven_pretty::{text, DocAllocator};
@@ -71,7 +72,7 @@ pub fn type_problem<'b>(
             symbol,
             overall_type,
         )),
-        UnexposedLookup(symbol) => {
+        UnexposedLookup(_, symbol) => {
             let title = "UNRECOGNIZED NAME".to_string();
             let doc = alloc
                 .stack(vec![alloc
@@ -86,7 +87,7 @@ pub fn type_problem<'b>(
         UnfulfilledAbility(incomplete) => {
             let title = "INCOMPLETE ABILITY IMPLEMENTATION".to_string();
 
-            let doc = report_unfulfilled_ability(alloc, lines, incomplete);
+            let doc = report_unfulfilled_ability(alloc, lines, incomplete, severity);
 
             report(title, doc, filename)
         }
@@ -97,9 +98,9 @@ pub fn type_problem<'b>(
 
             let incomplete = incomplete
                 .into_iter()
-                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled, severity));
             let note = alloc.stack(incomplete);
-            let snippet = alloc.region(lines.convert_region(region));
+            let snippet = alloc.region(lines.convert_region(region), severity);
             let stack = [
                 alloc.text(
                     "This expression has a type that does not implement the abilities it's expected to:",
@@ -119,9 +120,9 @@ pub fn type_problem<'b>(
         BadPatternMissingAbility(region, _category, _found, incomplete) => {
             let incomplete = incomplete
                 .into_iter()
-                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled));
+                .map(|unfulfilled| report_unfulfilled_ability(alloc, lines, unfulfilled, severity));
             let note = alloc.stack(incomplete);
-            let snippet = alloc.region(lines.convert_region(region));
+            let snippet = alloc.region(lines.convert_region(region), severity);
             let stack = [
                 alloc.text(
                     "This expression has a type does not implement the abilities it's expected to:",
@@ -140,7 +141,7 @@ pub fn type_problem<'b>(
         }
         Exhaustive(problem) => Some(exhaustive_problem(alloc, lines, filename, problem)),
         CircularDef(entries) => {
-            let doc = to_circular_def_doc(alloc, lines, &entries);
+            let doc = to_circular_def_doc(alloc, lines, &entries, severity);
             let title = CIRCULAR_DEF.to_string();
 
             Some(Report {
@@ -162,7 +163,7 @@ pub fn type_problem<'b>(
                     alloc.symbol_unqualified(member),
                     alloc.reflow(" is for a non-opaque type:"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("It is specialized for"),
                 alloc.type_block(error_type_to_doc(alloc, typ)),
                 alloc.reflow("but structural types can never specialize abilities!"),
@@ -192,7 +193,7 @@ pub fn type_problem<'b>(
                     alloc.symbol_unqualified(ability_member),
                     alloc.reflow(" is not for the expected type:"),
                 ]),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.concat([
                     alloc.reflow("It was previously claimed to be a specialization for "),
                     alloc.symbol_unqualified(expected_opaque),
@@ -248,6 +249,302 @@ pub fn type_problem<'b>(
                 severity,
             })
         }
+        UnexpectedModuleParams(region, module_id) => {
+            let stack = [
+                alloc.reflow("This import specifies module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(
+                        " does not expect any. Did you intend to import a different module?",
+                    ),
+                ]),
+            ];
+
+            Some(Report {
+                title: "UNEXPECTED MODULE PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        MissingModuleParams(region, module_id, expected) => {
+            let stack = [
+                alloc.reflow("This import specifies no module params:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("However, "),
+                    alloc.module(module_id),
+                    alloc.reflow(" expects the following to be provided:"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, expected)),
+                alloc.reflow("You can provide params after the module name, like:"),
+                alloc
+                    .parser_suggestion("import Menu { echo, read }")
+                    .indent(4),
+            ];
+            Some(Report {
+                title: "MISSING MODULE PARAMS".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        ModuleParamsMismatch(region, module_id, actual_type, expected_type) => {
+            let stack = [
+                alloc.reflow("Something is off with the params provided by this import:"),
+                alloc.region(lines.convert_region(region), severity),
+                type_comparison(
+                    alloc,
+                    actual_type,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    alloc.reflow("This is the type I inferred:"),
+                    alloc.concat([
+                        alloc.reflow("However, "),
+                        alloc.module(module_id),
+                        alloc.reflow(" expects:"),
+                    ]),
+                    None,
+                ),
+            ];
+            Some(Report {
+                title: "MODULE PARAMS MISMATCH".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        FxInPureFunction(fx_call_region, fx_call_kind, ann_region) => {
+            let lines = [
+                describe_fx_call_kind(alloc, fx_call_kind),
+                alloc.region(lines.convert_region(fx_call_region), severity),
+                match ann_region {
+                    Some(ann_region) => alloc.stack([
+                        alloc.reflow(
+                            "However, the type of the enclosing function requires that it's pure:",
+                        ),
+                        alloc.region(lines.convert_region(ann_region), Severity::Warning),
+                        alloc.concat([
+                            alloc.tip(),
+                            alloc.text("Replace "),
+                            alloc.keyword("->"),
+                            alloc.text(" with "),
+                            alloc.keyword("=>"),
+                            alloc.text(" to annotate it as effectful."),
+                        ]),
+                    ]),
+                    None => {
+                        alloc.reflow("However, the enclosing function is required to be pure.")
+                    }
+                },
+                alloc.reflow("You can still run the program with this error, which can be helpful when you're debugging."),
+            ];
+
+            Some(Report {
+                filename,
+                title: "EFFECT IN PURE FUNCTION".to_string(),
+                doc: alloc.stack(lines),
+                severity,
+            })
+        }
+        FxInTopLevel(call_region, fx_call_kind) => {
+            let lines = [
+                describe_fx_call_kind(alloc, fx_call_kind),
+                alloc.region(lines.convert_region(call_region), severity),
+                alloc.reflow("However, it appears in a top-level def instead of a function. If we allowed this, importing this module would produce a side effect."),
+                alloc.concat([
+                    alloc.tip(),
+                    alloc.reflow("If you don't need any arguments, use an empty record:"),
+                ]),
+                alloc.parser_suggestion("    askName! : {} => Str\n    askName! = \\{} ->\n        Stdout.line! \"What's your name?\"\n        Stdin.line! {}"),
+                alloc.reflow("This will allow the caller to control when the effects run."),
+            ];
+
+            Some(Report {
+                filename,
+                title: "EFFECT IN TOP-LEVEL".to_string(),
+                doc: alloc.stack(lines),
+                severity,
+            })
+        }
+        ExpectedEffectful(region, ExpectEffectfulReason::Stmt) => {
+            let stack = [
+                alloc.reflow("This statement does not produce any effects:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow(
+                    "Standalone statements are only useful if they call effectful functions.",
+                ),
+                alloc.reflow("Did you forget to use its result? If not, feel free to remove it."),
+            ];
+            Some(Report {
+                title: "LEFTOVER STATEMENT".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        ExpectedEffectful(region, ExpectEffectfulReason::Ignored) => {
+            let stack = [
+                alloc.reflow("This assignment doesn't introduce any new variables:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Since it doesn't call any effectful functions, this assignment cannot affect the program's behavior. If you don't need to use the value on the right-hand side, consider removing the assignment.")
+            ];
+
+            Some(Report {
+                title: "UNNECESSARY DEFINITION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        UnsuffixedEffectfulFunction(
+            region,
+            kind @ (FxSuffixKind::Let(symbol) | FxSuffixKind::Pattern(symbol)),
+        ) => {
+            let stack = [
+                match kind {
+                    FxSuffixKind::Let(_) => alloc
+                        .reflow("This function is effectful, but its name does not indicate so:"),
+                    FxSuffixKind::Pattern(_) => alloc.reflow(
+                        "This is an effectful function, but its name does not indicate so:",
+                    ),
+                    FxSuffixKind::UnsuffixedRecordField => {
+                        unreachable!()
+                    }
+                },
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
+                alloc
+                    .string(format!("{}!", symbol.as_str(alloc.interns)))
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ];
+            Some(Report {
+                title: "MISSING EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        UnsuffixedEffectfulFunction(region, FxSuffixKind::UnsuffixedRecordField) => {
+            let stack = [
+                alloc.reflow(
+                    "This field's value is an effectful function, but its name does not indicate so:",
+                ),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Add an exclamation mark at the end, like:"),
+                alloc
+                    .parser_suggestion("{ read_file! : File.read! }")
+                    .indent(4),
+                alloc.reflow("This will help readers identify it as a source of effects."),
+            ];
+            Some(Report {
+                title: "MISSING EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        SuffixedPureFunction(region, kind) => {
+            let stack = [
+                match kind {
+                    FxSuffixKind::Let(_) => {
+                        alloc.reflow("This function is pure, but its name suggests otherwise:")
+                    }
+                    FxSuffixKind::Pattern(_) => {
+                        alloc.reflow("This is a pure function, but its name suggests otherwise:")
+                    }
+                    FxSuffixKind::UnsuffixedRecordField => {
+                        unreachable!()
+                    }
+                },
+                alloc.region(lines.convert_region(region), severity),
+                alloc
+                    .reflow("The exclamation mark at the end is reserved for effectful functions."),
+                alloc.hint("Did you forget to run an effect? Is the type annotation wrong?"),
+            ];
+
+            Some(Report {
+                title: "UNNECESSARY EXCLAMATION".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        InvalidTryTarget(region, actual_type, try_kind) => {
+            let invalid_usage_message = match try_kind {
+                TryKind::KeywordPrefix => alloc.concat([
+                    alloc.reflow("This expression cannot be used as a "),
+                    alloc.keyword("try"),
+                    alloc.reflow(" target:"),
+                ]),
+                TryKind::OperatorSuffix => alloc.concat([
+                    alloc.reflow("This expression cannot be tried with the "),
+                    alloc.keyword("?"),
+                    alloc.reflow(" operator:"),
+                ]),
+            };
+
+            let stack = [
+                invalid_usage_message,
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.reflow("I expected a "),
+                    alloc.type_str("Result"),
+                    alloc.reflow(", but it actually has type:"),
+                ]),
+                alloc.type_block(error_type_to_doc(alloc, actual_type)),
+                alloc.concat([
+                    alloc.hint(""),
+                    alloc.reflow("Did you forget to wrap the value with an "),
+                    alloc.tag("Ok".into()),
+                    alloc.reflow(" or an "),
+                    alloc.tag("Err".into()),
+                    alloc.reflow(" tag?"),
+                ]),
+            ];
+
+            Some(Report {
+                title: "INVALID TRY TARGET".to_string(),
+                filename,
+                doc: alloc.stack(stack),
+                severity,
+            })
+        }
+        TypeIsNotGeneralized(region, actual_type, generalizable) => {
+            let doc = alloc.stack([
+                alloc.reflow("This type variable has a single type:"),
+                alloc.region(lines.convert_region(region), severity),
+                if !generalizable.0 {
+                    alloc.concat([
+                        alloc.reflow("Type variables tell me that they can be used with any type, but they can only be used with functions. All other values have exactly one type."),
+                    ])
+                } else {
+                    alloc.concat([
+                        alloc.reflow("Type variables tell me that they can be used as any type."),
+                        alloc.reflow("But, I found that this type can only be used as this single type:"),
+                        alloc.type_block(to_doc(alloc, Parens::Unnecessary, actual_type).0)
+                    ])
+                },
+                alloc.concat([
+                    alloc.hint(""),
+                    alloc.reflow(
+                        "If you would like the type to be inferred for you, use an underscore ",
+                    ),
+                    alloc.type_str("_"),
+                    alloc.reflow(" instead."),
+                ]),
+            ]);
+
+            Some(Report {
+                title: "TYPE VARIABLE IS NOT GENERIC".to_string(),
+                filename,
+                doc,
+                severity,
+            })
+        }
     }
 }
 
@@ -255,6 +552,7 @@ fn report_unfulfilled_ability<'a>(
     alloc: &'a RocDocAllocator<'a>,
     lines: &LineInfo,
     unfulfilled: Unfulfilled,
+    severity: Severity,
 ) -> RocDocBuilder<'a> {
     match unfulfilled {
         Unfulfilled::OpaqueDoesNotImplement { typ, ability } => {
@@ -303,7 +601,7 @@ fn report_unfulfilled_ability<'a>(
                     alloc.symbol_foreign_qualified(opaque),
                     alloc.reflow(":"),
                 ]),
-                alloc.region(lines.convert_region(derive_region)),
+                alloc.region(lines.convert_region(derive_region), severity),
             ]
             .into_iter()
             .chain(reason)
@@ -390,9 +688,9 @@ fn underivable_hint<'b>(
             },
         ]))),
         NotDerivableContext::UnboundVar => {
-            let v = match typ {
-                ErrorType::FlexVar(v) => v,
-                ErrorType::RigidVar(v) => v,
+            let formatted_var = match typ {
+                ErrorType::FlexVar(v) | ErrorType::RigidVar(v) => alloc.type_variable(v.clone()),
+                ErrorType::InferenceVar => alloc.type_str("_"),
                 _ => internal_error!("unbound variable context only applicable for variables"),
             };
 
@@ -405,7 +703,7 @@ fn underivable_hint<'b>(
                 alloc.inline_type_block(alloc.concat([
                     alloc.keyword(roc_parse::keyword::WHERE),
                     alloc.space(),
-                    alloc.type_variable(v.clone()),
+                    formatted_var,
                     alloc.space(),
                     alloc.keyword(roc_parse::keyword::IMPLEMENTS),
                     alloc.space(),
@@ -413,41 +711,17 @@ fn underivable_hint<'b>(
                 ])),
             ])))
         }
-        NotDerivableContext::Encode(reason) => match reason {
-            NotDerivableEncode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Encoding a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider using a fixed-sized unsigned integer, like a "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(" instead."),
-                ])))
-            }
-        },
-        NotDerivableContext::Decode(reason) => match reason {
-            NotDerivableDecode::Nat => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("Decoding to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" is not supported. Consider decoding to a fixed-sized unsigned integer, like "),
-                    alloc.type_str("U64"),
-                    alloc.reflow(", then converting to a "),
-                    alloc.type_str("Nat"),
-                    alloc.reflow(" if needed."),
-                ])))
-            }
-            NotDerivableDecode::OptionalRecordField(field) => {
-                Some(alloc.note("").append(alloc.concat([
-                    alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
-                    alloc.record_field(field),
-                    alloc.reflow(". Optional record fields are polymorphic over records that may or may not contain them at compile time, "),
-                    alloc.reflow("but are not a concept that extends to runtime!"),
-                    alloc.hardline(),
-                    alloc.reflow("Maybe you wanted to use a "),
-                    alloc.symbol_unqualified(Symbol::RESULT_RESULT),
-                    alloc.reflow("?"),
-                ])))
-            }
+        NotDerivableContext::DecodeOptionalRecordField(field) => {
+            Some(alloc.note("").append(alloc.concat([
+                alloc.reflow("I can't derive decoding for a record with an optional field, which in this case is "),
+                alloc.record_field(field),
+                alloc.reflow(". Default value record fields are polymorphic over records that may or may not contain them at compile time, "),
+                alloc.reflow("but are not a concept that extends to runtime!"),
+                alloc.hardline(),
+                alloc.reflow("Maybe you wanted to use a "),
+                alloc.symbol_unqualified(Symbol::RESULT_RESULT),
+                alloc.reflow("?"),
+            ])))
         },
         NotDerivableContext::Eq(reason) => match reason {
             NotDerivableEq::FloatingPoint => {
@@ -471,11 +745,12 @@ pub fn cyclic_alias<'b>(
     region: roc_region::all::Region,
     others: Vec<Symbol>,
     alias_kind: AliasKind,
+    severity: Severity,
 ) -> (RocDocBuilder<'b>, String) {
     let when_is_recursion_legal =
         alloc.reflow("Recursion in ")
-        .append(alloc.reflow(alias_kind.as_str()))
-        .append(alloc.reflow("es is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
+        .append(alloc.reflow(alias_kind.as_str_plural()))
+        .append(alloc.reflow(" is only allowed if recursion happens behind a tagged union, at least one variant of which is not recursive."));
 
     let doc = if others.is_empty() {
         alloc.stack([
@@ -485,7 +760,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.reflow(" "))
                 .append(alloc.reflow(alias_kind.as_str()))
                 .append(alloc.reflow(" is self-recursive in an invalid way:")),
-            alloc.region(lines.convert_region(region)),
+            alloc.region(lines.convert_region(region), severity),
             when_is_recursion_legal,
         ])
     } else {
@@ -496,7 +771,7 @@ pub fn cyclic_alias<'b>(
                 .append(alloc.reflow(" "))
                 .append(alloc.reflow(alias_kind.as_str()))
                 .append(alloc.reflow(" is recursive in an invalid way:")),
-            alloc.region(lines.convert_region(region)),
+            alloc.region(lines.convert_region(region), severity),
             alloc
                 .reflow("The ")
                 .append(alloc.symbol_unqualified(symbol))
@@ -540,9 +815,10 @@ fn report_mismatch<'b>(
         alloc.region_with_subregion(
             lines.convert_region(highlight),
             lines.convert_region(region),
+            severity,
         )
     } else {
-        alloc.region(lines.convert_region(region))
+        alloc.region(lines.convert_region(region), severity)
     };
     let lines = vec![
         problem,
@@ -584,9 +860,10 @@ fn report_bad_type<'b>(
         alloc.region_with_subregion(
             lines.convert_region(highlight),
             lines.convert_region(region),
+            severity,
         )
     } else {
-        alloc.region(lines.convert_region(region))
+        alloc.region(lines.convert_region(region), severity)
     };
     let lines = vec![
         problem,
@@ -689,16 +966,31 @@ fn to_expr_report<'b>(
                 title: "TYPE MISMATCH".to_string(),
                 doc: alloc.stack([
                     alloc.text("This expression is used in an unexpected way:"),
-                    alloc.region(lines.convert_region(expr_region)),
+                    alloc.region(lines.convert_region(expr_region), severity),
                     comparison,
                 ]),
                 severity,
             }
         }
         Expected::FromAnnotation(name, _arity, annotation_source, expected_type) => {
+            use roc_can::pattern::Pattern;
             use roc_types::types::AnnotationSource::*;
 
+            let is_suffixed = match &name.value {
+                Pattern::Identifier(symbol) => symbol.as_str(alloc.interns).starts_with("#!"),
+                _ => false,
+            };
+
+            let is_suffixed_stmt = match &name.value {
+                Pattern::Identifier(symbol) => {
+                    let ident = symbol.as_str(alloc.interns);
+                    ident.starts_with("#!") && ident.ends_with("_stmt")
+                }
+                _ => false,
+            };
+
             let (the_name_text, on_name_text) = match pattern_to_doc(alloc, &name.value) {
+                _ if is_suffixed => (alloc.text("this suffixed"), alloc.nil()),
                 Some(doc) => (
                     alloc.concat([alloc.reflow("the "), doc.clone()]),
                     alloc.concat([alloc.reflow(" on "), doc]),
@@ -711,9 +1003,9 @@ fn to_expr_report<'b>(
             let thing = match annotation_source {
                 TypedIfBranch {
                     index,
-                    num_branches,
+                    num_branches: 2,
                     ..
-                } if num_branches == 2 => alloc.concat([
+                } => alloc.concat([
                     alloc.keyword(if index == HumanIndex::FIRST {
                         "then"
                     } else {
@@ -735,6 +1027,11 @@ fn to_expr_report<'b>(
                     alloc.keyword("when"),
                     alloc.text(" expression:"),
                 ]),
+                TypedBody { .. } if is_suffixed_stmt => alloc.concat([
+                    alloc.text("body of "),
+                    the_name_text,
+                    alloc.text(" statement:"),
+                ]),
                 TypedBody { .. } => alloc.concat([
                     alloc.text("body of "),
                     the_name_text,
@@ -748,7 +1045,7 @@ fn to_expr_report<'b>(
             };
 
             let it_is = match annotation_source {
-                TypedIfBranch { index, .. } => format!("The {} branch is", index.ordinal()),
+                TypedIfBranch { .. } => "This branch is".to_string(),
                 TypedWhenBranch { index, .. } => format!("The {} branch is", index.ordinal()),
                 TypedBody { .. } => "The body is".into(),
                 RequiredSymbol { .. } => "The provided type is".into(),
@@ -790,11 +1087,18 @@ fn to_expr_report<'b>(
                     expected_type,
                     expectation_context,
                     add_category(alloc, alloc.text(it_is), &category),
-                    alloc.concat([
-                        alloc.text("But the type annotation"),
-                        on_name_text,
-                        alloc.text(" says it should be:"),
-                    ]),
+                    if is_suffixed_stmt {
+                        // TODO: add a tip for using underscore
+                        alloc.text(
+                            "But a suffixed statement is expected to resolve to an empty record:",
+                        )
+                    } else {
+                        alloc.concat([
+                            alloc.text("But the type annotation"),
+                            on_name_text,
+                            alloc.text(" says it should be:"),
+                        ])
+                    },
                     None,
                 )
             };
@@ -811,6 +1115,7 @@ fn to_expr_report<'b>(
                         alloc.region_with_subregion(
                             lines.convert_region(joined),
                             lines.convert_region(expr_region),
+                            severity,
                         )
                     },
                     comparison,
@@ -1005,8 +1310,8 @@ fn to_expr_report<'b>(
                 &category,
                 found,
                 expected_type,
-                region,
-                Some(expr_region),
+                expr_region,
+                Some(region),
                 alloc.concat([
                     alloc.reflow("The "),
                     alloc.string(index.ordinal()),
@@ -1163,15 +1468,8 @@ fn to_expr_report<'b>(
                                     " is an opaque type, so it cannot be called with an argument:",
                                 ),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
-                            match called_via {
-                                CalledVia::RecordBuilder => {
-                                    alloc.hint("Did you mean to apply it to a function first?")
-                                },
-                                _ => {
-                                    alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?")
-                                }
-                            }
+                            alloc.region(lines.convert_region(expr_region), severity),
+                            alloc.reflow("I can't call an opaque type because I don't know what it is! Maybe you meant to unwrap it first?"),
                         ]),
                         Other => alloc.stack([
                             alloc.concat([
@@ -1185,14 +1483,14 @@ fn to_expr_report<'b>(
                                     }
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             match called_via {
                                 CalledVia::RecordBuilder => {
                                     alloc.concat([
-                                        alloc.tip(),
-                                        alloc.reflow("Remove "),
-                                        alloc.keyword("<-"),
-                                        alloc.reflow(" to assign the field directly.")
+                                        alloc.note(""),
+                                        alloc.reflow("Record builders need a mapper function before the "),
+                                        alloc.backwards_arrow(),
+                                        alloc.reflow(" to combine fields together with.")
                                     ])
                                 }
                                 _ => {
@@ -1233,7 +1531,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             alloc.reflow("Are there any missing commas? Or missing parentheses?"),
                         ];
 
@@ -1257,7 +1555,7 @@ fn to_expr_report<'b>(
                                     arity
                                 )),
                             ]),
-                            alloc.region(lines.convert_region(expr_region)),
+                            alloc.region(lines.convert_region(expr_region), severity),
                             alloc.reflow(
                                 "Roc does not allow functions to be partially applied. \
                                 Use a closure to make partial application explicit.",
@@ -1273,12 +1571,24 @@ fn to_expr_report<'b>(
                     }
                 }
             },
-            Reason::FnArg { name, arg_index } => {
+            Reason::FnArg {
+                name,
+                arg_index,
+                called_via,
+            } => {
                 let ith = arg_index.ordinal();
 
-                let this_function = match name {
-                    None => alloc.text("this function"),
-                    Some(symbol) => alloc.symbol_unqualified(symbol),
+                let this_function = match (called_via, name) {
+                    (CalledVia::Space, Some(symbole)) => alloc.symbol_unqualified(symbole),
+                    (CalledVia::BinOp(op), _) => alloc.binop(op),
+                    (CalledVia::UnaryOp(op), _) => alloc.unop(op),
+                    (CalledVia::StringInterpolation, _) => alloc.text("this string interpolation"),
+                    _ => alloc.text("this function"),
+                };
+
+                let argument = match called_via {
+                    CalledVia::StringInterpolation => "argument".to_string(),
+                    _ => format!("{ith} argument"),
                 };
 
                 report_mismatch(
@@ -1289,10 +1599,10 @@ fn to_expr_report<'b>(
                     &category,
                     found,
                     expected_type,
-                    region,
-                    Some(expr_region),
+                    expr_region,
+                    Some(region),
                     alloc.concat([
-                        alloc.string(format!("This {ith} argument to ")),
+                        alloc.string(format!("This {argument} to ")),
                         this_function.clone(),
                         alloc.text(" has an unexpected type:"),
                     ]),
@@ -1300,7 +1610,7 @@ fn to_expr_report<'b>(
                     alloc.concat([
                         alloc.text("But "),
                         this_function,
-                        alloc.string(format!(" needs its {ith} argument to be:")),
+                        alloc.string(format!(" needs its {argument} to be:")),
                     ]),
                     None,
                 )
@@ -1420,6 +1730,7 @@ fn to_expr_report<'b>(
                 let snippet = alloc.region_with_subregion(
                     lines.convert_region(region),
                     lines.convert_region(expr_region),
+                    severity,
                 );
 
                 let this_is = alloc.concat([
@@ -1473,7 +1784,7 @@ fn to_expr_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         expected_type,
@@ -1514,7 +1825,7 @@ fn to_expr_report<'b>(
                         .reflow("This value passed to ")
                         .append(alloc.keyword("crash"))
                         .append(alloc.reflow(" is not a string:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     type_comparison(
                         alloc,
                         found,
@@ -1564,6 +1875,118 @@ fn to_expr_report<'b>(
             Reason::RecordDefaultField(_) => {
                 unimplemented!("record default field is not implemented yet")
             }
+            Reason::ImportParams(_) => unreachable!(),
+
+            Reason::FunctionOutput => {
+                let problem = alloc.concat([
+                    alloc.reflow("This returns something that's incompatible "),
+                    alloc.reflow("with the return type of the enclosing function:"),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It"), &category),
+                    alloc.reflow("But I expected the function to have return type:"),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
+
+            Reason::Stmt(opt_name) => {
+                let diff = to_diff(alloc, Parens::Unnecessary, found.clone(), expected_type);
+
+                let lines = [
+                    match opt_name {
+                        None => alloc.reflow("The result of this expression is ignored:"),
+                        Some(fn_name) => alloc.concat([
+                            alloc.reflow("The result of this call to "),
+                            alloc.symbol_qualified(fn_name),
+                            alloc.reflow(" is ignored:"),
+                        ]),
+                    },
+                    alloc.region(lines.convert_region(region), severity),
+                    alloc.reflow("Standalone statements are required to produce an empty record, but the type of this one is:"),
+                    alloc.type_block(type_with_able_vars(alloc, diff.left, diff.left_able)),
+                    match found {
+                        ErrorType::EffectfulFunc | ErrorType::Function(_, _, _, _) => {
+                            alloc.hint("Did you forget to call the function?")
+                        }
+                        _ => alloc.stack([
+                            alloc.concat([
+                                alloc.reflow("If you still want to ignore it, assign it to "),
+                                alloc.keyword("_"),
+                                alloc.reflow(", like this:"),
+                            ]),
+                            alloc
+                                .parser_suggestion("_ = File.delete! \"data.json\"")
+                                .indent(4),
+                        ])
+                    },
+                ];
+
+                Report {
+                    filename,
+                    title: "IGNORED RESULT".to_string(),
+                    doc: alloc.stack(lines),
+                    severity,
+                }
+            }
+
+            Reason::TryResult => {
+                let problem = alloc.concat([
+                    alloc.text("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(
+                        " statement doesn't match the return type of its enclosing function:",
+                    ),
+                ]);
+
+                let comparison = type_comparison(
+                    alloc,
+                    found,
+                    expected_type,
+                    ExpectationContext::Arbitrary,
+                    add_category(alloc, alloc.text("It is"), &category),
+                    alloc.concat([
+                        alloc.reflow("But I need every "),
+                        alloc.keyword("return"),
+                        alloc.reflow(" statement in that function to return:"),
+                    ]),
+                    None,
+                );
+
+                Report {
+                    title: "TYPE MISMATCH".to_string(),
+                    filename,
+                    doc: alloc.stack([
+                        problem,
+                        alloc.region_with_subregion(
+                            lines.convert_region(region),
+                            lines.convert_region(expr_region),
+                            severity,
+                        ),
+                        comparison,
+                    ]),
+                    severity,
+                }
+            }
         },
     }
 }
@@ -1594,7 +2017,7 @@ fn describe_wanted_function(tipe: &ErrorType) -> DescribedFunction {
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, _) => DescribedFunction::Arguments(args.len()),
+        Function(args, _, _, _) => DescribedFunction::Arguments(args.len()),
         Alias(_, _, actual, AliasKind::Structural) => describe_wanted_function(actual),
         Alias(_, _, actual, AliasKind::Opaque) => {
             let tag = if matches!(
@@ -1700,6 +2123,9 @@ fn format_category<'b>(
     let t = if capitalize_start { "T" } else { "t" };
 
     match category {
+        Lookup(name) if name.is_generated(alloc.interns) => {
+            (text!(alloc, "{}his value", t), alloc.text(" is a:"))
+        }
         Lookup(name) => (
             alloc.concat([
                 text!(alloc, "{}his ", t),
@@ -1708,7 +2134,6 @@ fn format_category<'b>(
             ]),
             alloc.text(" is a:"),
         ),
-
         If => (
             alloc.concat([
                 text!(alloc, "{}his ", t),
@@ -1873,7 +2298,7 @@ fn format_category<'b>(
         }
 
         Uniqueness => (
-            alloc.concat([this_is, alloc.text(" an uniqueness attribute")]),
+            alloc.concat([this_is, alloc.text(" a uniqueness attribute")]),
             alloc.text(" of type:"),
         ),
         Crash => {
@@ -1899,6 +2324,30 @@ fn format_category<'b>(
         Dbg => (
             alloc.concat([this_is, alloc.text(" a dbg statement")]),
             alloc.text(" of type:"),
+        ),
+        Return(EarlyReturnKind::Return) => (
+            alloc.concat([text!(alloc, "{}his", t), alloc.reflow(" returns a value")]),
+            alloc.text(" of type:"),
+        ),
+        Return(EarlyReturnKind::Try) => (
+            alloc.concat([
+                text!(alloc, "{}his", t),
+                alloc.reflow(" returns an "),
+                alloc.tag_name("Err".into()),
+            ]),
+            alloc.text(" of type:"),
+        ),
+        TryTarget => (
+            alloc.concat([this_is, alloc.reflow(" a try target")]),
+            alloc.text(" of type:"),
+        ),
+        TrySuccess => (
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
+            alloc.text(" that succeeds with type:"),
+        ),
+        TryFailure => (
+            alloc.concat([this_is, alloc.reflow(" a try expression")]),
+            alloc.text(" that fails with type:"),
         ),
     }
 }
@@ -1928,7 +2377,7 @@ fn to_pattern_report<'b>(
         PExpected::NoExpectation(expected_type) => {
             let doc = alloc.stack([
                 alloc.text("This pattern is being used in an unexpected way:"),
-                alloc.region(lines.convert_region(expr_region)),
+                alloc.region(lines.convert_region(expr_region), severity),
                 pattern_type_comparison(
                     alloc,
                     found,
@@ -1961,7 +2410,7 @@ fn to_pattern_report<'b>(
                         .append(alloc.text(" argument to "))
                         .append(name.clone())
                         .append(alloc.text(" is weird:")),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -1999,6 +2448,7 @@ fn to_pattern_report<'b>(
                         alloc.region_with_subregion(
                             lines.convert_region(region),
                             lines.convert_region(expr_region),
+                            severity,
                         ),
                         pattern_type_comparison(
                             alloc,
@@ -2043,6 +2493,7 @@ fn to_pattern_report<'b>(
                             alloc.region_with_subregion(
                                 lines.convert_region(region),
                                 lines.convert_region(expr_region),
+                                severity,
                             ),
                             pattern_type_comparison(
                                 alloc,
@@ -2072,7 +2523,7 @@ fn to_pattern_report<'b>(
             PReason::ListElem => {
                 let doc = alloc.stack([
                     alloc.concat([alloc.reflow("This list element doesn't match the types of other elements in the pattern:")]),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     pattern_type_comparison(
                         alloc,
                         found,
@@ -2183,7 +2634,7 @@ fn to_circular_report<'b>(
                     .reflow("I'm inferring a weird self-referential type for ")
                     .append(alloc.symbol_unqualified(symbol))
                     .append(alloc.text(":")),
-                alloc.region(lines.convert_region(region)),
+                alloc.region(lines.convert_region(region), severity),
                 alloc.stack([
                     alloc.reflow(
                         "Here is my best effort at writing down the type. \
@@ -2438,16 +2889,18 @@ fn to_doc_help<'b>(
     use ErrorType::*;
 
     match tipe {
-        Function(args, _, ret) => report_text::function(
+        Function(args, _, fx, ret) => report_text::function(
             alloc,
             parens,
             args.into_iter()
                 .map(|arg| to_doc_help(ctx, gen_usages, alloc, Parens::InFn, arg))
                 .collect(),
+            fx,
             to_doc_help(ctx, gen_usages, alloc, Parens::InFn, *ret),
         ),
         Infinite => alloc.text("∞"),
         Error => alloc.text("?"),
+        InferenceVar => alloc.text("_"),
 
         FlexVar(lowercase) if is_generated_name(&lowercase) => {
             let &usages = gen_usages
@@ -2465,6 +2918,8 @@ fn to_doc_help<'b>(
             ctx.able_variables.push((lowercase.clone(), ability));
             alloc.type_variable(lowercase)
         }
+
+        EffectfulFunc => alloc.text("effectful function"),
 
         Type(symbol, args) => report_text::apply(
             alloc,
@@ -2660,6 +3115,8 @@ fn count_generated_name_usages<'a>(
             RigidVar(name) | RigidAbleVar(name, _) => {
                 debug_assert!(!is_generated_name(name));
             }
+            InferenceVar => {}
+            EffectfulFunc => {}
             Type(_, tys) => {
                 stack.extend(tys.iter().map(|t| (t, only_unseen)));
             }
@@ -2680,7 +3137,7 @@ fn count_generated_name_usages<'a>(
                 stack.extend(tags.values().flatten().map(|t| (t, only_unseen)));
                 ext_stack.push((ext, only_unseen));
             }
-            Function(args, _lset, ret) => {
+            Function(args, _lset, _fx, ret) => {
                 stack.extend(args.iter().map(|t| (t, only_unseen)));
                 stack.push((ret, only_unseen));
             }
@@ -2855,7 +3312,7 @@ fn to_diff<'b>(
             }
         }
 
-        (Function(args1, _, ret1), Function(args2, _, ret2)) => {
+        (Function(args1, _, fx1, ret1), Function(args2, _, fx2, ret2)) => {
             if args1.len() == args2.len() {
                 let mut status = Status::Similar;
                 let arg_diff = diff_args(alloc, Parens::InFn, args1, args2);
@@ -2863,8 +3320,8 @@ fn to_diff<'b>(
                 status.merge(arg_diff.status);
                 status.merge(ret_diff.status);
 
-                let left = report_text::function(alloc, parens, arg_diff.left, ret_diff.left);
-                let right = report_text::function(alloc, parens, arg_diff.right, ret_diff.right);
+                let left = report_text::function(alloc, parens, arg_diff.left, fx1, ret_diff.left);
+                let right = report_text::function(alloc, parens, arg_diff.right, fx2, ret_diff.right);
                 let mut left_able = arg_diff.left_able;
                 left_able.extend(ret_diff.left_able);
                 let mut right_able = arg_diff.right_able;
@@ -3012,14 +3469,14 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
                 }
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_INTEGER, _))
                             | Some(ErrorType::Alias(Symbol::NUM_INTEGER, _, _, _))
                     )
@@ -3032,7 +3489,7 @@ fn to_diff<'b>(
 
                 ErrorType::Type(Symbol::NUM_NUM, args) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -3040,7 +3497,7 @@ fn to_diff<'b>(
 
                 ErrorType::Alias(Symbol::NUM_NUM, args, _, _) => {
                     matches!(
-                        &args.get(0),
+                        &args.first(),
                         Some(ErrorType::Type(Symbol::NUM_FLOATINGPOINT, _))
                             | Some(ErrorType::Alias(Symbol::NUM_FLOATINGPOINT, _, _, _))
                     )
@@ -3329,6 +3786,7 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
             // If either is flex, it will unify to the other type; no diff is needed.
             false
         }
+        (InferenceVar, InferenceVar) => false,
         (FlexAbleVar(v1, _set1), FlexAbleVar(v2, _set2))
         | (RigidAbleVar(v1, _set1), RigidAbleVar(v2, _set2)) => {
             #[cfg(debug_assertions)]
@@ -3453,9 +3911,10 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
                         .any(|(p1, p2)| should_show_diff(p1, p2))
                 })
         }
-        (Function(params1, ret1, l1), Function(params2, ret2, l2)) => {
+        (Function(params1, ret1, fx1, l1), Function(params2, ret2, fx2, l2)) => {
             if params1.len() != params2.len()
                 || should_show_diff(ret1, ret2)
+                || fx1 != fx2
                 || should_show_diff(l1, l2)
             {
                 return true;
@@ -3517,8 +3976,12 @@ fn should_show_diff(t1: &ErrorType, t2: &ErrorType) -> bool {
         | (_, TagUnion(_, _, _))
         | (RecursiveTagUnion(_, _, _, _), _)
         | (_, RecursiveTagUnion(_, _, _, _))
-        | (Function(_, _, _), _)
-        | (_, Function(_, _, _)) => true,
+        | (Function(_, _, _, _), _)
+        | (_, Function(_, _, _, _))
+        | (EffectfulFunc, _)
+        | (_, EffectfulFunc)
+        | (InferenceVar, _)
+        | (_, InferenceVar) => true,
     }
 }
 
@@ -3976,7 +4439,7 @@ mod report_text {
     use crate::report::{Annotation, RocDocAllocator, RocDocBuilder};
     use roc_module::ident::Lowercase;
     use roc_types::pretty_print::Parens;
-    use roc_types::types::{ErrorType, RecordField, TypeExt};
+    use roc_types::types::{ErrorFunctionFx, ErrorType, RecordField, TypeExt};
     use ven_pretty::DocAllocator;
 
     fn with_parens<'b>(
@@ -3990,11 +4453,15 @@ mod report_text {
         alloc: &'b RocDocAllocator<'b>,
         parens: Parens,
         args: Vec<RocDocBuilder<'b>>,
+        fx: ErrorFunctionFx,
         ret: RocDocBuilder<'b>,
     ) -> RocDocBuilder<'b> {
         let function_doc = alloc.concat([
             alloc.intersperse(args, alloc.reflow(", ")),
-            alloc.reflow(" -> "),
+            match fx {
+                ErrorFunctionFx::Pure => alloc.text(" -> "),
+                ErrorFunctionFx::Effectful => alloc.text(" => "),
+            },
             ret,
         ]);
 
@@ -4373,7 +4840,7 @@ fn type_problem_to_pretty<'b>(
         (FieldTypo(typo, possibilities), _) => {
             let suggestions = suggest::sort(typo.as_str(), possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let typo_str = format!("{typo}");
@@ -4425,7 +4892,7 @@ fn type_problem_to_pretty<'b>(
             let typo_str = format!("{}", typo.as_ident_str());
             let suggestions = suggest::sort(&typo_str, possibilities);
 
-            match suggestions.get(0) {
+            match suggestions.first() {
                 None => alloc.nil(),
                 Some(nearest) => {
                     let nearest_str = format!("{nearest}");
@@ -4555,12 +5022,12 @@ fn type_problem_to_pretty<'b>(
             };
 
             match tipe {
-                Infinite | Error | FlexVar(_) => alloc.nil(),
+                Infinite | Error | FlexVar(_) | InferenceVar | EffectfulFunc => alloc.nil(),
                 FlexAbleVar(_, other_abilities) => {
                     rigid_able_vs_different_flex_able(x, abilities, other_abilities)
                 }
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
-                Function(_, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
+                Function(_, _, _, _) => rigid_able_vs_concrete(x, alloc.reflow("a function value")),
                 Record(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a record value")),
                 Tuple(_, _) => rigid_able_vs_concrete(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
@@ -4628,7 +5095,7 @@ fn type_problem_to_pretty<'b>(
             };
 
             match tipe {
-                Infinite | Error | FlexVar(_) => alloc.nil(),
+                Infinite | Error | FlexVar(_) | InferenceVar => alloc.nil(),
                 FlexAbleVar(_, abilities) => {
                     let mut abilities = abilities.into_sorted_iter();
                     let msg = if abilities.len() == 1 {
@@ -4648,8 +5115,9 @@ fn type_problem_to_pretty<'b>(
                     };
                     bad_rigid_var(x, msg)
                 }
+                EffectfulFunc => alloc.reflow("an effectful function"),
                 RigidVar(y) | RigidAbleVar(y, _) => bad_double_rigid(x, y),
-                Function(_, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
+                Function(_, _, _, _) => bad_rigid_var(x, alloc.reflow("a function value")),
                 Record(_, _) => bad_rigid_var(x, alloc.reflow("a record value")),
                 Tuple(_, _) => bad_rigid_var(x, alloc.reflow("a tuple value")),
                 TagUnion(_, _, _) | RecursiveTagUnion(_, _, _, _) => {
@@ -4667,17 +5135,19 @@ fn type_problem_to_pretty<'b>(
             }
         }
 
-        (IntFloat, _) => alloc.tip().append(alloc.concat([
-            alloc.reflow("You can convert between "),
-            alloc.type_str("Int"),
-            alloc.reflow(" and "),
-            alloc.type_str("Frac"),
-            alloc.reflow(" using functions like "),
-            alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
-            alloc.reflow(" and "),
-            alloc.symbol_qualified(Symbol::NUM_ROUND),
-            alloc.reflow("."),
-        ])),
+        (IntFloat, _) => {
+            alloc.tip().append(alloc.concat(
+                [
+                    alloc.reflow(
+                        "You can convert between integers and fractions using functions like ",
+                    ),
+                    alloc.symbol_qualified(Symbol::NUM_TO_FRAC),
+                    alloc.reflow(" and "),
+                    alloc.symbol_qualified(Symbol::NUM_ROUND),
+                    alloc.reflow("."),
+                ],
+            ))
+        }
 
         (TagsMissing(missing), ExpectationContext::WhenCondition) => match missing.split_last() {
             None => alloc.nil(),
@@ -4756,17 +5226,14 @@ fn type_problem_to_pretty<'b>(
             alloc.reflow("Learn more about optional fields at TODO."),
         ])),
 
-        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(alloc.concat([
-            alloc.reflow(
-                "Type comparisons between an opaque type are only ever \
-                equal if both types are the same opaque type. Did you mean \
-                to create an opaque type by wrapping it? If I have an opaque type ",
-            ),
-            alloc.type_str("Age := U32"),
-            alloc.reflow(" I can create an instance of this opaque type by doing "),
-            alloc.type_str("@Age 23"),
-            alloc.reflow("."),
-        ])),
+        (OpaqueComparedToNonOpaque, _) => alloc.tip().append(
+            alloc.concat([
+                alloc
+                    .reflow("Add type annotations")
+                    .annotate(Annotation::Emphasized),
+                alloc.reflow(" to functions or values to help you figure this out."),
+            ]),
+        ),
 
         (BoolVsBoolTag(tag), _) => alloc.tip().append(alloc.concat([
             alloc.reflow("Did you mean to use "),
@@ -4821,7 +5288,7 @@ fn report_record_field_typo<'b>(
 
     let doc = alloc.stack([
         header,
-        alloc.region(lines.convert_region(field_region)),
+        alloc.region(lines.convert_region(field_region), severity),
         if suggestions.is_empty() {
             let r_doc = match opt_sym {
                 Some(symbol) => alloc.symbol_unqualified(symbol).append(" is"),
@@ -4886,7 +5353,7 @@ fn exhaustive_problem<'a>(
             BadArg => {
                 let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat([
@@ -4909,7 +5376,7 @@ fn exhaustive_problem<'a>(
             BadDestruct => {
                 let doc = alloc.stack([
                     alloc.reflow("This pattern does not cover all the possibilities:"),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.concat([
@@ -4937,7 +5404,7 @@ fn exhaustive_problem<'a>(
                         alloc.keyword("when"),
                         alloc.reflow(" does not cover all the possibilities:"),
                     ]),
-                    alloc.region(lines.convert_region(region)),
+                    alloc.region(lines.convert_region(region), severity),
                     alloc.reflow("Other possibilities include:"),
                     unhandled_patterns_to_doc_block(alloc, missing),
                     alloc.reflow(
@@ -4969,6 +5436,7 @@ fn exhaustive_problem<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(overall_region),
                     lines.convert_region(branch_region),
+                    severity,
                 ),
                 alloc.reflow(
                     "Any value of this shape will be handled by \
@@ -4997,6 +5465,7 @@ fn exhaustive_problem<'a>(
                 alloc.region_with_subregion(
                     lines.convert_region(overall_region),
                     lines.convert_region(branch_region),
+                    severity,
                 ),
                 alloc.reflow(
                     "It's impossible to create a value of this shape, \
@@ -5187,5 +5656,21 @@ fn pattern_to_doc_help<'b>(
                 }
             }
         }
+    }
+}
+
+fn describe_fx_call_kind<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    kind: FxCallKind,
+) -> RocDocBuilder<'b> {
+    match kind {
+        FxCallKind::Call(Some(name)) => alloc.concat([
+            alloc.reflow("This call to "),
+            alloc.symbol_qualified(name),
+            alloc.reflow(" might produce an effect:"),
+        ]),
+        FxCallKind::Call(None) => alloc.reflow("This expression calls an effectful function:"),
+        FxCallKind::Stmt => alloc.reflow("This statement calls an effectful function:"),
+        FxCallKind::Ignored => alloc.reflow("This ignored def calls an effectful function:"),
     }
 }

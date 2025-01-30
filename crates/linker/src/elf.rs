@@ -4,8 +4,8 @@ use memmap2::MmapMut;
 use object::{elf, endian};
 use object::{
     CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
-    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
-    SymbolIndex, SymbolSection,
+    ObjectSymbol, RelocationFlags, RelocationKind, RelocationTarget, Section, SectionIndex,
+    SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
@@ -15,9 +15,10 @@ use std::{
     io::{BufReader, BufWriter},
     mem,
     path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
+use crate::util::{is_roc_definition, is_roc_undefined, report_timing};
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
     load_struct_inplace_mut, load_structs_inplace_mut, open_mmap, open_mmap_mut,
@@ -101,26 +102,6 @@ impl Metadata {
             }
         }
     }
-}
-
-fn report_timing(label: &str, duration: Duration) {
-    println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
-}
-
-fn is_roc_symbol(sym: &object::Symbol) -> bool {
-    if let Ok(name) = sym.name() {
-        name.trim_start_matches('_').starts_with("roc_")
-    } else {
-        false
-    }
-}
-
-fn is_roc_definition(sym: &object::Symbol) -> bool {
-    sym.is_definition() && is_roc_symbol(sym)
-}
-
-fn is_roc_undefined(sym: &object::Symbol) -> bool {
-    sym.is_undefined() && is_roc_symbol(sym)
 }
 
 fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
@@ -332,8 +313,7 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
-pub(crate) fn preprocess_elf(
-    endianness: target_lexicon::Endianness,
+pub(crate) fn preprocess_elf_le(
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -427,8 +407,12 @@ pub(crate) fn preprocess_elf(
                 }
             })
             .filter_map(|(_, reloc)| {
-                if let RelocationKind::Elf(7) = reloc.kind() {
-                    Some(reloc)
+                if let RelocationFlags::Elf { r_type}  = reloc.flags() {
+                    if r_type == elf::R_X86_64_JUMP_SLOT {
+                        Some(reloc)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -479,47 +463,33 @@ pub(crate) fn preprocess_elf(
 
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
-    let scanning_dynamic_deps_duration;
-    let platform_gen_start;
+    let scanning_dynamic_deps_start = Instant::now();
 
-    let out_mmap = match endianness {
-        target_lexicon::Endianness::Little => {
-            let scanning_dynamic_deps_start = Instant::now();
+    let ElfDynamicDeps {
+        got_app_syms,
+        got_sections,
+        app_sym_indices,
+        dynamic_lib_count,
+        shared_lib_index,
+    } = scan_elf_dynamic_deps(
+        &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
+    );
 
-            let ElfDynamicDeps {
-                got_app_syms,
-                got_sections,
-                app_sym_indices,
-                dynamic_lib_count,
-                shared_lib_index,
-            } = scan_elf_dynamic_deps(
-                &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-            );
+    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-            scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
+    let platform_gen_start = Instant::now();
 
-            platform_gen_start = Instant::now();
-
-            // TODO little endian
-            gen_elf_le(
-                exec_data,
-                &mut md,
-                preprocessed_path,
-                &got_app_syms,
-                &got_sections,
-                &app_sym_indices,
-                dynamic_lib_count,
-                shared_lib_index,
-                verbose,
-            )
-        }
-        target_lexicon::Endianness::Big => {
-            // TODO probably need to make gen_elf a macro to get this
-            // to work, which is annoying. A parameterized function
-            // does *not* work.
-            todo!("Roc does not yet support big-endian ELF hosts!");
-        }
-    };
+    let out_mmap = gen_elf_le(
+        exec_data,
+        &mut md,
+        preprocessed_path,
+        &got_app_syms,
+        &got_sections,
+        &app_sym_indices,
+        dynamic_lib_count,
+        shared_lib_index,
+        verbose,
+    );
 
     let platform_gen_duration = platform_gen_start.elapsed();
 
@@ -1103,10 +1073,12 @@ fn scan_elf_dynamic_deps(
         }
     })
     .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(elf::R_X86_64_GLOB_DAT) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+        if let RelocationFlags::Elf { r_type } = reloc.flags() {
+            if r_type == elf::R_X86_64_GLOB_DAT {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+                    }
                 }
             }
         }
@@ -1122,10 +1094,12 @@ fn scan_elf_dynamic_deps(
         }
     })
     .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(elf::R_X86_64_JUMP_SLOT) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some(symbol.index().0);
+        if let RelocationFlags::Elf { r_type } = reloc.flags() {
+            if r_type == elf::R_X86_64_JUMP_SLOT {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        return Some(symbol.index().0);
+                    }
                 }
             }
         }
@@ -1484,7 +1458,7 @@ fn surgery_elf_help(
                         }
                     } else {
                         internal_error!(
-                            "Undefined Symbol in relocation, {:+x?}: {:+x?}",
+                            "Undefined Symbol in relocation, {:+x?}: {:+x?} try compiling with --linker legacy",
                             rel,
                             app_obj.symbol_by_index(index)
                         );
@@ -1740,10 +1714,8 @@ fn surgery_elf_help(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    use crate::preprocessed_host_filename;
     use indoc::indoc;
-    use target_lexicon::Triple;
+    use roc_target::Target;
 
     const ELF64_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_elf64") as &[_];
 
@@ -1778,9 +1750,6 @@ mod tests {
     fn collect_undefined_symbols_elf() {
         let object = object::File::parse(ELF64_DYNHOST).unwrap();
 
-        let mut triple = Triple::host();
-        triple.binary_format = target_lexicon::BinaryFormat::Elf;
-
         let mut keys: Vec<_> = object
             .dynamic_symbols()
             .filter(is_roc_undefined)
@@ -1800,7 +1769,7 @@ mod tests {
     }
 
     #[allow(dead_code)]
-    fn zig_host_app_help(dir: &Path, target: &Triple) {
+    fn zig_host_app_help(dir: &Path, target: Target) {
         let host_zig = indoc!(
             r#"
             const std = @import("std");
@@ -1832,14 +1801,7 @@ mod tests {
         // we need to compile the app first
         let output = std::process::Command::new(&zig)
             .current_dir(dir)
-            .args([
-                "build-obj",
-                "app.zig",
-                "-fPIC",
-                "-target",
-                "x86_64-linux-gnu",
-                "-OReleaseFast",
-            ])
+            .args(["build-obj", "app.zig", "-fPIC", "-OReleaseFast"])
             .output()
             .unwrap();
 
@@ -1878,8 +1840,6 @@ mod tests {
                 "host.zig",
                 "-fPIE",
                 "-lc",
-                "-target",
-                "x86_64-linux-gnu",
                 "-OReleaseFast",
             ])
             .output()
@@ -1894,10 +1854,9 @@ mod tests {
             panic!("zig build-exe failed");
         }
 
-        let preprocessed_host_filename = dir.join(preprocessed_host_filename(target).unwrap());
+        let preprocessed_host_filename = dir.join(target.prebuilt_surgical_host());
 
-        preprocess_elf(
-            target_lexicon::Endianness::Little,
+        preprocess_elf_le(
             &dir.join("host"),
             &dir.join("metadata"),
             &preprocessed_host_filename,
@@ -1920,12 +1879,10 @@ mod tests {
     #[cfg(target_os = "linux")]
     #[test]
     fn zig_host_app() {
-        use std::str::FromStr;
-
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.path();
 
-        zig_host_app_help(dir, &Triple::from_str("x86_64-unknown-linux-musl").unwrap());
+        zig_host_app_help(dir, Target::LinuxX64);
 
         let output = std::process::Command::new(dir.join("final"))
             .current_dir(dir)

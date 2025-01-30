@@ -1,4 +1,5 @@
 use bumpalo::Bump;
+use regex::Regex;
 use roc_wasm_interp::{
     wasi, DefaultImportDispatcher, ImportDispatcher, Instance, Value, WasiDispatcher,
 };
@@ -158,11 +159,11 @@ pub fn expect_failure(input: &'static str, expected: &str) {
 pub fn expect(input: &'static str, expected: &str) {
     let raw_output = run(input);
 
-    // We need to get rid of HTML tags, and we can be quite specific about it!
-    // If we ever write more complex test cases, we might need regex here.
-    let without_html = raw_output.replace("<span class='color-magenta'> : </span>", " : ");
+    // remove color HTML tags
+    let regx = Regex::new("<span class='color-(.*?)'> : </span>").unwrap();
+    let without_html = regx.replace_all(&raw_output, " : ");
 
-    let clean_output = without_html.trim();
+    let trimmed_output = without_html.trim();
 
-    assert_eq!(clean_output, expected);
+    assert_eq!(trimmed_output, expected);
 }

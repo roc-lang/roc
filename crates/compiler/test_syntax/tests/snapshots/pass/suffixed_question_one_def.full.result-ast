@@ -1,0 +1,211 @@
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: App(
+                AppHeader {
+                    before_provides: [],
+                    provides: [
+                        @5-9 ExposedName(
+                            "main",
+                        ),
+                    ],
+                    before_packages: [],
+                    packages: @11-55 Collection {
+                        items: [
+                            @15-52 SpaceBefore(
+                                PackageEntry {
+                                    shorthand: "cli",
+                                    spaces_after_shorthand: [],
+                                    platform_marker: None,
+                                    package_name: @20-52 PackageName(
+                                        "../basic-cli/platform/main.roc",
+                                    ),
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                    old_imports: None,
+                    old_provides_to_new_package: None,
+                },
+            ),
+        },
+        defs: Defs {
+            tags: [
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+            ],
+            regions: [
+                @57-74,
+                @76-220,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 2 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @64-74 ImportedModuleName {
+                            package: Some(
+                                "cli",
+                            ),
+                            name: ModuleName(
+                                "Stdout",
+                            ),
+                        },
+                        params: None,
+                        alias: None,
+                        exposed: None,
+                    },
+                ),
+                Body(
+                    @76-80 Identifier {
+                        ident: "main",
+                    },
+                    @120-220 SpaceBefore(
+                        Defs(
+                            Defs {
+                                tags: [
+                                    EitherIndex(2147483648),
+                                    EitherIndex(2147483649),
+                                ],
+                                regions: [
+                                    @120-133,
+                                    @162-205,
+                                ],
+                                space_before: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 3 },
+                                ],
+                                space_after: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 0 },
+                                ],
+                                spaces: [
+                                    Newline,
+                                    Newline,
+                                    LineComment(
+                                        " what about this?",
+                                    ),
+                                ],
+                                type_defs: [],
+                                value_defs: [
+                                    Stmt(
+                                        @120-133 BinOps(
+                                            [
+                                                (
+                                                    @120-125 Str(
+                                                        PlainLine(
+                                                            "Foo",
+                                                        ),
+                                                    ),
+                                                    @126-128 Pizza,
+                                                ),
+                                            ],
+                                            @129-132 TrySuffix(
+                                                Var {
+                                                    module_name: "A",
+                                                    ident: "x",
+                                                },
+                                            ),
+                                        ),
+                                    ),
+                                    Stmt(
+                                        @162-205 BinOps(
+                                            [
+                                                (
+                                                    @162-167 Str(
+                                                        PlainLine(
+                                                            "Bar",
+                                                        ),
+                                                    ),
+                                                    @168-170 Pizza,
+                                                ),
+                                            ],
+                                            @171-205 Apply(
+                                                @171-174 TrySuffix(
+                                                    Var {
+                                                        module_name: "B",
+                                                        ident: "y",
+                                                    },
+                                                ),
+                                                [
+                                                    @185-205 SpaceBefore(
+                                                        Record(
+                                                            [
+                                                                @187-203 RequiredValue(
+                                                                    @187-193 "config",
+                                                                    [],
+                                                                    @195-203 Str(
+                                                                        PlainLine(
+                                                                            "config",
+                                                                        ),
+                                                                    ),
+                                                                ),
+                                                            ],
+                                                        ),
+                                                        [
+                                                            Newline,
+                                                        ],
+                                                    ),
+                                                ],
+                                                Space,
+                                            ),
+                                        ),
+                                    ),
+                                ],
+                            },
+                            @211-220 SpaceBefore(
+                                Apply(
+                                    @211-214 Var {
+                                        module_name: "C",
+                                        ident: "z",
+                                    },
+                                    [
+                                        @215-220 Str(
+                                            PlainLine(
+                                                "Bar",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                [
+                                    Newline,
+                                    Newline,
+                                ],
+                            ),
+                        ),
+                        [
+                            Newline,
+                            LineComment(
+                                " is this a valid statement?",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        },
+    },
+)

@@ -1,45 +1,47 @@
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-24,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
-            @0-4 Identifier(
-                "main",
-            ),
+            @0-4 Identifier {
+                ident: "main",
+            },
             @11-24 SpaceBefore(
                 Defs(
                     Defs {
                         tags: [
-                            Index(2147483648),
+                            EitherIndex(2147483648),
                         ],
                         regions: [
                             @11-17,
                         ],
                         space_before: [
-                            Slice(start = 0, length = 0),
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                         ],
                         space_after: [
-                            Slice(start = 0, length = 0),
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                         ],
                         spaces: [],
                         type_defs: [],
                         value_defs: [
                             Body(
-                                @11-12 Identifier(
-                                    "i",
-                                ),
+                                @11-12 Identifier {
+                                    ident: "i",
+                                },
                                 @15-17 Num(
                                     "64",
                                 ),

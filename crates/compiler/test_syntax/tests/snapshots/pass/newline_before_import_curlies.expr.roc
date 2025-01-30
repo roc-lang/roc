@@ -1,0 +1,3 @@
+import P
+ {}
+y

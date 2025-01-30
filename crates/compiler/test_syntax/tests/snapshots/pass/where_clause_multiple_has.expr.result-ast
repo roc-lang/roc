@@ -1,86 +1,93 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-73,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @4-73 Where(
-                    @4-16 Function(
-                        [
-                            @4-5 BoundVariable(
-                                "a",
-                            ),
-                        ],
-                        @10-16 Function(
+@0-76 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-73,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @4-73 Where(
+                        @4-16 Function(
                             [
-                                @10-11 BoundVariable(
-                                    "b",
+                                @4-5 BoundVariable(
+                                    "a",
                                 ),
                             ],
-                            @15-16 BoundVariable(
-                                "c",
+                            Pure,
+                            @10-16 Function(
+                                [
+                                    @10-11 BoundVariable(
+                                        "b",
+                                    ),
+                                ],
+                                Pure,
+                                @15-16 BoundVariable(
+                                    "c",
+                                ),
                             ),
                         ),
+                        [
+                            @24-38 ImplementsClause {
+                                var: @24-25 "a",
+                                abilities: [
+                                    @37-38 Apply(
+                                        "",
+                                        "A",
+                                        [],
+                                    ),
+                                ],
+                            },
+                            @40-55 ImplementsClause {
+                                var: @40-41 "b",
+                                abilities: [
+                                    @53-55 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                ],
+                            },
+                            @57-73 ImplementsClause {
+                                var: @57-58 "c",
+                                abilities: [
+                                    @70-73 Apply(
+                                        "",
+                                        "Ord",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
                     ),
-                    [
-                        @24-38 ImplementsClause {
-                            var: @24-25 "a",
-                            abilities: [
-                                @37-38 Apply(
-                                    "",
-                                    "A",
-                                    [],
-                                ),
-                            ],
-                        },
-                        @40-55 ImplementsClause {
-                            var: @40-41 "b",
-                            abilities: [
-                                @53-55 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                            ],
-                        },
-                        @57-73 ImplementsClause {
-                            var: @57-58 "c",
-                            abilities: [
-                                @70-73 Apply(
-                                    "",
-                                    "Ord",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
                 ),
-            ),
-        ],
-    },
-    @75-76 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "f",
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @75-76 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

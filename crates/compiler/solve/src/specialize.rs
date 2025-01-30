@@ -3,7 +3,7 @@
 use std::collections::VecDeque;
 
 use roc_can::abilities::{AbilitiesStore, ImplKey};
-use roc_collections::{VecMap, VecSet};
+use roc_collections::{soa::slice_extend_new, VecMap, VecSet};
 use roc_debug_flags::dbg_do;
 #[cfg(debug_assertions)]
 use roc_debug_flags::ROC_TRACE_COMPACTION;
@@ -14,7 +14,7 @@ use roc_solve_schema::UnificationMode;
 use roc_types::{
     subs::{
         get_member_lambda_sets_at_region, Content, Descriptor, GetSubsSlice, LambdaSet, Mark,
-        OptVariable, Rank, Subs, SubsSlice, UlsOfVar, Variable,
+        OptVariable, Rank, Subs, UlsOfVar, Variable,
     },
     types::{AliasKind, MemberImpl, Polarity, Uls},
 };
@@ -360,7 +360,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                             // The first lambda set contains one concrete lambda, plus all solved
                             // lambdas, plus all other unspecialized lambdas.
                             // l' = [solved_lambdas + t1 + ... + tm + C:f:r]
-                            let unspecialized = SubsSlice::extend_new(
+                            let unspecialized = slice_extend_new(
                                 &mut env.subs.unspecialized_lambda_sets,
                                 not_concrete
                                     .drain(..)
@@ -371,7 +371,7 @@ pub fn compact_lambda_sets_of_vars<P: Phase>(
                             // All the other lambda sets consists only of their respective concrete
                             // lambdas.
                             // ln = [[] + C:fn:rn]
-                            let unspecialized = SubsSlice::extend_new(
+                            let unspecialized = slice_extend_new(
                                 &mut env.subs.unspecialized_lambda_sets,
                                 [concrete_lambda],
                             );
@@ -521,10 +521,7 @@ fn compact_lambda_set<P: Phase>(
     let t_f1_lambda_set_without_concrete = LambdaSet {
         solved,
         recursion_var,
-        unspecialized: SubsSlice::extend_new(
-            &mut env.subs.unspecialized_lambda_sets,
-            new_unspecialized,
-        ),
+        unspecialized: slice_extend_new(&mut env.subs.unspecialized_lambda_sets, new_unspecialized),
         ambient_function: t_f1,
     };
     env.subs.set_content(
@@ -628,29 +625,7 @@ fn make_specialization_decision<P: Phase>(
             } else {
                 // Solving within a module.
                 phase.with_module_abilities_store(opaque.module_id(), |abilities_store| {
-                    let impl_key = ImplKey {
-                        opaque: *opaque,
-                        ability_member,
-                    };
-                    match abilities_store.get_implementation(impl_key) {
-                        None => {
-                            // Doesn't specialize; an error will already be reported for this.
-                            SpecializeDecision::Drop
-                        }
-                        Some(MemberImpl::Error) => {
-                            // TODO: probably not right, we may want to choose a derive decision!
-                            SpecializeDecision::Specialize(Opaque(*opaque))
-                        }
-                        Some(MemberImpl::Impl(specialization_symbol)) => {
-                            match abilities_store.specialization_info(*specialization_symbol) {
-                                Some(_) => SpecializeDecision::Specialize(Opaque(*opaque)),
-
-                                // If we expect a specialization impl but don't yet know it, we must hold off
-                                // compacting the lambda set until the specialization is well-known.
-                                None => SpecializeDecision::PendingSpecialization(impl_key),
-                            }
-                        }
-                    }
+                    make_ability_specialization_decision(*opaque, ability_member, abilities_store)
                 })
             }
         }
@@ -692,8 +667,50 @@ fn make_specialization_decision<P: Phase>(
         | RigidVar(..)
         | LambdaSet(..)
         | ErasedLambda
+        | Pure
+        | Effectful
         | RangedNumber(..) => {
             internal_error!("unexpected")
+        }
+    }
+}
+
+fn make_ability_specialization_decision(
+    opaque: Symbol,
+    ability_member: Symbol,
+    abilities_store: &AbilitiesStore,
+) -> SpecializeDecision {
+    use SpecializationTypeKey::*;
+    let impl_key = ImplKey {
+        opaque,
+        ability_member,
+    };
+    match abilities_store.get_implementation(impl_key) {
+        None => {
+            match ability_member {
+                // Inspect is special - if there is no implementation for the
+                // opaque type, we always emit a default implementation.
+                Symbol::INSPECT_TO_INSPECTOR => {
+                    SpecializeDecision::Specialize(Immediate(Symbol::INSPECT_OPAQUE))
+                }
+                _ => {
+                    // Doesn't specialize; an error will already be reported for this.
+                    SpecializeDecision::Drop
+                }
+            }
+        }
+        Some(MemberImpl::Error) => {
+            // TODO: probably not right, we may want to choose a derive decision!
+            SpecializeDecision::Specialize(Opaque(opaque))
+        }
+        Some(MemberImpl::Impl(specialization_symbol)) => {
+            match abilities_store.specialization_info(*specialization_symbol) {
+                Some(_) => SpecializeDecision::Specialize(Opaque(opaque)),
+
+                // If we expect a specialization impl but don't yet know it, we must hold off
+                // compacting the lambda set until the specialization is well-known.
+                None => SpecializeDecision::PendingSpecialization(impl_key),
+            }
         }
     }
 }
@@ -705,115 +722,155 @@ fn get_specialization_lambda_set_ambient_function<P: Phase>(
     phase: &P,
     ability_member: Symbol,
     lset_region: u8,
-    specialization_key: SpecializationTypeKey,
+    mut specialization_key: SpecializationTypeKey,
     target_rank: Rank,
 ) -> Result<Variable, ()> {
-    match specialization_key {
-        SpecializationTypeKey::Opaque(opaque) => {
-            let opaque_home = opaque.module_id();
-            let external_specialized_lset =
-                phase.with_module_abilities_store(opaque_home, |abilities_store| {
-                    let impl_key = roc_can::abilities::ImplKey {
+    loop {
+        match specialization_key {
+            SpecializationTypeKey::Opaque(opaque) => {
+                let opaque_home = opaque.module_id();
+                let found = phase.with_module_abilities_store(opaque_home, |abilities_store| {
+                    find_opaque_specialization_ambient_function(
+                        abilities_store,
                         opaque,
                         ability_member,
-                    };
+                        lset_region,
+                    )
+                });
 
-                    let opt_specialization =
-                        abilities_store.get_implementation(impl_key);
-                    match opt_specialization {
-                        None => {
-                            if P::IS_LATE {
-                                internal_error!(
-                                    "expected to know a specialization for {:?}#{:?}, but it wasn't found",
-                                    opaque,
-                                    ability_member
-                                );
-                            } else {
-                                // doesn't specialize, we'll have reported an error for this
-                                Err(())
-                            }
-                        }
-                        Some(member_impl) => match member_impl {
-                            MemberImpl::Impl(spec_symbol) => {
-                                let specialization =
-                                    abilities_store.specialization_info(*spec_symbol).expect("expected custom implementations to always have complete specialization info by this point");
-
-                                let specialized_lambda_set = *specialization
-                                    .specialization_lambda_sets
-                                    .get(&lset_region)
-                                    .unwrap_or_else(|| panic!("lambda set region not resolved: {:?}", (spec_symbol, specialization)));
-                                Ok(specialized_lambda_set)
-                            }
-                            MemberImpl::Error => todo_abilities!(),
-                        },
+                let external_specialized_lset = match found {
+                    FoundOpaqueSpecialization::UpdatedSpecializationKey(key) => {
+                        specialization_key = key;
+                        continue;
                     }
-                })?;
+                    FoundOpaqueSpecialization::AmbientFunction(lset) => lset,
+                    FoundOpaqueSpecialization::NotFound => {
+                        if P::IS_LATE {
+                            internal_error!(
+                                "expected to know a specialization for {:?}#{:?}, but it wasn't found",
+                                opaque,
+                                ability_member
+                            );
+                        } else {
+                            // We'll have reported an error for this.
+                            return Err(());
+                        }
+                    }
+                };
 
-            let specialized_ambient = phase.copy_lambda_set_ambient_function_to_home_subs(
-                external_specialized_lset,
-                opaque_home,
-                subs,
-            );
+                let specialized_ambient = phase.copy_lambda_set_ambient_function_to_home_subs(
+                    external_specialized_lset,
+                    opaque_home,
+                    subs,
+                );
 
-            Ok(specialized_ambient)
+                return Ok(specialized_ambient);
+            }
+
+            SpecializationTypeKey::Derived(derive_key) => {
+                let mut derived_module = derived_env.derived_module.lock().unwrap();
+
+                let (_, _, specialization_lambda_sets) =
+                    derived_module.get_or_insert(derived_env.exposed_types, derive_key);
+
+                let specialized_lambda_set = *specialization_lambda_sets
+                    .get(&lset_region)
+                    .expect("lambda set region not resolved");
+
+                let specialized_ambient = derived_module.copy_lambda_set_ambient_function_to_subs(
+                    specialized_lambda_set,
+                    subs,
+                    target_rank,
+                );
+
+                return Ok(specialized_ambient);
+            }
+
+            SpecializationTypeKey::Immediate(imm) => {
+                // Immediates are like opaques in that we can simply look up their type definition in
+                // the ability store, there is nothing new to synthesize.
+                //
+                // THEORY: if something can become an immediate, it will always be available in the
+                // local ability store, because the transformation is local (?)
+                //
+                // TODO: I actually think we can get what we need here by examining `derived_env.exposed_types`,
+                // since immediates can only refer to builtins - and in userspace, all builtin types
+                // are available in `exposed_types`.
+                let immediate_lambda_set_at_region =
+                    phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
+
+                return Ok(immediate_lambda_set_at_region);
+            }
+
+            SpecializationTypeKey::SingleLambdaSetImmediate(imm) => {
+                let module_id = imm.module_id();
+                debug_assert!(module_id.is_builtin());
+
+                let module_types = &derived_env
+                    .exposed_types
+                    .get(&module_id)
+                    .unwrap()
+                    .exposed_types_storage_subs;
+
+                // Since this immediate has only one lambda set, the region must be pointing to 1, and
+                // moreover the imported function type is the ambient function of the single lset.
+                debug_assert_eq!(lset_region, 1);
+                let storage_var = module_types.stored_vars_by_symbol.get(&imm).unwrap();
+                let imported = module_types
+                    .storage_subs
+                    .export_variable_to(subs, *storage_var);
+
+                roc_types::subs::instantiate_rigids(subs, imported.variable);
+
+                return Ok(imported.variable);
+            }
         }
+    }
+}
 
-        SpecializationTypeKey::Derived(derive_key) => {
-            let mut derived_module = derived_env.derived_module.lock().unwrap();
+enum FoundOpaqueSpecialization {
+    UpdatedSpecializationKey(SpecializationTypeKey),
+    AmbientFunction(Variable),
+    NotFound,
+}
 
-            let (_, _, specialization_lambda_sets) =
-                derived_module.get_or_insert(derived_env.exposed_types, derive_key);
+fn find_opaque_specialization_ambient_function(
+    abilities_store: &AbilitiesStore,
+    opaque: Symbol,
+    ability_member: Symbol,
+    lset_region: u8,
+) -> FoundOpaqueSpecialization {
+    let impl_key = roc_can::abilities::ImplKey {
+        opaque,
+        ability_member,
+    };
 
-            let specialized_lambda_set = *specialization_lambda_sets
-                .get(&lset_region)
-                .expect("lambda set region not resolved");
+    let opt_specialization = abilities_store.get_implementation(impl_key);
+    match opt_specialization {
+        None => match ability_member {
+            Symbol::INSPECT_TO_INSPECTOR => FoundOpaqueSpecialization::UpdatedSpecializationKey(
+                SpecializationTypeKey::Immediate(Symbol::INSPECT_OPAQUE),
+            ),
+            _ => FoundOpaqueSpecialization::NotFound,
+        },
+        Some(member_impl) => match member_impl {
+            MemberImpl::Impl(spec_symbol) => {
+                let specialization =
+                            abilities_store.specialization_info(*spec_symbol).expect("expected custom implementations to always have complete specialization info by this point");
 
-            let specialized_ambient = derived_module.copy_lambda_set_ambient_function_to_subs(
-                specialized_lambda_set,
-                subs,
-                target_rank,
-            );
+                let specialized_lambda_set = *specialization
+                    .specialization_lambda_sets
+                    .get(&lset_region)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "lambda set region not resolved: {:?}",
+                            (spec_symbol, specialization)
+                        )
+                    });
 
-            Ok(specialized_ambient)
-        }
-
-        SpecializationTypeKey::Immediate(imm) => {
-            // Immediates are like opaques in that we can simply look up their type definition in
-            // the ability store, there is nothing new to synthesize.
-            //
-            // THEORY: if something can become an immediate, it will always be available in the
-            // local ability store, because the transformation is local (?)
-            //
-            // TODO: I actually think we can get what we need here by examining `derived_env.exposed_types`,
-            // since immediates can only refer to builtins - and in userspace, all builtin types
-            // are available in `exposed_types`.
-            let immediate_lambda_set_at_region =
-                phase.get_and_copy_ability_member_ambient_function(imm, lset_region, subs);
-
-            Ok(immediate_lambda_set_at_region)
-        }
-
-        SpecializationTypeKey::SingleLambdaSetImmediate(imm) => {
-            let module_id = imm.module_id();
-            debug_assert!(module_id.is_builtin());
-
-            let module_types = &derived_env
-                .exposed_types
-                .get(&module_id)
-                .unwrap()
-                .exposed_types_storage_subs;
-
-            // Since this immediate has only one lambda set, the region must be pointing to 1, and
-            // moreover the imported function type is the ambient function of the single lset.
-            debug_assert_eq!(lset_region, 1);
-            let storage_var = module_types.stored_vars_by_symbol.get(&imm).unwrap();
-            let imported = module_types
-                .storage_subs
-                .export_variable_to(subs, *storage_var);
-
-            roc_types::subs::instantiate_rigids(subs, imported.variable);
-
-            Ok(imported.variable)
-        }
+                FoundOpaqueSpecialization::AmbientFunction(specialized_lambda_set)
+            }
+            MemberImpl::Error => todo_abilities!(),
+        },
     }
 }

@@ -1,0 +1,33 @@
+@0-8 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 Var {
+                    module_name: "",
+                    ident: "i",
+                },
+                @1-2 Slash,
+            ),
+        ],
+        @4-8 SpaceBefore(
+            UnaryOp(
+                @7-8 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "g",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                @4-5 Not,
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

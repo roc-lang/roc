@@ -1,65 +1,47 @@
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-115,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [],
     value_defs: [
         Body(
-            @0-4 Identifier(
-                "main",
-            ),
+            @0-4 Identifier {
+                ident: "main",
+            },
             @11-115 SpaceBefore(
                 Defs(
                     Defs {
                         tags: [
-                            Index(2147483649),
+                            EitherIndex(2147483648),
                         ],
                         regions: [
                             @11-93,
                         ],
                         space_before: [
-                            Slice(start = 0, length = 0),
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                         ],
                         space_after: [
-                            Slice(start = 0, length = 0),
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
                         ],
                         spaces: [],
                         type_defs: [],
                         value_defs: [
-                            Annotation(
-                                @11-23 Identifier(
-                                    "wrappedNotEq",
-                                ),
-                                @26-38 Function(
-                                    [
-                                        @26-27 BoundVariable(
-                                            "a",
-                                        ),
-                                        @29-30 BoundVariable(
-                                            "a",
-                                        ),
-                                    ],
-                                    @34-38 Apply(
-                                        "",
-                                        "Bool",
-                                        [],
-                                    ),
-                                ),
-                            ),
                             AnnotatedBody {
-                                ann_pattern: @11-23 Identifier(
-                                    "wrappedNotEq",
-                                ),
+                                ann_pattern: @11-23 Identifier {
+                                    ident: "wrappedNotEq",
+                                },
                                 ann_type: @26-38 Function(
                                     [
                                         @26-27 BoundVariable(
@@ -69,24 +51,27 @@ Defs {
                                             "a",
                                         ),
                                     ],
+                                    Pure,
                                     @34-38 Apply(
                                         "",
                                         "Bool",
                                         [],
                                     ),
                                 ),
-                                comment: None,
-                                body_pattern: @43-55 Identifier(
-                                    "wrappedNotEq",
-                                ),
+                                lines_between: [
+                                    Newline,
+                                ],
+                                body_pattern: @43-55 Identifier {
+                                    ident: "wrappedNotEq",
+                                },
                                 body_expr: @58-93 Closure(
                                     [
-                                        @59-63 Identifier(
-                                            "num1",
-                                        ),
-                                        @65-69 Identifier(
-                                            "num2",
-                                        ),
+                                        @59-63 Identifier {
+                                            ident: "num1",
+                                        },
+                                        @65-69 Identifier {
+                                            ident: "num2",
+                                        },
                                     ],
                                     @81-93 SpaceBefore(
                                         BinOps(

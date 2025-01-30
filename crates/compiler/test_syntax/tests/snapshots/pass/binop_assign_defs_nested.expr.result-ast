@@ -1,0 +1,60 @@
+@0-16 BinOps(
+    [
+        (
+            @0-1 Num(
+                "5",
+            ),
+            @1-2 Minus,
+        ),
+    ],
+    @3-15 ParensAround(
+        ParensAround(
+            Defs(
+                Defs {
+                    tags: [
+                        EitherIndex(2147483648),
+                    ],
+                    regions: [
+                        @4-12,
+                    ],
+                    space_before: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    space_after: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    ],
+                    spaces: [],
+                    type_defs: [],
+                    value_defs: [
+                        Body(
+                            @4-5 Identifier {
+                                ident: "e",
+                            },
+                            @6-12 ParensAround(
+                                ParensAround(
+                                    SpaceBefore(
+                                        Var {
+                                            module_name: "",
+                                            ident: "r",
+                                        },
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ),
+                            ),
+                        ),
+                    ],
+                },
+                @13-14 SpaceBefore(
+                    Num(
+                        "1",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ),
+    ),
+)

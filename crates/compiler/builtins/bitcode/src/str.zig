@@ -1,10 +1,9 @@
 const utils = @import("utils.zig");
 const RocList = @import("list.zig").RocList;
-const grapheme = @import("helpers/grapheme.zig");
 const UpdateMode = utils.UpdateMode;
 const std = @import("std");
+const ascii = std.ascii;
 const mem = std.mem;
-const always_inline = std.builtin.CallOptions.Modifier.always_inline;
 const unicode = std.unicode;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -17,7 +16,7 @@ const InPlace = enum(u8) {
 };
 
 const MASK_ISIZE: isize = std.math.minInt(isize);
-const MASK: usize = @bitCast(usize, MASK_ISIZE);
+const MASK: usize = @as(usize, @bitCast(MASK_ISIZE));
 const SEAMLESS_SLICE_BIT: usize = MASK;
 
 const SMALL_STR_MAX_LENGTH = SMALL_STRING_SIZE - 1;
@@ -35,17 +34,21 @@ fn init_blank_small_string(comptime n: usize) [n]u8 {
 }
 
 pub const RocStr = extern struct {
-    str_bytes: ?[*]u8,
-    str_len: usize,
-    str_capacity: usize,
+    bytes: ?[*]u8,
+    length: usize,
+    // For big strs, contains the capacity.
+    // For seamless slices contains the pointer to the original allocation.
+    // This pointer is to the first character of the original string.
+    // Note we storing an allocation pointer, the pointer must be right shifted by one.
+    capacity_or_alloc_ptr: usize,
 
     pub const alignment = @alignOf(usize);
 
     pub inline fn empty() RocStr {
         return RocStr{
-            .str_len = 0,
-            .str_bytes = null,
-            .str_capacity = MASK,
+            .length = 0,
+            .bytes = null,
+            .capacity_or_alloc_ptr = MASK,
         };
     }
 
@@ -53,7 +56,7 @@ pub const RocStr = extern struct {
     // small string, and returns a (pointer, len) tuple which points to them.
     pub fn init(bytes_ptr: [*]const u8, length: usize) RocStr {
         var result = RocStr.allocate(length);
-        @memcpy(result.asU8ptrMut(), bytes_ptr, length);
+        @memcpy(result.asU8ptrMut()[0..length], bytes_ptr[0..length]);
 
         return result;
     }
@@ -61,32 +64,32 @@ pub const RocStr = extern struct {
     // This requires that the list is non-null.
     // It also requires that start and count define a slice that does not go outside the bounds of the list.
     pub fn fromSubListUnsafe(list: RocList, start: usize, count: usize, update_mode: UpdateMode) RocStr {
-        const start_byte = @ptrCast([*]u8, list.bytes) + start;
+        const start_byte = @as([*]u8, @ptrCast(list.bytes)) + start;
         if (list.isSeamlessSlice()) {
             return RocStr{
-                .str_bytes = start_byte,
-                .str_len = count | SEAMLESS_SLICE_BIT,
-                .str_capacity = list.capacity_or_ref_ptr & (~SEAMLESS_SLICE_BIT),
+                .bytes = start_byte,
+                .length = count | SEAMLESS_SLICE_BIT,
+                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr & (~SEAMLESS_SLICE_BIT),
             };
         } else if (start == 0 and (update_mode == .InPlace or list.isUnique())) {
             // Rare case, we can take over the original list.
             return RocStr{
-                .str_bytes = start_byte,
-                .str_len = count,
-                .str_capacity = list.capacity_or_ref_ptr, // This is guaranteed to be a proper capacity.
+                .bytes = start_byte,
+                .length = count,
+                .capacity_or_alloc_ptr = list.capacity_or_alloc_ptr, // This is guaranteed to be a proper capacity.
             };
         } else {
             // Create seamless slice pointing to the list.
             return RocStr{
-                .str_bytes = start_byte,
-                .str_len = count | SEAMLESS_SLICE_BIT,
-                .str_capacity = @ptrToInt(list.bytes) >> 1,
+                .bytes = start_byte,
+                .length = count | SEAMLESS_SLICE_BIT,
+                .capacity_or_alloc_ptr = @intFromPtr(list.bytes) >> 1,
             };
         }
     }
 
     pub fn isSeamlessSlice(self: RocStr) bool {
-        return !self.isSmallStr() and @bitCast(isize, self.str_len) < 0;
+        return !self.isSmallStr() and @as(isize, @bitCast(self.length)) < 0;
     }
 
     pub fn fromSlice(slice: []const u8) RocStr {
@@ -94,12 +97,12 @@ pub const RocStr = extern struct {
     }
 
     fn allocateBig(length: usize, capacity: usize) RocStr {
-        const first_element = utils.allocateWithRefcount(capacity, @sizeOf(usize));
+        const first_element = utils.allocateWithRefcount(capacity, @sizeOf(usize), false);
 
         return RocStr{
-            .str_bytes = first_element,
-            .str_len = length,
-            .str_capacity = capacity,
+            .bytes = first_element,
+            .length = length,
+            .capacity_or_alloc_ptr = capacity,
         };
     }
 
@@ -115,7 +118,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
 
             return string;
         }
@@ -131,7 +134,7 @@ pub const RocStr = extern struct {
         } else {
             var string = RocStr.empty();
 
-            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+            string.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
 
             return string;
         }
@@ -141,41 +144,42 @@ pub const RocStr = extern struct {
     // Otherwise, it returns all zeros.
     // This is done without branching for optimization purposes.
     pub fn seamlessSliceMask(self: RocStr) usize {
-        return @bitCast(usize, @bitCast(isize, self.str_len) >> (@bitSizeOf(isize) - 1));
+        return @as(usize, @bitCast(@as(isize, @bitCast(self.length)) >> (@bitSizeOf(isize) - 1)));
     }
 
-    // returns a pointer to just after the refcount.
-    // It is just after the refcount as an optimization for other shared code paths.
-    // For regular list, it just returns their bytes pointer.
-    // For seamless slices, it returns the pointer stored in capacity_or_ref_ptr.
+    // returns a pointer to the original allocation.
+    // This pointer points to the first element of the allocation.
+    // The pointer is to just after the refcount.
+    // For big strings, it just returns their bytes pointer.
+    // For seamless slices, it returns the pointer stored in capacity_or_alloc_ptr.
     // This does not return a valid value if the input is a small string.
-    pub fn getRefcountPtr(self: RocStr) ?[*]u8 {
-        const str_ref_ptr = @ptrToInt(self.str_bytes);
-        const slice_ref_ptr = self.str_capacity << 1;
+    pub fn getAllocationPtr(self: RocStr) ?[*]u8 {
+        const str_alloc_ptr = @intFromPtr(self.bytes);
+        const slice_alloc_ptr = self.capacity_or_alloc_ptr << 1;
         const slice_mask = self.seamlessSliceMask();
-        const ref_ptr = (str_ref_ptr & ~slice_mask) | (slice_ref_ptr & slice_mask);
-        return @intToPtr(?[*]u8, ref_ptr);
+        const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+        return @as(?[*]u8, @ptrFromInt(alloc_ptr));
     }
 
     pub fn incref(self: RocStr, n: usize) void {
         if (!self.isSmallStr()) {
-            const ref_ptr = self.getRefcountPtr();
-            if (ref_ptr != null) {
-                const isizes: [*]isize = @ptrCast([*]isize, @alignCast(@alignOf(isize), ref_ptr));
-                utils.increfRcPtrC(@ptrCast(*isize, isizes - 1), @intCast(isize, n));
+            const alloc_ptr = self.getAllocationPtr();
+            if (alloc_ptr != null) {
+                const isizes: [*]isize = @as([*]isize, @ptrCast(@alignCast(alloc_ptr)));
+                utils.increfRcPtrC(@as(*isize, @ptrCast(isizes - 1)), @as(isize, @intCast(n)));
             }
         }
     }
 
     pub fn decref(self: RocStr) void {
         if (!self.isSmallStr()) {
-            utils.decref(self.getRefcountPtr(), self.str_capacity, RocStr.alignment);
+            utils.decref(self.getAllocationPtr(), self.capacity_or_alloc_ptr, RocStr.alignment, false);
         }
     }
 
     pub fn eq(self: RocStr, other: RocStr) bool {
         // If they are byte-for-byte equal, they're definitely equal!
-        if (self.str_bytes == other.str_bytes and self.str_len == other.str_len and self.str_capacity == other.str_capacity) {
+        if (self.bytes == other.bytes and self.length == other.length) {
             return true;
         }
 
@@ -209,12 +213,12 @@ pub const RocStr = extern struct {
             // just return the bytes
             return str;
         } else {
-            var new_str = RocStr.allocateBig(str.str_len, str.str_len);
+            const new_str = RocStr.allocateBig(str.length, str.length);
 
-            var old_bytes: [*]u8 = @ptrCast([*]u8, str.str_bytes);
-            var new_bytes: [*]u8 = @ptrCast([*]u8, new_str.str_bytes);
+            var old_bytes: [*]u8 = @as([*]u8, @ptrCast(str.bytes));
+            var new_bytes: [*]u8 = @as([*]u8, @ptrCast(new_str.bytes));
 
-            @memcpy(new_bytes, old_bytes, str.str_len);
+            @memcpy(new_bytes[0..str.length], old_bytes[0..str.length]);
 
             return new_str;
         }
@@ -231,7 +235,7 @@ pub const RocStr = extern struct {
             return self.reallocateFresh(new_length);
         }
 
-        if (self.str_bytes) |source_ptr| {
+        if (self.bytes) |source_ptr| {
             if (old_capacity > new_length) {
                 var output = self;
                 output.setLen(new_length);
@@ -244,9 +248,10 @@ pub const RocStr = extern struct {
                 old_capacity,
                 new_capacity,
                 element_width,
+                false,
             );
 
-            return RocStr{ .str_bytes = new_source, .str_len = new_length, .str_capacity = new_capacity };
+            return RocStr{ .bytes = new_source, .length = new_length, .capacity_or_alloc_ptr = new_capacity };
         }
         return self.reallocateFresh(new_length);
     }
@@ -257,7 +262,6 @@ pub const RocStr = extern struct {
         new_length: usize,
     ) RocStr {
         const old_length = self.len();
-        const delta_length = new_length - old_length;
 
         const element_width = 1;
         const result_is_big = new_length >= SMALL_STRING_SIZE;
@@ -271,8 +275,8 @@ pub const RocStr = extern struct {
             const source_ptr = self.asU8ptr();
             const dest_ptr = result.asU8ptrMut();
 
-            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
-            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref();
 
@@ -282,13 +286,13 @@ pub const RocStr = extern struct {
 
             // I believe taking this reference on the stack here is important for correctness.
             // Doing it via a method call seemed to cause issues
-            const dest_ptr = @ptrCast([*]u8, &string);
-            dest_ptr[@sizeOf(RocStr) - 1] = @intCast(u8, new_length) | 0b1000_0000;
+            const dest_ptr = @as([*]u8, @ptrCast(&string));
+            dest_ptr[@sizeOf(RocStr) - 1] = @as(u8, @intCast(new_length)) | 0b1000_0000;
 
             const source_ptr = self.asU8ptr();
 
-            std.mem.copy(u8, dest_ptr[0..old_length], source_ptr[0..old_length]);
-            std.mem.set(u8, dest_ptr[old_length .. old_length + delta_length], 0);
+            @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
+            @memset(dest_ptr[old_length..new_length], 0);
 
             self.decref();
 
@@ -297,7 +301,7 @@ pub const RocStr = extern struct {
     }
 
     pub fn isSmallStr(self: RocStr) bool {
-        return @bitCast(isize, self.str_capacity) < 0;
+        return @as(isize, @bitCast(self.capacity_or_alloc_ptr)) < 0;
     }
 
     test "isSmallStr: returns true for empty string" {
@@ -305,7 +309,7 @@ pub const RocStr = extern struct {
     }
 
     fn asArray(self: RocStr) [@sizeOf(RocStr)]u8 {
-        const as_ptr = @ptrCast([*]const u8, &self);
+        const as_ptr = @as([*]const u8, @ptrCast(&self));
         const slice = as_ptr[0..@sizeOf(RocStr)];
 
         return slice.*;
@@ -315,15 +319,15 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return self.asArray()[@sizeOf(RocStr) - 1] ^ 0b1000_0000;
         } else {
-            return self.str_len & (~SEAMLESS_SLICE_BIT);
+            return self.length & (~SEAMLESS_SLICE_BIT);
         }
     }
 
     pub fn setLen(self: *RocStr, length: usize) void {
         if (self.isSmallStr()) {
-            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @intCast(u8, length) | 0b1000_0000;
+            self.asU8ptrMut()[@sizeOf(RocStr) - 1] = @as(u8, @intCast(length)) | 0b1000_0000;
         } else {
-            self.str_len = length | (SEAMLESS_SLICE_BIT & self.str_len);
+            self.length = length | (SEAMLESS_SLICE_BIT & self.length);
         }
     }
 
@@ -331,9 +335,9 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return SMALL_STR_MAX_LENGTH;
         } else if (self.isSeamlessSlice()) {
-            return self.str_len & (~SEAMLESS_SLICE_BIT);
+            return self.length & (~SEAMLESS_SLICE_BIT);
         } else {
-            return self.str_capacity;
+            return self.capacity_or_alloc_ptr;
         }
     }
 
@@ -342,7 +346,7 @@ pub const RocStr = extern struct {
         if (self.isSmallStr()) {
             return self.asArray()[index];
         } else {
-            const bytes = self.str_bytes orelse unreachable;
+            const bytes = self.bytes orelse unreachable;
 
             return bytes[index];
         }
@@ -359,24 +363,26 @@ pub const RocStr = extern struct {
         }
 
         // otherwise, check if the refcount is one
-        return @call(.{ .modifier = always_inline }, RocStr.isRefcountOne, .{self});
+        return @call(.always_inline, RocStr.isRefcountOne, .{self});
     }
 
     fn isRefcountOne(self: RocStr) bool {
-        return self.refcountMachine() == utils.REFCOUNT_ONE;
+        return utils.rcUnique(@bitCast(self.refcount()));
     }
 
-    fn refcountMachine(self: RocStr) usize {
-        if ((self.getCapacity() == 0 and !self.isSeamlessSlice()) or self.isSmallStr()) {
-            return utils.REFCOUNT_ONE;
+    fn refcount(self: RocStr) usize {
+        const is_seamless_slice = self.isSeamlessSlice();
+        if ((self.getCapacity() == 0 and !is_seamless_slice) or self.isSmallStr()) {
+            return 1;
         }
 
-        const ptr: [*]usize = @ptrCast([*]usize, @alignCast(@alignOf(usize), self.str_bytes));
-        return (ptr - 1)[0];
-    }
+        const data_ptr = if (is_seamless_slice)
+            self.getAllocationPtr()
+        else
+            self.bytes;
 
-    fn refcountHuman(self: RocStr) usize {
-        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
+        const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(data_ptr)));
+        return (ptr - 1)[0];
     }
 
     pub fn asSlice(self: *const RocStr) []const u8 {
@@ -393,17 +399,17 @@ pub const RocStr = extern struct {
 
     pub fn asU8ptr(self: *const RocStr) [*]const u8 {
         if (self.isSmallStr()) {
-            return @ptrCast([*]const u8, self);
+            return @as([*]const u8, @ptrCast(self));
         } else {
-            return @ptrCast([*]const u8, self.str_bytes);
+            return @as([*]const u8, @ptrCast(self.bytes));
         }
     }
 
     pub fn asU8ptrMut(self: *RocStr) [*]u8 {
         if (self.isSmallStr()) {
-            return @ptrCast([*]u8, self);
+            return @as([*]u8, @ptrCast(self));
         } else {
-            return @ptrCast([*]u8, self.str_bytes);
+            return @as([*]u8, @ptrCast(self.bytes));
         }
     }
 
@@ -415,7 +421,7 @@ pub const RocStr = extern struct {
     // a C function - like the file path argument to `fopen`.
     pub fn memcpy(self: RocStr, dest: [*]u8) void {
         const src = self.asU8ptr();
-        @memcpy(dest, src, self.len());
+        @memcpy(dest[0..self.len()], src[0..self.len()]);
     }
 
     test "RocStr.eq: small, equal" {
@@ -518,13 +524,13 @@ pub const RocStr = extern struct {
         const content = "012345678901234567890123456789";
         const roc_str1 = RocStr.init(content, content.len);
         const roc_str2 = RocStr.init(content, content.len);
-        try expect(roc_str1.str_bytes != roc_str2.str_bytes);
+        try expect(roc_str1.bytes != roc_str2.bytes);
 
         // Insert garbage after the end of each string
-        roc_str1.str_bytes.?[30] = '!';
-        roc_str1.str_bytes.?[31] = '!';
-        roc_str2.str_bytes.?[30] = '-';
-        roc_str2.str_bytes.?[31] = '-';
+        roc_str1.bytes.?[30] = '!';
+        roc_str1.bytes.?[31] = '!';
+        roc_str2.bytes.?[30] = '-';
+        roc_str2.bytes.?[31] = '-';
 
         defer {
             roc_str1.decref();
@@ -536,7 +542,7 @@ pub const RocStr = extern struct {
 };
 
 pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, RocStr.init, .{ bytes_ptr, length });
+    return @call(.always_inline, RocStr.init, .{ bytes_ptr, length });
 }
 
 // Str.equal
@@ -549,251 +555,15 @@ pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
-// Str.toScalars
-pub fn strToScalarsC(str: RocStr) callconv(.C) RocList {
-    return @call(.{ .modifier = always_inline }, strToScalars, .{str});
-}
-
-fn strToScalars(string: RocStr) callconv(.C) RocList {
-    const str_len = string.len();
-
-    if (str_len == 0) {
-        return RocList.empty();
-    }
-
-    var capacity = str_len;
-
-    if (!string.isSmallStr()) {
-        capacity = string.getCapacity();
-    }
-
-    // For purposes of preallocation, assume the number of code points is the same
-    // as the number of bytes. This might be longer than necessary, but definitely
-    // should not require a second allocation.
-    var answer = RocList.allocate(@alignOf(u32), capacity, @sizeOf(u32));
-
-    // `orelse unreachable` is fine here, because we already did an early
-    // return to verify the string was nonempty.
-    var answer_elems = answer.elements(u32) orelse unreachable;
-    var src_index: usize = 0;
-    var answer_index: usize = 0;
-
-    while (src_index < str_len) {
-        src_index += writeNextScalar(string, src_index, answer_elems, answer_index);
-        answer_index += 1;
-    }
-
-    answer.length = answer_index;
-
-    return answer;
-}
-
-// Given a non-empty RocStr, and a src_index byte index into that string,
-// and a destination [*]u32, and an index into that destination,
-// Parses the next scalar value out of the string (at the given byte index),
-// writes it into the destination, and returns the number of bytes parsed.
-inline fn writeNextScalar(non_empty_string: RocStr, src_index: usize, dest: [*]u32, dest_index: usize) usize {
-    const utf8_byte = non_empty_string.getUnchecked(src_index);
-
-    // How UTF-8 bytes work:
-    // https://docs.teradata.com/r/Teradata-Database-International-Character-Set-Support/June-2017/Client-Character-Set-Options/UTF8-Client-Character-Set-Support/UTF8-Multibyte-Sequences
-    if (utf8_byte <= 127) {
-        // It's an ASCII character. Copy it over directly.
-        dest[dest_index] = @intCast(u32, utf8_byte);
-
-        return 1;
-    } else if (utf8_byte >> 5 == 0b0000_0110) {
-        // Its three high order bits are 110, so this is a two-byte sequence.
-
-        // Example:
-        //     utf-8:   1100 1111   1011 0001
-        //     code pt: 0000 0011   1111 0001 (decimal: 1009)
-
-        // Discard the first byte's high order bits of 110.
-        var code_pt = @intCast(u32, utf8_byte & 0b0001_1111);
-
-        // Discard the second byte's high order bits of 10.
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-        dest[dest_index] = code_pt;
-
-        return 2;
-    } else if (utf8_byte >> 4 == 0b0000_1110) {
-        // Its four high order bits are 1110, so this is a three-byte sequence.
-
-        // Discard the first byte's high order bits of 1110.
-        var code_pt = @intCast(u32, utf8_byte & 0b0000_1111);
-
-        // Discard the second byte's high order bits of 10.
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-        // Discard the third byte's high order bits of 10 (same as second byte).
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 2) & 0b0011_1111;
-
-        dest[dest_index] = code_pt;
-
-        return 3;
-    } else {
-        // This must be a four-byte sequence, so the five high order bits should be 11110.
-
-        // Discard the first byte's high order bits of 11110.
-        var code_pt = @intCast(u32, utf8_byte & 0b0000_0111);
-
-        // Discard the second byte's high order bits of 10.
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 1) & 0b0011_1111;
-
-        // Discard the third byte's high order bits of 10 (same as second byte).
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 2) & 0b0011_1111;
-
-        // Discard the fourth byte's high order bits of 10 (same as second and third).
-        code_pt <<= 6;
-        code_pt |= non_empty_string.getUnchecked(src_index + 3) & 0b0011_1111;
-
-        dest[dest_index] = code_pt;
-
-        return 4;
-    }
-}
-
-test "strToScalars: empty string" {
-    const str = RocStr.fromSlice("");
-    defer RocStr.decref(str);
-
-    const expected = RocList.empty();
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: One ASCII char" {
-    const str = RocStr.fromSlice("R");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{82};
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: Multiple ASCII chars" {
-    const str = RocStr.fromSlice("Roc!");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{ 82, 111, 99, 33 };
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: One 2-byte UTF-8 character" {
-    const str = RocStr.fromSlice("é");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{233};
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: Multiple 2-byte UTF-8 characters" {
-    const str = RocStr.fromSlice("Cäfés");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{ 67, 228, 102, 233, 115 };
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: One 3-byte UTF-8 character" {
-    const str = RocStr.fromSlice("鹏");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{40527};
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: Multiple 3-byte UTF-8 characters" {
-    const str = RocStr.fromSlice("鹏很有趣");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{ 40527, 24456, 26377, 36259 };
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: One 4-byte UTF-8 character" {
-    // from https://design215.com/toolbox/utf8-4byte-characters.php
-    const str = RocStr.fromSlice("𒀀");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{73728};
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
-test "strToScalars: Multiple 4-byte UTF-8 characters" {
-    // from https://design215.com/toolbox/utf8-4byte-characters.php
-    const str = RocStr.fromSlice("𒀀𒀁");
-    defer RocStr.decref(str);
-
-    const expected_array = [_]u32{ 73728, 73729 };
-    const expected = RocList.fromSlice(u32, expected_array[0..expected_array.len]);
-    defer expected.decref(@sizeOf(u32));
-
-    const actual = strToScalars(str);
-    defer actual.decref(@sizeOf(u32));
-
-    try expect(RocList.eql(actual, expected));
-}
-
 // Str.fromInt
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
-    comptime var f = struct {
+    const f = struct {
         fn func(int: T) callconv(.C) RocStr {
-            return @call(.{ .modifier = always_inline }, strFromIntHelp, .{ T, int });
+            return @call(.always_inline, strFromIntHelp, .{ T, int });
         }
     }.func;
 
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {
@@ -801,9 +571,9 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
     const size = comptime blk: {
         // the string representation of the minimum i128 value uses at most 40 characters
         var buf: [40]u8 = undefined;
-        var resultMin = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
-        var resultMax = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
-        var result = if (resultMin.len > resultMax.len) resultMin.len else resultMax.len;
+        const resultMin = std.fmt.bufPrint(&buf, "{}", .{std.math.minInt(T)}) catch unreachable;
+        const resultMax = std.fmt.bufPrint(&buf, "{}", .{std.math.maxInt(T)}) catch unreachable;
+        const result = if (resultMin.len > resultMax.len) resultMin.len else resultMax.len;
         break :blk result;
     };
 
@@ -815,13 +585,13 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 
 // Str.fromFloat
 pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
-    comptime var f = struct {
+    const f = struct {
         fn func(float: T) callconv(.C) RocStr {
-            return @call(.{ .modifier = always_inline }, strFromFloatHelp, .{ T, float });
+            return @call(.always_inline, strFromFloatHelp, .{ T, float });
         }
     }.func;
 
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .Strong });
+    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 fn strFromFloatHelp(comptime T: type, float: T) RocStr {
@@ -831,14 +601,14 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
     return RocStr.init(&buf, result.len);
 }
 
-// Str.split
-pub fn strSplit(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
+// Str.splitOn
+pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
-    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr));
+    const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true);
 
     if (list.bytes) |bytes| {
-        const strings = @ptrCast([*]RocStr, @alignCast(@alignOf(RocStr), bytes));
-        strSplitHelp(strings, string, delimiter);
+        const strings = @as([*]RocStr, @ptrCast(@alignCast(bytes)));
+        strSplitOnHelp(strings, string, delimiter);
     }
 
     return list;
@@ -848,86 +618,32 @@ fn initFromSmallStr(slice_bytes: [*]u8, len: usize, _: usize) RocStr {
     return RocStr.init(slice_bytes, len);
 }
 
-// The ref_ptr must already be shifted to be ready for storing in a seamless slice.
-fn initFromBigStr(slice_bytes: [*]u8, len: usize, ref_ptr: usize) RocStr {
-    // Here we can make seamless slices instead of copying to a new small str.
-    return RocStr{
-        .str_bytes = slice_bytes,
-        .str_len = len | SEAMLESS_SLICE_BIT,
-        .str_capacity = ref_ptr,
-    };
-}
-
-// TODO: relpace this with @qualCast or @constCast in future version of zig
-fn constCast(ptr: [*]const u8) [*]u8 {
-    var result: [*]u8 = undefined;
-    @memcpy(@ptrCast([*]u8, &result), @ptrCast([*]const u8, &ptr), @sizeOf([*]u8));
-    return result;
-}
-
-fn strSplitHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
-    var ret_array_index: usize = 0;
-    var slice_start_index: usize = 0;
-    var str_index: usize = 0;
-
-    const str_bytes = string.asU8ptr();
-    const str_len = string.len();
-    const ref_ptr = @ptrToInt(string.getRefcountPtr()) >> 1;
-    const init_fn = if (string.isSmallStr())
-        initFromSmallStr
-    else
-        initFromBigStr;
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    if (str_len >= delimiter_len and delimiter_len > 0) {
-        const end_index: usize = str_len - delimiter_len + 1;
-        while (str_index <= end_index) {
-            var delimiter_index: usize = 0;
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                var delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-
-                if (str_index + delimiter_index >= str_len) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                var strChar = str_bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                const segment_len: usize = str_index - slice_start_index;
-
-                array[ret_array_index] = init_fn(constCast(str_bytes) + slice_start_index, segment_len, ref_ptr);
-                slice_start_index = str_index + delimiter_len;
-                ret_array_index += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+fn strSplitOnHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
+    if (delimiter.len() == 0) {
+        string.incref(1);
+        array[0] = string;
+        return;
     }
 
-    array[ret_array_index] = init_fn(constCast(str_bytes) + slice_start_index, str_len - slice_start_index, ref_ptr);
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
 
-    if (!string.isSmallStr()) {
-        // Correct refcount for all of the splits made.
-        string.incref(ret_array_index + 1);
+    var i: usize = 0;
+    var offset: usize = 0;
+
+    while (it.next()) |zig_slice| {
+        const roc_slice = substringUnsafe(string, offset, zig_slice.len);
+        array[i] = roc_slice;
+
+        i += 1;
+        offset += zig_slice.len + delimiter.len();
     }
+
+    // Correct refcount for all of the splits made.
+    string.incref(i); // i == array.len()
 }
 
 test "strSplitHelp: empty delimiter" {
-    // Str.split "abc" "" == ["abc"]
+    // Str.splitOn "abc" "" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -937,9 +653,9 @@ test "strSplitHelp: empty delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
-    var expected = [1]RocStr{
+    const expected = [1]RocStr{
         str,
     };
 
@@ -961,7 +677,7 @@ test "strSplitHelp: empty delimiter" {
 }
 
 test "strSplitHelp: no delimiter" {
-    // Str.split "abc" "!" == ["abc"]
+    // Str.splitOn "abc" "!" == ["abc"]
     const str_arr = "abc";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -971,9 +687,9 @@ test "strSplitHelp: no delimiter" {
     var array: [1]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
-    var expected = [1]RocStr{
+    const expected = [1]RocStr{
         str,
     };
 
@@ -1008,11 +724,11 @@ test "strSplitHelp: empty start" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const one = RocStr.init("a", 1);
 
-    var expected = [2]RocStr{
+    const expected = [2]RocStr{
         RocStr.empty(), one,
     };
 
@@ -1049,12 +765,12 @@ test "strSplitHelp: empty end" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const one = RocStr.init("1", 1);
     const two = RocStr.init("2", 1);
 
-    var expected = [3]RocStr{
+    const expected = [3]RocStr{
         one, two, RocStr.empty(),
     };
 
@@ -1088,9 +804,9 @@ test "strSplitHelp: string equals delimiter" {
     };
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str_delimiter, str_delimiter);
+    strSplitOnHelp(array_ptr, str_delimiter, str_delimiter);
 
-    var expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
+    const expected = [2]RocStr{ RocStr.empty(), RocStr.empty() };
 
     defer {
         for (array) |rocStr| {
@@ -1123,12 +839,12 @@ test "strSplitHelp: delimiter on sides" {
         undefined,
     };
     const array_ptr: [*]RocStr = &array;
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const ghi_arr = "ghi";
     const ghi = RocStr.init(ghi_arr, ghi_arr.len);
 
-    var expected = [3]RocStr{
+    const expected = [3]RocStr{
         RocStr.empty(), ghi, RocStr.empty(),
     };
 
@@ -1152,7 +868,7 @@ test "strSplitHelp: delimiter on sides" {
 }
 
 test "strSplitHelp: three pieces" {
-    // Str.split "a!b!c" "!" == ["a", "b", "c"]
+    // Str.splitOn "a!b!c" "!" == ["a", "b", "c"]
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -1163,13 +879,13 @@ test "strSplitHelp: three pieces" {
     var array: [array_len]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
     const a = RocStr.init("a", 1);
     const b = RocStr.init("b", 1);
     const c = RocStr.init("c", 1);
 
-    var expected_array = [array_len]RocStr{
+    const expected_array = [array_len]RocStr{
         a, b, c,
     };
 
@@ -1193,7 +909,7 @@ test "strSplitHelp: three pieces" {
 }
 
 test "strSplitHelp: overlapping delimiter 1" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const str_arr = "aaa";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -1203,9 +919,9 @@ test "strSplitHelp: overlapping delimiter 1" {
     var array: [2]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
-    var expected = [2]RocStr{
+    const expected = [2]RocStr{
         RocStr.empty(),
         RocStr.init("a", 1),
     };
@@ -1218,7 +934,7 @@ test "strSplitHelp: overlapping delimiter 1" {
 }
 
 test "strSplitHelp: overlapping delimiter 2" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const str_arr = "aaaa";
     const str = RocStr.init(str_arr, str_arr.len);
 
@@ -1228,9 +944,9 @@ test "strSplitHelp: overlapping delimiter 2" {
     var array: [3]RocStr = undefined;
     const array_ptr: [*]RocStr = &array;
 
-    strSplitHelp(array_ptr, str, delimiter);
+    strSplitOnHelp(array_ptr, str, delimiter);
 
-    var expected = [3]RocStr{
+    const expected = [3]RocStr{
         RocStr.empty(),
         RocStr.empty(),
         RocStr.empty(),
@@ -1244,54 +960,25 @@ test "strSplitHelp: overlapping delimiter 2" {
     try expect(array[2].eq(expected[2]));
 }
 
-// This is used for `Str.split : Str, Str -> Array Str
+// This is used for `Str.splitOn : Str, Str -> List Str
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
-    const str_bytes = string.asU8ptr();
-    const str_len = string.len();
-
-    const delimiter_bytes_ptrs = delimiter.asU8ptr();
-    const delimiter_len = delimiter.len();
-
-    var count: usize = 1;
-
-    if (str_len >= delimiter_len and delimiter_len > 0) {
-        var str_index: usize = 0;
-        const end_cond: usize = str_len - delimiter_len + 1;
-
-        while (str_index < end_cond) {
-            var delimiter_index: usize = 0;
-
-            var matches_delimiter = true;
-
-            while (delimiter_index < delimiter_len) {
-                const delimiterChar = delimiter_bytes_ptrs[delimiter_index];
-                const strChar = str_bytes[str_index + delimiter_index];
-
-                if (delimiterChar != strChar) {
-                    matches_delimiter = false;
-                    break;
-                }
-
-                delimiter_index += 1;
-            }
-
-            if (matches_delimiter) {
-                count += 1;
-                str_index += delimiter_len;
-            } else {
-                str_index += 1;
-            }
-        }
+    if (delimiter.isEmpty()) {
+        return 1;
     }
+
+    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
+    var count: usize = 0;
+
+    while (it.next()) |_| : (count += 1) {}
 
     return count;
 }
 
 test "countSegments: long delimiter" {
-    // Str.split "str" "delimiter" == ["str"]
+    // Str.splitOn "str" "delimiter" == ["str"]
     // 1 segment
     const str_arr = "str";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1309,7 +996,7 @@ test "countSegments: long delimiter" {
 }
 
 test "countSegments: delimiter at start" {
-    // Str.split "hello there" "hello" == ["", " there"]
+    // Str.splitOn "hello there" "hello" == ["", " there"]
     // 2 segments
     const str_arr = "hello there";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1328,7 +1015,7 @@ test "countSegments: delimiter at start" {
 }
 
 test "countSegments: delimiter interspered" {
-    // Str.split "a!b!c" "!" == ["a", "b", "c"]
+    // Str.splitOn "a!b!c" "!" == ["a", "b", "c"]
     // 3 segments
     const str_arr = "a!b!c";
     const str = RocStr.init(str_arr, str_arr.len);
@@ -1347,7 +1034,7 @@ test "countSegments: delimiter interspered" {
 }
 
 test "countSegments: string equals delimiter" {
-    // Str.split "/" "/" == ["", ""]
+    // Str.splitOn "/" "/" == ["", ""]
     // 2 segments
     const str_delimiter_arr = "/";
     const str_delimiter = RocStr.init(str_delimiter_arr, str_delimiter_arr.len);
@@ -1362,140 +1049,21 @@ test "countSegments: string equals delimiter" {
 }
 
 test "countSegments: overlapping delimiter 1" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const segments_count = countSegments(RocStr.init("aaa", 3), RocStr.init("aa", 2));
 
     try expectEqual(segments_count, 2);
 }
 
 test "countSegments: overlapping delimiter 2" {
-    // Str.split "aaa" "aa" == ["", "a"]
+    // Str.splitOn "aaa" "aa" == ["", "a"]
     const segments_count = countSegments(RocStr.init("aaaa", 4), RocStr.init("aa", 2));
 
     try expectEqual(segments_count, 3);
 }
 
-// Str.countGraphemeClusters
-pub fn countGraphemeClusters(string: RocStr) callconv(.C) usize {
-    if (string.isEmpty()) {
-        return 0;
-    }
-
-    const bytes_len = string.len();
-    const bytes_ptr = string.asU8ptr();
-
-    var bytes = bytes_ptr[0..bytes_len];
-    var iter = (unicode.Utf8View.init(bytes) catch unreachable).iterator();
-
-    var count: usize = 0;
-    var grapheme_break_state: ?grapheme.BoundClass = null;
-    var grapheme_break_state_ptr = &grapheme_break_state;
-    var opt_last_codepoint: ?u21 = null;
-    while (iter.nextCodepoint()) |cur_codepoint| {
-        if (opt_last_codepoint) |last_codepoint| {
-            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, grapheme_break_state_ptr);
-            if (did_break) {
-                count += 1;
-                grapheme_break_state = null;
-            }
-        }
-        opt_last_codepoint = cur_codepoint;
-    }
-
-    // If there are no breaks, but the str is not empty, then there
-    // must be a single grapheme
-    if (bytes_len != 0) {
-        count += 1;
-    }
-
-    return count;
-}
-
-// Str.graphemes
-pub fn strGraphemes(roc_str: RocStr) callconv(.C) RocList {
-    var break_state: ?grapheme.BoundClass = null;
-    var opt_last_codepoint: ?u21 = null;
-    var index: usize = 0;
-    var last_codepoint_len: u8 = 0;
-
-    const ref_ptr = @ptrToInt(roc_str.getRefcountPtr()) >> 1;
-    const init_fn = if (roc_str.isSmallStr())
-        initFromSmallStr
-    else
-        initFromBigStr;
-
-    var result = RocList.allocate(@alignOf(RocStr), countGraphemeClusters(roc_str), @sizeOf(RocStr));
-    const graphemes = result.elements(RocStr) orelse return result;
-    var slice = roc_str.asSlice();
-    var iter = (unicode.Utf8View.init(slice) catch unreachable).iterator();
-
-    while (iter.nextCodepoint()) |cur_codepoint| {
-        const cur_codepoint_len = unicode.utf8CodepointSequenceLength(cur_codepoint) catch unreachable;
-        if (opt_last_codepoint) |last_codepoint| {
-            var did_break = grapheme.isGraphemeBreak(last_codepoint, cur_codepoint, &break_state);
-            if (did_break) {
-                graphemes[index] = init_fn(constCast(slice.ptr), last_codepoint_len, ref_ptr);
-                slice = slice[last_codepoint_len..];
-                index += 1;
-                break_state = null;
-                last_codepoint_len = 0;
-            }
-        }
-        last_codepoint_len += cur_codepoint_len;
-        opt_last_codepoint = cur_codepoint;
-    }
-    // Append last grapheme
-    graphemes[index] = init_fn(constCast(slice.ptr), slice.len, ref_ptr);
-
-    if (!roc_str.isSmallStr()) {
-        // Correct refcount for all of the splits made.
-        roc_str.incref(index + 1);
-    }
-    return result;
-}
-
-// these test both countGraphemeClusters() and strGraphemes()
-fn graphemesTest(input: []const u8, expected: []const []const u8) !void {
-    const rocstr = RocStr.fromSlice(input);
-    defer rocstr.decref();
-    const count = countGraphemeClusters(rocstr);
-    try expectEqual(expected.len, count);
-
-    const graphemes = strGraphemes(rocstr);
-    defer graphemes.decref(@sizeOf(u8));
-    if (input.len == 0) return; // empty string
-    const elems = graphemes.elements(RocStr) orelse unreachable;
-    for (expected) |g, i| {
-        try std.testing.expectEqualStrings(g, elems[i].asSlice());
-    }
-}
-
-test "graphemes: empty string" {
-    try graphemesTest("", &.{});
-}
-
-test "graphemes: ascii characters" {
-    try graphemesTest("abcd", &.{ "a", "b", "c", "d" });
-}
-
-test "graphemes: utf8 characters" {
-    try graphemesTest("ãxā", &.{ "ã", "x", "ā" });
-}
-
-test "graphemes: emojis" {
-    try graphemesTest("🤔🤔🤔", &.{ "🤔", "🤔", "🤔" });
-}
-
-test "graphemes: emojis and ut8 characters" {
-    try graphemesTest("🤔å🤔¥🤔ç", &.{ "🤔", "å", "🤔", "¥", "🤔", "ç" });
-}
-
-test "graphemes: emojis, ut8, and ascii characters" {
-    try graphemesTest("6🤔å🤔e¥🤔çpp", &.{ "6", "🤔", "å", "🤔", "e", "¥", "🤔", "ç", "p", "p" });
-}
-
-pub fn countUtf8Bytes(string: RocStr) callconv(.C) usize {
-    return string.len();
+pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
+    return @intCast(string.len());
 }
 
 pub fn isEmpty(string: RocStr) callconv(.C) bool {
@@ -1506,13 +1074,47 @@ pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
-pub fn substringUnsafe(string: RocStr, start: usize, length: usize) callconv(.C) RocStr {
-    const slice = string.asSlice()[start .. start + length];
-    return RocStr.fromSlice(slice);
+pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
+    const start: usize = @intCast(start_u64);
+    const length: usize = @intCast(length_u64);
+
+    return substringUnsafe(string, start, length);
 }
 
-pub fn getUnsafe(string: RocStr, index: usize) callconv(.C) u8 {
-    return string.getUnchecked(index);
+fn substringUnsafe(string: RocStr, start: usize, length: usize) RocStr {
+    if (string.isSmallStr()) {
+        if (start == 0) {
+            var output = string;
+            output.setLen(length);
+            return output;
+        }
+        const slice = string.asSlice()[start .. start + length];
+        return RocStr.fromSlice(slice);
+    }
+    if (string.bytes) |source_ptr| {
+        if (start == 0 and string.isUnique()) {
+            var output = string;
+            output.setLen(length);
+            return output;
+        } else {
+            // Shifting right by 1 is required to avoid the highest bit of capacity being set.
+            // If it was set, the slice would get interpreted as a small string.
+            const str_alloc_ptr = (@intFromPtr(source_ptr) >> 1);
+            const slice_alloc_ptr = string.capacity_or_alloc_ptr;
+            const slice_mask = string.seamlessSliceMask();
+            const alloc_ptr = (str_alloc_ptr & ~slice_mask) | (slice_alloc_ptr & slice_mask);
+            return RocStr{
+                .bytes = source_ptr + start,
+                .length = length | SEAMLESS_SLICE_BIT,
+                .capacity_or_alloc_ptr = alloc_ptr,
+            };
+        }
+    }
+    return RocStr.empty();
+}
+
+pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
+    return string.getUnchecked(@intCast(index));
 }
 
 test "substringUnsafe: start" {
@@ -1575,7 +1177,8 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 }
 
 // Str.repeat
-pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
+pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
+    const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
 
@@ -1584,48 +1187,11 @@ pub fn repeat(string: RocStr, count: usize) callconv(.C) RocStr {
 
     var i: usize = 0;
     while (i < count) : (i += 1) {
-        @memcpy(ret_string_ptr + (i * bytes_len), bytes_ptr, bytes_len);
+        @memcpy(ret_string_ptr[0..bytes_len], bytes_ptr[0..bytes_len]);
+        ret_string_ptr += bytes_len;
     }
 
     return ret_string;
-}
-
-// Str.startsWithScalar
-pub fn startsWithScalar(string: RocStr, prefix: u32) callconv(.C) bool {
-    const str_len = string.len();
-
-    if (str_len == 0) {
-        return false;
-    }
-
-    // Write this (non-empty) string's first scalar into `first_scalar`
-    var first_scalar: [1]u32 = undefined;
-
-    _ = writeNextScalar(string, 0, &first_scalar, 0);
-
-    // Return whether `first_scalar` equals `prefix`
-    return @ptrCast(*u32, &first_scalar).* == prefix;
-}
-
-test "startsWithScalar: empty string" {
-    const whole = RocStr.empty();
-    const prefix: u32 = 'x';
-    try expect(!startsWithScalar(whole, prefix));
-}
-
-test "startsWithScalar: ascii char" {
-    const whole = RocStr.fromSlice("foobar");
-    const prefix: u32 = 'f';
-    try expect(startsWithScalar(whole, prefix));
-}
-
-test "startsWithScalar: emoji" {
-    const yes = RocStr.fromSlice("💖foobar");
-    const no = RocStr.fromSlice("foobar");
-    const prefix: u32 = '💖';
-
-    try expect(startsWithScalar(yes, prefix));
-    try expect(!startsWithScalar(no, prefix));
 }
 
 test "startsWith: foo starts with fo" {
@@ -1707,7 +1273,7 @@ test "endsWith: hello world ends with world" {
 
 // Str.concat
 pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
-    return @call(.{ .modifier = always_inline }, strConcat, .{ arg1, arg2 });
+    return @call(.always_inline, strConcat, .{ arg1, arg2 });
 }
 
 fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
@@ -1720,7 +1286,7 @@ fn strConcat(arg1: RocStr, arg2: RocStr) RocStr {
         const combined_length = arg1.len() + arg2.len();
 
         var result = arg1.reallocate(combined_length);
-        @memcpy(result.asU8ptrMut() + arg1.len(), arg2.asU8ptr(), arg2.len());
+        @memcpy(result.asU8ptrMut()[arg1.len()..combined_length], arg2.asU8ptr()[0..arg2.len()]);
 
         return result;
     }
@@ -1758,18 +1324,18 @@ test "RocStr.concat: small concat small" {
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
-    list_capacity_or_ref_ptr: usize,
+    list_capacity_or_alloc_ptr: usize,
 };
 
 // Str.joinWith
 pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
-        .list_elements = @ptrCast(?[*]RocStr, @alignCast(@alignOf(usize), list.bytes)),
+        .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
         .list_length = list.length,
-        .list_capacity_or_ref_ptr = list.capacity_or_ref_ptr,
+        .list_capacity_or_alloc_ptr = list.capacity_or_alloc_ptr,
     };
 
-    return @call(.{ .modifier = always_inline }, strJoinWith, .{ roc_list_str, separator });
+    return @call(.always_inline, strJoinWith, .{ roc_list_str, separator });
 }
 
 fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
@@ -1778,7 +1344,7 @@ fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
     if (len == 0) {
         return RocStr.empty();
     } else {
-        const ptr = @ptrCast([*]RocStr, list.list_elements);
+        const ptr = @as([*]RocStr, @ptrCast(list.list_elements));
         const slice: []RocStr = ptr[0..len];
 
         // determine the size of the result
@@ -1791,7 +1357,7 @@ fn strJoinWith(list: RocListStr, separator: RocStr) RocStr {
         total_size += separator.len() * (len - 1);
 
         var result = RocStr.allocate(total_size);
-        var result_ptr = result.asU8ptrMut();
+        const result_ptr = result.asU8ptrMut();
 
         var offset: usize = 0;
         for (slice[0 .. len - 1]) |substr| {
@@ -1828,8 +1394,8 @@ test "RocStr.joinWith: result is big" {
     var elements: [3]RocStr = .{ roc_elem, roc_elem, roc_elem };
     const list = RocListStr{
         .list_length = 3,
-        .list_capacity_or_ref_ptr = 3,
-        .list_elements = @ptrCast([*]RocStr, &elements),
+        .list_capacity_or_alloc_ptr = 3,
+        .list_elements = @as([*]RocStr, @ptrCast(&elements)),
     };
 
     defer {
@@ -1855,41 +1421,136 @@ inline fn strToBytes(arg: RocStr) RocList {
     if (length == 0) {
         return RocList.empty();
     } else if (arg.isSmallStr()) {
-        const ptr = utils.allocateWithRefcount(length, RocStr.alignment);
+        const ptr = utils.allocateWithRefcount(length, RocStr.alignment, false);
 
-        @memcpy(ptr, arg.asU8ptr(), length);
+        @memcpy(ptr[0..length], arg.asU8ptr()[0..length]);
 
-        return RocList{ .length = length, .bytes = ptr, .capacity_or_ref_ptr = length };
+        return RocList{ .length = length, .bytes = ptr, .capacity_or_alloc_ptr = length };
     } else {
-        const is_seamless_slice = arg.str_len & SEAMLESS_SLICE_BIT;
-        return RocList{ .length = length, .bytes = arg.str_bytes, .capacity_or_ref_ptr = arg.str_capacity | is_seamless_slice };
+        const is_seamless_slice = arg.length & SEAMLESS_SLICE_BIT;
+        return RocList{ .length = length, .bytes = arg.bytes, .capacity_or_alloc_ptr = arg.capacity_or_alloc_ptr | is_seamless_slice };
     }
 }
 
 const FromUtf8Result = extern struct {
-    byte_index: usize,
+    byte_index: u64,
     string: RocStr,
     is_ok: bool,
     problem_code: Utf8ByteProblem,
 };
 
-const CountAndStart = extern struct {
-    count: usize,
-    start: usize,
-};
-
-pub fn fromUtf8RangeC(
+pub fn fromUtf8C(
     list: RocList,
-    start: usize,
-    count: usize,
     update_mode: UpdateMode,
 ) callconv(.C) FromUtf8Result {
-    return fromUtf8Range(list, start, count, update_mode);
+    return fromUtf8(list, update_mode);
 }
 
-pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: UpdateMode) FromUtf8Result {
-    if (arg.len() == 0 or count == 0) {
-        arg.decref(RocStr.alignment);
+const UNICODE_REPLACEMENT: u21 = 0xfffd;
+
+const Utf8Iterator = struct {
+    bytes: []u8,
+    i: usize,
+
+    pub fn init(list: RocList) Utf8Iterator {
+        const bytes = @as([*]u8, @ptrCast(list.bytes))[0..list.length];
+        return Utf8Iterator{
+            .bytes = bytes,
+            .i = 0,
+        };
+    }
+
+    pub fn nextLossy(it: *Utf8Iterator) ?u32 {
+        if (it.bytes.len <= it.i) {
+            return null;
+        }
+
+        const rest = it.bytes[it.i..];
+        const n = unicode.utf8ByteSequenceLength(rest[0]) catch {
+            // invalid start byte
+            it.i += 1;
+            return UNICODE_REPLACEMENT;
+        };
+
+        for (1..n) |i| {
+            if (rest.len == i) {
+                // unexpected end
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+            if (rest[i] < 0x70) {
+                // expected continuation byte (>= 0x70)
+                it.i += i;
+                return UNICODE_REPLACEMENT;
+            }
+        }
+
+        it.i += n;
+        return unicode.utf8Decode(rest[0..n]) catch {
+            return UNICODE_REPLACEMENT;
+        };
+    }
+
+    pub fn reset(it: *Utf8Iterator) void {
+        it.i = 0;
+    }
+};
+
+fn codepointSeqLengthLossy(c: u32) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8CodepointSequenceLength(@intCast(c))) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8CodepointSequenceLength(UNICODE_REPLACEMENT) catch unreachable;
+}
+
+fn utf8EncodeLossy(c: u32, out: []u8) u3 {
+    if (c < 0x110000) {
+        if (unicode.utf8Encode(@intCast(c), out)) |n| {
+            return n;
+        } else |_| {
+            // fallthrough
+        }
+    }
+    return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
+}
+
+pub fn fromUtf8Lossy(
+    list: RocList,
+) callconv(.C) RocStr {
+    if (list.len() == 0) {
+        return RocStr.empty();
+    }
+
+    // PERF: we could try to reuse the input list if it's already valid utf-8, similar to fromUtf8
+
+    var it = Utf8Iterator.init(list);
+
+    var enc_len: usize = 0;
+    while (it.nextLossy()) |c| {
+        enc_len += codepointSeqLengthLossy(c);
+    }
+
+    var str = RocStr.allocate(enc_len);
+    const ptr = str.asU8ptrMut()[0..enc_len];
+    var end_index: usize = 0;
+    it.reset();
+    while (it.nextLossy()) |c| {
+        end_index += utf8EncodeLossy(c, ptr[end_index..]);
+    }
+    str.setLen(end_index);
+    return str;
+}
+
+pub fn fromUtf8(
+    list: RocList,
+    update_mode: UpdateMode,
+) FromUtf8Result {
+    if (list.len() == 0) {
+        list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
         return FromUtf8Result{
             .is_ok = true,
             .string = RocStr.empty(),
@@ -1897,11 +1558,11 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     }
-    const bytes = @ptrCast([*]const u8, arg.bytes)[start .. start + count];
+    const bytes = @as([*]const u8, @ptrCast(list.bytes))[0..list.len()];
 
     if (isValidUnicode(bytes)) {
         // Make a seamless slice of the input.
-        const string = RocStr.fromSubListUnsafe(arg, start, count, update_mode);
+        const string = RocStr.fromSubListUnsafe(list, 0, list.len(), update_mode);
         return FromUtf8Result{
             .is_ok = true,
             .string = string,
@@ -1909,25 +1570,25 @@ pub fn fromUtf8Range(arg: RocList, start: usize, count: usize, update_mode: Upda
             .problem_code = Utf8ByteProblem.InvalidStartByte,
         };
     } else {
-        const temp = errorToProblem(@ptrCast([*]u8, arg.bytes), arg.length);
+        const temp = errorToProblem(bytes);
 
-        // decref the list
-        arg.decref(RocStr.alignment);
+        list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
 
         return FromUtf8Result{
             .is_ok = false,
             .string = RocStr.empty(),
-            .byte_index = temp.index,
+            .byte_index = @intCast(temp.index),
             .problem_code = temp.problem,
         };
     }
 }
 
-fn errorToProblem(bytes: [*]u8, length: usize) struct { index: usize, problem: Utf8ByteProblem } {
+fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8ByteProblem } {
+    const len = bytes.len;
     var index: usize = 0;
 
-    while (index < length) {
-        const nextNumBytes = numberOfNextCodepointBytes(bytes, length, index) catch |err| {
+    while (index < len) {
+        const nextNumBytes = numberOfNextCodepointBytes(bytes, index) catch |err| {
             switch (err) {
                 error.UnexpectedEof => {
                     return .{ .index = index, .problem = Utf8ByteProblem.UnexpectedEndOfSequence };
@@ -1954,7 +1615,7 @@ pub fn isValidUnicode(buf: []const u8) bool {
     var i: usize = 0;
     while (i + step < buf.len) {
         var bytes: u64 = undefined;
-        @memcpy(@ptrCast([*]u8, &bytes), @ptrCast([*]const u8, buf) + i, size);
+        @memcpy(@as([*]u8, @ptrCast(&bytes))[0..size], buf[i..(i + size)]);
         const unicode_bytes = bytes & 0x8080_8080_8080_8080;
         if (unicode_bytes == 0) {
             i += step;
@@ -1967,7 +1628,7 @@ pub fn isValidUnicode(buf: []const u8) bool {
             // This forces prefetching, otherwise the loop can run at about half speed.
             if (i + 4 >= buf.len) break;
             var small_buf: [4]u8 = undefined;
-            @memcpy(&small_buf, @ptrCast([*]const u8, buf) + i, 4);
+            @memcpy(small_buf[0..4], buf[i..(i + 4)]);
             // TODO: Should we always inline these function calls below?
             if (std.unicode.utf8ByteSequenceLength(small_buf[0])) |cp_len| {
                 if (std.meta.isError(std.unicode.utf8Decode(small_buf[0..cp_len]))) {
@@ -1986,7 +1647,7 @@ pub fn isValidUnicode(buf: []const u8) bool {
         if (i == buf.len) return true;
     }
 
-    return @call(.{ .modifier = always_inline }, unicode.utf8ValidateSlice, .{buf[i..]});
+    return @call(.always_inline, unicode.utf8ValidateSlice, .{buf[i..]});
 }
 
 const Utf8DecodeError = error{
@@ -2001,13 +1662,13 @@ const Utf8DecodeError = error{
 // Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
 // but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
 // TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
-pub fn numberOfNextCodepointBytes(ptr: [*]u8, len: usize, index: usize) Utf8DecodeError!usize {
-    const codepoint_len = try unicode.utf8ByteSequenceLength(ptr[index]);
+pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
+    const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
     const codepoint_end_index = index + codepoint_len;
-    if (codepoint_end_index > len) {
+    if (codepoint_end_index > bytes.len) {
         return error.UnexpectedEof;
     }
-    _ = try unicode.utf8Decode(ptr[index..codepoint_end_index]);
+    _ = try unicode.utf8Decode(bytes[index..codepoint_end_index]);
     return codepoint_end_index - index;
 }
 
@@ -2023,11 +1684,11 @@ pub const Utf8ByteProblem = enum(u8) {
 };
 
 fn validateUtf8Bytes(bytes: [*]u8, length: usize) FromUtf8Result {
-    return fromUtf8Range(RocList{ .bytes = bytes, .length = length, .capacity_or_ref_ptr = length }, 0, length, .Immutable);
+    return fromUtf8(RocList{ .bytes = bytes, .length = length, .capacity_or_alloc_ptr = length }, .Immutable);
 }
 
 fn validateUtf8BytesX(str: RocList) FromUtf8Result {
-    return fromUtf8Range(str, 0, str.len(), .Immutable);
+    return fromUtf8(str, .Immutable);
 }
 
 fn expectOk(result: FromUtf8Result) !void {
@@ -2035,15 +1696,16 @@ fn expectOk(result: FromUtf8Result) !void {
 }
 
 fn sliceHelp(bytes: [*]const u8, length: usize) RocList {
-    var list = RocList.allocate(RocStr.alignment, length, @sizeOf(u8));
-    @memcpy(list.bytes orelse unreachable, bytes, length);
+    var list = RocList.allocate(RocStr.alignment, length, @sizeOf(u8), false);
+    var list_bytes = list.bytes orelse unreachable;
+    @memcpy(list_bytes[0..length], bytes[0..length]);
     list.length = length;
 
     return list;
 }
 
 fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result {
-    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = index, .problem_code = problem };
+    return FromUtf8Result{ .is_ok = false, .string = RocStr.empty(), .byte_index = @as(u64, @intCast(index)), .problem_code = problem };
 }
 
 // NOTE on memory: the validate function consumes a RC token of the input. Since
@@ -2053,7 +1715,7 @@ fn toErrUtf8ByteResponse(index: usize, problem: Utf8ByteProblem) FromUtf8Result 
 
 test "validateUtf8Bytes: ascii" {
     const raw = "abc";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     const str_result = validateUtf8BytesX(list);
@@ -2063,7 +1725,7 @@ test "validateUtf8Bytes: ascii" {
 
 test "validateUtf8Bytes: unicode œ" {
     const raw = "œ";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     const str_result = validateUtf8BytesX(list);
@@ -2073,7 +1735,7 @@ test "validateUtf8Bytes: unicode œ" {
 
 test "validateUtf8Bytes: unicode ∆" {
     const raw = "∆";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     const str_result = validateUtf8BytesX(list);
@@ -2083,7 +1745,7 @@ test "validateUtf8Bytes: unicode ∆" {
 
 test "validateUtf8Bytes: emoji" {
     const raw = "💖";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     const str_result = validateUtf8BytesX(list);
@@ -2093,7 +1755,7 @@ test "validateUtf8Bytes: emoji" {
 
 test "validateUtf8Bytes: unicode ∆ in middle of array" {
     const raw = "œb∆c¬";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     const str_result = validateUtf8BytesX(list);
@@ -2101,18 +1763,29 @@ test "validateUtf8Bytes: unicode ∆ in middle of array" {
     try expectOk(str_result);
 }
 
-fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
-    const str_ptr = @ptrCast([*]u8, list.bytes);
-    const str_len = list.length;
+test "fromUtf8Lossy: ascii, emoji" {
+    var list = RocList.fromSlice(u8, "r💖c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
 
-    try expectError(err, numberOfNextCodepointBytes(str_ptr, str_len, index));
-    try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, str_len));
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+fn expectErr(list: RocList, index: usize, err: Utf8DecodeError, problem: Utf8ByteProblem) !void {
+    const str_ptr = @as([*]u8, @ptrCast(list.bytes));
+    const len = list.length;
+
+    try expectError(err, numberOfNextCodepointBytes(str_ptr[0..len], index));
+    try expectEqual(toErrUtf8ByteResponse(index, problem), validateUtf8Bytes(str_ptr, len));
 }
 
 test "validateUtf8Bytes: invalid start byte" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
     const raw = "ab\x80c";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 2, error.Utf8InvalidStartByte, Utf8ByteProblem.InvalidStartByte);
@@ -2121,7 +1794,7 @@ test "validateUtf8Bytes: invalid start byte" {
 test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
     const raw = "abc\xc2";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
@@ -2130,7 +1803,7 @@ test "validateUtf8Bytes: unexpected eof for 2 byte sequence" {
 test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L426
     const raw = "abc\xc2\x00";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
@@ -2139,7 +1812,7 @@ test "validateUtf8Bytes: expected continuation for 2 byte sequence" {
 test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
     const raw = "abc\xe0\x00";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
@@ -2148,7 +1821,7 @@ test "validateUtf8Bytes: unexpected eof for 3 byte sequence" {
 test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L430
     const raw = "abc\xe0\xa0\xc0";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
@@ -2157,7 +1830,7 @@ test "validateUtf8Bytes: expected continuation for 3 byte sequence" {
 test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
     const raw = "abc\xf0\x90\x00";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.UnexpectedEof, Utf8ByteProblem.UnexpectedEndOfSequence);
@@ -2166,7 +1839,7 @@ test "validateUtf8Bytes: unexpected eof for 4 byte sequence" {
 test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L437
     const raw = "abc\xf0\x90\x80\x00";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8ExpectedContinuation, Utf8ByteProblem.ExpectedContinuation);
@@ -2175,7 +1848,7 @@ test "validateUtf8Bytes: expected continuation for 4 byte sequence" {
 test "validateUtf8Bytes: overlong" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L451
     const raw = "abc\xf0\x80\x80\x80";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8OverlongEncoding, Utf8ByteProblem.OverlongEncoding);
@@ -2184,7 +1857,7 @@ test "validateUtf8Bytes: overlong" {
 test "validateUtf8Bytes: codepoint out too large" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L465
     const raw = "abc\xf4\x90\x80\x80";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8CodepointTooLarge, Utf8ByteProblem.CodepointTooLarge);
@@ -2193,10 +1866,70 @@ test "validateUtf8Bytes: codepoint out too large" {
 test "validateUtf8Bytes: surrogate halves" {
     // https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L468
     const raw = "abc\xed\xa0\x80";
-    const ptr: [*]const u8 = @ptrCast([*]const u8, raw);
+    const ptr: [*]const u8 = @as([*]const u8, @ptrCast(raw));
     const list = sliceHelp(ptr, raw.len);
 
     try expectErr(list, 3, error.Utf8EncodesSurrogateHalf, Utf8ByteProblem.EncodesSurrogateHalf);
+}
+
+test "fromUtf8Lossy: invalid start byte" {
+    var list = RocList.fromSlice(u8, "r\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: overlong encoding" {
+    var list = RocList.fromSlice(u8, "r\xF0\x9F\x92\x96\x80c", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r💖�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: expected continuation" {
+    var list = RocList.fromSlice(u8, "r\xCFc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: unexpected end" {
+    var list = RocList.fromSlice(u8, "r\xCF", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�");
+    defer expected.decref();
+    try expect(expected.eq(res));
+}
+
+test "fromUtf8Lossy: encodes surrogate" {
+    // 0xd83d == 0b1101_1000_0011_1101
+    //             wwww xxxx yyyy zzzz
+    // becomes 0b1110_1101 0b10_1000_00 0b10_11_1101
+    //           1110_wwww   10_xxxx_yy   10_yy_zzzz
+    //         0xED        0x90         0xBD
+    var list = RocList.fromSlice(u8, "r\xED\xA0\xBDc", false);
+    defer list.decref(@alignOf(u8), @sizeOf(u8), false, rcNone);
+
+    const res = fromUtf8Lossy(list);
+    defer res.decref();
+    const expected = RocStr.fromSlice("r�c");
+    defer expected.decref();
+    try expect(expected.eq(res));
 }
 
 fn isWhitespace(codepoint: u21) bool {
@@ -2254,22 +1987,22 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
-        new_string.str_len = new_len;
+        new_string.length = new_len;
 
         return new_string;
     } else if (string.isSeamlessSlice()) {
         // Already a seamless slice, just update the range.
         return RocStr{
-            .str_bytes = bytes_ptr + leading_bytes,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = string.str_capacity,
+            .bytes = bytes_ptr + leading_bytes,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
         };
     } else {
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
-            .str_bytes = bytes_ptr + leading_bytes,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = @ptrToInt(bytes_ptr) >> 1,
+            .bytes = bytes_ptr + leading_bytes,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
         };
     }
 }
@@ -2302,22 +2035,22 @@ pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
-        new_string.str_len = new_len;
+        new_string.length = new_len;
 
         return new_string;
     } else if (string.isSeamlessSlice()) {
         // Already a seamless slice, just update the range.
         return RocStr{
-            .str_bytes = bytes_ptr + leading_bytes,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = string.str_capacity,
+            .bytes = bytes_ptr + leading_bytes,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
         };
     } else {
         // Not unique or removing leading bytes, just make a slice.
         return RocStr{
-            .str_bytes = bytes_ptr + leading_bytes,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = @ptrToInt(bytes_ptr) >> 1,
+            .bytes = bytes_ptr + leading_bytes,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
         };
     }
 }
@@ -2350,22 +2083,22 @@ pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
         // Big and unique with no leading bytes to remove.
         // Just take ownership and shrink the length.
         var new_string = string;
-        new_string.str_len = new_len;
+        new_string.length = new_len;
 
         return new_string;
     } else if (string.isSeamlessSlice()) {
         // Already a seamless slice, just update the range.
         return RocStr{
-            .str_bytes = bytes_ptr,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = string.str_capacity,
+            .bytes = bytes_ptr,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = string.capacity_or_alloc_ptr,
         };
     } else {
         // Not unique, just make a slice.
         return RocStr{
-            .str_bytes = bytes_ptr,
-            .str_len = new_len | SEAMLESS_SLICE_BIT,
-            .str_capacity = @ptrToInt(bytes_ptr) >> 1,
+            .bytes = bytes_ptr,
+            .length = new_len | SEAMLESS_SLICE_BIT,
+            .capacity_or_alloc_ptr = @intFromPtr(bytes_ptr) >> 1,
         };
     }
 }
@@ -2373,7 +2106,7 @@ pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
 fn countLeadingWhitespaceBytes(string: RocStr) usize {
     var byte_count: usize = 0;
 
-    var bytes = string.asU8ptr()[0..string.len()];
+    const bytes = string.asU8ptr()[0..string.len()];
     var iter = unicode.Utf8View.initUnchecked(bytes).iterator();
     while (iter.nextCodepoint()) |codepoint| {
         if (isWhitespace(codepoint)) {
@@ -2389,7 +2122,7 @@ fn countLeadingWhitespaceBytes(string: RocStr) usize {
 fn countTrailingWhitespaceBytes(string: RocStr) usize {
     var byte_count: usize = 0;
 
-    var bytes = string.asU8ptr()[0..string.len()];
+    const bytes = string.asU8ptr()[0..string.len()];
     var iter = ReverseUtf8View.initUnchecked(bytes).iterator();
     while (iter.nextCodepoint()) |codepoint| {
         if (isWhitespace(codepoint)) {
@@ -2400,6 +2133,201 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     }
 
     return byte_count;
+}
+
+// Str.with_ascii_lowercased
+pub fn strWithAsciiLowercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toLower(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiLowercased: small str" {
+    const original = RocStr.fromSlice("cOFFÉ");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: non small str" {
+    const original = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiLowercased: seamless slice" {
+    const l = RocStr.fromSlice("cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("offÉ coffÉ coffÉ coffÉ coffÉ coffÉ");
+    defer expected.decref();
+
+    const str_result = strWithAsciiLowercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+// Str.with_ascii_uppercased
+pub fn strWithAsciiUppercased(string: RocStr) callconv(.C) RocStr {
+    var new_str = if (string.isUnique())
+        string
+    else blk: {
+        string.decref();
+        break :blk RocStr.fromSlice(string.asSlice());
+    };
+
+    const new_str_bytes = new_str.asU8ptrMut()[0..string.len()];
+    for (new_str_bytes) |*c| {
+        c.* = ascii.toUpper(c.*);
+    }
+    return new_str;
+}
+
+test "withAsciiUppercased: small str" {
+    const original = RocStr.fromSlice("coffé");
+    try expect(original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+    defer str_result.decref();
+
+    try expect(str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: non small str" {
+    const original = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer original.decref();
+    try expect(!original.isSmallStr());
+
+    const expected = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+test "withAsciiUppercased: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const original = substringUnsafeC(l, 1, l.len() - 1);
+    defer original.decref();
+
+    try expect(original.isSeamlessSlice());
+
+    const expected = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer expected.decref();
+
+    const str_result = strWithAsciiUppercased(original);
+
+    try expect(!str_result.isSmallStr());
+    try expect(str_result.eq(expected));
+}
+
+pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
+    if (self.bytes == other.bytes and self.length == other.length) {
+        return true;
+    }
+
+    return ascii.eqlIgnoreCase(self.asSlice(), other.asSlice());
+}
+
+test "caselessAsciiEquals: same str" {
+    const str1 = RocStr.fromSlice("coFféÉ");
+    defer str1.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str1);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: differently capitalized non-ascii char" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("coffÉ");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(!are_equal);
+}
+
+test "caselessAsciiEquals: small str" {
+    const str1 = RocStr.fromSlice("coffé");
+    defer str1.decref();
+    try expect(str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: non small str" {
+    const str1 = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    defer str1.decref();
+    try expect(!str1.isSmallStr());
+
+    const str2 = RocStr.fromSlice("COFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
+}
+
+test "caselessAsciiEquals: seamless slice" {
+    const l = RocStr.fromSlice("coffé coffé coffé coffé coffé coffé");
+    const str1 = substringUnsafeC(l, 1, l.len() - 1);
+    defer str1.decref();
+
+    try expect(str1.isSeamlessSlice());
+
+    const str2 = RocStr.fromSlice("OFFé COFFé COFFé COFFé COFFé COFFé");
+    defer str2.decref();
+
+    const are_equal = strCaselessAsciiEquals(str1, str2);
+
+    try expect(are_equal);
+}
+
+fn rcNone(_: ?[*]u8) callconv(.C) void {}
+
+fn decStr(ptr: ?[*]u8) callconv(.C) void {
+    const str_ptr = @as(*RocStr, @ptrCast(@alignCast(ptr orelse unreachable)));
+    str_ptr.decref();
 }
 
 /// A backwards version of Utf8View from std.unicode
@@ -2480,7 +2408,7 @@ test "strTrim: null byte" {
     defer original_with_capacity.decref();
 
     try expectEqual(@as(usize, 1), original_with_capacity.len());
-    try expectEqual(@as(usize, 64), original_with_capacity.getCapacity());
+    try expectEqual(@as(usize, 41), original_with_capacity.getCapacity());
 
     const trimmed = strTrim(original.clone());
     defer trimmed.decref();
@@ -2736,80 +2664,13 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
-pub fn appendScalar(string: RocStr, scalar_u32: u32) callconv(.C) RocStr {
-    const scalar = @intCast(u21, scalar_u32);
-    const width = std.unicode.utf8CodepointSequenceLength(scalar) catch unreachable;
-
-    var output = string.reallocate(string.len() + width);
-    var slice = output.asSliceWithCapacityMut();
-
-    _ = std.unicode.utf8Encode(scalar, slice[string.len() .. string.len() + width]) catch unreachable;
-
-    return output;
+pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
+    return reserve(string, @intCast(spare_u64));
 }
 
-test "appendScalar: small A" {
-    const A: []const u8 = "A";
-
-    const data_bytes = "hello";
-    var data = RocStr.init(data_bytes, data_bytes.len);
-
-    const actual = appendScalar(data, A[0]);
-    defer actual.decref();
-
-    const expected_bytes = "helloA";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.decref();
-
-    try expect(actual.eq(expected));
-}
-
-test "appendScalar: small 😀" {
-    const data_bytes = "hello";
-    var data = RocStr.init(data_bytes, data_bytes.len);
-
-    const actual = appendScalar(data, 0x1F600);
-    defer actual.decref();
-
-    const expected_bytes = "hello😀";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.decref();
-
-    try expect(actual.eq(expected));
-}
-
-test "appendScalar: big A" {
-    const A: []const u8 = "A";
-
-    const data_bytes = "a string so large that it must be heap-allocated";
-    var data = RocStr.init(data_bytes, data_bytes.len);
-
-    const actual = appendScalar(data, A[0]);
-    defer actual.decref();
-
-    const expected_bytes = "a string so large that it must be heap-allocatedA";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.decref();
-
-    try expect(actual.eq(expected));
-}
-
-test "appendScalar: big 😀" {
-    const data_bytes = "a string so large that it must be heap-allocated";
-    var data = RocStr.init(data_bytes, data_bytes.len);
-
-    const actual = appendScalar(data, 0x1F600);
-    defer actual.decref();
-
-    const expected_bytes = "a string so large that it must be heap-allocated😀";
-    const expected = RocStr.init(expected_bytes, expected_bytes.len);
-    defer expected.decref();
-
-    try expect(actual.eq(expected));
-}
-
-pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
+fn reserve(string: RocStr, spare: usize) RocStr {
     const old_length = string.len();
+
     if (string.getCapacity() >= old_length + spare) {
         return string;
     } else {
@@ -2819,30 +2680,10 @@ pub fn reserve(string: RocStr, spare: usize) callconv(.C) RocStr {
     }
 }
 
-pub fn withCapacity(capacity: usize) callconv(.C) RocStr {
-    var str = RocStr.allocate(capacity);
+pub fn withCapacityC(capacity: u64) callconv(.C) RocStr {
+    var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
-}
-
-pub fn getScalarUnsafe(string: RocStr, index: usize) callconv(.C) extern struct { bytesParsed: usize, scalar: u32 } {
-    const slice = string.asSlice();
-    const bytesParsed = @intCast(usize, std.unicode.utf8ByteSequenceLength(slice[index]) catch unreachable);
-    const scalar = std.unicode.utf8Decode(slice[index .. index + bytesParsed]) catch unreachable;
-
-    return .{ .bytesParsed = bytesParsed, .scalar = @intCast(u32, scalar) };
-}
-
-test "getScalarUnsafe" {
-    const data_bytes = "A";
-    var data = RocStr.init(data_bytes, data_bytes.len);
-
-    const result = getScalarUnsafe(data, 0);
-
-    const expected = try std.unicode.utf8Decode("A");
-
-    try expectEqual(result.scalar, @intCast(u32, expected));
-    try expectEqual(result.bytesParsed, 1);
 }
 
 pub fn strCloneTo(
@@ -2853,7 +2694,7 @@ pub fn strCloneTo(
 ) callconv(.C) usize {
     const WIDTH: usize = @sizeOf(RocStr);
     if (string.isSmallStr()) {
-        const array: [@sizeOf(RocStr)]u8 = @bitCast([@sizeOf(RocStr)]u8, string);
+        const array: [@sizeOf(RocStr)]u8 = @as([@sizeOf(RocStr)]u8, @bitCast(string));
 
         var i: usize = 0;
         while (i < WIDTH) : (i += 1) {
@@ -2865,30 +2706,30 @@ pub fn strCloneTo(
         const slice = string.asSlice();
 
         var relative = string;
-        relative.str_bytes = @intToPtr(?[*]u8, extra_offset); // i.e. just after the string struct
+        relative.bytes = @as(?[*]u8, @ptrFromInt(extra_offset)); // i.e. just after the string struct
 
         // write the string struct
         const array = relative.asArray();
-        @memcpy(ptr + offset, &array, WIDTH);
+        @memcpy(ptr[offset..(offset + WIDTH)], array[0..WIDTH]);
 
         // write the string bytes just after the struct
-        @memcpy(ptr + extra_offset, slice.ptr, slice.len);
+        @memcpy(ptr[extra_offset..(extra_offset + slice.len)], slice);
 
         return extra_offset + slice.len;
     }
 }
 
-pub fn strRefcountPtr(
+pub fn strAllocationPtr(
     string: RocStr,
 ) callconv(.C) ?[*]u8 {
-    return string.getRefcountPtr();
+    return string.getAllocationPtr();
 }
 
 pub fn strReleaseExcessCapacity(
     string: RocStr,
 ) callconv(.C) RocStr {
     const old_length = string.len();
-    // We use the direct list.capacity_or_ref_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
+    // We use the direct list.capacity_or_alloc_ptr to make sure both that there is no extra capacity and that it isn't a seamless slice.
     if (string.isSmallStr()) {
         // SmallStr has no excess capacity.
         return string;
@@ -2902,7 +2743,7 @@ pub fn strReleaseExcessCapacity(
         const source_ptr = string.asU8ptr();
         const dest_ptr = output.asU8ptrMut();
 
-        @memcpy(dest_ptr, source_ptr, old_length);
+        @memcpy(dest_ptr[0..old_length], source_ptr[0..old_length]);
         string.decref();
 
         return output;

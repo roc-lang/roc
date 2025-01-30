@@ -1,4 +1,1 @@
-app "test"
-    packages { pf: "./platform" }
-    imports [ foo.Bar.Baz ]
-    provides [ quicksort ] { Flags, Model, } to pf
+app [quicksort, Flags, Model] { pf: "./platform" }

@@ -18,9 +18,9 @@ use roc_std::RocStr;
 fn basic_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     ( 15, 17, 19 ).0
-                "#
+                "
         ),
         15,
         i64
@@ -28,9 +28,9 @@ fn basic_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     ( 15, 17, 19 ).1
-                "#
+                "
         ),
         17,
         i64
@@ -38,9 +38,9 @@ fn basic_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     ( 15, 17, 19 ).2
-                "#
+                "
         ),
         19,
         i64
@@ -52,11 +52,11 @@ fn basic_tuple() {
 fn f64_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    tup = (17.2f64, 15.1f64, 19.3f64)
 
                    tup.0
-                "#
+                "
         ),
         17.2,
         f64
@@ -64,11 +64,11 @@ fn f64_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    tup = (17.2f64, 15.1f64, 19.3f64)
 
                    tup.1
-                "#
+                "
         ),
         15.1,
         f64
@@ -76,11 +76,11 @@ fn f64_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     tup = (17.2f64, 15.1f64, 19.3f64)
 
                     tup.2
-                "#
+                "
         ),
         19.3,
         f64
@@ -93,9 +93,9 @@ fn fn_tuple() {
     assert_evals_to!(
         indoc!(
             r#"
-                    getRec = \x -> ("foo", x, 19)
+                    get_rec = \x -> ("foo", x, 19)
 
-                    (getRec 15).1
+                    (get_rec 15).1
                 "#
         ),
         15,
@@ -104,11 +104,11 @@ fn fn_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     rec = (15, 17, 19)
 
                     rec.2 + rec.0
-                "#
+                "
         ),
         34,
         i64
@@ -120,11 +120,11 @@ fn fn_tuple() {
 fn int_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     rec = (15, 17, 19)
 
                     rec.0
-                "#
+                "
         ),
         15,
         i64
@@ -132,11 +132,11 @@ fn int_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     rec = (15, 17, 19)
 
                     rec.1
-                "#
+                "
         ),
         17,
         i64
@@ -144,11 +144,11 @@ fn int_tuple() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                     rec = (15, 17, 19)
 
                     rec.2
-                "#
+                "
         ),
         19,
         i64
@@ -160,10 +160,10 @@ fn int_tuple() {
 fn when_on_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when (0x2, 0x3) is
                     (x, y) -> x + y
-                "#
+                "
         ),
         5,
         i64
@@ -175,10 +175,10 @@ fn when_on_tuple() {
 fn when_tuple_with_guard_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when (0x2, 1.23) is
                     (var, _) -> var + 3
-                "#
+                "
         ),
         5,
         i64
@@ -190,11 +190,11 @@ fn when_tuple_with_guard_pattern() {
 fn let_with_tuple_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (x, _ ) = (0x2, 1.23)
 
                 x
-                "#
+                "
         ),
         2,
         i64
@@ -202,11 +202,11 @@ fn let_with_tuple_pattern() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (_, y) = (0x2, 0x3)
 
                 y
-                "#
+                "
         ),
         3,
         i64
@@ -218,11 +218,11 @@ fn let_with_tuple_pattern() {
 fn tuple_guard_pattern() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when (0x2, 1.23) is
                     (0x4, _) -> 5
                     (x, _) -> x + 4
-                "#
+                "
         ),
         6,
         i64
@@ -230,11 +230,11 @@ fn tuple_guard_pattern() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 when (0x2, 0x3) is
                     (_, 0x4) -> 5
                     (_, x) -> x + 4
-                "#
+                "
         ),
         7,
         i64
@@ -246,11 +246,11 @@ fn tuple_guard_pattern() {
 fn twice_tuple_access() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x =  (0x2, 0x3)
 
                 x.0 + x.1
-                "#
+                "
         ),
         5,
         i64
@@ -262,9 +262,9 @@ fn twice_tuple_access() {
 fn i64_tuple2_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    (3, 5)
-                "#
+                "
         ),
         (3, 5),
         (i64, i64)
@@ -276,9 +276,9 @@ fn i64_tuple2_literal() {
 fn i64_tuple3_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                (3, 5, 17)
-            "#
+            "
         ),
         (3, 5, 17),
         (i64, i64, i64)
@@ -290,9 +290,9 @@ fn i64_tuple3_literal() {
 fn f64_tuple2_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                    (3.1f64, 5.1f64)
-                "#
+                "
         ),
         (3.1, 5.1),
         (f64, f64)
@@ -304,12 +304,12 @@ fn f64_tuple2_literal() {
 fn bool_tuple4_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                tuple : (Bool, Bool, Bool, Bool)
                tuple = (Bool.true, Bool.false, Bool.false, Bool.true)
 
                tuple
-            "#
+            "
         ),
         (true, false, false, true),
         (bool, bool, bool, bool)
@@ -323,9 +323,9 @@ fn bool_tuple4_literal() {
 fn i64_tuple9_literal() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                ( 3, 5, 17, 1, 9, 12, 13, 14, 15 )
-            "#
+            "
         ),
         [3, 5, 17, 1, 9, 12, 13, 14, 15],
         [i64; 9]
@@ -337,12 +337,12 @@ fn i64_tuple9_literal() {
 fn return_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x = 4
                 y = 3
 
                 (x, y)
-                "#
+                "
         ),
         (4, 3),
         (i64, i64)
@@ -354,9 +354,9 @@ fn return_tuple() {
 fn return_tuple_2() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (3, 5)
-                "#
+                "
         ),
         [3, 5],
         [i64; 2]
@@ -368,9 +368,9 @@ fn return_tuple_2() {
 fn return_tuple_3() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 3, 5, 4 )
-                "#
+                "
         ),
         (3, 5, 4),
         (i64, i64, i64)
@@ -382,9 +382,9 @@ fn return_tuple_3() {
 fn return_tuple_4() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 3, 5, 4, 2 )
-                "#
+                "
         ),
         [3, 5, 4, 2],
         [i64; 4]
@@ -398,9 +398,9 @@ fn return_tuple_4() {
 fn return_tuple_5() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 3, 5, 4, 2, 1 )
-                "#
+                "
         ),
         [3, 5, 4, 2, 1],
         [i64; 5]
@@ -414,9 +414,9 @@ fn return_tuple_5() {
 fn return_tuple_6() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 3, 5, 4, 2, 1, 7 )
-                "#
+                "
         ),
         [3, 5, 4, 2, 1, 7],
         [i64; 6]
@@ -430,9 +430,9 @@ fn return_tuple_6() {
 fn return_tuple_7() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 3, 5, 4, 2, 1, 7, 8 )
-                "#
+                "
         ),
         [3, 5, 4, 2, 1, 7, 8],
         [i64; 7]
@@ -444,9 +444,9 @@ fn return_tuple_7() {
 fn return_tuple_float_int() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (1.23f64, 0x1)
-                "#
+                "
         ),
         (1.23, 0x1),
         (f64, i64)
@@ -458,9 +458,9 @@ fn return_tuple_float_int() {
 fn return_tuple_int_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 0x1, 1.23f64 )
-                "#
+                "
         ),
         (0x1, 1.23),
         (i64, f64)
@@ -472,9 +472,9 @@ fn return_tuple_int_float() {
 fn return_tuple_float_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 2.46f64, 1.23f64 )
-                "#
+                "
         ),
         (2.46, 1.23),
         (f64, f64)
@@ -486,9 +486,9 @@ fn return_tuple_float_float() {
 fn return_tuple_float_float_float() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 ( 2.46f64, 1.23f64, 0.1f64 )
-                "#
+                "
         ),
         (2.46, 1.23, 0.1),
         (f64, f64, f64)
@@ -500,9 +500,9 @@ fn return_tuple_float_float_float() {
 fn return_nested_tuple() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 (0x0, (2.46f64, 1.23f64, 0.1f64))
-                "#
+                "
         ),
         (0x0, (2.46, 1.23, 0.1)),
         (i64, (f64, f64, f64))
@@ -514,13 +514,13 @@ fn return_nested_tuple() {
 fn nested_tuple_load() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
                 x = (0, (0x2, 0x5, 0x6))
 
                 y = x.1
 
                 y.2
-                "#
+                "
         ),
         6,
         i64
@@ -572,7 +572,7 @@ fn alignment_in_tuple() {
 fn tuple_length_polymorphism() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             a = (42, 43)
             b = (1, 2, 44)
 
@@ -580,7 +580,7 @@ fn tuple_length_polymorphism() {
             f = \(x1, x2), (x3, x4) -> x1 + x2 + x3 + x4
 
             f a b
-            "#
+            "
         ),
         88,
         i64

@@ -1,10 +1,10 @@
-Record(
+@0-39 Record(
     [
         @1-31 RequiredValue(
             @1-2 "x",
             [],
-            @5-31 If(
-                [
+            @5-31 If {
+                if_thens: [
                     (
                         @8-17 Var {
                             module_name: "Bool",
@@ -15,10 +15,11 @@ Record(
                         ),
                     ),
                 ],
-                @30-31 Num(
+                final_else: @30-31 Num(
                     "2",
                 ),
-            ),
+                indented_else: false,
+            },
         ),
         @33-37 RequiredValue(
             @33-34 "y",

@@ -8,11 +8,8 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_collections = { path = "../collections" }
-roc_module = { path = "../module" }
-roc_region = { path = "../region" }
-roc_target = { path = "../roc_target" }
-roc_error_macros = { path = "../../error_macros" }
-
-tempfile.workspace = true
-
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_region.workspace = true
+roc_target.workspace = true
+roc_error_macros.workspace = true

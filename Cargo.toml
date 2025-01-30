@@ -1,39 +1,47 @@
 [workspace]
 members = [
-  "crates/compiler/*",
-  "crates/vendor/*",
-  "crates/glue",
-  "crates/cli",
-  "crates/cli_utils",
-  "crates/highlight",
-  "crates/error_macros",
-  "crates/reporting",
-  "crates/packaging",
-  "crates/repl_cli",
-  "crates/repl_eval",
-  "crates/repl_test",
-  "crates/repl_ui",
-  "crates/repl_wasm",
-  "crates/repl_expect",
-  "crates/roc_std",
-  "crates/test_utils",
-  "crates/valgrind",
-  "crates/tracing",
-  "crates/utils/*",
-  "crates/docs",
-  "crates/docs_cli",
-  "crates/linker",
-  "crates/wasi-libc-sys",
-  "crates/wasm_module",
-  "crates/wasm_interp",
+    "crates/build/*",
+    "crates/check/*",
+    "crates/compiler/*",
+    "crates/vendor/*",
+    "crates/fs",
+    "crates/glue",
+    "crates/cli",
+    "crates/cli_test_utils",
+    "crates/highlight",
+    "crates/error_macros",
+    "crates/reporting",
+    "crates/packaging",
+    "crates/repl_cli",
+    "crates/repl_eval",
+    "crates/repl_test",
+    "crates/repl_ui",
+    "crates/repl_wasm",
+    "crates/repl_expect",
+    "crates/roc_std",
+    "crates/test_compile",
+    "crates/test_utils",
+    "crates/test_utils_dir",
+    "crates/valgrind_tests",
+    "crates/tracing",
+    "crates/utils/*",
+    "crates/soa",
+    "crates/docs",
+    "crates/docs_cli",
+    "crates/linker",
+    "crates/wasi-libc-sys",
+    "crates/wasm_module",
+    "crates/wasm_interp",
+    "crates/language_server",
+    "crates/copy_zig_glue",
+    "crates/roc_std_heap",
 ]
 
 exclude = [
-  "ci/benchmarks/bench-runner",
-  "ci/repl_basic_test",
-  # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
-  "crates/cli_testing_examples",
-  "examples",
+    "ci/benchmarks/bench-runner",
+    "ci/repl_basic_test",
+    # Examples sometimes have Rust hosts in their platforms. The compiler should ignore those.
+    "examples",
 ]
 # Needed to be able to run `cargo run -p roc_cli --no-default-features` -
 # see www/build.sh for more.
@@ -50,44 +58,36 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-# NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
-#
-# The reason for this fork is that the way Inkwell is designed, you have to use
-# a particular branch (e.g. "llvm8-0") in Cargo.toml. That would be fine, except that
-# breaking changes get pushed directly to that branch, which breaks our build
-# without warning.
-#
-# We tried referencing a specific rev on TheDan64/inkwell directly (instead of branch),
-# but although that worked locally, it did not work on GitHub Actions. (After a few
-# hours of investigation, gave up trying to figure out why.) So this is the workaround:
-# having an immutable tag on the roc-lang/inkwell fork which points to
-# a particular "release" of Inkwell.
-#
-# When we want to update Inkwell, we can sync up roc-lang/inkwell to the latest
-# commit of TheDan64/inkwell, push a new tag which points to the latest commit,
-# change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
-# This way, GitHub Actions works and nobody's builds get broken.
-inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-15", features = ["llvm13-0"] }
-
-arrayvec = "0.7.2" # update roc_std/Cargo.toml on change
-backtrace = "0.3.67"
+object = { version = "0.36.7", default-features = false, features = [
+    "read",
+    "write",
+] }
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "89e06af", features = [
+    "llvm18-0",
+] }
+arrayvec = "0.7.2"
 base64-url = "1.4.13"
 bincode = "1.3.3"
 bitflags = "1.3.2"
 bitvec = "1.0.1"
 blake3 = "1.3.3"
-brotli = "3.3.4"                                                                                                         # used for decompressing tarballs over HTTPS, if the server supports brotli
+brotli = "3.3.4" # used for decompressing tarballs over HTTPS, if the server supports brotli
 bumpalo = { version = "3.12.0", features = ["collections"] }
-bytemuck = { version = "1.13.1", features = ["derive"] }
 capstone = { version = "0.11.0", default-features = false }
-cgmath = "0.18.0"
 chrono = "0.4.26"
-clap = { version = "4.2.7", default-features = false, features = ["std", "color", "suggestions", "help", "usage", "error-context"] }
-colored = "2.0.0"
+clap = { version = "4.2.7", default-features = false, features = [
+    "std",
+    "color",
+    "suggestions",
+    "help",
+    "usage",
+    "error-context",
+] }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
-copypasta = "0.8.2"
-criterion = { git = "https://github.com/Anton-4/criterion.rs", features = ["html_reports"], rev = "30ea0c5" }
+criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
+    "html_reports",
+], rev = "30ea0c5" }
 criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events", rev = "0f38c3e" }
 crossbeam = "0.8.2"
 dircpy = "0.3.14"
@@ -98,12 +98,15 @@ flate2 = "1.0.25"
 fnv = "1.0.7"
 fs_extra = "1.3.0"
 futures = "0.3.26"
-glyph_brush = "0.7.7"
-hashbrown = { version = "0.13.2", features = ["bumpalo"] }
-iced-x86 = { version = "1.18.0", default-features = false, features = ["std", "decoder", "op_code_info", "instr_info"] }
+hashbrown = { version = "0.14.3" }
+iced-x86 = { version = "1.18.0", default-features = false, features = [
+    "std",
+    "decoder",
+    "op_code_info",
+    "instr_info",
+] }
 im = "15.1.0"
 im-rc = "15.1.0"
-indexmap = "1.9.2"
 indoc = "1.0.9"
 insta = "1.28.0"
 js-sys = "0.3.61"
@@ -117,16 +120,10 @@ mach_object = "0.1"
 maplit = "1.0.2"
 memmap2 = "0.5.10"
 mimalloc = { version = "0.1.34", default-features = false }
-nonempty = "0.8.1"
-object = { version = "0.30.3", features = ["read", "write"] }
+morphic_lib = { path = "crates/vendor/morphic_lib" }
 packed_struct = "0.10.1"
-page_size = "0.5.0"
-palette = "0.6.1"
 parking_lot = "0.12"
-peg = "0.8.1"
 perfcnt = "0.8.0"
-pest = "2.5.6"
-pest_derive = "2.5.6"
 pretty_assertions = "1.3.0" # update roc_std/Cargo.toml on change
 proc-macro2 = "1.0.63"
 proptest = "1.1.0"
@@ -137,18 +134,21 @@ quote = "1.0.23"
 rand = "0.8.5"
 regex = "1.7.1"
 remove_dir_all = "0.8.1"
-reqwest = { version = "0.11.20", default-features = false, features = ["blocking", "rustls-tls"] }                       # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
+reqwest = { version = "0.11.23", default-features = false, features = [
+    "blocking",
+    "rustls-tls",
+] } # default-features=false removes libopenssl as a dependency on Linux, which might not be available!
 rlimit = "0.9.1"
 rustyline = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 rustyline-derive = { git = "https://github.com/roc-lang/rustyline", rev = "e74333c" }
 schemars = "0.8.12"
-serde = { version = "1.0.153", features = ["derive"] } # update roc_std/Cargo.toml on change
-serde-xml-rs = "0.6.0"
+serde = { version = "1.0.153", features = [
+    "derive",
+] } # update roc_std/Cargo.toml on change
 serde_json = "1.0.94" # update roc_std/Cargo.toml on change
 serial_test = "1.0.0"
 signal-hook = "0.3.15"
 smallvec = { version = "1.10.0", features = ["const_generics", "const_new"] }
-snafu = { version = "0.7.4", features = ["backtraces"] }
 static_assertions = "1.1.0" # update roc_std/Cargo.toml on change
 strip-ansi-escapes = "0.1.1"
 strum = { version = "0.24.1", features = ["derive"] }
@@ -157,34 +157,103 @@ syn = { version = "1.0.109", features = ["full", "extra-traits"] }
 tar = "0.4.38"
 target-lexicon = "0.12.6"
 tempfile = "=3.2.0"
-threadpool = "1.8.1"
-tracing = { version = "0.1.37", features = ["release_max_level_off"] }
+tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
-unicode-segmentation = "1.10.1"
-uuid = { version = "1.3.0", features = ["v4"] }
 walkdir = "2.3.2"
 wasm-bindgen = "0.2.84"
 wasm-bindgen-futures = "0.4.34"
-wgpu = "0.12.0"
-wgpu_glyph = "0.16.0"
-winapi = { version = "0.3.9", features = ["memoryapi"] }
-winit = "0.26.1"
+widestring = { version = "1.1.0", default-features = false }
 wyhash = "0.5.0"
+
+# INTERNAL DEPENDENCIES
+cli_test_utils = { path = "crates/cli_test_utils" }
+copy_zig_glue = { path = "crates/copy_zig_glue" }
+roc_alias_analysis = { path = "crates/compiler/alias_analysis" }
+roc_bitcode = { path = "crates/compiler/builtins/bitcode" }
+roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
+roc_build = { path = "crates/compiler/build" }
+roc_builtins = { path = "crates/compiler/builtins" }
+roc_can = { path = "crates/compiler/can" }
+roc_can_solo = { path = "crates/check/can_solo" }
+roc_checkmate = { path = "crates/compiler/checkmate" }
+roc_checkmate_schema = { path = "crates/compiler/checkmate_schema" }
+roc_cli = { path = "crates/cli" }
+roc_collections = { path = "crates/compiler/collections" }
+roc_command_utils = { path = "crates/utils/command" }
+roc_constrain = { path = "crates/compiler/constrain" }
+roc_debug_flags = { path = "crates/compiler/debug_flags" }
+roc_derive = { path = "crates/compiler/derive" }
+roc_derive_key = { path = "crates/compiler/derive_key" }
+roc_docs = { path = "crates/docs" }
+roc_error_macros = { path = "crates/error_macros" }
+roc_exhaustive = { path = "crates/compiler/exhaustive" }
+roc_fmt = { path = "crates/compiler/fmt" }
+roc_gen_llvm = { path = "crates/compiler/gen_llvm" }
+roc_gen_dev = { path = "crates/compiler/gen_dev" }
+roc_gen_wasm = { path = "crates/compiler/gen_wasm" }
+roc_glue = { path = "crates/glue" }
+roc_highlight = { path = "crates/highlight" }
+roc_ident = { path = "crates/compiler/ident" }
+roc_late_solve = { path = "crates/compiler/late_solve" }
+roc_linker = { path = "crates/linker" }
+roc_load = { path = "crates/compiler/load" }
+roc_load_internal = { path = "crates/compiler/load_internal" }
+roc_lower_params = { path = "crates/compiler/lower_params" }
+roc_module = { path = "crates/compiler/module" }
+roc_mono = { path = "crates/compiler/mono" }
+roc_packaging = { path = "crates/packaging" }
+roc_parse = { path = "crates/compiler/parse" }
+roc_problem = { path = "crates/compiler/problem" }
+roc_region = { path = "crates/compiler/region" }
+roc_repl_cli = { path = "crates/repl_cli" }
+roc_repl_eval = { path = "crates/repl_eval" }
+roc_repl_expect = { path = "crates/repl_expect" }
+roc_repl_ui = { path = "crates/repl_ui" }
+roc_reporting = { path = "crates/reporting" }
+roc_serialize = { path = "crates/compiler/serialize" }
+roc_solve = { path = "crates/compiler/solve" }
+roc_solve_schema = { path = "crates/compiler/solve_schema" }
+roc_solve_problem = { path = "crates/compiler/solve_problem" }
+roc_specialize_types = { path = "crates/build/specialize_types" }
+roc_std = { path = "crates/roc_std" }
+roc_target = { path = "crates/compiler/roc_target" }
+roc_test_utils = { path = "crates/test_utils" }
+roc_test_utils_dir = { path = "crates/test_utils_dir" }
+roc_tracing = { path = "crates/tracing" }
+roc_types = { path = "crates/compiler/types" }
+roc_unify = { path = "crates/compiler/unify" }
+roc_wasm_interp = { path = "crates/wasm_interp" }
+roc_wasm_module = { path = "crates/wasm_module" }
+roc_work = { path = "crates/compiler/work" }
+roc_worker = { path = "crates/compiler/worker" }
+soa = { path = "crates/soa" }
+test_compile = { path = "crates/test_compile" }
+test_mono_macros = { path = "crates/compiler/test_mono_macros" }
+test_solve_helpers = { path = "crates/compiler/test_solve_helpers" }
+ven_pretty = { path = "crates/vendor/pretty" }
+wasi_libc_sys = { path = "crates/wasi-libc-sys" }
 
 # Optimizations based on https://deterministic.space/high-performance-rust.html
 [profile.release]
 codegen-units = 1
-
 # debug = true # enable when profiling
+
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.bench]
 codegen-units = 1
 lto = "thin"
 
 [profile.release-with-debug]
-debug = true
 inherits = "release"
+debug = true
 
 [profile.release-with-lto]
-lto = "thin" # TODO: We could consider full here since this is only used for packaged release on github.
 inherits = "release"
+lto = "thin"         # TODO: We could consider full here since this is only used for packaged release on github.
+
+[profile.debug-full]
+inherits = "dev"
+debug = true

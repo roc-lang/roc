@@ -26,15 +26,27 @@ pub(crate) fn save_wasm_file(app_module_bytes: &[u8], build_dir_hash: u64) {
 
     let debug_dir_str = format!("/tmp/roc/gen_wasm/{build_dir_hash:016x}");
     let debug_dir_path = Path::new(&debug_dir_str);
-    let final_wasm_file = debug_dir_path.join("final.wasm");
+    let final_wasm_path = debug_dir_path.join("final.wasm");
 
     std::fs::create_dir_all(debug_dir_path).unwrap();
-    std::fs::write(&final_wasm_file, app_module_bytes).unwrap();
+    std::fs::write(&final_wasm_path, app_module_bytes).unwrap();
 
-    println!(
-        "Debug command:\n\twasm-objdump -dx {}",
-        final_wasm_file.to_str().unwrap()
-    );
+    let final_wasm_str = final_wasm_path.to_str().unwrap();
+
+    // Get the absolute path to our HTML debug tool.
+    // Use the fact that Cargo runs tests from the root of the crate
+    let test_gen_dir = std::env::current_dir().unwrap();
+    let debug_wasm_test_path = test_gen_dir
+        .join("src")
+        .join("helpers")
+        .join("debug-wasm-test.html");
+    let debug_wasm_test_str = debug_wasm_test_path.to_str().unwrap();
+
+    println!();
+    println!("Wrote wasm file to\n\t{final_wasm_str}");
+    println!("Go to the Roc Wasm Debug tool in your browser\n\tfile://{debug_wasm_test_str}");
+    println!("Or analyse the generated code\n\twasm-objdump -dx {final_wasm_str}");
+    println!();
 }
 
 /// Used in the with_larger_debug_stack() function, for tests that otherwise
@@ -83,4 +95,11 @@ pub enum RefCount {
     Live(u32),
     Deallocated,
     Constant,
+}
+
+#[allow(dead_code)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefCountLoc {
+    StandardRC,
+    AfterSize,
 }

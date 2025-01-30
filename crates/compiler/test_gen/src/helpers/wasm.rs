@@ -1,4 +1,4 @@
-use super::RefCount;
+use super::{RefCount, RefCountLoc};
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
 use bumpalo::Bump;
 use roc_collections::all::MutSet;
@@ -88,7 +88,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_wasm32(),
+        target: roc_target::Target::Wasm32,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE_HTML,
         threading: Threading::Single,
@@ -100,6 +100,7 @@ fn compile_roc_to_wasm_bytes<'a, T: Wasm32Result>(
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -202,12 +203,12 @@ impl<'a> ImportDispatcher for TestDispatcher<'a> {
             self.wasi.dispatch(function_name, arguments, memory)
         } else if module_name == "env" && function_name == "send_panic_msg_to_rust" {
             let msg_ptr = arguments[0].expect_i32().unwrap();
-            let tag = arguments[1].expect_i32().unwrap();
+            let panic_tag = arguments[1].expect_i32().unwrap();
             let roc_msg = RocStr::decode(memory, msg_ptr as _);
-            let msg = match tag {
-                0 => format!(r#"Roc failed with message: "{}""#, roc_msg),
-                1 => format!(r#"User crash with message: "{}""#, roc_msg),
-                tag => format!(r#"Got an invald panic tag: "{}""#, tag),
+            let msg = match panic_tag {
+                0 => format!(r#"Roc failed with message: "{roc_msg}""#),
+                1 => format!(r#"User crash with message: "{roc_msg}""#),
+                _ => format!(r#"Got an invald panic tag: "{panic_tag}""#),
             };
             panic!("{}", msg)
         } else {
@@ -257,7 +258,7 @@ where
 pub fn assert_wasm_refcounts_help<T>(
     src: &str,
     phantom: PhantomData<T>,
-    num_refcounts: usize,
+    refcount_locs: &[RefCountLoc],
 ) -> Result<Vec<RefCount>, String>
 where
     T: FromWasm32Memory + Wasm32Result,
@@ -277,6 +278,7 @@ where
     let mut inst = Instance::for_module(&arena, &module, dispatcher, is_debug_mode)?;
 
     // Allocate a vector in the test host that refcounts will be copied into
+    let num_refcounts = refcount_locs.len();
     let mut refcount_vector_addr: i32 = inst
         .call_export(INIT_REFCOUNT_NAME, [Value::I32(num_refcounts as i32)])?
         .ok_or_else(|| format!("No return address from {}", INIT_REFCOUNT_NAME))?
@@ -301,19 +303,23 @@ where
 
     // Read the refcounts
     let mut refcounts = Vec::with_capacity(num_refcounts);
-    for _ in 0..num_refcounts {
+    for refcount_loc in refcount_locs {
         // Get the next RC pointer from the host's vector
         refcount_vector_addr += 4;
-        let rc_ptr = read_i32(&inst.memory, refcount_vector_addr);
+        let mut rc_ptr = read_i32(&inst.memory, refcount_vector_addr);
         let rc = if rc_ptr == 0 {
             RefCount::Deallocated
         } else {
-            // Dereference the RC pointer and decode its value from the negative number format
-            let rc_encoded = read_i32(&inst.memory, rc_ptr);
-            if rc_encoded == 0 {
+            // If size is store on the heap for this type, the rc pointer is directly after.
+            if matches!(refcount_loc, RefCountLoc::AfterSize) {
+                rc_ptr += 4
+            }
+
+            let rc = read_i32(&inst.memory, rc_ptr);
+
+            if rc == 0 {
                 RefCount::Constant
             } else {
-                let rc = rc_encoded - i32::MIN + 1;
                 RefCount::Live(rc as u32)
             }
         };
@@ -396,15 +402,18 @@ macro_rules! assert_refcounts {
     // We need the result type to generate the test_wrapper, even though we ignore the value!
     // We can't just call `main` with no args, because some tests return structs, via pointer arg!
     // Also we need to know how much stack space to reserve for the struct.
-    ($src: expr, $ty: ty, $expected_refcounts: expr) => {{
+    ($src: expr, $ty: ty, $expected: expr) => {{
         let phantom = std::marker::PhantomData;
-        let num_refcounts = $expected_refcounts.len();
+        let (refcount_locs, expected_refcounts): (
+            Vec<$crate::helpers::RefCountLoc>,
+            Vec<$crate::helpers::RefCount>,
+        ) = $expected.into_iter().map(|x| *x).unzip();
         let result =
-            $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, num_refcounts);
+            $crate::helpers::wasm::assert_wasm_refcounts_help::<$ty>($src, phantom, &refcount_locs);
         match result {
             Err(msg) => panic!("{:?}", msg),
             Ok(actual_refcounts) => {
-                assert_eq!(&actual_refcounts, $expected_refcounts)
+                assert_eq!(actual_refcounts, expected_refcounts)
             }
         }
     }};

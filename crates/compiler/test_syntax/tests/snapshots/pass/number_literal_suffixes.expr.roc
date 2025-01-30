@@ -9,7 +9,6 @@
   i32:  123i32,
   i64:  123i64,
   i128: 123i128,
-  nat:  123nat,
   dec:  123dec,
   u8Neg:   -123u8,
   u16Neg:  -123u16,
@@ -21,7 +20,6 @@
   i32Neg:  -123i32,
   i64Neg:  -123i64,
   i128Neg: -123i128,
-  natNeg:  -123nat,
   decNeg:  -123dec,
   u8Bin:   0b101u8,
   u16Bin:  0b101u16,
@@ -33,5 +31,4 @@
   i32Bin:  0b101i32,
   i64Bin:  0b101i64,
   i128Bin: 0b101i128,
-  natBin:  0b101nat,
 }

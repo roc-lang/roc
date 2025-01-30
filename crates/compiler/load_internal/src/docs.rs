@@ -4,8 +4,8 @@ use roc_can::scope::Scope;
 use roc_collections::VecSet;
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{IdentIds, ModuleId, ModuleIds, Symbol};
-use roc_parse::ast::AssignedField;
-use roc_parse::ast::{self, ExtractSpaces, TypeHeader};
+use roc_parse::ast::{self, ExtractSpaces, TypeHeader, TypeVar};
+use roc_parse::ast::{AssignedField, FunctionArrow};
 use roc_parse::ast::{CommentOrNewline, TypeDef, ValueDef};
 
 // Documentation generation requirements
@@ -18,10 +18,22 @@ pub struct ModuleDocumentation {
     pub exposed_symbols: VecSet<Symbol>,
 }
 
+impl ModuleDocumentation {
+    pub fn get_doc_for_symbol(&self, symbol_to_match: &Symbol) -> Option<String> {
+        self.entries.iter().find_map(|doc| match doc {
+            DocEntry::DocDef(DocDef { symbol, docs, .. }) if symbol == symbol_to_match => {
+                docs.clone()
+            }
+            _ => None,
+        })
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum DocEntry {
     DocDef(DocDef),
     DetachedDoc(String),
+    ModuleDoc(String),
 }
 
 #[derive(Debug, Clone)]
@@ -41,6 +53,7 @@ pub enum TypeAnnotation {
     },
     Function {
         args: Vec<TypeAnnotation>,
+        arrow: FunctionArrow,
         output: Box<TypeAnnotation>,
     },
     ObscuredTagUnion,
@@ -174,10 +187,10 @@ fn generate_entry_docs(
 ) -> Vec<DocEntry> {
     use roc_parse::ast::Pattern;
 
-    let mut acc = Vec::with_capacity(defs.tags.len() + 1);
+    let mut doc_entries = Vec::with_capacity(defs.tags.len() + 1);
 
     if let Some(docs) = comments_or_new_lines_to_docs(header_comments) {
-        acc.push(DetachedDoc(docs));
+        doc_entries.push(DocEntry::ModuleDoc(docs));
     }
 
     let mut before_comments_or_new_lines: Option<&[CommentOrNewline]> = None;
@@ -200,7 +213,7 @@ fn generate_entry_docs(
         match either_index.split() {
             Err(value_index) => match &defs.value_defs[value_index.index()] {
                 ValueDef::Annotation(loc_pattern, loc_ann) => {
-                    if let Pattern::Identifier(identifier) = loc_pattern.value {
+                    if let Pattern::Identifier { ident: identifier } = loc_pattern.value {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let name = identifier.to_string();
@@ -211,7 +224,7 @@ fn generate_entry_docs(
                                 type_vars: Vec::new(),
                                 docs,
                             };
-                            acc.push(DocEntry::DocDef(doc_def));
+                            doc_entries.push(DocEntry::DocDef(doc_def));
                         }
                     }
                 }
@@ -221,7 +234,7 @@ fn generate_entry_docs(
                     ann_type,
                     ..
                 } => {
-                    if let Pattern::Identifier(identifier) = ann_pattern.value {
+                    if let Pattern::Identifier { ident: identifier } = ann_pattern.value {
                         // Check if this module exposes the def
                         if let Some(ident_id) = ident_ids.get_id(identifier) {
                             let doc_def = DocDef {
@@ -231,13 +244,25 @@ fn generate_entry_docs(
                                 symbol: Symbol::new(home, ident_id),
                                 docs,
                             };
-                            acc.push(DocEntry::DocDef(doc_def));
+                            doc_entries.push(DocEntry::DocDef(doc_def));
                         }
                     }
                 }
 
-                ValueDef::Body(_, _) => {
-                    // TODO generate docs for un-annotated bodies
+                ValueDef::Body(pattern, _) => {
+                    if let Pattern::Identifier { ident: identifier } = pattern.value {
+                        // Check if this module exposes the def
+                        if let Some(ident_id) = ident_ids.get_id(identifier) {
+                            let doc_def = DocDef {
+                                name: identifier.to_string(),
+                                type_annotation: TypeAnnotation::NoTypeAnn,
+                                type_vars: Vec::new(),
+                                symbol: Symbol::new(home, ident_id),
+                                docs,
+                            };
+                            doc_entries.push(DocEntry::DocDef(doc_def));
+                        }
+                    }
                 }
 
                 ValueDef::Dbg { .. } => {
@@ -248,10 +273,37 @@ fn generate_entry_docs(
                     // Don't generate docs for `expect`s
                 }
 
-                ValueDef::ExpectFx { .. } => {
-                    // Don't generate docs for `expect-fx`s
+                ValueDef::ModuleImport { .. } => {
+                    // Don't generate docs for module imports
+                }
+                ValueDef::IngestedFileImport { .. } => {
+                    // Don't generate docs for ingested file imports
+                }
+
+                ValueDef::StmtAfterExpr { .. } => {
+                    // Ignore. Canonicalization will produce an error.
+                }
+
+                ValueDef::Stmt(loc_expr) => {
+                    if let roc_parse::ast::Expr::Var {
+                        ident: identifier, ..
+                    } = loc_expr.value
+                    {
+                        // Check if this module exposes the def
+                        if let Some(ident_id) = ident_ids.get_id(identifier) {
+                            let doc_def = DocDef {
+                                name: identifier.to_string(),
+                                type_annotation: TypeAnnotation::NoTypeAnn,
+                                type_vars: Vec::new(),
+                                symbol: Symbol::new(home, ident_id),
+                                docs,
+                            };
+                            doc_entries.push(DocEntry::DocDef(doc_def));
+                        }
+                    }
                 }
             },
+
             Ok(type_index) => match &defs.type_defs[type_index.index()] {
                 TypeDef::Alias {
                     header: TypeHeader { name, vars },
@@ -260,7 +312,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -284,7 +336,7 @@ fn generate_entry_docs(
                         docs,
                         symbol: Symbol::new(home, ident_id),
                     };
-                    acc.push(DocEntry::DocDef(doc_def));
+                    doc_entries.push(DocEntry::DocDef(doc_def));
                 }
 
                 TypeDef::Opaque {
@@ -294,7 +346,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -307,7 +359,7 @@ fn generate_entry_docs(
                         docs,
                         symbol: Symbol::new(home, ident_id),
                     };
-                    acc.push(DocEntry::DocDef(doc_def));
+                    doc_entries.push(DocEntry::DocDef(doc_def));
                 }
 
                 TypeDef::Ability {
@@ -318,7 +370,7 @@ fn generate_entry_docs(
                     let mut type_vars = Vec::new();
 
                     for var in vars.iter() {
-                        if let Pattern::Identifier(ident_name) = var.value {
+                        if let TypeVar::Identifier(ident_name) = var.value {
                             type_vars.push(ident_name.to_string());
                         }
                     }
@@ -347,7 +399,7 @@ fn generate_entry_docs(
                         type_vars,
                         docs,
                     };
-                    acc.push(DocEntry::DocDef(doc_def));
+                    doc_entries.push(DocEntry::DocDef(doc_def));
                 }
             },
         }
@@ -359,40 +411,49 @@ fn generate_entry_docs(
     let it = before_comments_or_new_lines.iter().flat_map(|e| e.iter());
 
     for detached_doc in detached_docs_from_comments_and_new_lines(it) {
-        acc.push(DetachedDoc(detached_doc));
+        doc_entries.push(DetachedDoc(detached_doc));
     }
 
-    acc
+    doc_entries
 }
 
 /// Does this type contain any types which are not exposed outside the package?
 /// (If so, we shouldn't try to render a type annotation for it.)
 fn contains_unexposed_type(
-    ann: &ast::TypeAnnotation,
+    type_ann: &ast::TypeAnnotation,
     exposed_module_ids: &[ModuleId],
     module_ids: &ModuleIds,
 ) -> bool {
     use ast::TypeAnnotation::*;
 
-    match ann {
+    match type_ann {
         // Apply is the one case that can directly return true.
         Apply(module_name, _ident, loc_args) => {
+            let apply_module_id = module_ids.get_id(&(*module_name).into());
+            let loc_args_contains_unexposed_type = loc_args.iter().any(|loc_arg| {
+                contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
+            });
+
             // If the *ident* was unexposed, we would have gotten a naming error
             // during canonicalization, so all we need to check is the module.
-            let module_id = module_ids.get_id(&(*module_name).into()).unwrap();
+            if let Some(module_id) = apply_module_id {
+                !exposed_module_ids.contains(&module_id) || loc_args_contains_unexposed_type
+            } else {
+                true
+            }
+        }
 
-            !exposed_module_ids.contains(&module_id)
-                || loc_args.iter().any(|loc_arg| {
-                    contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
-                })
-        }
         Malformed(_) | Inferred | Wildcard | BoundVariable(_) => false,
-        Function(loc_args, loc_ret) => {
+
+        Function(loc_args, _arrow, loc_ret) => {
+            let loc_args_contains_unexposed_type = loc_args.iter().any(|loc_arg| {
+                contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
+            });
+
             contains_unexposed_type(&loc_ret.value, exposed_module_ids, module_ids)
-                || loc_args.iter().any(|loc_arg| {
-                    contains_unexposed_type(&loc_arg.value, exposed_module_ids, module_ids)
-                })
+                || loc_args_contains_unexposed_type
         }
+
         Record { fields, ext } => {
             if let Some(loc_ext) = ext {
                 if contains_unexposed_type(&loc_ext.value, exposed_module_ids, module_ids) {
@@ -406,12 +467,13 @@ fn contains_unexposed_type(
             while let Some(field) = fields_to_process.pop() {
                 match field {
                     AssignedField::RequiredValue(_field, _spaces, loc_val)
-                    | AssignedField::OptionalValue(_field, _spaces, loc_val) => {
+                    | AssignedField::OptionalValue(_field, _spaces, loc_val)
+                    | AssignedField::IgnoredValue(_field, _spaces, loc_val) => {
                         if contains_unexposed_type(&loc_val.value, exposed_module_ids, module_ids) {
                             return true;
                         }
                     }
-                    AssignedField::Malformed(_) | AssignedField::LabelOnly(_) => {
+                    AssignedField::LabelOnly(_) => {
                         // contains no unexposed types, so continue
                     }
                     AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
@@ -422,6 +484,7 @@ fn contains_unexposed_type(
 
             false
         }
+
         Tuple { elems: fields, ext } => {
             if let Some(loc_ext) = ext {
                 if contains_unexposed_type(&loc_ext.value, exposed_module_ids, module_ids) {
@@ -433,6 +496,7 @@ fn contains_unexposed_type(
                 contains_unexposed_type(&loc_field.value, exposed_module_ids, module_ids)
             })
         }
+
         TagUnion { ext, tags } => {
             use ast::Tag;
 
@@ -457,9 +521,6 @@ fn contains_unexposed_type(
                             }
                         }
                     }
-                    Tag::Malformed(_) => {
-                        // contains no unexposed types, so continue
-                    }
                     Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => {
                         tags_to_process.push(*tag);
                     }
@@ -468,14 +529,17 @@ fn contains_unexposed_type(
 
             false
         }
+
         Where(loc_ann, _loc_has_clauses) => {
             // We assume all the abilities in the `implements` clause are from exported modules.
             // TODO don't assume this! Instead, look them up and verify.
             contains_unexposed_type(&loc_ann.value, exposed_module_ids, module_ids)
         }
+
         As(loc_ann, _spaces, _type_header) => {
             contains_unexposed_type(&loc_ann.value, exposed_module_ids, module_ids)
         }
+
         SpaceBefore(ann, _) | ast::TypeAnnotation::SpaceAfter(ann, _) => {
             contains_unexposed_type(ann, exposed_module_ids, module_ids)
         }
@@ -546,7 +610,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
         ast::TypeAnnotation::SpaceAfter(&sub_type_ann, _) => {
             type_to_docs(in_func_type_ann, sub_type_ann)
         }
-        ast::TypeAnnotation::Function(ast_arg_anns, output_ann) => {
+        ast::TypeAnnotation::Function(ast_arg_anns, arrow, output_ann) => {
             let mut doc_arg_anns = Vec::new();
 
             for ast_arg_ann in ast_arg_anns {
@@ -555,6 +619,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
 
             Function {
                 args: doc_arg_anns,
+                arrow,
                 output: Box::new(type_to_docs(true, output_ann.value)),
             }
         }
@@ -566,7 +631,7 @@ fn type_to_docs(in_func_type_ann: bool, type_annotation: ast::TypeAnnotation) ->
                 .vars
                 .iter()
                 .filter_map(|loc_pattern| match loc_pattern.value {
-                    ast::Pattern::Identifier(ident) => Some(ident.to_string()),
+                    ast::TypeVar::Identifier(ident) => Some(ident.to_string()),
                     _ => None,
                 })
                 .collect(),
@@ -657,7 +722,7 @@ fn record_field_to_doc(
         AssignedField::LabelOnly(label) => Some(RecordField::LabelOnly {
             name: label.value.to_string(),
         }),
-        AssignedField::Malformed(_) => None,
+        AssignedField::IgnoredValue(_, _, _) => None,
     }
 }
 
@@ -678,7 +743,6 @@ fn tag_to_doc(in_func_ann: bool, tag: ast::Tag) -> Option<Tag> {
         }),
         ast::Tag::SpaceBefore(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
         ast::Tag::SpaceAfter(&sub_tag, _) => tag_to_doc(in_func_ann, sub_tag),
-        ast::Tag::Malformed(_) => None,
     }
 }
 

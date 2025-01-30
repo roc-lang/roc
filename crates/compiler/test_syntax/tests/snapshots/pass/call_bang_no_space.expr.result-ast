@@ -1,0 +1,18 @@
+@0-8 SpaceAfter(
+    Apply(
+        @0-5 Var {
+            module_name: "",
+            ident: "fxFn!",
+        },
+        [
+            @5-8 Var {
+                module_name: "",
+                ident: "arg",
+            },
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

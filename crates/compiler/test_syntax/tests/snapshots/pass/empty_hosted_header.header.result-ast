@@ -1,45 +1,10 @@
-Module {
-    comments: [],
-    header: Hosted(
+SpacesBefore {
+    before: [],
+    item: Hosted(
         HostedHeader {
-            before_name: [],
-            name: @7-10 ModuleName(
-                "Foo",
-            ),
-            exposes: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ExposesKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ImportsKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            generates: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: GeneratesKeyword,
-                    after: [],
-                },
-                item: UppercaseIdent(
-                    "Bar",
-                ),
-            },
-            generates_with: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: WithKeyword,
-                    after: [],
-                },
-                item: [],
-            },
+            before_exposes: [],
+            exposes: [],
+            old_imports: None,
         },
     ),
 }

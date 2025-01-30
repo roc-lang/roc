@@ -1,0 +1,37 @@
+procedure Bool.1 ():
+    let Bool.21 : Int1 = false;
+    ret Bool.21;
+
+procedure Test.2 (Test.11, Test.1):
+    if Test.1 then
+        let Test.29 : I64 = 0i64;
+        let Test.28 : [C {}, C I64] = TagId(1) Test.29;
+        ret Test.28;
+    else
+        let Test.27 : {} = Struct {};
+        let Test.26 : [C {}, C I64] = TagId(0) Test.27;
+        ret Test.26;
+
+procedure Test.3 (Test.12, Test.1):
+    if Test.1 then
+        let Test.23 : I64 = 0i64;
+        let Test.22 : [C {}, C I64] = TagId(1) Test.23;
+        ret Test.22;
+    else
+        let Test.21 : {} = Struct {};
+        let Test.20 : [C {}, C I64] = TagId(0) Test.21;
+        ret Test.20;
+
+procedure Test.4 (Test.13, Test.1):
+    let Test.25 : {} = Struct {};
+    let Test.17 : [C {}, C I64] = CallByName Test.2 Test.25 Test.1;
+    let Test.19 : {} = Struct {};
+    let Test.18 : [C {}, C I64] = CallByName Test.3 Test.19 Test.1;
+    let Test.16 : List [C {}, C I64] = Array [Test.17, Test.18];
+    ret Test.16;
+
+procedure Test.0 ():
+    let Test.1 : Int1 = CallByName Bool.1;
+    let Test.15 : {} = Struct {};
+    let Test.14 : List [C {}, C I64] = CallByName Test.4 Test.15 Test.1;
+    ret Test.14;

@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 
-#[cfg(not(windows))]
 use bumpalo::Bump;
 use roc_error_macros::internal_error;
 use roc_module::symbol::ModuleId;
@@ -26,7 +25,6 @@ const MODULES: &[(ModuleId, &str)] = &[
     (ModuleId::DECODE, "Decode.roc"),
     (ModuleId::HASH, "Hash.roc"),
     (ModuleId::INSPECT, "Inspect.roc"),
-    (ModuleId::JSON, "TotallyNotJson.roc"),
 ];
 
 fn main() {
@@ -47,18 +45,10 @@ fn write_subs_for_module(module_id: ModuleId, filename: &str) {
     output_path.extend([filename]);
     output_path.set_extension("dat");
 
-    #[cfg(not(windows))]
     if SKIP_SUBS_CACHE {
         write_types_for_module_dummy(&output_path)
     } else {
         write_types_for_module_real(module_id, filename, &output_path)
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = SKIP_SUBS_CACHE;
-        let _ = module_id;
-        write_types_for_module_dummy(&output_path)
     }
 }
 
@@ -67,7 +57,6 @@ fn write_types_for_module_dummy(output_path: &Path) {
     std::fs::write(output_path, []).unwrap();
 }
 
-#[cfg(not(windows))]
 fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path: &Path) {
     use roc_can::module::TypeState;
     use roc_load_internal::file::{LoadingProblem, Threading};
@@ -77,7 +66,8 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
     let arena = Bump::new();
     let cwd = std::env::current_dir().unwrap();
     let source = roc_builtins::roc::module_source(module_id);
-    let target_info = roc_target::TargetInfo::default_x86_64();
+    // This is just for typechecking. Target shouldn't matter.
+    let target = roc_target::Target::LinuxX64;
     let function_kind = roc_solve::FunctionKind::LambdaSet;
 
     let res_module = roc_load_internal::file::load_and_typecheck_str(
@@ -85,8 +75,9 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
         PathBuf::from(filename),
         source,
         cwd,
+        None,
         Default::default(),
-        target_info,
+        target,
         function_kind,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,
@@ -96,7 +87,7 @@ fn write_types_for_module_real(module_id: ModuleId, filename: &str, output_path:
 
     let mut module = match res_module {
         Ok(v) => v,
-        Err(LoadingProblem::FormattedReport(report)) => {
+        Err(LoadingProblem::FormattedReport(report, _)) => {
             internal_error!("{}", report);
         }
         Err(other) => {

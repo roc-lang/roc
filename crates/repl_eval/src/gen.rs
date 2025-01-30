@@ -12,7 +12,7 @@ use roc_parse::ast::Expr;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{can_problem, type_problem, RocDocAllocator};
 use roc_solve::FunctionKind;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 #[derive(Debug)]
 pub struct ReplOutput {
@@ -22,9 +22,15 @@ pub struct ReplOutput {
 
 pub fn format_answer<'a>(arena: &'a Bump, answer: Expr<'_>) -> &'a str {
     match answer {
-        Expr::Closure(_, _) | Expr::MalformedClosure => "<function>",
+        Expr::Closure(_, _) => "<function>",
         _ => {
-            let mut expr = roc_fmt::Buf::new_in(arena);
+            let mut expr = roc_fmt::Buf::new_in(
+                arena,
+                roc_fmt::MigrationFlags {
+                    snakify: false,
+                    parens_and_commas: false,
+                },
+            );
 
             answer.format_with_options(&mut expr, Parens::NotNeeded, Newlines::Yes, 0);
 
@@ -49,20 +55,21 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
     arena: &'a Bump,
     defs: I,
     expr: &str,
-    target_info: TargetInfo,
+    target: Target,
     palette: Palette,
 ) -> (Option<MonomorphizedModule<'a>>, Problems) {
-    let filename = PathBuf::from("");
-    let src_dir = PathBuf::from("fake/test/path");
+    let filename = PathBuf::from("replfile.roc");
+    let src_dir = PathBuf::from(".");
     let (bytes_before_expr, module_src) = promote_expr_to_module(arena, defs, expr);
     let loaded = roc_load::load_and_monomorphize_from_str(
         arena,
         filename,
         module_src,
         src_dir,
-        RocCacheDir::Persistent(cache::roc_cache_dir().as_path()),
+        None,
+        RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
         LoadConfig {
-            target_info,
+            target,
             function_kind: FunctionKind::LambdaSet,
             render: roc_reporting::report::RenderTarget::ColorTerminal,
             palette,
@@ -79,7 +86,7 @@ pub fn compile_to_mono<'a, 'i, I: Iterator<Item = &'i str>>(
                 (m.can_problems, m.type_problems)
             );
         }
-        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report))) => {
+        Err(LoadMonomorphizedError::LoadingProblem(LoadingProblem::FormattedReport(report, _))) => {
             return (
                 None,
                 Problems {
@@ -172,8 +179,8 @@ fn promote_expr_to_module<'a, 'i, I: Iterator<Item = &'i str>>(
     defs: I,
     expr: &str,
 ) -> (usize, &'a str) {
-    const REPL_MODULE_HEADER: &str = "app \"app\" provides [replOutput] to \"./platform\"\n\n";
-    const REPL_MODULE_MAIN_DEF: &str = "replOutput =\n";
+    const REPL_MODULE_HEADER: &str = "app \"app\" provides [repl_output] to \"./platform\"\n\n";
+    const REPL_MODULE_MAIN_DEF: &str = "repl_output =\n";
     const INDENT: &str = "    ";
 
     let mut buffer = bumpalo::collections::string::String::from_str_in(REPL_MODULE_HEADER, arena);

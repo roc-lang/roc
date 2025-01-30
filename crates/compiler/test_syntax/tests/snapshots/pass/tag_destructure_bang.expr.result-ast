@@ -1,0 +1,63 @@
+@0-55 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-33,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-27 Apply(
+                        @0-6 Tag(
+                            "Config",
+                        ),
+                        [
+                            @7-22 Identifier {
+                                ident: "launchTheNukes!",
+                            },
+                            @23-27 Identifier {
+                                ident: "code",
+                            },
+                        ],
+                    ),
+                    @30-33 Var {
+                        module_name: "",
+                        ident: "cfg",
+                    },
+                ),
+            ],
+        },
+        @35-55 SpaceBefore(
+            Apply(
+                @35-50 Var {
+                    module_name: "",
+                    ident: "launchTheNukes!",
+                },
+                [
+                    @51-55 Var {
+                        module_name: "",
+                        ident: "code",
+                    },
+                ],
+                Space,
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

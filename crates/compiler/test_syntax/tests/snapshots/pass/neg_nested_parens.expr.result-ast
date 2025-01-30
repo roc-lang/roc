@@ -1,0 +1,29 @@
+@0-9 UnaryOp(
+    @2-8 ParensAround(
+        PncApply(
+            @2-3 Num(
+                "0",
+            ),
+            [
+                @4-7 Apply(
+                    @4-5 Num(
+                        "1",
+                    ),
+                    [
+                        @6-7 SpaceBefore(
+                            Var {
+                                module_name: "",
+                                ident: "d",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ],
+                    Space,
+                ),
+            ],
+        ),
+    ),
+    @0-1 Negate,
+)

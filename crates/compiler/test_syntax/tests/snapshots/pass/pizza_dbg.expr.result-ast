@@ -1,0 +1,16 @@
+@0-8 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 Num(
+                    "1",
+                ),
+                @2-4 Pizza,
+            ),
+        ],
+        @5-8 Dbg,
+    ),
+    [
+        Newline,
+    ],
+)

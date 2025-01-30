@@ -1,6 +1,6 @@
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Test.12 (Test.52):
     let Test.72 : Int1 = false;
@@ -19,7 +19,6 @@ procedure Test.15 (Test.49):
     ret Test.70;
 
 procedure Test.16 (Test.48):
-    dec Test.48;
     let Test.79 : {} = Struct {};
     let Test.78 : Int1 = CallByName Test.13 Test.79;
     ret Test.78;
@@ -55,12 +54,13 @@ procedure Test.43 (Test.44, Test.42):
     if Test.75 then
         let Test.77 : Str = StructAtIndex 0 Test.42;
         let Test.76 : Int1 = CallByName Test.16 Test.77;
+        dec Test.77;
         let Test.61 : Int1 = CallByName Test.14 Test.76;
         jump Test.62 Test.61;
     else
         let Test.69 : U8 = StructAtIndex 1 Test.42;
-        let #Derived_gen.5 : Str = StructAtIndex 0 Test.42;
-        dec #Derived_gen.5;
+        let Bool.27 : Str = StructAtIndex 0 Test.42;
+        dec Bool.27;
         let Test.63 : Int1 = CallByName Test.15 Test.69;
         let Test.61 : Int1 = CallByName Test.14 Test.63;
         jump Test.62 Test.61;

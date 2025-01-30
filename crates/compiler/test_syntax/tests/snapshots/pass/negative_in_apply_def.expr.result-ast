@@ -1,40 +1,40 @@
-Defs(
+@0-11 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-9,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                },
                 @2-9 Apply(
-                    @2-3 SpaceAfter(
-                        Tag(
-                            "A",
-                        ),
-                        [
-                            Newline,
-                        ],
+                    @2-3 Tag(
+                        "A",
                     ),
                     [
-                        @5-7 UnaryOp(
-                            @6-7 Var {
-                                module_name: "",
-                                ident: "g",
-                            },
-                            @5-6 Negate,
+                        @5-7 SpaceBefore(
+                            UnaryOp(
+                                @6-7 Var {
+                                    module_name: "",
+                                    ident: "g",
+                                },
+                                @5-6 Negate,
+                            ),
+                            [
+                                Newline,
+                            ],
                         ),
                         @8-9 Var {
                             module_name: "",

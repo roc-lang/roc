@@ -1,0 +1,25 @@
+@0-11 Closure(
+    [
+        @1-8 RecordDestructure(
+            [
+                @2-3 SpaceAfter(
+                    Identifier {
+                        ident: "i",
+                    },
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+                @6-7 Identifier {
+                    ident: "e",
+                },
+            ],
+        ),
+    ],
+    @10-11 Var {
+        module_name: "",
+        ident: "a",
+    },
+)

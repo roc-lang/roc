@@ -1,0 +1,36 @@
+@0-17 SpaceAfter(
+    When(
+        @5-6 SpaceAfter(
+            Num(
+                "0",
+            ),
+            [
+                Newline,
+            ],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-11 Tag(
+                        "B",
+                    ),
+                ],
+                value: @13-17 ParensAround(
+                    SpaceBefore(
+                        Var {
+                            module_name: "",
+                            ident: "t",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

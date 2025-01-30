@@ -1,0 +1,47 @@
+@0-12 BinOps(
+    [
+        (
+            @0-9 SpaceAfter(
+                Apply(
+                    @0-2 Var {
+                        module_name: "",
+                        ident: "m0",
+                    },
+                    [
+                        @2-9 Closure(
+                            [
+                                @3-4 Identifier {
+                                    ident: "w",
+                                },
+                            ],
+                            @6-9 Apply(
+                                @6-7 TrySuffix(
+                                    Var {
+                                        module_name: "",
+                                        ident: "w",
+                                    },
+                                ),
+                                [
+                                    @8-9 Var {
+                                        module_name: "",
+                                        ident: "e",
+                                    },
+                                ],
+                                Space,
+                            ),
+                        ),
+                    ],
+                    Space,
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            @10-11 Slash,
+        ),
+    ],
+    @11-12 Var {
+        module_name: "",
+        ident: "s",
+    },
+)

@@ -1,3 +1,4 @@
+use roc_error_macros::internal_error;
 use roc_types::subs::{Rank, Variable};
 
 const DEFAULT_POOLS: usize = 8;
@@ -27,14 +28,14 @@ impl Pools {
     pub fn get_mut(&mut self, rank: Rank) -> &mut Vec<Variable> {
         match self.0.get_mut(rank.into_usize()) {
             Some(reference) => reference,
-            None => panic!("Compiler bug: could not find pool at rank {rank}"),
+            None => internal_error!("Compiler bug: could not find pool at rank {rank}"),
         }
     }
 
     pub fn get(&self, rank: Rank) -> &Vec<Variable> {
         match self.0.get(rank.into_usize()) {
             Some(reference) => reference,
-            None => panic!("Compiler bug: could not find pool at rank {rank}"),
+            None => internal_error!("Compiler bug: could not find pool at rank {rank}"),
         }
     }
 
@@ -46,7 +47,7 @@ impl Pools {
         let last = self
             .0
             .pop()
-            .unwrap_or_else(|| panic!("Attempted to split_last() on non-empty Pools"));
+            .unwrap_or_else(|| internal_error!("Attempted to split_last() on non-empty Pools"));
 
         (last, self.0)
     }

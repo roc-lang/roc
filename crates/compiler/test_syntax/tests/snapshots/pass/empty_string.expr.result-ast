@@ -1,5 +1,10 @@
-Str(
-    PlainLine(
-        "",
+@0-2 SpaceAfter(
+    Str(
+        PlainLine(
+            "",
+        ),
     ),
+    [
+        Newline,
+    ],
 )

@@ -4,11 +4,11 @@ use {
     roc_module::symbol::Interns,
     roc_mono::{
         ir::ProcLayout,
-        layout::{GlobalLayoutInterner, LayoutCache, Niche},
+        layout::{GlobalLayoutInterner, LayoutCache, LayoutInterner, Niche},
     },
     roc_parse::ast::Expr,
     roc_repl_eval::{eval::jit_to_ast, ReplAppMemory},
-    roc_target::TargetInfo,
+    roc_target::Target,
     roc_types::subs::{Subs, Variable},
 };
 
@@ -23,7 +23,7 @@ use app::{ExpectMemory, ExpectReplApp};
 #[cfg(not(windows))]
 #[allow(clippy::too_many_arguments)]
 pub fn get_values<'a>(
-    target_info: TargetInfo,
+    target: Target,
     arena: &'a bumpalo::Bump,
     subs: &Subs,
     interns: &'a Interns,
@@ -57,29 +57,29 @@ pub fn get_values<'a>(
 
         app.offset = start;
 
-        let expr = {
-            // TODO: pass layout_cache to jit_to_ast directly
-            let mut layout_cache = LayoutCache::new(layout_interner.fork(), target_info);
-            let layout = layout_cache.from_var(arena, variable, subs).unwrap();
+        // TODO: pass layout_cache to jit_to_ast directly
+        let mut layout_cache = LayoutCache::new(layout_interner.fork(), target);
+        let layout = layout_cache.from_var(arena, variable, subs).unwrap();
 
-            let proc_layout = ProcLayout {
-                arguments: &[],
-                result: layout,
-                niche: Niche::NONE,
-            };
-
-            jit_to_ast(
-                arena,
-                app,
-                "expect_repl_main_fn",
-                proc_layout,
-                variable,
-                subs,
-                interns,
-                layout_interner.fork(),
-                target_info,
-            )
+        let proc_layout = ProcLayout {
+            arguments: &[],
+            result: layout,
+            niche: Niche::NONE,
         };
+
+        let expr = jit_to_ast(
+            arena,
+            app,
+            "expect_repl_main_fn",
+            proc_layout,
+            variable,
+            subs,
+            interns,
+            layout_interner.fork(),
+            target,
+        );
+
+        app.offset += layout_cache.interner.stack_size_and_alignment(layout).0 as usize;
 
         result.push(expr);
         result_vars.push(variable);
@@ -102,17 +102,13 @@ mod test {
 
     use crate::run::expect_mono_module_to_dylib;
 
-    use super::*;
-
     fn run_expect_test(source: &str, expected: &str) {
         let arena = bumpalo::Bump::new();
         let arena = &arena;
 
-        let triple = Triple::host();
-        let target = &triple;
+        let target = Triple::host().into();
 
         let opt_level = roc_mono::ir::OptLevel::Normal;
-        let target_info = TargetInfo::from(target);
         let function_kind = FunctionKind::LambdaSet;
 
         // Step 1: compile the app and generate the .o file
@@ -122,7 +118,7 @@ mod test {
         std::fs::write(&filename, source).unwrap();
 
         let load_config = LoadConfig {
-            target_info,
+            target,
             function_kind,
             render: RenderTarget::ColorTerminal,
             palette: DEFAULT_PALETTE,
@@ -134,6 +130,7 @@ mod test {
             filename,
             source,
             src_dir.path().to_path_buf(),
+            None,
             RocCacheDir::Disallowed,
             load_config,
         ) {
@@ -150,14 +147,9 @@ mod test {
 
         let interns = loaded.interns.clone();
 
-        let (lib, expects, layout_interner) = expect_mono_module_to_dylib(
-            arena,
-            target.clone(),
-            loaded,
-            opt_level,
-            LlvmBackendMode::CliTest,
-        )
-        .unwrap();
+        let (dy_lib, expects_by_module, layout_interner) =
+            expect_mono_module_to_dylib(arena, target, loaded, opt_level, LlvmBackendMode::CliTest)
+                .unwrap();
 
         let arena = &bumpalo::Bump::new();
         let interns = arena.alloc(interns);
@@ -168,23 +160,27 @@ mod test {
         let mut memory = crate::run::ExpectMemory::from_slice(&mut shared_buffer);
 
         // communicate the mmapped name to zig/roc
-        let set_shared_buffer = run_roc_dylib!(lib, "set_shared_buffer", (*mut u8, usize), ());
+        let set_shared_buffer = run_roc_dylib!(dy_lib, "set_shared_buffer", (*mut u8, usize), ());
         let mut result = RocCallResult::default();
         unsafe { set_shared_buffer((shared_buffer.as_mut_ptr(), BUFFER_SIZE), &mut result) };
 
         let mut writer = Vec::with_capacity(1024);
-        let (_failed, _passed) = crate::run::run_expects_with_memory(
-            &mut writer,
-            RenderTarget::ColorTerminal,
-            arena,
-            interns,
-            &layout_interner.into_global(),
-            &lib,
-            &mut expectations,
-            expects,
-            &mut memory,
-        )
-        .unwrap();
+
+        let global_layout_interner = layout_interner.into_global();
+        for (_, expect_funcs) in expects_by_module {
+            let (_failed, _passed) = crate::run::run_expects_with_memory(
+                &mut writer,
+                RenderTarget::ColorTerminal,
+                arena,
+                interns,
+                &global_layout_interner,
+                &dy_lib,
+                &mut expectations,
+                expect_funcs,
+                &mut memory,
+            )
+            .unwrap();
+        }
 
         // Remove ANSI escape codes from the answer - for example:
         //
@@ -238,12 +234,12 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│  expect 1 == 2
                     ^^^^^^^^^^^^^
-                "#
+                "
             ),
         );
     }
@@ -265,7 +261,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -281,7 +277,7 @@ mod test {
 
                 b : Num *
                 b = 2
-                "#
+                "
             ),
         );
     }
@@ -380,7 +376,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  5│>  expect
@@ -397,7 +393,7 @@ mod test {
 
                 expected : Result I64 [OutOfBounds]
                 expected = Ok 42
-                "#
+                "
             ),
         );
     }
@@ -463,7 +459,7 @@ mod test {
                 "#
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 5│>  expect
@@ -485,7 +481,7 @@ mod test {
                     y : U8,
                 }
                 vec2 = { x: 4, y: 8 }
-                "#
+                "
             ),
         );
     }
@@ -890,13 +886,13 @@ mod test {
                 ]
 
                 expect
-                    nonEmpty =
+                    non_empty =
                         a = "abcdefgh"
                         b = @NonEmpty (First "ijkl" 67u8)
                         c = Next [{ item: a, rest: b }]
                         @NonEmpty c
 
-                    when nonEmpty is
+                    when non_empty is
                         _ -> Bool.false
                 "#
             ),
@@ -905,19 +901,19 @@ mod test {
                 This expectation failed:
 
                  8│>  expect
-                 9│>      nonEmpty =
+                 9│>      non_empty =
                 10│>          a = "abcdefgh"
                 11│>          b = @NonEmpty (First "ijkl" 67u8)
                 12│>          c = Next [{ item: a, rest: b }]
                 13│>          @NonEmpty c
                 14│>
-                15│>      when nonEmpty is
+                15│>      when non_empty is
                 16│>          _ -> Bool.false
 
                 When it failed, these variables had these values:
 
-                nonEmpty : NonEmpty
-                nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
+                non_empty : NonEmpty
+                non_empty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
                 "#
             ),
         );
@@ -930,11 +926,11 @@ mod test {
                 r#"
                 interface Test exposes [] imports []
 
-                makeForcer : {} -> (Str -> U8)
-                makeForcer = \{} -> \_ -> 2u8
+                make_forcer : {} -> (Str -> U8)
+                make_forcer = \{} -> \_ -> 2u8
 
                 expect
-                    forcer = makeForcer {}
+                    forcer = make_forcer {}
 
                     case = ""
 
@@ -946,7 +942,7 @@ mod test {
                 This expectation failed:
 
                  6│>  expect
-                 7│>      forcer = makeForcer {}
+                 7│>      forcer = make_forcer {}
                  8│>
                  9│>      case = ""
                 10│>
@@ -965,22 +961,22 @@ mod test {
     fn issue_i4389() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 expect
-                    totalCount = \{} -> 1u8
-                    totalCount {} == 96u8
-                "#
+                    total_count = \{} -> 1u8
+                    total_count {} == 96u8
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                 3│>  expect
-                4│>      totalCount = \{} -> 1u8
-                5│>      totalCount {} == 96u8
-                "#
+                4│>      total_count = \{} -> 1u8
+                5│>      total_count {} == 96u8
+                "
             ),
         );
     }
@@ -989,7 +985,7 @@ mod test {
     fn adjacent_lists() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 expect
@@ -1007,10 +1003,10 @@ mod test {
                         x: [115, 116, 117],
                     }
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  3│>  expect
@@ -1044,7 +1040,7 @@ mod test {
                     x : List (Int Unsigned8),
                 }
                 expected = { body: [42, 43, 44], headers: [15, 16, 17], x: [115, 116, 117] }
-                "#
+                "
             ),
         );
     }
@@ -1057,22 +1053,22 @@ mod test {
                 interface Test exposes [] imports []
 
                 Request : {
-                    fieldA : [Get, Post],
-                    fieldB : Str,
+                    field_a : [Get, Post],
+                    field_b : Str,
                 }
 
                 expect
 
                     actual : Request
                     actual = {
-                        fieldA: Get,
-                        fieldB: "/things?id=2",
+                        field_a: Get,
+                        field_b: "/things?id=2",
                     }
 
                     expected : Request
                     expected = {
-                        fieldA: Get,
-                        fieldB: "/things?id=1",
+                        field_a: Get,
+                        field_b: "/things?id=1",
                     }
                     actual == expected
                 "#
@@ -1085,24 +1081,24 @@ mod test {
                  9│>
                 10│>      actual : Request
                 11│>      actual = {
-                12│>          fieldA: Get,
-                13│>          fieldB: "/things?id=2",
+                12│>          field_a: Get,
+                13│>          field_b: "/things?id=2",
                 14│>      }
                 15│>
                 16│>      expected : Request
                 17│>      expected = {
-                18│>          fieldA: Get,
-                19│>          fieldB: "/things?id=1",
+                18│>          field_a: Get,
+                19│>          field_b: "/things?id=1",
                 20│>      }
                 21│>      actual == expected
 
                 When it failed, these variables had these values:
 
                 actual : Request
-                actual = { fieldA: Get, fieldB: "/things?id=2" }
+                actual = { field_a: Get, field_b: "/things?id=2" }
 
                 expected : Request
-                expected = { fieldA: Get, fieldB: "/things?id=1" }
+                expected = { field_a: Get, field_b: "/things?id=1" }
 
                 "#
             ),
@@ -1113,7 +1109,7 @@ mod test {
     fn tag_payloads_of_different_size() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
                 actual : [Leftover (List U8), TooShort]
@@ -1124,10 +1120,10 @@ mod test {
                     expected = TooShort
 
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  6│>  expect
@@ -1143,7 +1139,7 @@ mod test {
                     TooShort,
                 ]
                 expected = TooShort
-                "#
+                "
             ),
         );
     }
@@ -1220,25 +1216,25 @@ mod test {
     fn match_on_opaque_number_type() {
         run_expect_test(
             indoc!(
-                r#"
+                r"
                 interface Test exposes [] imports []
 
-                hexToByte : U8, U8 -> U8
-                hexToByte = \upper, lower ->
-                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+                hex_to_byte : U8, U8 -> U8
+                hex_to_byte = \upper, lower ->
+                    Num.bitwise_or (Num.shift_right_by upper 4) lower
 
                 expect
-                    actual = hexToByte 7 4
+                    actual = hex_to_byte 7 4
                     expected = 't'
                     actual == expected
-                "#
+                "
             ),
             indoc!(
-                r#"
+                r"
                 This expectation failed:
 
                  7│>  expect
-                 8│>      actual = hexToByte 7 4
+                 8│>      actual = hex_to_byte 7 4
                  9│>      expected = 't'
                 10│>      actual == expected
 
@@ -1249,7 +1245,7 @@ mod test {
 
                 expected : Int Unsigned8
                 expected = 116
-                "#
+                "
             ),
         );
     }

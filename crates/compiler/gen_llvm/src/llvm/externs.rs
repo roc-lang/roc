@@ -1,3 +1,4 @@
+use crate::debug_info_init;
 use crate::llvm::bitcode::call_void_bitcode_fn;
 use crate::llvm::build::{add_func, get_panic_msg_ptr, get_panic_tag_ptr, BuilderExt, C_CALL_CONV};
 use crate::llvm::build::{CCReturn, Env, FunctionSpec};
@@ -18,7 +19,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let builder = env.builder;
 
     let usize_type = env.ptr_int();
-    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::default());
+    let i8_ptr_type = env.context.ptr_type(AddressSpace::default());
 
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
@@ -59,7 +60,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
                 .build_array_malloc(ctx.i8_type(), size_arg.into_int_value(), "call_malloc")
                 .unwrap();
 
-            builder.build_return(Some(&retval));
+            builder.new_build_return(Some(&retval));
 
             if cfg!(debug_assertions) {
                 crate::llvm::build::verify_fn(fn_val);
@@ -115,7 +116,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             builder.position_at_end(entry);
 
             // Call libc realloc()
-            let call = builder.build_call(
+            let call = builder.new_build_call(
                 libc_realloc_val,
                 &[ptr_arg.into(), new_size_arg.into()],
                 "call_libc_realloc",
@@ -125,7 +126,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
 
             let retval = call.try_as_basic_value().left().unwrap();
 
-            builder.build_return(Some(&retval));
+            builder.new_build_return(Some(&retval));
 
             if cfg!(debug_assertions) {
                 crate::llvm::build::verify_fn(fn_val);
@@ -151,16 +152,50 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
             builder.position_at_end(entry);
 
             // Call libc free()
-            builder.build_free(ptr_arg.into_pointer_value());
+            builder.new_build_free(ptr_arg.into_pointer_value());
 
-            builder.build_return(None);
+            builder.new_build_return(None);
 
             if cfg!(debug_assertions) {
                 crate::llvm::build::verify_fn(fn_val);
             }
         }
 
-        match env.target_info.operating_system {
+        // roc_dbg
+        {
+            // The type of this function (but not the implementation) should have
+            // already been defined by the builtins, which rely on it.
+            let fn_val = module.get_function("roc_dbg").unwrap();
+            let mut params = fn_val.get_param_iter();
+            let loc_arg = params.next().unwrap();
+            let msg_arg = params.next().unwrap();
+            let src_arg = params.next().unwrap();
+
+            debug_assert!(params.next().is_none());
+
+            // Add a basic block for the entry point
+            let entry = ctx.append_basic_block(fn_val, "entry");
+
+            builder.position_at_end(entry);
+
+            // Call utils.dbg_impl()
+            let dbg_impl = module.get_function(bitcode::UTILS_DBG_IMPL).unwrap();
+            let call = builder.new_build_call(
+                dbg_impl,
+                &[loc_arg.into(), msg_arg.into(), src_arg.into()],
+                "call_utils_dbg_impl",
+            );
+
+            call.set_call_convention(C_CALL_CONV);
+
+            builder.new_build_return(None);
+
+            if cfg!(debug_assertions) {
+                crate::llvm::build::verify_fn(fn_val);
+            }
+        }
+
+        match env.target.operating_system() {
             roc_target::OperatingSystem::Windows => {
                 // We don't need these functions on Windows
             }
@@ -188,7 +223,7 @@ fn unreachable_function(env: &Env, name: &str) {
 
     env.builder.position_at_end(entry);
 
-    env.builder.build_unreachable();
+    env.builder.new_build_unreachable();
 
     if cfg!(debug_assertions) {
         crate::llvm::build::verify_fn(fn_val);
@@ -220,6 +255,8 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
         let subprogram = env.new_subprogram("roc_panic");
         fn_val.set_subprogram(subprogram);
 
+        debug_info_init!(env, fn_val);
+
         env.dibuilder.finalize();
 
         // Add a basic block for the entry point
@@ -229,7 +266,7 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
         // write our error message to the RocStr pointer
         {
-            let loaded_roc_str = match env.target_info.ptr_width() {
+            let loaded_roc_str = match env.target.ptr_width() {
                 roc_target::PtrWidth::Bytes4 => roc_str_arg,
                 // On 64-bit we pass RocStrs by reference internally
                 roc_target::PtrWidth::Bytes8 => {
@@ -243,31 +280,32 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
             };
 
             env.builder
-                .build_store(get_panic_msg_ptr(env), loaded_roc_str);
+                .new_build_store(get_panic_msg_ptr(env), loaded_roc_str);
         }
 
         // write the panic tag.
         // increment by 1, since the tag we'll get from the Roc program is 0-based,
         // but we use 0 for marking a successful call.
         {
-            let cast_tag_id = builder.build_int_z_extend(
+            let cast_tag_id = builder.new_build_int_z_extend(
                 tag_id_arg.into_int_value(),
                 env.context.i64_type(),
                 "zext_panic_tag",
             );
 
-            let inc_tag_id = builder.build_int_add(
+            let inc_tag_id = builder.new_build_int_add(
                 cast_tag_id,
                 env.context.i64_type().const_int(1, false),
                 "inc_panic_tag",
             );
 
-            env.builder.build_store(get_panic_tag_ptr(env), inc_tag_id);
+            env.builder
+                .new_build_store(get_panic_tag_ptr(env), inc_tag_id);
         }
 
         build_longjmp_call(env);
 
-        builder.build_unreachable();
+        builder.new_build_unreachable();
 
         if cfg!(debug_assertions) {
             crate::llvm::build::verify_fn(fn_val);
@@ -277,16 +315,23 @@ pub fn add_sjlj_roc_panic(env: &Env<'_, '_, '_>) {
 
 pub fn build_longjmp_call(env: &Env) {
     let jmp_buf = get_sjlj_buffer(env);
-    if cfg!(target_arch = "aarch64") {
-        // Call the Zig-linked longjmp: `void longjmp(i32*, i32)`
+    if env.target.architecture() == roc_target::Architecture::Aarch64 {
+        // Due to https://github.com/roc-lang/roc/issues/2965, we use a setjmp we linked in from Zig
         let tag = env.context.i32_type().const_int(1, false);
         let _call =
             call_void_bitcode_fn(env, &[jmp_buf.into(), tag.into()], bitcode::UTILS_LONGJMP);
+    } else if env.target.operating_system() == roc_target::OperatingSystem::Windows {
+        let tag = env.context.i32_type().const_int(1, false);
+        let _call = call_void_bitcode_fn(
+            env,
+            &[jmp_buf.into(), tag.into()],
+            bitcode::UTILS_WINDOWS_LONGJMP,
+        );
     } else {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
-        let jmp_buf_i8p = env.builder.build_pointer_cast(
+        let jmp_buf_i8p = env.builder.new_build_pointer_cast(
             jmp_buf,
-            env.context.i8_type().ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "jmp_buf i8*",
         );
         let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);

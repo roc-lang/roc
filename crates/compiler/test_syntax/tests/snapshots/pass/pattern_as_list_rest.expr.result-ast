@@ -1,39 +1,44 @@
-When(
-    @5-11 Var {
-        module_name: "",
-        ident: "myList",
-    },
-    [
-        WhenBranch {
-            patterns: [
-                @19-38 SpaceBefore(
-                    List(
-                        [
-                            @20-25 Identifier(
-                                "first",
-                            ),
-                            @27-37 ListRest(
-                                Some(
-                                    (
-                                        [],
-                                        PatternAs {
-                                            spaces_before: [],
-                                            identifier: @33-37 "rest",
-                                        },
+@0-43 SpaceAfter(
+    When(
+        @5-11 Var {
+            module_name: "",
+            ident: "myList",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @19-38 SpaceBefore(
+                        List(
+                            [
+                                @20-25 Identifier {
+                                    ident: "first",
+                                },
+                                @27-37 ListRest(
+                                    Some(
+                                        (
+                                            [],
+                                            PatternAs {
+                                                spaces_before: [],
+                                                identifier: @33-37 "rest",
+                                            },
+                                        ),
                                     ),
                                 ),
-                            ),
+                            ],
+                        ),
+                        [
+                            Newline,
                         ],
                     ),
-                    [
-                        Newline,
-                    ],
+                ],
+                value: @42-43 Num(
+                    "0",
                 ),
-            ],
-            value: @42-43 Num(
-                "0",
-            ),
-            guard: None,
-        },
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

@@ -1,48 +1,13 @@
-Module {
-    comments: [],
-    header: App(
+SpacesBefore {
+    before: [],
+    item: App(
         AppHeader {
-            before_name: [],
-            name: @4-14 PlainLine(
-                "test-app",
-            ),
-            packages: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [],
-                        item: PackagesKeyword,
-                        after: [],
-                    },
-                    item: [],
-                },
-            ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [],
-                },
-            ),
-            provides: ProvidesTo {
-                provides_keyword: Spaces {
-                    before: [],
-                    item: ProvidesKeyword,
-                    after: [],
-                },
-                entries: [],
-                types: None,
-                to_keyword: Spaces {
-                    before: [],
-                    item: ToKeyword,
-                    after: [],
-                },
-                to: @53-57 ExistingPackage(
-                    "blah",
-                ),
-            },
+            before_provides: [],
+            provides: [],
+            before_packages: [],
+            packages: @14-26 [],
+            old_imports: None,
+            old_provides_to_new_package: None,
         },
     ),
 }

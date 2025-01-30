@@ -1,116 +1,73 @@
-Full {
-    header: Module {
-        comments: [],
-        header: App(
-            AppHeader {
-                before_name: [],
-                name: @4-13 PlainLine(
-                    "example",
-                ),
-                packages: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: PackagesKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @29-40 PackageEntry {
-                                shorthand: "pf",
-                                spaces_after_shorthand: [],
-                                package_name: @34-40 PackageName(
-                                    "path",
-                                ),
-                            },
-                        ],
-                    },
-                ),
-                imports: Some(
-                    KeywordItem {
-                        keyword: Spaces {
-                            before: [
-                                Newline,
-                            ],
-                            item: ImportsKeyword,
-                            after: [],
-                        },
-                        item: [
-                            @57-66 Package(
-                                "pf",
-                                ModuleName(
-                                    "Stdout",
-                                ),
-                                [],
-                            ),
-                        ],
-                    },
-                ),
-                provides: ProvidesTo {
-                    provides_keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ProvidesKeyword,
-                        after: [],
-                    },
-                    entries: [
-                        @84-88 ExposedName(
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: App(
+                AppHeader {
+                    before_provides: [],
+                    provides: [
+                        @6-10 ExposedName(
                             "main",
                         ),
                     ],
-                    types: None,
-                    to_keyword: Spaces {
-                        before: [],
-                        item: ToKeyword,
-                        after: [],
-                    },
-                    to: @94-96 ExistingPackage(
-                        "pf",
-                    ),
-                },
-            },
-        ),
-    },
-    module_defs: Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @98-124,
-        ],
-        space_before: [
-            Slice(start = 0, length = 2),
-        ],
-        space_after: [
-            Slice(start = 2, length = 0),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @98-102 Identifier(
-                    "main",
-                ),
-                @105-124 Apply(
-                    @105-116 Var {
-                        module_name: "Stdout",
-                        ident: "line",
-                    },
-                    [
-                        @117-124 Str(
-                            PlainLine(
-                                "Hello",
+                    before_packages: [],
+                    packages: @13-37 [
+                        @15-35 PackageEntry {
+                            shorthand: "pf",
+                            spaces_after_shorthand: [],
+                            platform_marker: Some(
+                                [],
                             ),
-                        ),
+                            package_name: @29-35 PackageName(
+                                "path",
+                            ),
+                        },
                     ],
-                    Space,
-                ),
+                    old_imports: None,
+                    old_provides_to_new_package: None,
+                },
             ),
-        ],
+        },
+        defs: Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @39-65,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @39-43 Identifier {
+                        ident: "main",
+                    },
+                    @46-65 Apply(
+                        @46-57 Var {
+                            module_name: "Stdout",
+                            ident: "line",
+                        },
+                        [
+                            @58-65 Str(
+                                PlainLine(
+                                    "Hello",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ],
+        },
     },
-}
+)

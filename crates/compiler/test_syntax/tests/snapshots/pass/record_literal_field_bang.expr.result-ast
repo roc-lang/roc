@@ -1,0 +1,46 @@
+@0-52 SpaceAfter(
+    Record(
+        [
+            @6-16 SpaceBefore(
+                RequiredValue(
+                    @6-12 "answer",
+                    [],
+                    @14-16 Num(
+                        "42",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            @22-50 SpaceBefore(
+                SpaceAfter(
+                    RequiredValue(
+                        @22-37 "launchTheNukes!",
+                        [],
+                        @39-50 Closure(
+                            [
+                                @40-42 RecordDestructure(
+                                    [],
+                                ),
+                            ],
+                            @46-50 Var {
+                                module_name: "",
+                                ident: "boom",
+                            },
+                        ),
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

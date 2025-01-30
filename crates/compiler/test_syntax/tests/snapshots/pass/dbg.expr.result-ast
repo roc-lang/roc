@@ -1,24 +1,14 @@
-Dbg(
-    @4-10 BinOps(
+@0-5 SpaceAfter(
+    Apply(
+        @0-3 Dbg,
         [
-            (
-                @4-5 Num(
-                    "1",
-                ),
-                @6-8 Equals,
+            @4-5 Num(
+                "1",
             ),
         ],
-        @9-10 Num(
-            "1",
-        ),
+        Space,
     ),
-    @12-13 SpaceBefore(
-        Num(
-            "4",
-        ),
-        [
-            Newline,
-            Newline,
-        ],
-    ),
+    [
+        Newline,
+    ],
 )

@@ -1,0 +1,459 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+    ],
+    regions: [
+        @0-644,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Expect {
+            condition: @11-644 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            EitherIndex(2147483648),
+                            EitherIndex(2147483649),
+                            EitherIndex(2147483650),
+                        ],
+                        regions: [
+                            @11-118,
+                            @124-252,
+                            @258-556,
+                        ],
+                        space_before: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 2 },
+                        ],
+                        space_after: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 0 },
+                        ],
+                        spaces: [
+                            Newline,
+                            Newline,
+                            Newline,
+                            Newline,
+                        ],
+                        type_defs: [],
+                        value_defs: [
+                            AnnotatedBody {
+                                ann_pattern: @11-15 Identifier {
+                                    ident: "html",
+                                },
+                                ann_type: @18-25 Apply(
+                                    "",
+                                    "Html",
+                                    [
+                                        @23-25 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                    ],
+                                ),
+                                lines_between: [
+                                    Newline,
+                                ],
+                                body_pattern: @30-34 Identifier {
+                                    ident: "html",
+                                },
+                                body_expr: @45-118 SpaceBefore(
+                                    Apply(
+                                        @45-52 Tag(
+                                            "Element",
+                                        ),
+                                        [
+                                            @53-56 Str(
+                                                PlainLine(
+                                                    "a",
+                                                ),
+                                            ),
+                                            @57-59 Num(
+                                                "43",
+                                            ),
+                                            @60-105 List(
+                                                [
+                                                    @61-104 Apply(
+                                                        @61-69 Tag(
+                                                            "HtmlAttr",
+                                                        ),
+                                                        [
+                                                            @70-76 Str(
+                                                                PlainLine(
+                                                                    "href",
+                                                                ),
+                                                            ),
+                                                            @77-104 Str(
+                                                                PlainLine(
+                                                                    "https://www.roc-lang.org/",
+                                                                ),
+                                                            ),
+                                                        ],
+                                                        Space,
+                                                    ),
+                                                ],
+                                            ),
+                                            @106-118 List(
+                                                [
+                                                    @107-117 Apply(
+                                                        @107-111 Tag(
+                                                            "Text",
+                                                        ),
+                                                        [
+                                                            @112-117 Str(
+                                                                PlainLine(
+                                                                    "Roc",
+                                                                ),
+                                                            ),
+                                                        ],
+                                                        Space,
+                                                    ),
+                                                ],
+                                            ),
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            },
+                            AnnotatedBody {
+                                ann_pattern: @124-130 Identifier {
+                                    ident: "actual",
+                                },
+                                ann_type: @133-185 Record {
+                                    fields: [
+                                        @135-160 RequiredValue(
+                                            @135-140 "nodes",
+                                            [],
+                                            @143-160 Apply(
+                                                "",
+                                                "List",
+                                                [
+                                                    @148-160 Apply(
+                                                        "",
+                                                        "RenderedNode",
+                                                        [],
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                        @162-183 RequiredValue(
+                                            @162-172 "siblingIds",
+                                            [],
+                                            @175-183 Apply(
+                                                "",
+                                                "List",
+                                                [
+                                                    @180-183 Apply(
+                                                        "",
+                                                        "U64",
+                                                        [],
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                    ],
+                                    ext: None,
+                                },
+                                lines_between: [
+                                    Newline,
+                                ],
+                                body_pattern: @190-196 Identifier {
+                                    ident: "actual",
+                                },
+                                body_expr: @207-252 SpaceBefore(
+                                    Apply(
+                                        @207-217 Var {
+                                            module_name: "",
+                                            ident: "indexNodes",
+                                        },
+                                        [
+                                            @218-247 Record(
+                                                [
+                                                    @220-229 RequiredValue(
+                                                        @220-225 "nodes",
+                                                        [],
+                                                        @227-229 List(
+                                                            [],
+                                                        ),
+                                                    ),
+                                                    @231-245 RequiredValue(
+                                                        @231-241 "siblingIds",
+                                                        [],
+                                                        @243-245 List(
+                                                            [],
+                                                        ),
+                                                    ),
+                                                ],
+                                            ),
+                                            @248-252 Var {
+                                                module_name: "",
+                                                ident: "html",
+                                            },
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            },
+                            AnnotatedBody {
+                                ann_pattern: @258-266 Identifier {
+                                    ident: "expected",
+                                },
+                                ann_type: @269-321 Record {
+                                    fields: [
+                                        @271-296 RequiredValue(
+                                            @271-276 "nodes",
+                                            [],
+                                            @279-296 Apply(
+                                                "",
+                                                "List",
+                                                [
+                                                    @284-296 Apply(
+                                                        "",
+                                                        "RenderedNode",
+                                                        [],
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                        @298-319 RequiredValue(
+                                            @298-308 "siblingIds",
+                                            [],
+                                            @311-319 Apply(
+                                                "",
+                                                "List",
+                                                [
+                                                    @316-319 Apply(
+                                                        "",
+                                                        "U64",
+                                                        [],
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                    ],
+                                    ext: None,
+                                },
+                                lines_between: [
+                                    Newline,
+                                ],
+                                body_pattern: @326-334 Identifier {
+                                    ident: "expected",
+                                },
+                                body_expr: @337-556 Record(
+                                    Collection {
+                                        items: [
+                                            @347-524 SpaceBefore(
+                                                RequiredValue(
+                                                    @347-352 "nodes",
+                                                    [],
+                                                    @354-524 List(
+                                                        Collection {
+                                                            items: [
+                                                                @368-386 SpaceBefore(
+                                                                    Apply(
+                                                                        @368-380 Tag(
+                                                                            "RenderedText",
+                                                                        ),
+                                                                        [
+                                                                            @381-386 Str(
+                                                                                PlainLine(
+                                                                                    "Roc",
+                                                                                ),
+                                                                            ),
+                                                                        ],
+                                                                        Space,
+                                                                    ),
+                                                                    [
+                                                                        Newline,
+                                                                    ],
+                                                                ),
+                                                                @400-513 SpaceBefore(
+                                                                    Apply(
+                                                                        @400-415 Tag(
+                                                                            "RenderedElement",
+                                                                        ),
+                                                                        [
+                                                                            @416-419 Str(
+                                                                                PlainLine(
+                                                                                    "a",
+                                                                                ),
+                                                                            ),
+                                                                            @420-509 RecordUpdate {
+                                                                                update: @422-440 Var {
+                                                                                    module_name: "",
+                                                                                    ident: "emptyRenderedAttrs",
+                                                                                },
+                                                                                fields: [
+                                                                                    @443-507 RequiredValue(
+                                                                                        @443-452 "htmlAttrs",
+                                                                                        [],
+                                                                                        @454-507 Apply(
+                                                                                            @454-467 Var {
+                                                                                                module_name: "Dict",
+                                                                                                ident: "fromList",
+                                                                                            },
+                                                                                            [
+                                                                                                @468-507 List(
+                                                                                                    [
+                                                                                                        @469-506 Tuple(
+                                                                                                            [
+                                                                                                                @470-476 Str(
+                                                                                                                    PlainLine(
+                                                                                                                        "href",
+                                                                                                                    ),
+                                                                                                                ),
+                                                                                                                @478-505 Str(
+                                                                                                                    PlainLine(
+                                                                                                                        "https://www.roc-lang.org/",
+                                                                                                                    ),
+                                                                                                                ),
+                                                                                                            ],
+                                                                                                        ),
+                                                                                                    ],
+                                                                                                ),
+                                                                                            ],
+                                                                                            Space,
+                                                                                        ),
+                                                                                    ),
+                                                                                ],
+                                                                            },
+                                                                            @510-513 List(
+                                                                                [
+                                                                                    @511-512 Num(
+                                                                                        "0",
+                                                                                    ),
+                                                                                ],
+                                                                            ),
+                                                                        ],
+                                                                        Space,
+                                                                    ),
+                                                                    [
+                                                                        Newline,
+                                                                    ],
+                                                                ),
+                                                            ],
+                                                            final_comments: [
+                                                                Newline,
+                                                            ],
+                                                        },
+                                                    ),
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                            @534-549 SpaceBefore(
+                                                RequiredValue(
+                                                    @534-544 "siblingIds",
+                                                    [],
+                                                    @546-549 List(
+                                                        [
+                                                            @547-548 Num(
+                                                                "1",
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                        final_comments: [
+                                            Newline,
+                                        ],
+                                    },
+                                ),
+                            },
+                        ],
+                    },
+                    @562-644 SpaceBefore(
+                        BinOps(
+                            [
+                                (
+                                    @563-593 SpaceAfter(
+                                        ParensAround(
+                                            BinOps(
+                                                [
+                                                    (
+                                                        @563-575 RecordAccess(
+                                                            Var {
+                                                                module_name: "",
+                                                                ident: "actual",
+                                                            },
+                                                            "nodes",
+                                                        ),
+                                                        @576-578 Equals,
+                                                    ),
+                                                ],
+                                                @579-593 RecordAccess(
+                                                    Var {
+                                                        module_name: "",
+                                                        ident: "expected",
+                                                    },
+                                                    "nodes",
+                                                ),
+                                            ),
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    @599-601 And,
+                                ),
+                            ],
+                            @603-643 ParensAround(
+                                BinOps(
+                                    [
+                                        (
+                                            @603-620 RecordAccess(
+                                                Var {
+                                                    module_name: "",
+                                                    ident: "actual",
+                                                },
+                                                "siblingIds",
+                                            ),
+                                            @621-623 Equals,
+                                        ),
+                                    ],
+                                    @624-643 RecordAccess(
+                                        Var {
+                                            module_name: "",
+                                            ident: "expected",
+                                        },
+                                        "siblingIds",
+                                    ),
+                                ),
+                            ),
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+            preceding_comment: …,
+        },
+    ],
+}

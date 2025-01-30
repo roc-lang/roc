@@ -6,30 +6,30 @@ Builtins are the functions and modules that are implicitly imported into every m
 
 Edit the appropriate `roc/*.roc` file with your new implementation. All normal rules for writing Roc code apply. Be sure to add a declaration, definition, some documentation and add it to the exposes list it in the module head.
 
-Next, look towards the bottom of the  `compiler/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
+Next, look towards the bottom of the `compiler/module/src/symbol.rs` file. Inside the `define_builtins!` macro, there is a list for each of the builtin modules and the function or value names it contains. Add a new entry to the appropriate list for your new function.
 
 For each of the builtin modules, there is a file in `compiler/test_gen/src/` like `gen_num.rs`, `gen_str.rs` etc. Add new tests for the module you are changing to the appropriate file here. You can look at the existing test cases for examples and inspiration.
 
-You can run your new tests locally using `cargo test-gen-llvm`. You can add a filter like `cargo test-gen-llvm gen_str` (to only run tests defined in `gen_str.rs`) or `cargo test-gen-llvm gen_str::str_split` (to only run tests defined in `gen_str` whose names start with `str_split`). More details can be found in the README in the `compiler/test_gen` directory.
+You can run your new tests locally using `cargo test-gen-llvm`. You can add a filter like `cargo test-gen-llvm gen_str` (to only run tests defined in `gen_str.rs`) or `cargo test-gen-llvm gen_str::str_split_on` (to only run tests defined in `gen_str` whose names start with `str_split`). More details can be found in the README in the `compiler/test_gen` directory.
 
 ## A builtin implemented directly as LLVM
 
 ### module/src/symbol.rs
 
-Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `addTwo` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "addTwo"` (assuming there are 37 existing ones).
+Towards the bottom of `symbol.rs` there is a `define_builtins!` macro being used that takes many modules and function names. The first level (`List`, `Int` ..) is the module name, and the second level is the function or value name (`reverse`, `rem` ..). If you wanted to add a `Int` function called `add_two` go to `2 Int: "Int" => {` and inside that case add to the bottom `38 INT_ADD_TWO: "add_two"` (assuming there are 37 existing ones).
 
 Some of these have `#` inside their name (`first#list`, `#lt` ..). This is a trick we are doing to hide implementation details from Roc programmers. To a Roc programmer, a name with `#` in it is invalid, because `#` means everything after it is parsed to a comment. We are constructing these functions manually, so we are circumventing the parsing step and don't have such restrictions. We get to make functions and values with `#` which as a consequence are not accessible to Roc programmers. Roc programmers simply cannot reference them.
 
 But we can use these values and some of these are necessary for implementing builtins. For example, `List.get` returns tags, and it is not easy for us to create tags when composing LLVM. What is easier however, is:
 
-- ..writing `List.#getUnsafe` that has the dangerous signature of `List elem, Nat -> elem` in LLVM
-- ..writing `List elem, Nat -> Result elem [OutOfBounds]*` in a type safe way that uses `getUnsafe` internally, only after it checks if the `elem` at `Nat` index exists.
+- ..writing `List.#get_unsafe` that has the dangerous signature of `List elem, U64 -> elem` in LLVM
+- ..writing `List elem, U64 -> Result elem [OutOfBounds]*` in a type safe way that uses `get_unsafe` internally, only after it checks if the `elem` at `U64` index exists.
 
 ### can/src/builtins.rs
 
-Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to  defer to lower-level functions via an if statement.
+Right at the top of this module is a function called `builtin_defs`. All this is doing is mapping the `Symbol` defined in `module/src/symbol.rs` to its implementation. Some of the builtins are quite complex, such as `list_get`. What makes `list_get` is that it returns tags, and in order to return tags it first has to defer to lower-level functions via an if statement.
 
-Lets look at `List.repeat : elem, Nat -> List elem`, which is more straight-forward, and points directly to its lower level implementation:
+Lets look at `List.repeat : elem, U64 -> List elem`, which is more straightforward, and points directly to its lower level implementation:
 
 ```rust
 fn list_repeat(symbol: Symbol, var_store: &mut VarStore) -> Def {
@@ -80,7 +80,7 @@ It's one thing to actually write these functions, it's _another_ thing to let th
 
 ## Specifying how we pass args to the function
 
-### builtins/mono/src/borrow.rs
+### builtins/mono/src/inc_dec.rs
 
 After we have all of this, we need to specify if the arguments we're passing are owned, borrowed or irrelevant. Towards the bottom of this file, add a new case for your builtin and specify each arg. Be sure to read the comment, as it explains this in more detail.
 
@@ -106,7 +106,7 @@ fn atan() {
 
 But replace `Num.atan` and the type signature with the new builtin.
 
-### test_gen/test/*.rs
+### test_gen/test/\*.rs
 
 In this directory, there are a couple files like `gen_num.rs`, `gen_str.rs`, etc. For the `Str` module builtins, put the test in `gen_str.rs`, etc. Find the one for the new builtin, and add a test like:
 
@@ -123,5 +123,5 @@ But replace `Num.atan`, the return value, and the return type with your new buil
 
 When implementing a new builtin, it is often easy to copy and paste the implementation for an existing builtin. This can take you quite far since many builtins are very similar, but it also risks forgetting to change one small part of what you copy and pasted and losing a lot of time later on when you cant figure out why things don't work. So, speaking from experience, even if you are copying an existing builtin, try and implement it manually without copying and pasting. Two recent instances of this (as of September 7th, 2020):
 
-- `List.keepIf` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
-- `List.walkBackwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keepIf`.
+- `List.keep_if` did not work for a long time because in builtins its `LowLevel` was `ListMap`. This was because I copy and pasted the `List.map` implementation in `builtins.rs
+- `List.walk_backwards` had mysterious memory bugs for a little while because in `unique.rs` its return type was `list_type(flex(b))` instead of `flex(b)` since it was copy and pasted from `List.keep_if`.

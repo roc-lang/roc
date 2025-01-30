@@ -7,11 +7,10 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-morphic_lib = { path = "../../vendor/morphic_lib" }
-roc_collections = { path = "../collections" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_error_macros = { path = "../../error_macros" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-
+morphic_lib.workspace = true
+roc_collections.workspace = true
+roc_debug_flags.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
 bumpalo.workspace = true

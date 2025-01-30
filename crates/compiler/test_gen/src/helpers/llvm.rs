@@ -16,7 +16,7 @@ use roc_mono::ir::{CrashTag, OptLevel, SingleEntryPoint};
 use roc_packaging::cache::RocCacheDir;
 use roc_region::all::LineInfo;
 use roc_reporting::report::{RenderTarget, DEFAULT_PALETTE};
-use target_lexicon::Triple;
+use roc_target::Target;
 
 #[cfg(feature = "gen-llvm-wasm")]
 use crate::helpers::from_wasm32_memory::FromWasm32Memory;
@@ -52,11 +52,9 @@ fn create_llvm_module<'a>(
     src: &str,
     config: HelperConfig,
     context: &'a inkwell::context::Context,
-    target: &Triple,
+    target: Target,
     function_kind: FunctionKind,
 ) -> (&'static str, String, &'a Module<'a>) {
-    let target_info = roc_target::TargetInfo::from(target);
-
     let filename = PathBuf::from("Test.roc");
     let src_dir = PathBuf::from("fake/test/path");
 
@@ -72,7 +70,7 @@ fn create_llvm_module<'a>(
     }
 
     let load_config = LoadConfig {
-        target_info,
+        target,
         function_kind,
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
@@ -84,6 +82,7 @@ fn create_llvm_module<'a>(
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -92,6 +91,7 @@ fn create_llvm_module<'a>(
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
+            _,
         ))) => {
             println!("{report}");
             panic!();
@@ -186,8 +186,6 @@ fn create_llvm_module<'a>(
     let module = roc_gen_llvm::llvm::build::module_from_builtins(target, context, "app");
 
     let module = arena.alloc(module);
-    let (module_pass, function_pass) =
-        roc_gen_llvm::llvm::build::construct_optimization_passes(module, config.opt_level);
 
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
 
@@ -227,14 +225,11 @@ fn create_llvm_module<'a>(
         context,
         interns,
         module,
-        target_info,
+        target,
         mode: config.mode,
         // important! we don't want any procedures to get the C calling convention
         exposed_to_host: MutSet::default(),
     };
-
-    // strip Zig debug stuff
-    module.strip_debug_info();
 
     // Add roc_alloc, roc_realloc, and roc_dealloc, since the repl has no
     // platform to provide them.
@@ -247,17 +242,21 @@ fn create_llvm_module<'a>(
         } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let (name, symbol, layout) = exposed_to_host[0];
 
-            SingleEntryPoint { symbol, layout }
+            SingleEntryPoint {
+                name,
+                symbol,
+                layout,
+            }
         }
         EntryPoint::Test => {
             unreachable!()
         }
     };
-    let (main_fn_name, main_fn) = match config.mode {
+    let (main_fn_name, _main_fn) = match config.mode {
         LlvmBackendMode::Binary => unreachable!(),
-        LlvmBackendMode::BinaryDev => unreachable!(),
+        LlvmBackendMode::BinaryWithExpect => unreachable!(),
         LlvmBackendMode::BinaryGlue => unreachable!(),
         LlvmBackendMode::CliTest => unreachable!(),
         LlvmBackendMode::WasmGenTest => roc_gen_llvm::llvm::build::build_wasm_test_wrapper(
@@ -279,39 +278,20 @@ fn create_llvm_module<'a>(
 
     env.dibuilder.finalize();
 
-    // strip all debug info: we don't use it at the moment and causes weird validation issues
-    module.strip_debug_info();
-
-    // Uncomment this to see the module's un-optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    let panic_bad_llvm = |errors| {
-        let path = std::env::temp_dir().join("test.ll");
-        env.module.print_to_file(&path).unwrap();
-        panic!(
-            "Errors defining module:\n\n{errors}\n\nI have written the full module to `{path:?}`"
-        );
-    };
-
-    if main_fn.verify(true) {
-        function_pass.run_on(&main_fn);
-    } else {
-        panic_bad_llvm(main_fn_name);
-    }
-
-    module_pass.run_on(env.module);
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        panic_bad_llvm(&errors.to_string());
-    }
+    let ll_file_path = std::env::temp_dir().join("test.ll");
+    let opt_level = OptLevel::Development;
+    let emit_debug_info = true;
+    roc_build::llvm_passes::optimize_llvm_ir(
+        &env,
+        target,
+        opt_level,
+        emit_debug_info,
+        &ll_file_path,
+    );
 
     if let Ok(path) = std::env::var("ROC_DEBUG_LLVM") {
         env.module.print_to_file(path).unwrap();
     }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
 
     let delayed_errors = if config.ignore_problems {
         String::new()
@@ -325,7 +305,7 @@ fn create_llvm_module<'a>(
 pub struct HelperConfig {
     pub mode: LlvmBackendMode,
     pub ignore_problems: bool,
-    pub add_debug_info: bool,
+    pub emit_debug_info: bool,
     pub opt_level: OptLevel,
 }
 
@@ -338,71 +318,22 @@ pub fn helper<'a>(
     context: &'a inkwell::context::Context,
     function_kind: FunctionKind,
 ) -> (&'static str, String, Library) {
-    let target = target_lexicon::Triple::host();
+    let target = target_lexicon::Triple::host().into();
 
     let (main_fn_name, delayed_errors, module) =
-        create_llvm_module(arena, src, config, context, &target, function_kind);
+        create_llvm_module(arena, src, config, context, target, function_kind);
 
-    let res_lib = if config.add_debug_info {
-        let module = annotate_with_debug_info(module, context);
-        llvm_module_to_dylib(&module, &target, config.opt_level)
-    } else {
-        llvm_module_to_dylib(module, &target, config.opt_level)
-    };
+    // for debugging:
+    //module.print_to_file(std::path::Path::new("/home/username/roc/llvm_ir.ll")).unwrap();
+
+    if !config.emit_debug_info {
+        module.strip_debug_info();
+    }
+    let res_lib = llvm_module_to_dylib(module, target, config.opt_level);
 
     let lib = res_lib.expect("Error loading compiled dylib for test");
 
     (main_fn_name, delayed_errors, lib)
-}
-
-fn annotate_with_debug_info<'ctx>(
-    module: &Module<'ctx>,
-    context: &'ctx inkwell::context::Context,
-) -> Module<'ctx> {
-    use std::process::Command;
-
-    let app_ll_file = "/tmp/roc-debugir.ll";
-    let app_dbg_ll_file = "/tmp/roc-debugir.dbg.ll";
-    let app_bc_file = "/tmp/roc-debugir.bc";
-
-    // write the ll code to a file, so we can modify it
-    module.print_to_file(app_ll_file).unwrap();
-
-    // run the debugir https://github.com/vaivaswatha/debugir tool
-    match Command::new("debugir")
-        .args(["-instnamer", app_ll_file])
-        .output()
-    {
-        Ok(_) => {}
-        Err(error) => {
-            use std::io::ErrorKind;
-            match error.kind() {
-                ErrorKind::NotFound => panic!(
-                    r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
-                ),
-                _ => panic!("{error:?}"),
-            }
-        }
-    }
-
-    Command::new("llvm-as")
-        .args([app_dbg_ll_file, "-o", app_bc_file])
-        .output()
-        .unwrap();
-
-    inkwell::module::Module::parse_bitcode_from_path(app_bc_file, context).unwrap()
-}
-
-#[allow(dead_code)]
-fn wasm32_target_tripple() -> Triple {
-    use target_lexicon::{Architecture, BinaryFormat};
-
-    let mut triple = Triple::unknown();
-
-    triple.architecture = Architecture::Wasm32;
-    triple.binary_format = BinaryFormat::Wasm;
-
-    triple
 }
 
 #[allow(dead_code)]
@@ -429,10 +360,10 @@ fn compile_to_wasm_bytes<'a>(
     static TEMP_DIR: OnceLock<tempfile::TempDir> = OnceLock::new();
     let temp_dir = TEMP_DIR.get_or_init(|| tempfile::tempdir().unwrap());
 
-    let target = wasm32_target_tripple();
+    let target = Target::Wasm32;
 
     let (_main_fn_name, _delayed_errors, llvm_module) =
-        create_llvm_module(arena, src, config, context, &target, function_kind);
+        create_llvm_module(arena, src, config, context, target, function_kind);
 
     let content_hash = crate::helpers::src_hash(src);
     let wasm_file = llvm_module_to_wasm_file(temp_dir, content_hash, llvm_module);
@@ -533,7 +464,7 @@ where
 
     let config = HelperConfig {
         mode: LlvmBackendMode::WasmGenTest,
-        add_debug_info: false,
+        emit_debug_info: false,
         ignore_problems,
         opt_level: OPT_LEVEL,
     };
@@ -592,7 +523,9 @@ pub fn try_run_lib_function<T>(
     }
 }
 
+#[allow(dead_code)]
 // only used in tests
+#[allow(dead_code)]
 pub(crate) fn llvm_evals_to<T, U, F>(
     src: &str,
     expected: U,
@@ -611,7 +544,7 @@ pub(crate) fn llvm_evals_to<T, U, F>(
 
     let config = crate::helpers::llvm::HelperConfig {
         mode: LlvmBackendMode::GenTest,
-        add_debug_info: false,
+        emit_debug_info: false,
         ignore_problems,
         opt_level: crate::helpers::llvm::OPT_LEVEL,
     };
@@ -641,6 +574,7 @@ pub(crate) fn llvm_evals_to<T, U, F>(
     }
 }
 
+#[allow(unused_macros)]
 macro_rules! assert_llvm_evals_to {
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $ignore_problems:expr) => {
         crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
@@ -674,6 +608,7 @@ macro_rules! assert_llvm_evals_to {
 //
 //   let (_main_fn_name, _delayed_errors, _module) =
 //       $crate::helpers::llvm::create_llvm_module(&arena, $src, config, &context, &target);
+#[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
         assert_evals_to!($src, $expected, $ty, $crate::helpers::llvm::identity, false);
@@ -704,6 +639,7 @@ macro_rules! assert_evals_to {
     }};
 }
 
+#[allow(unused_macros)]
 macro_rules! assert_evals_to_erased {
     ($src:expr, $expected:expr, $ty:ty) => {{
         crate::helpers::llvm::llvm_evals_to::<$ty, _, _>(
@@ -716,12 +652,16 @@ macro_rules! assert_evals_to_erased {
     }};
 }
 
+#[allow(dead_code)]
 pub fn identity<T>(value: T) -> T {
     value
 }
 
+#[allow(unused_imports)]
 pub(crate) use assert_evals_to;
+#[allow(unused_imports)]
 pub(crate) use assert_evals_to_erased;
+#[allow(unused_imports)]
 pub(crate) use assert_llvm_evals_to;
 #[cfg(feature = "gen-llvm-wasm")]
 pub(crate) use assert_wasm_evals_to;

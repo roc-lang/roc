@@ -1,6 +1,5 @@
 use libloading::Library;
 use roc_build::link::{link, LinkType};
-use roc_builtins::bitcode;
 use roc_load::{EntryPoint, ExecutionMode, LoadConfig, Threading};
 use roc_mono::ir::CrashTag;
 use roc_mono::ir::SingleEntryPoint;
@@ -57,7 +56,7 @@ pub fn helper(
     }
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(),
+        target: roc_target::Target::LinuxX64,
         render: roc_reporting::report::RenderTarget::ColorTerminal,
         palette: roc_reporting::report::DEFAULT_PALETTE,
         threading: Threading::Single,
@@ -69,6 +68,7 @@ pub fn helper(
         filename,
         module_src,
         src_dir,
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -89,13 +89,10 @@ pub fn helper(
     // while you're working on the dev backend!
     {
         // println!("=========== Procedures ==========");
-        // if pretty_print_ir_symbols() {
-        //     println!("");
-        //     for proc in procedures.values() {
-        //         println!("{}", proc.to_pretty(200));
-        //     }
-        // } else {
-        //     println!("{:?}", procedures.values());
+        // let pretty = pretty_print_ir_symbols();
+        // println!("");
+        // for proc in procedures.values() {
+        //     println!("{}", proc.to_pretty(&layout_interner, 200, pretty));
         // }
         // println!("=================================\n");
 
@@ -116,9 +113,13 @@ pub fn helper(
         } => {
             // TODO support multiple of these!
             debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let (name, symbol, layout) = exposed_to_host[0];
 
-            SingleEntryPoint { symbol, layout }
+            SingleEntryPoint {
+                name,
+                symbol,
+                layout,
+            }
         }
         EntryPoint::Test => {
             unreachable!()
@@ -198,14 +199,9 @@ pub fn helper(
         mode: roc_gen_dev::AssemblyBackendMode::Test,
     };
 
-    let target = target_lexicon::Triple::host();
-    let module_object = roc_gen_dev::build_module(
-        &env,
-        &mut interns,
-        &mut layout_interner,
-        &target,
-        procedures,
-    );
+    let target = target_lexicon::Triple::host().into();
+    let module_object =
+        roc_gen_dev::build_module(&env, &mut interns, &mut layout_interner, target, procedures);
 
     let module_out = module_object
         .write()
@@ -215,14 +211,8 @@ pub fn helper(
     let builtins_host_tempfile =
         roc_bitcode::host_tempfile().expect("failed to write host builtins object to tempfile");
 
-    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
-        let file_path = std::env::temp_dir().join("app.o");
-        println!("gen-test object file written to {}", file_path.display());
-        std::fs::copy(&app_o_file, file_path).unwrap();
-    }
-
     let (mut child, dylib_path) = link(
-        &target,
+        target,
         app_o_file.clone(),
         // Long term we probably want a smarter way to link in zig builtins.
         // With the current method all methods are kept and it adds about 100k to all outputs.
@@ -316,12 +306,6 @@ fn get_test_main_fn<T>(
     get_raw_fn("test_main", lib)
 }
 
-pub(crate) fn run_function<T>(fn_name: &str, lib: &libloading::Library) -> T {
-    let main = get_raw_fn::<T>(fn_name, lib);
-
-    unsafe { main() }
-}
-
 pub(crate) fn run_test_main<T>(lib: &libloading::Library) -> Result<T, (String, CrashTag)> {
     let main = get_test_main_fn::<T>(lib);
 
@@ -336,10 +320,56 @@ impl<T: Sized> From<RocCallResult<T>> for Result<T, (String, CrashTag)> {
     }
 }
 
+// only used in tests
+pub(crate) fn asm_evals_to<T, U, F>(
+    src: &str,
+    expected: U,
+    transform: F,
+    leak: bool,
+    lazy_literals: bool,
+) where
+    U: PartialEq + std::fmt::Debug,
+    F: FnOnce(T) -> U,
+{
+    use bumpalo::Bump;
+
+    let arena = Bump::new();
+    let (_main_fn_name, errors, lib) =
+        crate::helpers::dev::helper(&arena, src, leak, lazy_literals);
+
+    let result = crate::helpers::dev::run_test_main::<T>(&lib);
+
+    if !errors.is_empty() {
+        assert_eq!(
+            errors,
+            std::vec::Vec::new(),
+            "Encountered errors: {:?}",
+            errors
+        );
+    }
+
+    match result {
+        Ok(value) => {
+            let expected = expected;
+            #[allow(clippy::redundant_closure_call)]
+            let given = transform(value);
+            assert_eq!(&given, &expected, "output is different");
+        }
+        Err((msg, tag)) => match tag {
+            CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
+            CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
+        },
+    }
+}
+
+pub(crate) fn identity<T>(x: T) -> T {
+    x
+}
+
 #[allow(unused_macros)]
 macro_rules! assert_evals_to {
     ($src:expr, $expected:expr, $ty:ty) => {{
-        assert_evals_to!($src, $expected, $ty, (|val| val));
+        assert_evals_to!($src, $expected, $ty, $crate::helpers::dev::identity);
     }};
     ($src:expr, $expected:expr, $ty:ty, $transform:expr) => {
         // Same as above, except with an additional transformation argument.
@@ -357,41 +387,13 @@ macro_rules! assert_evals_to {
         }
     };
     ($src:expr, $expected:expr, $ty:ty, $transform:expr, $leak:expr, $lazy_literals:expr) => {
-        use bumpalo::Bump;
-
-        let arena = Bump::new();
-        let (_main_fn_name, errors, lib) =
-            $crate::helpers::dev::helper(&arena, $src, $leak, $lazy_literals);
-
-        let result = $crate::helpers::dev::run_test_main::<$ty>(&lib);
-
-        if !errors.is_empty() {
-            dbg!(&errors);
-
-            assert_eq!(
-                errors,
-                std::vec::Vec::new(),
-                "Encountered errors: {:?}",
-                errors
-            );
-        }
-
-        match result {
-            Ok(value) => {
-                let expected = $expected;
-                #[allow(clippy::redundant_closure_call)]
-                let given = $transform(value);
-                assert_eq!(&given, &expected, "output is different");
-            }
-            Err((msg, tag)) => {
-                use roc_mono::ir::CrashTag;
-
-                match tag {
-                    CrashTag::Roc => panic!(r#"Roc failed with message: "{msg}""#),
-                    CrashTag::User => panic!(r#"User crash with message: "{msg}""#),
-                }
-            }
-        }
+        $crate::helpers::dev::asm_evals_to::<$ty, _, _>(
+            $src,
+            $expected,
+            $transform,
+            $leak,
+            $lazy_literals,
+        );
     };
 }
 

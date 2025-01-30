@@ -4,8 +4,8 @@ Effect a := {} -> a
 
 eforever : Effect a -> Effect b
 
-Task a err : Effect (Result a err)
+OtherTask a err : Effect (Result a err)
 
-tforever : Task val err -> Task * *
+tforever : OtherTask val err -> OtherTask * *
 tforever = \task -> eforever task
-#^^^^^^^^{-1} Task val err -[[tforever(0)]]-> Task * *
+#^^^^^^^^{-1} OtherTask val err -[[tforever(0)]]-> OtherTask * *

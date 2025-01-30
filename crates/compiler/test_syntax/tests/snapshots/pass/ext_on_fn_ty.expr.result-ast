@@ -1,0 +1,59 @@
+@0-11 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-9,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "t",
+                    },
+                    @2-9 Tuple {
+                        elems: [
+                            @3-7 Function(
+                                [
+                                    @3-4 BoundVariable(
+                                        "w",
+                                    ),
+                                ],
+                                Effectful,
+                                @6-7 BoundVariable(
+                                    "p",
+                                ),
+                            ),
+                        ],
+                        ext: Some(
+                            @8-9 BoundVariable(
+                                "a",
+                            ),
+                        ),
+                    },
+                ),
+            ],
+        },
+        @10-11 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "t",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

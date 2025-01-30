@@ -1,0 +1,75 @@
+@0-30 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-25,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-1 "M",
+                        vars: [
+                            @4-6 SpaceBefore(
+                                Identifier(
+                                    "im",
+                                ),
+                                [
+                                    LineComment(
+                                        "",
+                                    ),
+                                ],
+                            ),
+                        ],
+                    },
+                    loc_implements: @9-19 SpaceBefore(
+                        Implements,
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                    ),
+                    members: [
+                        AbilityMember {
+                            name: @21-23 SpaceBefore(
+                                "de",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            typ: @24-25 Apply(
+                                "",
+                                "J",
+                                [],
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @29-30 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "s",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

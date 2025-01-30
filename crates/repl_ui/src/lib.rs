@@ -4,64 +4,44 @@ pub mod colors;
 pub mod repl_state;
 
 use bumpalo::Bump;
-use colors::{BLUE, END_COL, PINK};
+use colors::{CYAN, END_COL, GREEN};
 use const_format::concatcp;
 use repl_state::{parse_src, ParseOutcome};
-use roc_parse::ast::{Expr, ValueDef};
+use roc_parse::ast::{Expr, ExtractSpaces, ValueDef};
 use roc_repl_eval::gen::{Problems, ReplOutput};
 use roc_reporting::report::StyleCodes;
 
-use crate::colors::GREEN;
-
-// TODO add link to repl tutorial(does not yet exist).
+// TODO add link to repl tutorial (does not yet exist).
 pub const TIPS: &str = concatcp!(
     "\nEnter an expression to evaluate, or a definition (like ",
-    BLUE,
+    CYAN,
     "x = 1",
     END_COL,
     ") to use later.\n\n",
     if cfg!(target_family = "wasm") {
-        // In the web REPL, the :quit command doesn't make sense. Just close the browser tab!
-        // We use Shift-Enter for newlines because it's nicer than our workaround for Unix terminals (see below)
-        concatcp!(
-            BLUE,
-            "  - ",
-            END_COL,
-            PINK,
-            "Shift-Enter",
-            END_COL,
-            " or ",
-            PINK,
-            "Ctrl-Enter",
-            END_COL,
-            " makes a newline\n",
-            BLUE,
-            "  - ",
-            END_COL,
-            ":help"
-        )
+        "" // In the web repl, we render tips in the UI around the repl instead of in the repl itself.
     } else {
         // We use ctrl-v + ctrl-j for newlines because on Unix, terminals cannot distinguish between Shift-Enter and Enter
         concatcp!(
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
-            PINK,
+            GREEN,
             "ctrl-v",
             END_COL,
             " + ",
-            PINK,
+            GREEN,
             "ctrl-j",
             END_COL,
             " makes a newline\n",
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
             GREEN,
             ":q",
             END_COL,
             " quits\n",
-            BLUE,
+            CYAN,
             "  - ",
             END_COL,
             GREEN,
@@ -75,32 +55,38 @@ pub const TIPS: &str = concatcp!(
 // For when nothing is entered in the repl
 // TODO add link to repl tutorial(does not yet exist).
 pub const SHORT_INSTRUCTIONS: &str = "Enter an expression, or :help, or :q to quit.\n\n";
-pub const PROMPT: &str = concatcp!(BLUE, "»", END_COL, " ");
-pub const CONT_PROMPT: &str = concatcp!(BLUE, "…", END_COL, " ");
+pub const PROMPT: &str = concatcp!(CYAN, "»", END_COL, " ");
+pub const CONT_PROMPT: &str = concatcp!(CYAN, "…", END_COL, " ");
 
 pub fn is_incomplete(input: &str) -> bool {
     let arena = Bump::new();
 
     match parse_src(&arena, input) {
         ParseOutcome::Incomplete => !input.ends_with('\n'),
-        // Standalone annotations are default incomplete, because we can't know
-        // whether they're about to annotate a body on the next line
-        // (or if not, meaning they stay standalone) until you press Enter again!
-        //
-        // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
-        ParseOutcome::ValueDef(ValueDef::Annotation(_, _)) if !input.ends_with('\n') => true,
-        ParseOutcome::Expr(Expr::When(_, _)) => {
-            // There might be lots of `when` branches, so don't assume the user is done entering
-            // them until they enter a blank line!
-            !input.ends_with('\n')
+        ParseOutcome::DefsAndExpr(defs, None) => {
+            // Standalone annotations are default incomplete, because we can't know
+            // whether they're about to annotate a body on the next line
+            // (or if not, meaning they stay standalone) until you press Enter again!
+            //
+            // So it's Incomplete until you've pressed Enter again (causing the input to end in "\n")
+            if matches!(defs.last(), Some(Err(ValueDef::Annotation(_, _)))) {
+                !input.ends_with('\n')
+            } else {
+                false
+            }
         }
-        ParseOutcome::Empty
-        | ParseOutcome::Help
-        | ParseOutcome::Exit
-        | ParseOutcome::ValueDef(_)
-        | ParseOutcome::TypeDef(_)
-        | ParseOutcome::SyntaxErr
-        | ParseOutcome::Expr(_) => false,
+        ParseOutcome::DefsAndExpr(_, Some(expr)) => {
+            if matches!(expr.extract_spaces().item, Expr::When(..)) {
+                // There might be lots of `when` branches, so don't assume the user is done entering
+                // them until they enter a blank line!
+                !input.ends_with('\n')
+            } else {
+                false
+            }
+        }
+        ParseOutcome::Empty | ParseOutcome::Help | ParseOutcome::Exit | ParseOutcome::SyntaxErr => {
+            false
+        }
     }
 }
 
@@ -134,7 +120,7 @@ pub fn format_output(
             {
                 buf.push('\n');
                 buf.push_str(&expr);
-                buf.push_str(style_codes.magenta); // Color for the type separator
+                buf.push_str(style_codes.green); // Color for the type separator
                 buf.push_str(EXPR_TYPE_SEPARATOR);
                 buf.push_str(style_codes.reset);
                 buf.push_str(&expr_type);

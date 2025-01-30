@@ -1,0 +1,61 @@
+@0-25 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-2 Var {
+                    module_name: "",
+                    ident: "di",
+                },
+                @2-3 LessThan,
+            ),
+            (
+                @3-4 Var {
+                    module_name: "",
+                    ident: "s",
+                },
+                @4-5 LessThan,
+            ),
+        ],
+        @5-25 Apply(
+            @5-21 When(
+                @10-11 SpaceAfter(
+                    Var {
+                        module_name: "",
+                        ident: "b",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+                [
+                    WhenBranch {
+                        patterns: [
+                            @16-17 NumLiteral(
+                                "7",
+                            ),
+                        ],
+                        value: @19-21 Num(
+                            "7e",
+                        ),
+                        guard: None,
+                    },
+                ],
+            ),
+            [
+                @23-25 SpaceBefore(
+                    Var {
+                        module_name: "",
+                        ident: "zl",
+                    },
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            Space,
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

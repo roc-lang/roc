@@ -1,40 +1,45 @@
-When(
-    @5-6 Num(
-        "0",
+@0-60 SpaceAfter(
+    When(
+        @5-6 Num(
+            "0",
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @14-54 SpaceBefore(
+                        As(
+                            @14-15 SpaceAfter(
+                                NumLiteral(
+                                    "0",
+                                ),
+                                [
+                                    LineComment(
+                                        " foobar",
+                                    ),
+                                ],
+                            ),
+                            PatternAs {
+                                spaces_before: [
+                                    LineComment(
+                                        " barfoo",
+                                    ),
+                                ],
+                                identifier: @53-54 "n",
+                            },
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @58-60 Record(
+                    [],
+                ),
+                guard: None,
+            },
+        ],
     ),
     [
-        WhenBranch {
-            patterns: [
-                @14-54 SpaceBefore(
-                    As(
-                        @14-15 SpaceAfter(
-                            NumLiteral(
-                                "0",
-                            ),
-                            [
-                                LineComment(
-                                    " foobar",
-                                ),
-                            ],
-                        ),
-                        PatternAs {
-                            spaces_before: [
-                                LineComment(
-                                    " barfoo",
-                                ),
-                            ],
-                            identifier: @53-54 "n",
-                        },
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @58-60 Record(
-                [],
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

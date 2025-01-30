@@ -1,0 +1,17 @@
+@0-19 SpaceAfter(
+    Apply(
+        @0-15 Var {
+            module_name: "",
+            ident: "launchTheNukes!",
+        },
+        [
+            @16-19 Num(
+                "123",
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

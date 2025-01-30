@@ -12,8 +12,11 @@ use core::{
     ops::{Deref, DerefMut},
     ptr::{self, NonNull},
 };
+use std::{cmp::max, ops::Range};
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage};
+use crate::{
+    roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted, ROC_REFCOUNT_CONSTANT,
+};
 
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
@@ -25,7 +28,10 @@ use serde::{
 };
 
 #[repr(C)]
-pub struct RocList<T> {
+pub struct RocList<T>
+where
+    T: RocRefcounted,
+{
     elements: Option<NonNull<ManuallyDrop<T>>>,
     length: usize,
     // This technically points to directly after the refcount.
@@ -33,10 +39,22 @@ pub struct RocList<T> {
     capacity_or_ref_ptr: usize,
 }
 
-impl<T> RocList<T> {
+impl<T> RocList<T>
+where
+    T: RocRefcounted,
+{
     #[inline(always)]
-    fn alloc_alignment() -> u32 {
-        mem::align_of::<T>().max(mem::align_of::<Storage>()) as u32
+    fn alloc_alignment() -> usize {
+        mem::align_of::<T>().max(mem::align_of::<Storage>())
+    }
+
+    fn alloc_to_elem_offset() -> usize {
+        let min_offset = if T::is_refcounted() {
+            2 * mem::size_of::<usize>()
+        } else {
+            mem::size_of::<usize>()
+        };
+        max(Self::alloc_alignment(), min_offset)
     }
 
     pub fn empty() -> Self {
@@ -65,12 +83,12 @@ impl<T> RocList<T> {
     /// returns the number of bytes needed to allocate, taking into account both the
     /// size of the elements as well as the size of Storage.
     fn alloc_bytes(num_elems: usize) -> usize {
-        next_multiple_of(mem::size_of::<Storage>(), mem::align_of::<T>())
-            + (num_elems * mem::size_of::<T>())
+        Self::alloc_to_elem_offset() + (num_elems * mem::size_of::<T>())
     }
 
     fn elems_with_capacity(num_elems: usize) -> NonNull<ManuallyDrop<T>> {
-        let alloc_ptr = unsafe { roc_alloc(Self::alloc_bytes(num_elems), Self::alloc_alignment()) };
+        let alloc_ptr =
+            unsafe { roc_alloc(Self::alloc_bytes(num_elems), Self::alloc_alignment() as u32) };
 
         Self::elems_from_allocation(NonNull::new(alloc_ptr).unwrap_or_else(|| {
             todo!("Call roc_panic with the info that an allocation failed.");
@@ -78,14 +96,14 @@ impl<T> RocList<T> {
     }
 
     fn elems_from_allocation(allocation: NonNull<c_void>) -> NonNull<ManuallyDrop<T>> {
-        let offset = Self::alloc_alignment() - core::mem::size_of::<*const u8>() as u32;
+        let offset = Self::alloc_to_elem_offset() - core::mem::size_of::<usize>();
         let alloc_ptr = allocation.as_ptr();
 
         unsafe {
             let elem_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr).cast::<ManuallyDrop<T>>();
 
             // Initialize the reference count.
-            let rc_ptr = alloc_ptr.offset(offset as isize);
+            let rc_ptr = alloc_ptr.add(offset);
             rc_ptr
                 .cast::<Storage>()
                 .write(Storage::new_reference_counted());
@@ -156,9 +174,12 @@ impl<T> RocList<T> {
     /// There is no way to tell how many references it has and if it is safe to free.
     /// As such, only values that should have a static lifetime for the entire application run
     /// should be considered for marking read-only.
-    pub unsafe fn set_readonly(&self) {
+    pub unsafe fn set_readonly(&mut self) {
         if let Some((_, storage)) = self.elements_and_storage() {
-            storage.set(Storage::Readonly);
+            // Only safe to write to the pointer if it is not constant (0)
+            if !matches!(storage.get(), Storage::Readonly) {
+                storage.set(Storage::Readonly);
+            }
         }
     }
 
@@ -192,10 +213,14 @@ impl<T> RocList<T> {
     fn elements_and_storage(&self) -> Option<(NonNull<ManuallyDrop<T>>, &Cell<Storage>)> {
         let elements = self.elements?;
 
-        let offset = match mem::align_of::<T>() {
-            16 => 1,
-            8 | 4 | 2 | 1 => 0,
-            other => unreachable!("invalid alignment {other}"),
+        let offset = if T::is_refcounted() {
+            1
+        } else {
+            match mem::align_of::<T>() {
+                16 => 1,
+                8 | 4 | 2 | 1 => 0,
+                other => unreachable!("invalid alignment {other}"),
+            }
         };
 
         let storage = unsafe { &*self.ptr_to_allocation().cast::<Cell<Storage>>().add(offset) };
@@ -208,33 +233,84 @@ impl<T> RocList<T> {
     }
 
     /// Useful for doing memcpy on the elements. Returns NULL if list is empty.
-    pub(crate) unsafe fn ptr_to_first_elem(&self) -> *const T {
+    pub(crate) fn ptr_to_first_elem(&self) -> *const T {
         unsafe { core::mem::transmute(self.elements) }
     }
 
     /// Useful for doing memcpy on the underlying allocation. Returns NULL if list is empty.
-    pub(crate) fn ptr_to_allocation(&self) -> *mut c_void {
-        let alignment = Self::alloc_alignment() as usize;
+    fn ptr_to_allocation(&self) -> *mut c_void {
+        let offset = Self::alloc_to_elem_offset();
         if self.is_seamless_slice() {
-            ((self.capacity_or_ref_ptr << 1) - alignment) as *mut _
+            ((self.capacity_or_ref_ptr << 1) - offset) as *mut _
         } else {
-            unsafe { self.ptr_to_first_elem().cast::<u8>().sub(alignment) as *mut _ }
+            unsafe { self.ptr_to_first_elem().cast::<u8>().sub(offset) as *mut _ }
+        }
+    }
+
+    fn allocation_element_count(&self) -> usize {
+        if self.is_seamless_slice() && T::is_refcounted() {
+            unsafe { self.ptr_to_refcount().sub(1).read() }
+        } else {
+            self.len()
+        }
+    }
+
+    #[allow(unused)]
+    pub(crate) fn ptr_to_refcount(&self) -> *mut usize {
+        if self.is_seamless_slice() {
+            ((self.capacity_or_ref_ptr << 1) - std::mem::size_of::<usize>()) as *mut _
+        } else {
+            unsafe { self.ptr_to_first_elem().cast::<usize>().sub(1) as *mut _ }
         }
     }
 
     unsafe fn elem_ptr_from_alloc_ptr(alloc_ptr: *mut c_void) -> *mut c_void {
+        let offset = Self::alloc_to_elem_offset();
+        unsafe { alloc_ptr.cast::<u8>().add(offset).cast() }
+    }
+
+    pub fn append(&mut self, value: T) {
+        self.push(value)
+    }
+
+    pub fn push(&mut self, value: T) {
+        if self.capacity() <= self.len() {
+            // reserve space for (at least!) one more element
+            self.reserve(1);
+        }
+
+        let elements = self.elements.unwrap().as_ptr();
+        let append_ptr = unsafe { elements.add(self.len()) };
+
         unsafe {
-            alloc_ptr
-                .cast::<u8>()
-                .add(Self::alloc_alignment() as usize)
-                .cast()
+            // Write the element into the slot, without dropping it.
+            ptr::write(append_ptr, ManuallyDrop::new(value));
+        }
+
+        // It's important that the length is increased one by one, to
+        // make sure that we don't drop uninitialized elements, even when
+        // a incrementing the reference count panics.
+        self.length += 1;
+    }
+
+    /// # Safety
+    ///
+    /// - `bytes` must be allocated for `cap` elements
+    /// - `bytes` must be initialized for `len` elements
+    /// - `bytes` must be preceded by a correctly-aligned refcount (usize)
+    /// - `cap` >= `len`
+    pub unsafe fn from_raw_parts(bytes: *mut T, len: usize, cap: usize) -> Self {
+        Self {
+            elements: NonNull::new(bytes.cast()),
+            length: len,
+            capacity_or_ref_ptr: cap,
         }
     }
 }
 
 impl<T> RocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     pub fn from_slice(slice: &[T]) -> Self {
         let mut list = Self::empty();
@@ -256,17 +332,17 @@ where
 
             if is_unique {
                 // If we have enough capacity, we can add to the existing elements in-place.
-                if self.capacity() >= slice.len() {
+                if self.capacity() >= new_len {
                     elements
                 } else {
                     // There wasn't enough capacity, so we need a new allocation.
                     // Since this is a unique RocList, we can use realloc here.
                     let new_ptr = unsafe {
                         roc_realloc(
-                            storage.as_ptr().cast(),
+                            self.ptr_to_allocation(),
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity()),
-                            Self::alloc_alignment(),
+                            Self::alloc_alignment() as u32,
                         )
                     };
 
@@ -322,7 +398,42 @@ where
     }
 }
 
-impl<T> RocList<T> {
+impl<T> RocList<T>
+where
+    T: RocRefcounted,
+{
+    #[track_caller]
+    pub fn slice_range(&self, range: Range<usize>) -> Self {
+        match self.try_slice_range(range) {
+            Some(x) => x,
+            None => panic!("slice index out of range"),
+        }
+    }
+
+    pub fn try_slice_range(&self, range: Range<usize>) -> Option<Self> {
+        if self.as_slice().get(range.start..range.end).is_none() {
+            None
+        } else {
+            // increment the refcount
+            std::mem::forget(self.clone());
+
+            let element_ptr = self.as_slice()[range.start..]
+                .as_ptr()
+                .cast::<ManuallyDrop<T>>();
+
+            let capacity_or_ref_ptr =
+                (self.ptr_to_first_elem() as usize) >> 1 | isize::MIN as usize;
+
+            let roc_list = RocList {
+                elements: NonNull::new(element_ptr as *mut ManuallyDrop<T>),
+                length: range.end - range.start,
+                capacity_or_ref_ptr,
+            };
+
+            Some(roc_list)
+        }
+    }
+
     /// Increase a RocList's capacity by at least the requested number of elements (possibly more).
     ///
     /// May return a new RocList, if the provided one was not unique.
@@ -333,7 +444,7 @@ impl<T> RocList<T> {
 
         match self.elements_and_storage() {
             Some((elements, storage)) => {
-                if storage.get().is_unique() {
+                if storage.get().is_unique() && !self.is_seamless_slice() {
                     unsafe {
                         let old_alloc = self.ptr_to_allocation();
 
@@ -342,7 +453,7 @@ impl<T> RocList<T> {
                             old_alloc,
                             Self::alloc_bytes(new_len),
                             Self::alloc_bytes(self.capacity()),
-                            Self::alloc_alignment(),
+                            Self::alloc_alignment() as u32,
                         );
 
                         if new_alloc == old_alloc {
@@ -384,7 +495,10 @@ impl<T> RocList<T> {
                             // The new allocation is referencing them, so instead of incrementing them all
                             // all just to decrement them again here, we neither increment nor decrement them.
                             unsafe {
-                                roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                                roc_dealloc(
+                                    self.ptr_to_allocation(),
+                                    Self::alloc_alignment() as u32,
+                                );
                             }
                         } else {
                             // Write the storage back.
@@ -419,7 +533,10 @@ impl<T> RocList<T> {
     }
 }
 
-impl<T> Deref for RocList<T> {
+impl<T> Deref for RocList<T>
+where
+    T: RocRefcounted,
+{
     type Target = [T];
 
     fn deref(&self) -> &Self::Target {
@@ -433,7 +550,10 @@ impl<T> Deref for RocList<T> {
     }
 }
 
-impl<T> DerefMut for RocList<T> {
+impl<T> DerefMut for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn deref_mut(&mut self) -> &mut Self::Target {
         if let Some(elements) = self.elements {
             let ptr = elements.as_ptr().cast::<T>();
@@ -446,7 +566,10 @@ impl<T> DerefMut for RocList<T> {
     }
 }
 
-impl<T> Default for RocList<T> {
+impl<T> Default for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn default() -> Self {
         Self::empty()
     }
@@ -454,18 +577,20 @@ impl<T> Default for RocList<T> {
 
 impl<T, U> PartialEq<RocList<U>> for RocList<T>
 where
-    T: PartialEq<U>,
+    U: RocRefcounted,
+    T: PartialEq<U> + RocRefcounted,
 {
     fn eq(&self, other: &RocList<U>) -> bool {
         self.as_slice() == other.as_slice()
     }
 }
 
-impl<T> Eq for RocList<T> where T: Eq {}
+impl<T> Eq for RocList<T> where T: Eq + RocRefcounted {}
 
 impl<T, U> PartialOrd<RocList<U>> for RocList<T>
 where
-    T: PartialOrd<U>,
+    U: RocRefcounted,
+    T: PartialOrd<U> + RocRefcounted,
 {
     fn partial_cmp(&self, other: &RocList<U>) -> Option<cmp::Ordering> {
         // If one is longer than the other, use that as the ordering.
@@ -489,7 +614,7 @@ where
 
 impl<T> Ord for RocList<T>
 where
-    T: Ord,
+    T: Ord + RocRefcounted,
 {
     fn cmp(&self, other: &Self) -> Ordering {
         // If one is longer than the other, use that as the ordering.
@@ -513,14 +638,17 @@ where
 
 impl<T> Debug for RocList<T>
 where
-    T: Debug,
+    T: Debug + RocRefcounted,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.deref().fmt(f)
     }
 }
 
-impl<T> Clone for RocList<T> {
+impl<T> Clone for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn clone(&self) -> Self {
         // Increment the reference count
         if let Some((_, storage)) = self.elements_and_storage() {
@@ -540,9 +668,28 @@ impl<T> Clone for RocList<T> {
     }
 }
 
-impl<T> Drop for RocList<T> {
-    fn drop(&mut self) {
-        if let Some((elements, storage)) = self.elements_and_storage() {
+impl<T> RocRefcounted for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+        if self.elements.is_none() {
+            // Empty, non-allocated list, no refcounting to do.
+            return;
+        }
+
+        let ptr = self.ptr_to_refcount();
+        unsafe {
+            let value = std::ptr::read(ptr);
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != ROC_REFCOUNT_CONSTANT {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        if let Some((_, storage)) = self.elements_and_storage() {
             // Decrease the list's reference count.
             let mut new_storage = storage.get();
 
@@ -550,14 +697,19 @@ impl<T> Drop for RocList<T> {
                 let needs_dealloc = new_storage.decrease();
 
                 if needs_dealloc {
+                    let alloc_ptr = self.ptr_to_allocation();
                     unsafe {
-                        // Drop the stored elements.
-                        for index in 0..self.len() {
-                            ManuallyDrop::drop(&mut *elements.as_ptr().add(index));
+                        // Dec the stored elements in the underlying allocation.
+                        if T::is_refcounted() {
+                            let elements_ptr = Self::elem_ptr_from_alloc_ptr(alloc_ptr) as *mut T;
+                            let len = self.allocation_element_count();
+                            for index in 0..len {
+                                (*elements_ptr.add(index)).dec()
+                            }
                         }
 
                         // Release the memory.
-                        roc_dealloc(self.ptr_to_allocation(), Self::alloc_alignment());
+                        roc_dealloc(alloc_ptr, Self::alloc_alignment() as u32);
                     }
                 } else {
                     // Write the storage back.
@@ -566,24 +718,43 @@ impl<T> Drop for RocList<T> {
             }
         }
     }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl<T> Drop for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn drop(&mut self) {
+        self.dec()
+    }
 }
 
 impl<T> From<&[T]> for RocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn from(slice: &[T]) -> Self {
         Self::from_slice(slice)
     }
 }
 
-impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T> {
+impl<T, const SIZE: usize> From<[T; SIZE]> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from(array: [T; SIZE]) -> Self {
         Self::from_iter(array)
     }
 }
 
-impl<'a, T> IntoIterator for &'a RocList<T> {
+impl<'a, T> IntoIterator for &'a RocList<T>
+where
+    T: RocRefcounted,
+{
     type Item = &'a T;
     type IntoIter = core::slice::Iter<'a, T>;
 
@@ -592,7 +763,10 @@ impl<'a, T> IntoIterator for &'a RocList<T> {
     }
 }
 
-impl<T: Hash> Hash for RocList<T> {
+impl<T: Hash> Hash for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         // This is the same as Rust's Vec implementation, which
         // just delegates to the slice implementation. It's a bit surprising
@@ -608,7 +782,10 @@ impl<T: Hash> Hash for RocList<T> {
     }
 }
 
-impl<T> FromIterator<T> for RocList<T> {
+impl<T> FromIterator<T> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from_iter<I>(into: I) -> Self
     where
         I: IntoIterator<Item = T>,
@@ -652,7 +829,10 @@ impl<T> FromIterator<T> for RocList<T> {
 }
 
 #[cfg(feature = "serde")]
-impl<T: Serialize> Serialize for RocList<T> {
+impl<T: Serialize> Serialize for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -670,7 +850,7 @@ impl<'de, T> Deserialize<'de> for RocList<T>
 where
     // TODO: I'm not sure about requiring clone here. Is that fine? Is that
     // gonna mean lots of extra allocations?
-    T: Deserialize<'de> + core::clone::Clone,
+    T: Deserialize<'de> + core::clone::Clone + RocRefcounted,
 {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -682,13 +862,32 @@ where
 
 // This is a RocList that is checked to ensure it is unique or readonly such that it can be sent between threads safely.
 #[repr(transparent)]
-pub struct SendSafeRocList<T>(RocList<T>);
+pub struct SendSafeRocList<T>(RocList<T>)
+where
+    T: RocRefcounted;
 
-unsafe impl<T> Send for SendSafeRocList<T> where T: Send {}
+unsafe impl<T> Send for SendSafeRocList<T> where T: Send + RocRefcounted {}
+
+impl<T> RocRefcounted for SendSafeRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
 
 impl<T> Clone for SendSafeRocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn clone(&self) -> Self {
         if self.0.is_readonly() {
@@ -702,7 +901,7 @@ where
 
 impl<T> From<RocList<T>> for SendSafeRocList<T>
 where
-    T: Clone,
+    T: Clone + RocRefcounted,
 {
     fn from(l: RocList<T>) -> Self {
         if l.is_unique() || l.is_readonly() {
@@ -716,19 +915,84 @@ where
     }
 }
 
-impl<T> From<SendSafeRocList<T>> for RocList<T> {
+impl<T> From<SendSafeRocList<T>> for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn from(l: SendSafeRocList<T>) -> Self {
         l.0
     }
 }
 
+#[repr(transparent)]
+pub struct ReadOnlyRocList<T>(RocList<T>)
+where
+    T: RocRefcounted;
+
+unsafe impl<T> Send for ReadOnlyRocList<T> where T: Send + RocRefcounted {}
+unsafe impl<T> Sync for ReadOnlyRocList<T> where T: Sync + RocRefcounted {}
+
+impl<T> RocRefcounted for ReadOnlyRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {}
+
+    fn dec(&mut self) {}
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl<T> Clone for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn clone(&self) -> Self {
+        ReadOnlyRocList(self.0.clone())
+    }
+}
+
+impl<T> From<RocList<T>> for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn from(mut l: RocList<T>) -> Self {
+        if l.is_unique() {
+            unsafe { l.set_readonly() };
+        }
+        if l.is_readonly() {
+            ReadOnlyRocList(l)
+        } else {
+            // This is not unique, do a deep copy.
+            ReadOnlyRocList::from(RocList::from_slice(&l))
+        }
+    }
+}
+
+impl<T> From<ReadOnlyRocList<T>> for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn from(l: ReadOnlyRocList<T>) -> Self {
+        l.0
+    }
+}
+
 #[cfg(feature = "serde")]
-struct RocListVisitor<T> {
+struct RocListVisitor<T>
+where
+    T: RocRefcounted,
+{
     marker: PhantomData<T>,
 }
 
 #[cfg(feature = "serde")]
-impl<T> RocListVisitor<T> {
+impl<T> RocListVisitor<T>
+where
+    T: RocRefcounted,
+{
     fn new() -> Self {
         RocListVisitor {
             marker: PhantomData,
@@ -739,7 +1003,7 @@ impl<T> RocListVisitor<T> {
 #[cfg(feature = "serde")]
 impl<'de, T> Visitor<'de> for RocListVisitor<T>
 where
-    T: Deserialize<'de> + core::clone::Clone,
+    T: Deserialize<'de> + core::clone::Clone + RocRefcounted,
 {
     type Value = RocList<T>;
 
@@ -763,13 +1027,6 @@ where
         }
 
         Ok(out)
-    }
-}
-
-const fn next_multiple_of(lhs: usize, rhs: usize) -> usize {
-    match lhs % rhs {
-        0 => lhs,
-        r => lhs + (rhs - r),
     }
 }
 
@@ -832,7 +1089,7 @@ mod tests {
 
     #[test]
     fn readonly_list_is_sendsafe() {
-        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        let mut x = RocList::from_slice(&[1, 2, 3, 4, 5]);
         unsafe { x.set_readonly() };
         assert!(x.is_readonly());
 

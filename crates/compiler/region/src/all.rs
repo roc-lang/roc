@@ -22,8 +22,16 @@ impl Region {
         self.start <= other.start && self.end >= other.end
     }
 
+    pub fn contains_pos(&self, pos: Position) -> bool {
+        self.start <= pos && self.end >= pos
+    }
+
     pub fn is_empty(&self) -> bool {
         self.start == self.end
+    }
+
+    pub const fn len(&self) -> u32 {
+        self.end.offset - self.start.offset
     }
 
     pub fn span_across(start: &Region, end: &Region) -> Self {
@@ -356,6 +364,7 @@ where
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct LineInfo {
     line_offsets: Vec<u32>,
 }
@@ -400,6 +409,10 @@ impl LineInfo {
         let start = self.convert_line_column(lc_region.start);
         let end = self.convert_line_column(lc_region.end);
         Region::new(start, end)
+    }
+
+    pub fn num_lines(&self) -> u32 {
+        self.line_offsets.len() as u32
     }
 }
 

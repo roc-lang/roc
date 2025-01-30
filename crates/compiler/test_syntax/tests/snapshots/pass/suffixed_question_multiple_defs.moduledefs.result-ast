@@ -1,0 +1,116 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+    ],
+    regions: [
+        @0-49,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    spaces: [
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @0-4 Identifier {
+                ident: "main",
+            },
+            @12-49 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            EitherIndex(2147483648),
+                            EitherIndex(2147483649),
+                        ],
+                        regions: [
+                            @12-21,
+                            @26-39,
+                        ],
+                        space_before: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                        ],
+                        space_after: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                        ],
+                        spaces: [
+                            Newline,
+                        ],
+                        type_defs: [],
+                        value_defs: [
+                            Stmt(
+                                @12-21 Apply(
+                                    @12-13 TrySuffix(
+                                        Var {
+                                            module_name: "",
+                                            ident: "a",
+                                        },
+                                    ),
+                                    [
+                                        @16-21 Str(
+                                            PlainLine(
+                                                "Bar",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                            Body(
+                                @26-27 Identifier {
+                                    ident: "x",
+                                },
+                                @29-39 Apply(
+                                    @29-32 TrySuffix(
+                                        Var {
+                                            module_name: "B",
+                                            ident: "b",
+                                        },
+                                    ),
+                                    [
+                                        @34-39 Str(
+                                            PlainLine(
+                                                "Foo",
+                                            ),
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                    },
+                    @45-49 SpaceBefore(
+                        Apply(
+                            @45-46 TrySuffix(
+                                Var {
+                                    module_name: "",
+                                    ident: "c",
+                                },
+                            ),
+                            [
+                                @48-49 Var {
+                                    module_name: "",
+                                    ident: "x",
+                                },
+                            ],
+                            Space,
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

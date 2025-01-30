@@ -1,0 +1,23 @@
+on:
+  workflow_call:
+
+name: CI
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  fuzz-test-parser:
+    name: Fuzz test parser (allowed to fail). Do check this if you've made changes to the parser.
+    runs-on: [self-hosted, i7-6700K]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: run fuzz tests - ok to merge if this one fails # for now!
+        run: |
+          cargo +nightly-2024-02-03 install --locked cargo-fuzz
+          cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60 || true
+          cd ..
+          for x in fuzz/artifacts/fuzz_expr/crash-*; do cargo run --bin minimize expr $x; done
+          if ls fuzz/artifacts/fuzz_expr/ | grep crash-; then exit 1; fi

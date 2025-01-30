@@ -1,0 +1,15 @@
+@0-4 SpaceAfter(
+    Apply(
+        @0-2 Tag(
+            "Ok",
+        ),
+        [
+            @3-4 Identifier {
+                ident: "a",
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

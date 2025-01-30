@@ -1,15 +1,15 @@
 :root {
-  /* WCAG AAA Compliant colors */
-  --code-bg: #f4f8f9;
-  --gray: #717171;
-  --orange: #bf5000;
-  --green: #0b8400;
-  --cyan: #067c94;
+  /* WCAG AAA Compliant colors - important that luminence (the l in hsl) is 18% for font colors against the bg's luminence of 96-97% when the font-size is at least 14pt */
+  --code-bg: hsl(262 33% 96% / 1);
+  --gray: hsl(0 0% 18% / 1);
+  --orange: hsl(25 100% 18% / 1);
+  --green: hsl(115 100% 18% / 1);
+  --cyan: hsl(190 100% 18% / 1);
   --blue: #05006d;
   --violet: #7c38f5;
-  --violet-bg: #ece2fd;
+  --violet-bg: hsl(262.22deg 87.1% 96%);
   --magenta: #a20031;
-
+  --link-hover-color: #333;
   --link-color: var(--violet);
   --code-link-color: var(--violet);
   --text-color: #000;
@@ -17,13 +17,16 @@
   --body-bg-color: #ffffff;
   --border-color: #717171;
   --faded-color: #4c4c4c;
-  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial,
-      sans-serif;
-  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier,
-      monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, Roboto, Helvetica, Arial, sans-serif;
+  --font-mono: SFMono-Regular, Consolas, "Liberation Mono", Menlo, Courier, monospace;
   --top-header-height: 67px;
-  --sidebar-width: 280px;
+  --sidebar-width: clamp(280px, 25dvw, 500px);
+  --module-search-height: 56px;
+  --module-search-padding-height: 16px;
+  --module-search-form-padding-width: 20px;
+  --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.05) calc(l * 0.95));
 }
+
 
 a {
   color: var(--violet);
@@ -38,10 +41,6 @@ table tr td {
   padding: 6px 13px;
 }
 
-.logo {
-  padding: 2px 8px;
-}
-
 .logo svg {
   height: 48px;
   width: 48px;
@@ -53,32 +52,45 @@ table tr td {
 }
 
 .logo svg:hover {
-  fill: var(--green);
+  fill: var(--link-hover-color);
 }
 
 .pkg-full-name {
   display: flex;
   align-items: center;
-  font-size: 32px;
+  font-size: 24px;
   margin: 0 8px;
   font-weight: normal;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  height: 100%;
 }
 
 .entry-name {
   white-space: pre-wrap;
   font-family: var(--font-mono);
-  font-size: 18px;
+  font-size: 16px;
   font-weight: normal;
-  color: var(--violet);
+  background-color: var(--violet-bg);
+  color: var(--text-color);
   width: auto;
   margin-top: 0;
   margin-bottom: 24px;
-  padding: 8px 16px;
-  border-left: 2px solid var(--violet);
+  padding: 12px 16px;
+  border-left: 4px solid var(--violet);
+  display: flex;
+}
+
+.entry-name strong {
+    color: var(--text-color);
+}
+
+.entry-name code {
+    background: none;
+}
+
+.entry-name:target {
+  background-color: var(--violet-bg);
 }
 
 .entry-name a {
@@ -105,6 +117,9 @@ table tr td {
 .pkg-full-name a {
   padding-top: 12px;
   padding-bottom: 16px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 a {
@@ -120,8 +135,10 @@ a:hover code {
   min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
   display: flex;
   align-items: center;
-  height: 100%;
+  justify-content: flex-start;
+  gap: 8px;
   background-color: var(--violet-bg);
+  padding: 16px;
 }
 
 .pkg-and-logo a,
@@ -130,7 +147,7 @@ a:hover code {
 }
 
 .pkg-and-logo a:hover {
-  color: var(--green);
+  color: var(--link-hover-color);
   text-decoration: none;
 }
 
@@ -150,31 +167,50 @@ a:hover code {
 body {
   display: grid;
   grid-template-columns:
-      [before-sidebar] 1fr [sidebar] var(--sidebar-width)
-      [main-content] fit-content(calc(1280px - var(--sidebar-width)))
-      [end] 1fr;
-  grid-template-rows: [top-header] var(--top-header-height) [above-footer] auto [footer] auto;
+      [sidebar] var(--sidebar-width)
+      [main-content] 1fr
+      [content-end];
+  grid-template-rows: 1fr;
+  height: 100dvh;
   box-sizing: border-box;
   margin: 0;
   padding: 0;
   font-family: var(--font-sans);
   color: var(--text-color);
   background-color: var(--body-bg-color);
+  overflow: hidden;
 }
 
 main {
   grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
+  grid-column-end: content-end;
   box-sizing: border-box;
   position: relative;
-  font-size: 18px;
+  font-size: 14pt; /* This keeps links AAA compliant while still making the links distinctly colored. */
   line-height: 1.85em;
   margin-top: 2px;
-  padding: 48px;
+  padding: 16px;
+  padding-top: 0px;
+  /* necessary for text-overflow: ellipsis to work in descendants */
+  min-width: 0;
+  overflow-x: auto;
+  /* fixes issues with horizonatal scroll in cases where word is too long,
+  like in one of the examples at https://www.roc-lang.org/builtins/Num#Dec */
+  overflow-wrap: break-word;
+  overflow-y: auto;
+  display: grid;
+  --main-content-width: clamp(100px, calc(100% - 32px), 60ch); 
+  grid-template-columns: [main-start] minmax(16px,1fr) [main-content-start] var(--main-content-width) [main-content-end] minmax(16px,1fr) [main-end];
+  grid-template-rows: auto;
+  flex-direction: column;
+  scrollbar-color: var(--violet) var(--body-bg-color);
+  scrollbar-gutter: stable both-edges;
+  scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
+}
 
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
+main > * {
+    grid-column-start: main-content-start;
+    grid-column-end: main-content-end;
 }
 
 /* Module links on the package index page (/index.html) */
@@ -186,7 +222,7 @@ main {
 
 section {
   padding: 0px 0px 16px 0px;
-  margin: 72px 0px;
+  margin: 36px 0px;
 }
 
 section blockquote {
@@ -220,25 +256,31 @@ padding: 0px 16px;
 }
 
 #sidebar-nav {
-  grid-column-start: sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: above-footer;
-  grid-row-end: above-footer;
-  position: relative;
-  display: flex;
-  flex-direction: column;
-  box-sizing: border-box;
-  padding-left: 56px;
-  padding-top: 6px;
-  width: 100%;
+    grid-column-start: sidebar;
+    grid-column-end: main-content;
+    position: relative;
+    display: grid;
+    grid-template-rows: min-content 1fr;
+    box-sizing: border-box;
+    width: 100%;
+    background-color: var(--sidebar-bg-color);
+    transition: all 1s linear;
 }
 
-.top-header-extension {
-  grid-column-start: before-sidebar;
-  grid-column-end: sidebar;
-  grid-row-start: top-header;
-  grid-row-end: top-header;
-  background-color: var(--violet-bg);
+#sidebar-nav .module-links-container {
+    position: relative;
+}
+
+
+#sidebar-nav .module-links {
+    position: absolute;
+    inset: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    scrollbar-color: var(--violet) var(--sidebar-bg-color);
+    scrollbar-gutter: stable;
+    padding: 16px 8px;
+    transition: all .2s linear;
 }
 
 .top-header {
@@ -252,20 +294,11 @@ padding: 0px 16px;
   flex-wrap: nowrap;
   box-sizing: border-box;
   font-family: var(--font-sans);
-  font-size: 24px;
+  font-size: 20px;
   height: 100%;
-  min-width: 0; /* necessary for text-overflow: ellipsis to work in descendants */
-}
-
-.top-header-triangle {
-  /* This used to be a clip-path, but Firefox on Android (at least as of early 2020)
- * rendered the page extremely slowly in that version. With this approach it's super fast.
- */
-  width: 0;
-  height: 0;
-  border-style: solid;
-  border-width: var(--top-header-height) 0 0 48px;
-  border-color: transparent transparent transparent var(--violet-bg);
+  background-color: var(--violet-bg);
+  /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants, but we want this anyway. */
+  min-width: 1024px;
 }
 
 p {
@@ -274,10 +307,6 @@ p {
 }
 
 footer {
-  grid-column-start: main-content;
-  grid-column-end: main-content;
-  grid-row-start: footer;
-  grid-row-end: footer;
   max-width: var(--main-content-max-width);
   font-size: 14px;
   box-sizing: border-box;
@@ -304,9 +333,9 @@ footer p {
 
 .sidebar-entry a {
   box-sizing: border-box;
-  min-height: 48px;
+  min-height: 40px;
   min-width: 48px;
-  padding: 12px 16px;
+  padding: 8px 16px;
   font-family: var(--font-mono);
 }
 
@@ -315,23 +344,63 @@ footer p {
   color: var(--text-color);
 }
 
+.sidebar-sub-entries {
+    font-size: 12pt;
+    display: none;
+}
+
+.active + .sidebar-sub-entries {
+    display: block;
+}
+
 .sidebar-sub-entries a {
   display: block;
   line-height: 24px;
   width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
-  padding-left: 36px;
+  margin-left: 20px;
+  padding-left: 27px;
+  border-left: 2px solid rgb(from var(--gray) r g b / .30);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-sub-entries a:first-child {
+    margin-top: 8px;
+    padding-top: 0;
+}
+
+.sidebar-sub-entries a:last-child {
+    margin-bottom: 8px;
+    padding-bottom: 0;
+}
+
+.sidebar-sub-entries a:hover {
+    border-left-color: rgb(from var(--violet) r g b / .60);
+    color: var(--violet);
+    text-decoration: none;
 }
 
 .module-name {
-  font-size: 56px;
+  font-size: 40pt;
   line-height: 1em;
   font-family: var(--font-mono);
   font-weight: bold;
-  margin-top: 18px;
-  margin-bottom: 48px;
+  margin-top: 36px;
+  margin-bottom: 16px;
   color: var(--violet);
+}
+
+main h2 {
+    font-size: 28pt;
+}
+main h3 {
+    font-size: 24pt;
+}
+main h4 {
+    font-size: 20pt;
 }
 
 .module-name a,
@@ -340,24 +409,65 @@ color: inherit;
 }
 
 .module-name a:hover {
-  color: var(--green);
+  color: var(--link-hover-color);
 }
 
-.sidebar-module-link {
+a.sidebar-module-link {
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 14pt;
   line-height: 24px;
   font-family: var(--font-mono);
-  display: block;
+  display: flex;
+  flex-direction: row-reverse;
+  justify-content: space-between;
+  align-items: center;
   width: 100%;
-  padding: 8px 0;
+  padding: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 
+.sidebar-module-link:hover {
+    text-decoration: none;
+
+    span:hover {
+        color: var(--violet);
+    }
+}
+
+.sidebar-module-link span {
+    display: inline-block;
+    flex-grow: 1;
+}
+
 .sidebar-module-link.active {
   font-weight: bold;
+}
+
+.sidebar-module-link > .entry-toggle {
+    background-color: transparent;
+    appearance: none;
+    border: none;
+    color: transparent;
+    color: rgba(from var(--text-color) r g b / .6);
+    transition: all 80ms linear;
+    text-decoration: none;
+    font-size: 0.6rem;
+    cursor: pointer;
+    padding: 8px 16px;
+    
+    &:hover {
+        color: var(--violet);
+    }
+}
+
+:hover >  .entry-toggle {
+    color: var(--text-color);
+}
+
+.active .entry-toggle {
+    rotate: 90deg;
 }
 
 a,
@@ -404,6 +514,7 @@ a code {
   color: var(--code-link-color);
   background: none;
   padding: 0;
+  font-weight: bold; /* Important for AAA compliance while keeping color distinct */
 }
 
 code a:visited,
@@ -416,14 +527,16 @@ pre {
   padding: 8px 16px;
   box-sizing: border-box;
   background-color: var(--code-bg);
-  overflow-x: hidden;
   position: relative;
   word-wrap: normal;
 }
 
 pre>samp {
-  overflow-x: auto;
-  display: block;
+    overflow-x: auto;
+    display: block;
+    scrollbar-color: var(--violet) var(--code-bg);
+    scrollbar-width: thin;
+    scrollbar-gutter: stable;
 }
 
 .hidden {
@@ -431,41 +544,65 @@ pre>samp {
   display: none !important;
 }
 
-#module-search:placeholder-shown {
-  padding: 0;
-  opacity: 0;
-  height: 0;
+#module-search-form {
+  display: flex;
+  align-items: center;
+  align-content: center;
+  height: 100%;
+  position: sticky;
+  flex-grow: 1;
+  box-sizing: border-box;
+  padding-block: 16px;
+  background-color: var(--body-bg-color);
+  top: 0;
+  z-index: 1;
 }
+
+.menu-toggle {
+    display: none;
+    margin-right: 8px;
+    appearance: none;
+    background-color: transparent;
+    outline: none;
+    border: none;
+    color: var(--violet);
+    padding: 0;
+    cursor: pointer;
+}
+
+.menu-toggle svg {
+    height: 48px;
+    width: 48px;
+}
+
 
 #module-search,
 #module-search:focus {
   opacity: 1;
   padding: 12px 16px;
-  height: 48px;
-}
-
-/* Show the "Search" label link when the text input has a placeholder */
-#module-search:placeholder-shown + #search-link {
-  display: flex;
-}
-
-/* Hide the "Search" label link when the text input has focus */
-#module-search:focus + #search-link {
-  display: none;
+  height: var(--module-search-height);
 }
 
 #module-search {
+  border-radius: 8px;
   display: block;
+  position: relative;
   box-sizing: border-box;
   width: 100%;
   box-sizing: border-box;
-  font-size: 18px;
+  font-size: 16px;
   line-height: 18px;
-  margin-top: 6px;
   border: none;
   color: var(--faded-color);
-  background-color: var(--code-bg);
+  background-color: var(--body-bg-color);
   font-family: var(--font-serif);
+  border: 2px solid var(--violet-bg);
+}
+
+@media (prefers-color-scheme: light) {
+    #module-search {
+        outline: 1px solid var(--gray);
+    }
 }
 
 #module-search::placeholder {
@@ -473,32 +610,102 @@ pre>samp {
   opacity: 1;
 }
 
-#search-link {
+#module-search:focus, #module-search:hover {
+  outline: 2px solid var(--violet);
+}
+
+#search-type-ahead {
+  font-family: var(--font-mono);
+  display: flex;
+  gap: 0px;
+  flex-direction: column;
+  position: absolute;
+  top: calc(var(--module-search-padding-height) + var(--module-search-height));
+  left: var(--module-search-form-padding-width);
+  width: calc(100% - 2 * var(--module-search-form-padding-width));
   box-sizing: border-box;
+  z-index: 100;
+  background-color: var(--body-bg-color);
+  border-width: 1px;
+  border-style: solid;
+  border-color: var(--border-color);
+  list-style-type: none;
+  margin: 0;
+  padding: 0;
+}
+
+.search-icon {
+    fill: var(--faded-color);
+    pointer-events: none;
+    opacity: 0.6;
+    position: absolute;
+    right: 32px;
+}
+
+#search-type-ahead .type-ahead-link {
+  font-size: 1rem;
+  color: var(--text-color);
+  line-height: 2em;
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 4px 8px;
+
+  max-height: 6em;
+  text-overflow: ellipsis;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+
+  /* if it wraps, indent after the first line */
+  padding-left: calc(2em + 8px);
+  text-indent: -2em;
+
+
+  span {
+    margin: 0px;
+  }
+
+  .type-ahead-module-name, .type-ahead-def-name {
+    color: var(--violet);
+    font-size: 1rem;
+  }
+}
+
+#search-type-ahead li {
+  box-sizing: border-box;
+  position: relative;
+}
+
+#search-type-ahead a:focus {
+  outline: none;
+  background: var(--violet-bg);
+}
+
+#module-search-form:focus-within #search-label, #module-search-form:focus-within .search-icon {
   display: none;
+}
+
+#search-label {
+  color: var(--faded-color);
+  box-sizing: border-box;
   align-items: center;
   font-size: 18px;
-  line-height: 18px;
-  padding: 12px 16px;
-  height: 48px;
-  cursor: pointer;
-}
-
-#search-link:hover #search-link-text {
-  text-decoration: underline;
-}
-
-#search-link-hint {
-  margin-left: 1em;
-  opacity: 0.6;
+  pointer-events: none;
+  position: absolute;
+  right: 72px;
 }
 
 #search-shortcut-key {
-  font-family: monospace;
+  font-family: var(--font-mono);
   border: 1px solid #666;
+  border-radius: 5px;
   padding: 1px 3px 3px;
   font-style: normal;
   line-height: 15px;
+  pointer-events: none;
 }
 
 .builtins-tip {
@@ -507,28 +714,44 @@ pre>samp {
   line-height: 1.3em;
 }
 
+.module-header-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-end;
+  margin-bottom: 48px;
+}
+
+.llm-prompt-link {
+  flex-shrink: 0;
+}
+
+.module-name {
+    flex-grow: 1;
+}
+
 @media (prefers-color-scheme: dark) {
   :root {
       /* WCAG AAA Compliant colors */
-      --code-bg: #202746;
-      --gray: #b6b6b6;
-      --orange: #fd6e08;
-      --green: #8ecc88;
-      --cyan: #12c9be;
-      --blue: #b1afdf;
-      --violet: #CAADFB;
-      --violet-bg: #332944;
-      --magenta: #f39bac;
+    --code-bg: hsl(228.95deg 37.25% 15%);
+    --gray: hsl(0 0% 70% / 1);
+    --orange: hsl(25 98% 70% / 1);
+    --green: hsl(115 40% 70% / 1);
+    --cyan: hsl(176 84% 70% / 1);
+    --blue: hsl(243 43% 80% / 1);
+    --violet: #caadfb;
+    --violet-bg: hsl(262 25% 15% / 1);
+    --magenta: hsl(348 79% 80% / 1);
+      --link-hover-color: #fff;
 
       --link-color: var(--violet);
       --code-link-color: var(--violet);
       --text-color: #eaeaea;
-      --body-bg-color: #0e0e0f;
+      --body-bg-color: hsl(from var(--violet-bg) h s calc(l * .5));
       --border-color: var(--gray);
       --code-color: #eeeeee;
       --logo-solid: #8f8f8f;
       --faded-color: #bbbbbb;
-      --gray: #6e6e6e;
+      --sidebar-bg-color: hsl(from var(--violet-bg) h calc(s * 1.1) calc(l * 0.75));
   }
 
   html {
@@ -536,114 +759,172 @@ pre>samp {
   }
 }
 
-@media only screen and (max-device-width: 480px) and (orientation: portrait) {
-  #search-link-hint {
-      display: none;
-  }
+@media only screen and (max-width: 768px) {
+    :root {
+        --sidebar-width: clamp(280px, 50dvw, 385px);
+    }
+    body {
+        display: block;
+        overflow-y: auto;
+        overflow-x: hidden;
+    }
 
-  .search-button {
-      display: block; /* This is only visible in mobile. */
-  }
+    #sidebar-nav {
+        left: calc(-1 * var(--sidebar-width));
+        top: 0;
+        bottom: 0;
+        position: fixed;
+        z-index: 2;
+        transition: all .2s linear;
+    }
 
-  .top-header {
-      justify-content: space-between;
-      width: auto;
-  }
+    .entry-toggle {
+        height: 48px;
+        width: 48px;
+    }
 
-  .pkg-full-name {
-      margin-left: 8px;
-      margin-right: 12px;
-      font-size: 24px;
-      padding-bottom: 14px;
-  }
+    body.sidebar-open #sidebar-nav {
+        left: 0;
+    }
 
-  .pkg-full-name a {
-      vertical-align: middle;
-      padding: 18px 0;
-  }
+    main {
+        display: block;
+        margin: 0 16px;
+        --main-content-width: minmax(calc(100% - 32px), 60ch);
+    }
 
-  .logo {
-      padding-left: 2px;
-      width: 50px;
-      height: 54px;
-  }
+    :root {
+        --top-header-height: 160px;
+    }
 
-  .version {
-      margin: 0;
-      font-weight: normal;
-      font-size: 18px;
-      padding-bottom: 16px;
-  }
+    #search-shortcut-key, .header-start-extension, .header-end-extension, #search-label {
+        display: none;
+    }
 
-  .module-name {
-      font-size: 36px;
-      margin-top: 8px;
-      margin-bottom: 8px;
-      max-width: calc(100% - 18px);
-      overflow: hidden;
-      text-overflow: ellipsis;
-  }
+    #module-search-form {
+        padding: 16px 16px;
+        height: auto;
+        margin-bottom: 16px;
+        grid-column-start: main-content-start;
+        grid-column-end: main-content-end;
+        position: fixed;
+        left: 0;
+        right: 0;
+    }
 
-  main {
-      grid-column-start: none;
-      grid-column-end: none;
-      grid-row-start: above-footer;
-      grid-row-end: above-footer;
-      padding: 18px;
-      font-size: 16px;
-  }
+    .menu-toggle {
+        display: inline-block;
+        margin-right: 8px;
+        appearance: none;
+        background-color: transparent;
+        outline: none;
+        border: none;
+        color: var(--text-color);
+        padding: 0;
+    }
 
-  #sidebar-nav {
-      grid-column-start: none;
-      grid-column-end: none;
-      grid-row-start: sidebar;
-      grid-row-end: sidebar;
-      margin-top: 0;
-      padding-left: 0;
-      width: auto;
-  }
+    .menu-toggle svg {
+        height: 48px;
+        width: 48px;
+    }
 
-  #sidebar-heading {
-      font-size: 24px;
-      margin: 16px;
-  }
+    /* Hide the Copy Link button on mobile. */
+    .entry-name a:first-of-type {
+        display: none;
+    }
 
-  h3 {
-      font-size: 18px;
-      margin: 0;
-      padding: 0;
-  }
+    .search-icon {
+        display: block; /* This is only visible in mobile. */
+        top: calc(1lh / 2 + 16px);
+    }
 
-  h4 {
-      font-size: 16px;
-  }
+    .top-header {
+        flex-direction: column;
+        height: auto;
+        justify-content: space-between;
+        /* min-width must be set to something (even 0) for text-overflow: ellipsis to work in descendants. */
+        min-width: 0;
+    }
 
-  body {
-      grid-template-columns: auto;
-      grid-template-rows: [top-header] var(--top-header-height) [before-sidebar] auto [sidebar] auto [above-footer] auto [footer] auto;
-      /* [before-sidebar] 1fr [sidebar] var(--sidebar-width) [main-content] fit-content(calc(1280px - var(--sidebar-width))) [end] 1fr; */
+    .pkg-full-name {
+        font-size: 20px;
+        padding-bottom: 14px;
+    }
 
-      margin: 0;
-      min-width: 320px;
-      max-width: 100%;
-  }
+    .pkg-full-name a {
+        vertical-align: middle;
+        padding: 18px 0;
+    }
 
-  .top-header-triangle {
-      display: none;
-  }
+    .logo {
+        width: 50px;
+        height: 54px;
+    }
 
-  .pkg-and-logo {
-      width: 100%;
-  }
+    .version {
+        margin: 0;
+        font-weight: normal;
+        font-size: 18px;
+        padding-bottom: 16px;
+    }
 
-  .pkg-full-name {
-      flex-grow: 1;
-  }
+    .module-name {
+        font-size: 24px;
+        margin-top: 8px;
+        margin-bottom: 8px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+    }
 
-  .pkg-full-name a {
-      padding-top: 24px;
-      padding-bottom: 12px;
-  }
+    main {
+        padding: 18px;
+        font-size: 16px;
+        padding-top: calc(16px + 16px + 1lh + 16px);
+    }
+
+    #sidebar-nav {
+        margin-top: 0;
+        padding-left: 0;
+        width: var(--sidebar-width);
+    }
+
+    #sidebar-heading {
+        font-size: 24px;
+        margin: 16px;
+    }
+
+    h3 {
+        font-size: 18px;
+        margin: 0;
+        padding: 0;
+    }
+
+    h4 {
+        font-size: 16px;
+    }
+
+    body {
+        margin: 0;
+        min-width: 320px;
+        max-width: 100dvw;
+    }
+
+    .top-header-triangle {
+        display: none;
+    }
+
+    .pkg-and-logo {
+        padding-block: 4px;
+    }
+
+    .pkg-full-name {
+        flex-grow: 1;
+    }
+
+    .pkg-full-name a {
+        padding-top: 24px;
+        padding-bottom: 12px;
+    }
 }
 
 /* Comments `#` and Documentation comments `##` */
@@ -739,6 +1020,6 @@ code .dim {
 }
 
 .copy-button:hover {
-  border-color: var(--green);
-  color: var(--green);
+  border-color: var(--link-hover-color);
+  color: var(--link-hover-color);
 }

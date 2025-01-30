@@ -1,0 +1,32 @@
+@0-18 Apply(
+    @0-6 Str(
+        Block(
+            [],
+        ),
+    ),
+    [
+        @6-18 Str(
+            Line(
+                [
+                    Interpolated(
+                        @9-16 Apply(
+                            @9-10 Var {
+                                module_name: "",
+                                ident: "i",
+                            },
+                            [
+                                @10-16 Str(
+                                    Block(
+                                        [],
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
+                    ),
+                ],
+            ),
+        ),
+    ],
+    Space,
+)

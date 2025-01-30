@@ -1,27 +1,11 @@
-Module {
-    comments: [],
-    header: Package(
+SpacesBefore {
+    before: [],
+    item: Package(
         PackageHeader {
-            before_name: [],
-            name: @8-24 PackageName(
-                "rtfeldman/blah",
-            ),
-            exposes: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: ExposesKeyword,
-                    after: [],
-                },
-                item: [],
-            },
-            packages: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: PackagesKeyword,
-                    after: [],
-                },
-                item: [],
-            },
+            before_exposes: [],
+            exposes: [],
+            before_packages: [],
+            packages: @11-13 [],
         },
     ),
 }

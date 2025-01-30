@@ -1,0 +1,22 @@
+@0-13 Apply(
+    @2-11 ParensAround(
+        SpaceBefore(
+            Return(
+                @2-11 Num(
+                    "-3e",
+                ),
+                None,
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        @12-13 Var {
+            module_name: "",
+            ident: "g",
+        },
+    ],
+    Space,
+)

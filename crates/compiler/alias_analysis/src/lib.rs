@@ -28,7 +28,7 @@ pub const MOD_APP: ModName = ModName(b"UserApp");
 pub const STATIC_STR_NAME: ConstName = ConstName(&Symbol::STR_ALIAS_ANALYSIS_STATIC.to_ne_bytes());
 pub const STATIC_LIST_NAME: ConstName = ConstName(b"THIS IS A STATIC LIST");
 
-const ENTRY_POINT_NAME: &[u8] = b"mainForHost";
+const DEFAULT_ENTRY_POINT_NAME: &[u8] = b"main_for_host";
 
 pub fn func_name_bytes(proc: &Proc) -> [u8; SIZE] {
     let bytes = func_name_bytes_help(
@@ -149,6 +149,7 @@ where
     I1: Iterator<Item = &'r Proc<'a>>,
     I2: Iterator<Item = &'r HostExposedLambdaSet<'a>>,
 {
+    let mut entry_point_names = bumpalo::vec![in arena;];
     let main_module = {
         let mut m = ModDefBuilder::new();
 
@@ -237,34 +238,38 @@ where
         }
 
         match entry_point {
-            EntryPoint::Single(SingleEntryPoint {
-                symbol: entry_point_symbol,
-                layout: entry_point_layout,
-            }) => {
-                // the entry point wrapper
-                let roc_main_bytes = func_name_bytes_help(
-                    entry_point_symbol,
-                    entry_point_layout.arguments.iter().copied(),
-                    Niche::NONE,
-                    entry_point_layout.result,
-                );
-                let roc_main = FuncName(&roc_main_bytes);
+            EntryPoint::Program(entry_points) => {
+                for SingleEntryPoint {
+                    name: entry_point_name,
+                    symbol: entry_point_symbol,
+                    layout: entry_point_layout,
+                } in entry_points
+                {
+                    let roc_main_bytes = func_name_bytes_help(
+                        *entry_point_symbol,
+                        entry_point_layout.arguments.iter().copied(),
+                        Niche::NONE,
+                        entry_point_layout.result,
+                    );
+                    let roc_main = FuncName(&roc_main_bytes);
 
-                let mut env = Env::new();
+                    let mut env = Env::new();
 
-                let entry_point_function = build_entry_point(
-                    &mut env,
-                    interner,
-                    entry_point_layout,
-                    Some(roc_main),
-                    &host_exposed_functions,
-                    &erased_functions,
-                )?;
+                    let entry_point_function = build_entry_point(
+                        &mut env,
+                        interner,
+                        *entry_point_layout,
+                        Some(roc_main),
+                        &host_exposed_functions,
+                        &erased_functions,
+                    )?;
 
-                type_definitions.extend(env.type_names);
+                    type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
-                m.add_func(entry_point_name, entry_point_function)?;
+                    entry_point_names.push(entry_point_name.as_bytes());
+                    let entry_point_name = FuncName(entry_point_name.as_bytes());
+                    m.add_func(entry_point_name, entry_point_function)?;
+                }
             }
             EntryPoint::Expects { symbols } => {
                 // construct a big pattern match picking one of the expects at random
@@ -296,7 +301,8 @@ where
 
                 type_definitions.extend(env.type_names);
 
-                let entry_point_name = FuncName(ENTRY_POINT_NAME);
+                entry_point_names.push(DEFAULT_ENTRY_POINT_NAME);
+                let entry_point_name = FuncName(DEFAULT_ENTRY_POINT_NAME);
                 m.add_func(entry_point_name, entry_point_function)?;
             }
         }
@@ -335,11 +341,13 @@ where
         let mut p = ProgramBuilder::new();
         p.add_mod(MOD_APP, main_module)?;
 
-        p.add_entry_point(
-            EntryPointName(ENTRY_POINT_NAME),
-            MOD_APP,
-            FuncName(ENTRY_POINT_NAME),
-        )?;
+        for entry_point_name in entry_point_names {
+            p.add_entry_point(
+                EntryPointName(entry_point_name),
+                MOD_APP,
+                FuncName(entry_point_name),
+            )?;
+        }
 
         p.build()?
     };
@@ -350,7 +358,16 @@ where
 
     match opt_level {
         OptLevel::Development | OptLevel::Normal => morphic_lib::solve_trivial(program),
-        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve(program),
+        // TODO(#7367): Change this back to `morphic_lib::solve`.
+        // For now, using solve_trivial to avoid bug with loops.
+        // Note: when disabling this, there was not much of a change in performance.
+        // Notably, NQueens was about 5% slower. False interpreter was 0-5% faster (depending on input).
+        // cFold and derive saw minor gains ~1.5%. rBTreeCk saw a big gain of ~4%.
+        // This feels wrong, morphic should not really be able to slow down code.
+        // Likely, noise or the bug and wrong inplace mutation lead to these perf changes.
+        // When re-enabling this, we should analysis the perf and inplace mutations of a few apps.
+        // It might be the case that our current benchmarks just aren't affected by morphic much.
+        OptLevel::Optimize | OptLevel::Size => morphic_lib::solve_trivial(program),
     }
 }
 
@@ -608,7 +625,6 @@ fn stmt_spec<'a>(
         }
         Dbg { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Expect { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
-        ExpectFx { remainder, .. } => stmt_spec(builder, interner, env, block, layout, remainder),
         Ret(symbol) => Ok(env.symbols[symbol]),
         Refcounting(modify_rc, continuation) => {
             apply_refcount_operation(builder, env, block, modify_rc)?;
@@ -863,7 +879,6 @@ fn call_spec<'a>(
 
             let closure_env = env.symbols[&passed_function.captured_environment];
 
-            let return_layout = &passed_function.return_layout;
             let argument_layouts = passed_function.argument_layouts;
 
             macro_rules! call_function {
@@ -879,30 +894,6 @@ fn call_spec<'a>(
             }
 
             match op {
-                ListMap { xs } => {
-                    let list = env.symbols[xs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
-
-                        let element = builder.add_bag_get(block, input_bag)?;
-
-                        let new_element = call_function!(builder, block, [element]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
                 ListSortWith { xs } => {
                     let list = env.symbols[xs];
 
@@ -925,109 +916,6 @@ fn call_spec<'a>(
                     let state_layout = LayoutRepr::Builtin(Builtin::List(arg0_layout));
                     let state_type = layout_spec(env, builder, interner, state_layout)?;
                     let init_state = list;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
-                ListMap2 { xs, ys } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-
-                        let new_element = call_function!(builder, block, [element_1, element_2]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-
-                ListMap3 { xs, ys, zs } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-                    let list3 = env.symbols[zs];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let input_bag_3 =
-                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
-
-                        let new_element =
-                            call_function!(builder, block, [element_1, element_2, element_3]);
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
-
-                    add_loop(builder, block, state_type, init_state, loop_body)
-                }
-                ListMap4 { xs, ys, zs, ws } => {
-                    let list1 = env.symbols[xs];
-                    let list2 = env.symbols[ys];
-                    let list3 = env.symbols[zs];
-                    let list4 = env.symbols[ws];
-
-                    let loop_body = |builder: &mut FuncDefBuilder, block, state| {
-                        let input_bag_1 =
-                            builder.add_get_tuple_field(block, list1, LIST_BAG_INDEX)?;
-                        let input_bag_2 =
-                            builder.add_get_tuple_field(block, list2, LIST_BAG_INDEX)?;
-                        let input_bag_3 =
-                            builder.add_get_tuple_field(block, list3, LIST_BAG_INDEX)?;
-                        let input_bag_4 =
-                            builder.add_get_tuple_field(block, list4, LIST_BAG_INDEX)?;
-
-                        let element_1 = builder.add_bag_get(block, input_bag_1)?;
-                        let element_2 = builder.add_bag_get(block, input_bag_2)?;
-                        let element_3 = builder.add_bag_get(block, input_bag_3)?;
-                        let element_4 = builder.add_bag_get(block, input_bag_4)?;
-
-                        let new_element = call_function!(
-                            builder,
-                            block,
-                            [element_1, element_2, element_3, element_4]
-                        );
-
-                        list_append(builder, block, update_mode_var, state, new_element)
-                    };
-
-                    let output_element_type =
-                        layout_spec(env, builder, interner, interner.get_repr(*return_layout))?;
-
-                    let state_layout = LayoutRepr::Builtin(Builtin::List(*return_layout));
-                    let state_type = layout_spec(env, builder, interner, state_layout)?;
-
-                    let init_state = new_list(builder, block, output_element_type)?;
 
                     add_loop(builder, block, state_type, init_state, loop_body)
                 }
@@ -1121,7 +1009,7 @@ fn lowlevel_spec<'a>(
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
         }
-        ListLen => {
+        ListLenUsize | ListLenU64 => {
             // TODO should this touch the heap cell?
             // just dream up a unit value
             builder.add_make_tuple(block, &[])
@@ -1147,10 +1035,10 @@ fn lowlevel_spec<'a>(
             let _unit1 = builder.add_touch(block, cell)?;
             let _unit2 = builder.add_update(block, update_mode_var, cell)?;
 
-            builder.add_bag_insert(block, bag, to_insert)?;
+            let new_bag = builder.add_bag_insert(block, bag, to_insert)?;
 
-            let old_value = builder.add_bag_get(block, bag)?;
-            let new_list = with_new_heap_cell(builder, block, bag)?;
+            let old_value = builder.add_bag_get(block, new_bag)?;
+            let new_list = with_new_heap_cell(builder, block, new_bag)?;
 
             // depending on the types, the list or value will come first in the struct
             let fields = match interner.get_repr(layout) {
@@ -1172,6 +1060,16 @@ fn lowlevel_spec<'a>(
                 }
                 _ => unreachable!(),
             }
+        }
+        ListClone => {
+            let list = env.symbols[&arguments[0]];
+
+            let bag = builder.add_get_tuple_field(block, list, LIST_BAG_INDEX)?;
+            let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
+
+            let _unit = builder.add_update(block, update_mode_var, cell)?;
+
+            with_new_heap_cell(builder, block, bag)
         }
         ListSwap => {
             let list = env.symbols[&arguments[0]];
@@ -1220,7 +1118,7 @@ fn lowlevel_spec<'a>(
 
             builder.add_make_tuple(block, &[cell, bag])
         }
-        StrFromUtf8Range => {
+        StrFromUtf8 => {
             let list = env.symbols[&arguments[0]];
 
             let cell = builder.add_get_tuple_field(block, list, LIST_CELL_INDEX)?;
@@ -1312,12 +1210,6 @@ fn recursive_variant_types<'a>(
     }
 
     Ok(result)
-}
-
-#[allow(dead_code)]
-fn worst_case_type(context: &mut impl TypeContext) -> Result<TypeId> {
-    let cell = context.add_heap_cell_type();
-    context.add_bag_type(cell)
 }
 
 fn expr_spec<'a>(
@@ -1436,13 +1328,15 @@ fn expr_spec<'a>(
                 builder.add_get_tuple_field(block, variant_id, index)
             }
         },
-        UnionFieldPtrAtIndex {
-            index,
-            tag_id,
+        GetElementPointer {
+            indices,
             structure,
             union_layout,
+            ..
         } => {
-            let index = (*index) as u32;
+            debug_assert!(indices.len() >= 2);
+            let tag_id = indices[0] as u32;
+            let index = indices[1];
             let tag_value_id = env.symbols[structure];
 
             let type_name_bytes = recursive_tag_union_name_bytes(union_layout).as_bytes();
@@ -1459,9 +1353,9 @@ fn expr_spec<'a>(
             builder.add_touch(block, heap_cell)?;
 
             // next, unwrap the union at the tag id that we've got
-            let variant_id = builder.add_unwrap_union(block, union_data, *tag_id as u32)?;
+            let variant_id = builder.add_unwrap_union(block, union_data, tag_id)?;
 
-            let value = builder.add_get_tuple_field(block, variant_id, index)?;
+            let value = builder.add_get_tuple_field(block, variant_id, index as u32)?;
 
             // construct the box. Here the heap_cell of the tag is re-used, I'm hoping that that
             // conveys to morphic that we're borrowing into the existing tag?!
@@ -1561,11 +1455,6 @@ fn expr_spec<'a>(
             let loaded_type = layout_spec(env, builder, interner, interner.get_repr(layout))?;
 
             erasure_load(builder, block, value, *field, loaded_type)
-        }
-        RuntimeErrorFunction(_) => {
-            let type_id = layout_spec(env, builder, interner, interner.get_repr(layout))?;
-
-            builder.add_terminate(block, type_id)
         }
         GetTagId { .. } => {
             // TODO touch heap cell in recursive cases

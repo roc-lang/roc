@@ -1,178 +1,189 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-            Index(1),
-            Index(2),
-            Index(3),
-            Index(4),
-            Index(5),
-            Index(6),
-            Index(7),
-            Index(8),
-            Index(9),
-        ],
-        regions: [
-            @0-7,
-            @31-62,
-            @86-117,
-            @146-153,
-            @189-196,
-            @224-231,
-            @265-272,
-            @306-313,
-            @329-360,
-            @401-408,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-            Slice(start = 0, length = 2),
-            Slice(start = 2, length = 2),
-            Slice(start = 4, length = 2),
-            Slice(start = 6, length = 2),
-            Slice(start = 8, length = 2),
-            Slice(start = 10, length = 2),
-            Slice(start = 12, length = 2),
-            Slice(start = 14, length = 2),
-            Slice(start = 16, length = 2),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-            Slice(start = 2, length = 0),
-            Slice(start = 4, length = 0),
-            Slice(start = 6, length = 0),
-            Slice(start = 8, length = 0),
-            Slice(start = 10, length = 0),
-            Slice(start = 12, length = 0),
-            Slice(start = 14, length = 0),
-            Slice(start = 16, length = 0),
-            Slice(start = 18, length = 0),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-        ],
-        type_defs: [
-            Opaque {
-                header: TypeHeader {
-                    name: @0-1 "A",
-                    vars: [],
+@0-430 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+                EitherIndex(1),
+                EitherIndex(2),
+                EitherIndex(3),
+                EitherIndex(4),
+                EitherIndex(5),
+                EitherIndex(6),
+                EitherIndex(7),
+                EitherIndex(8),
+                EitherIndex(9),
+            ],
+            regions: [
+                @0-29,
+                @31-84,
+                @86-144,
+                @146-187,
+                @189-222,
+                @224-263,
+                @265-304,
+                @306-327,
+                @329-399,
+                @401-427,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 10, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 12, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 14, length: 2 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 16, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 10, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 12, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 14, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 16, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 18, length: 0 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [
+                Opaque {
+                    header: TypeHeader {
+                        name: @0-1 "A",
+                        vars: [],
+                    },
+                    typ: @5-7 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @8-18,
+                            after_implements_kw: [],
+                            item: @19-29 [
+                                @20-22 ImplementsAbility {
+                                    ability: @20-22 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                                @24-28 ImplementsAbility {
+                                    ability: @24-28 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                            ],
+                        },
+                    ),
                 },
-                typ: @5-7 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @19-29 Implements(
+                Opaque {
+                    header: TypeHeader {
+                        name: @31-32 "A",
+                        vars: [],
+                    },
+                    typ: @36-62 Where(
+                        @36-37 BoundVariable(
+                            "a",
+                        ),
                         [
-                            @20-22 ImplementsAbility {
-                                ability: @20-22 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: None,
-                            },
-                            @24-28 ImplementsAbility {
-                                ability: @24-28 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                                impls: None,
+                            @44-62 ImplementsClause {
+                                var: @44-45 "a",
+                                abilities: [
+                                    @57-62 Apply(
+                                        "",
+                                        "Other",
+                                        [],
+                                    ),
+                                ],
                             },
                         ],
                     ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @31-32 "A",
-                    vars: [],
-                },
-                typ: @36-62 Where(
-                    @36-37 BoundVariable(
-                        "a",
-                    ),
-                    [
-                        @44-62 ImplementsClause {
-                            var: @44-45 "a",
-                            abilities: [
-                                @57-62 Apply(
-                                    "",
-                                    "Other",
-                                    [],
-                                ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @63-73,
+                            after_implements_kw: [],
+                            item: @74-84 [
+                                @75-77 ImplementsAbility {
+                                    ability: @75-77 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                                @79-83 ImplementsAbility {
+                                    ability: @79-83 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
                             ],
                         },
-                    ],
-                ),
-                derived: Some(
-                    @74-84 Implements(
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @86-87 "A",
+                        vars: [],
+                    },
+                    typ: @91-117 Where(
+                        @91-92 BoundVariable(
+                            "a",
+                        ),
                         [
-                            @75-77 ImplementsAbility {
-                                ability: @75-77 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: None,
-                            },
-                            @79-83 ImplementsAbility {
-                                ability: @79-83 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                                impls: None,
+                            @99-117 ImplementsClause {
+                                var: @99-100 "a",
+                                abilities: [
+                                    @112-117 Apply(
+                                        "",
+                                        "Other",
+                                        [],
+                                    ),
+                                ],
                             },
                         ],
                     ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @86-87 "A",
-                    vars: [],
-                },
-                typ: @91-117 Where(
-                    @91-92 BoundVariable(
-                        "a",
-                    ),
-                    [
-                        @99-117 ImplementsClause {
-                            var: @99-100 "a",
-                            abilities: [
-                                @112-117 Apply(
-                                    "",
-                                    "Other",
-                                    [],
-                                ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [
+                                Newline,
                             ],
-                        },
-                    ],
-                ),
-                derived: Some(
-                    @134-144 SpaceBefore(
-                        Implements(
-                            [
+                            implements: @123-133,
+                            after_implements_kw: [],
+                            item: @134-144 [
                                 @135-137 ImplementsAbility {
                                     ability: @135-137 Apply(
                                         "",
@@ -190,228 +201,243 @@ Defs(
                                     impls: None,
                                 },
                             ],
-                        ),
-                        [
-                            Newline,
-                        ],
+                        },
                     ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @146-147 "A",
-                    vars: [],
                 },
-                typ: @151-153 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @165-187 Implements(
-                        [
-                            @166-173 ImplementsAbility {
-                                ability: @166-168 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @169-173 AbilityImpls(
-                                        [
-                                            @170-172 LabelOnly(
-                                                @170-172 "eq",
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            },
-                            @175-186 ImplementsAbility {
-                                ability: @175-179 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @180-186 AbilityImpls(
-                                        [
-                                            @181-185 LabelOnly(
-                                                @181-185 "hash",
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            },
-                        ],
-                    ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @189-190 "A",
-                    vars: [],
-                },
-                typ: @194-196 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @208-222 Implements(
-                        [
-                            @209-221 ImplementsAbility {
-                                ability: @209-211 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @212-221 AbilityImpls(
-                                        [
-                                            @213-215 LabelOnly(
-                                                @213-215 "eq",
-                                            ),
-                                            @217-220 LabelOnly(
-                                                @217-220 "eq1",
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            },
-                        ],
-                    ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @224-225 "A",
-                    vars: [],
-                },
-                typ: @229-231 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @243-263 Implements(
-                        [
-                            @244-256 ImplementsAbility {
-                                ability: @244-246 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @247-256 AbilityImpls(
-                                        [
-                                            @248-250 LabelOnly(
-                                                @248-250 "eq",
-                                            ),
-                                            @252-255 LabelOnly(
-                                                @252-255 "eq1",
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            },
-                            @258-262 ImplementsAbility {
-                                ability: @258-262 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                                impls: None,
-                            },
-                        ],
-                    ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @265-266 "A",
-                    vars: [],
-                },
-                typ: @270-272 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @284-304 Implements(
-                        [
-                            @285-289 ImplementsAbility {
-                                ability: @285-289 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                                impls: None,
-                            },
-                            @291-303 ImplementsAbility {
-                                ability: @291-293 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @294-303 AbilityImpls(
-                                        [
-                                            @295-297 LabelOnly(
-                                                @295-297 "eq",
-                                            ),
-                                            @299-302 LabelOnly(
-                                                @299-302 "eq1",
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                            },
-                        ],
-                    ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @306-307 "A",
-                    vars: [],
-                },
-                typ: @311-313 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @325-327 Implements(
+                Opaque {
+                    header: TypeHeader {
+                        name: @146-147 "A",
+                        vars: [],
+                    },
+                    typ: @151-153 Apply(
+                        "",
+                        "U8",
                         [],
                     ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @329-330 "A",
-                    vars: [],
-                },
-                typ: @334-360 Where(
-                    @334-335 BoundVariable(
-                        "a",
-                    ),
-                    [
-                        @342-360 ImplementsClause {
-                            var: @342-343 "a",
-                            abilities: [
-                                @355-360 Apply(
-                                    "",
-                                    "Other",
-                                    [],
-                                ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @154-164,
+                            after_implements_kw: [],
+                            item: @165-187 [
+                                @166-173 ImplementsAbility {
+                                    ability: @166-168 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @169-173 AbilityImpls(
+                                            [
+                                                @170-172 LabelOnly(
+                                                    @170-172 "eq",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                                @175-186 ImplementsAbility {
+                                    ability: @175-179 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @180-186 AbilityImpls(
+                                            [
+                                                @181-185 LabelOnly(
+                                                    @181-185 "hash",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
                             ],
                         },
-                    ],
-                ),
-                derived: Some(
-                    @377-399 SpaceBefore(
-                        Implements(
-                            [
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @189-190 "A",
+                        vars: [],
+                    },
+                    typ: @194-196 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @197-207,
+                            after_implements_kw: [],
+                            item: @208-222 [
+                                @209-221 ImplementsAbility {
+                                    ability: @209-211 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @212-221 AbilityImpls(
+                                            [
+                                                @213-215 LabelOnly(
+                                                    @213-215 "eq",
+                                                ),
+                                                @217-220 LabelOnly(
+                                                    @217-220 "eq1",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                            ],
+                        },
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @224-225 "A",
+                        vars: [],
+                    },
+                    typ: @229-231 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @232-242,
+                            after_implements_kw: [],
+                            item: @243-263 [
+                                @244-256 ImplementsAbility {
+                                    ability: @244-246 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @247-256 AbilityImpls(
+                                            [
+                                                @248-250 LabelOnly(
+                                                    @248-250 "eq",
+                                                ),
+                                                @252-255 LabelOnly(
+                                                    @252-255 "eq1",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                                @258-262 ImplementsAbility {
+                                    ability: @258-262 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                            ],
+                        },
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @265-266 "A",
+                        vars: [],
+                    },
+                    typ: @270-272 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @273-283,
+                            after_implements_kw: [],
+                            item: @284-304 [
+                                @285-289 ImplementsAbility {
+                                    ability: @285-289 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    impls: None,
+                                },
+                                @291-303 ImplementsAbility {
+                                    ability: @291-293 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                    impls: Some(
+                                        @294-303 AbilityImpls(
+                                            [
+                                                @295-297 LabelOnly(
+                                                    @295-297 "eq",
+                                                ),
+                                                @299-302 LabelOnly(
+                                                    @299-302 "eq1",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                },
+                            ],
+                        },
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @306-307 "A",
+                        vars: [],
+                    },
+                    typ: @311-313 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @314-324,
+                            after_implements_kw: [],
+                            item: @325-327 [],
+                        },
+                    ),
+                },
+                Opaque {
+                    header: TypeHeader {
+                        name: @329-330 "A",
+                        vars: [],
+                    },
+                    typ: @334-360 Where(
+                        @334-335 BoundVariable(
+                            "a",
+                        ),
+                        [
+                            @342-360 ImplementsClause {
+                                var: @342-343 "a",
+                                abilities: [
+                                    @355-360 Apply(
+                                        "",
+                                        "Other",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [
+                                Newline,
+                            ],
+                            implements: @366-376,
+                            after_implements_kw: [],
+                            item: @377-399 [
                                 @378-385 ImplementsAbility {
                                     ability: @378-380 Apply(
                                         "",
@@ -445,52 +471,55 @@ Defs(
                                     ),
                                 },
                             ],
-                        ),
-                        [
-                            Newline,
-                        ],
+                        },
                     ),
-                ),
-            },
-            Opaque {
-                header: TypeHeader {
-                    name: @401-402 "A",
-                    vars: [],
                 },
-                typ: @406-408 Apply(
-                    "",
-                    "U8",
-                    [],
-                ),
-                derived: Some(
-                    @420-427 Implements(
-                        [
-                            @421-426 ImplementsAbility {
-                                ability: @421-423 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                                impls: Some(
-                                    @424-426 AbilityImpls(
+                Opaque {
+                    header: TypeHeader {
+                        name: @401-402 "A",
+                        vars: [],
+                    },
+                    typ: @406-408 Apply(
+                        "",
+                        "U8",
+                        [],
+                    ),
+                    derived: Some(
+                        ImplementsAbilities {
+                            before_implements_kw: [],
+                            implements: @409-419,
+                            after_implements_kw: [],
+                            item: @420-427 [
+                                @421-426 ImplementsAbility {
+                                    ability: @421-423 Apply(
+                                        "",
+                                        "Eq",
                                         [],
                                     ),
-                                ),
-                            },
-                        ],
+                                    impls: Some(
+                                        @424-426 AbilityImpls(
+                                            [],
+                                        ),
+                                    ),
+                                },
+                            ],
+                        },
                     ),
-                ),
-            },
-        ],
-        value_defs: [],
-    },
-    @429-430 SpaceBefore(
-        Num(
-            "0",
+                },
+            ],
+            value_defs: [],
+        },
+        @429-430 SpaceBefore(
+            Num(
+                "0",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

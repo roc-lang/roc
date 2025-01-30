@@ -55,14 +55,14 @@ fn crash_in_call() {
             r#"
             app "test" provides [main] to "./platform"
 
-            getInfallible = \result -> when result is
+            get_infallible = \result -> when result is
                 Ok x -> x
                 _ -> crash "turns out this was fallible"
 
             main =
                 x : [Ok U64, Err Str]
                 x = Err ""
-                getInfallible x
+                get_infallible x
             "#
         ),
         1u64,

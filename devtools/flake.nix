@@ -32,19 +32,18 @@
               vscodeWithExtensions = pkgs.vscode-with-extensions.override {
                 vscodeExtensions = with pkgs.vscode-extensions;
                   [
-                    matklad.rust-analyzer
+                    rust-lang.rust-analyzer
                     # eamodio.gitlens
                     bbenoist.nix
                     tamasfe.even-better-toml
                   ] ++ (if isAarch64Darwin then [ ] else [ vadimcn.vscode-lldb ])
                   ++ pkgs.vscode-utils.extensionsFromVscodeMarketplace [
-                    {
-                      name = "roc-lang-support";
-                      publisher = "benjamin-thomas";
-                      version = "0.0.4";
-                      # keep this sha for the first run, nix will tell you the correct one to change it to
-                      sha256 = "sha256-USZiXdvYa8hxj62cy6hdiS5c2tIDIQxSyux684lyAEY=";
-                    }
+                     {
+                        name = "roc-lang-unofficial";
+                        publisher = "IvanDemchenko";
+                        version = "1.2.0";
+                        sha256 = "sha256-lMN6GlUM20ptg1c6fNp8jwSzlCzE1U0ugRyhRLYGPGE=";
+                      }
                   ]
                 ;
               };

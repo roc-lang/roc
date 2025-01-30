@@ -415,7 +415,7 @@ fn eq_tag_union_help<'a>(
     };
 
     //
-    // combine all the statments
+    // combine all the statements
     //
     let compare_values = tag_id_a_stmt(root.arena.alloc(
         //
@@ -668,8 +668,8 @@ fn eq_list<'a>(
 
     let len_1 = root.create_symbol(ident_ids, "len_1");
     let len_2 = root.create_symbol(ident_ids, "len_2");
-    let len_1_stmt = |next| let_lowlevel(arena, layout_isize, len_1, ListLen, &[ARG_1], next);
-    let len_2_stmt = |next| let_lowlevel(arena, layout_isize, len_2, ListLen, &[ARG_2], next);
+    let len_1_stmt = |next| let_lowlevel(arena, layout_isize, len_1, ListLenUsize, &[ARG_1], next);
+    let len_2_stmt = |next| let_lowlevel(arena, layout_isize, len_2, ListLenUsize, &[ARG_2], next);
 
     let eq_len = root.create_symbol(ident_ids, "eq_len");
     let eq_len_stmt = |next| let_lowlevel(arena, LAYOUT_BOOL, eq_len, Eq, &[len_1, len_2], next);

@@ -1,231 +1,236 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-            Index(2147483649),
-            Index(2147483650),
-            Index(2147483651),
-            Index(2147483652),
-        ],
-        regions: [
-            @0-19,
-            @20-39,
-            @40-59,
-            @60-72,
-            @73-128,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-            Slice(start = 0, length = 1),
-            Slice(start = 1, length = 1),
-            Slice(start = 2, length = 1),
-            Slice(start = 3, length = 1),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-            Slice(start = 1, length = 0),
-            Slice(start = 2, length = 0),
-            Slice(start = 3, length = 0),
-            Slice(start = 4, length = 0),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-4 Apply(
-                    @0-4 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @5-6 Identifier(
-                            "x",
+@0-131 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+                EitherIndex(2147483650),
+                EitherIndex(2147483651),
+                EitherIndex(2147483652),
+            ],
+            regions: [
+                @0-19,
+                @20-39,
+                @40-59,
+                @60-72,
+                @73-128,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 1 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 0 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-8 Apply(
+                        @0-4 Tag(
+                            "Pair",
                         ),
-                        @7-8 Underscore(
-                            "",
-                        ),
-                    ],
-                ),
-                @11-19 Apply(
-                    @11-15 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @16-17 Num(
-                            "0",
-                        ),
-                        @18-19 Num(
-                            "1",
-                        ),
-                    ],
-                    Space,
-                ),
-            ),
-            Body(
-                @20-28 Apply(
-                    @20-24 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @25-26 Underscore(
-                            "",
-                        ),
-                        @27-28 Identifier(
-                            "y",
-                        ),
-                    ],
-                ),
-                @31-39 Apply(
-                    @31-35 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @36-37 Num(
-                            "0",
-                        ),
-                        @38-39 Num(
-                            "1",
-                        ),
-                    ],
-                    Space,
-                ),
-            ),
-            Body(
-                @40-48 Apply(
-                    @40-44 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @45-46 Underscore(
-                            "",
-                        ),
-                        @47-48 Underscore(
-                            "",
-                        ),
-                    ],
-                ),
-                @51-59 Apply(
-                    @51-55 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @56-57 Num(
-                            "0",
-                        ),
-                        @58-59 Num(
-                            "1",
-                        ),
-                    ],
-                    Space,
-                ),
-            ),
-            Body(
-                @60-61 Underscore(
-                    "",
-                ),
-                @64-72 Apply(
-                    @64-68 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @69-70 Num(
-                            "0",
-                        ),
-                        @71-72 Num(
-                            "1",
-                        ),
-                    ],
-                    Space,
-                ),
-            ),
-            Body(
-                @73-98 Apply(
-                    @73-77 Tag(
-                        "Pair",
-                    ),
-                    [
-                        @79-87 Apply(
-                            @79-83 Tag(
-                                "Pair",
+                        [
+                            @5-6 Identifier {
+                                ident: "x",
+                            },
+                            @7-8 Underscore(
+                                "",
                             ),
-                            [
-                                @84-85 Identifier(
-                                    "x",
-                                ),
-                                @86-87 Underscore(
-                                    "",
-                                ),
-                            ],
-                        ),
-                        @90-98 Apply(
-                            @90-94 Tag(
-                                "Pair",
-                            ),
-                            [
-                                @95-96 Underscore(
-                                    "",
-                                ),
-                                @97-98 Identifier(
-                                    "y",
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-                @102-128 Apply(
-                    @102-106 Tag(
-                        "Pair",
+                        ],
                     ),
-                    [
-                        @108-116 ParensAround(
-                            Apply(
-                                @108-112 Tag(
+                    @11-19 Apply(
+                        @11-15 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @16-17 Num(
+                                "0",
+                            ),
+                            @18-19 Num(
+                                "1",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+                Body(
+                    @20-28 Apply(
+                        @20-24 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @25-26 Underscore(
+                                "",
+                            ),
+                            @27-28 Identifier {
+                                ident: "y",
+                            },
+                        ],
+                    ),
+                    @31-39 Apply(
+                        @31-35 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @36-37 Num(
+                                "0",
+                            ),
+                            @38-39 Num(
+                                "1",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+                Body(
+                    @40-48 Apply(
+                        @40-44 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @45-46 Underscore(
+                                "",
+                            ),
+                            @47-48 Underscore(
+                                "",
+                            ),
+                        ],
+                    ),
+                    @51-59 Apply(
+                        @51-55 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @56-57 Num(
+                                "0",
+                            ),
+                            @58-59 Num(
+                                "1",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+                Body(
+                    @60-61 Underscore(
+                        "",
+                    ),
+                    @64-72 Apply(
+                        @64-68 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @69-70 Num(
+                                "0",
+                            ),
+                            @71-72 Num(
+                                "1",
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+                Body(
+                    @73-98 Apply(
+                        @73-77 Tag(
+                            "Pair",
+                        ),
+                        [
+                            @79-87 Apply(
+                                @79-83 Tag(
                                     "Pair",
                                 ),
                                 [
-                                    @113-114 Num(
-                                        "0",
-                                    ),
-                                    @115-116 Num(
-                                        "1",
+                                    @84-85 Identifier {
+                                        ident: "x",
+                                    },
+                                    @86-87 Underscore(
+                                        "",
                                     ),
                                 ],
-                                Space,
                             ),
-                        ),
-                        @119-127 ParensAround(
-                            Apply(
-                                @119-123 Tag(
+                            @90-98 Apply(
+                                @90-94 Tag(
                                     "Pair",
                                 ),
                                 [
-                                    @124-125 Num(
-                                        "2",
+                                    @95-96 Underscore(
+                                        "",
                                     ),
-                                    @126-127 Num(
-                                        "3",
-                                    ),
+                                    @97-98 Identifier {
+                                        ident: "y",
+                                    },
                                 ],
-                                Space,
                             ),
+                        ],
+                    ),
+                    @102-128 Apply(
+                        @102-106 Tag(
+                            "Pair",
                         ),
-                    ],
-                    Space,
+                        [
+                            @108-116 ParensAround(
+                                Apply(
+                                    @108-112 Tag(
+                                        "Pair",
+                                    ),
+                                    [
+                                        @113-114 Num(
+                                            "0",
+                                        ),
+                                        @115-116 Num(
+                                            "1",
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                            @119-127 ParensAround(
+                                Apply(
+                                    @119-123 Tag(
+                                        "Pair",
+                                    ),
+                                    [
+                                        @124-125 Num(
+                                            "2",
+                                        ),
+                                        @126-127 Num(
+                                            "3",
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
                 ),
+            ],
+        },
+        @130-131 SpaceBefore(
+            Num(
+                "0",
             ),
-        ],
-    },
-    @130-131 SpaceBefore(
-        Num(
-            "0",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

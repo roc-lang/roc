@@ -10,7 +10,7 @@ use roc_error_macros::{internal_error, todo_abilities};
 use roc_module::ident::{Lowercase, TagName};
 use roc_module::symbol::{Interns, Symbol};
 use roc_problem::can::RuntimeError;
-use roc_target::{PtrWidth, TargetInfo};
+use roc_target::{PtrWidth, Target};
 use roc_types::num::NumericRange;
 use roc_types::subs::{
     self, Content, FlatType, GetSubsSlice, OptVariable, RecordFields, Subs, TagExt, TupleElems,
@@ -114,7 +114,7 @@ macro_rules! inc_stat {
 /// Layout cache to avoid recomputing [Layout] from a [Variable] multiple times.
 #[derive(Debug)]
 pub struct LayoutCache<'a> {
-    pub target_info: TargetInfo,
+    pub target: Target,
     cache: std::vec::Vec<CacheLayer<LayoutResult<'a>>>,
     raw_function_cache: std::vec::Vec<CacheLayer<RawFunctionLayoutResult<'a>>>,
 
@@ -128,13 +128,13 @@ pub struct LayoutCache<'a> {
 }
 
 impl<'a> LayoutCache<'a> {
-    pub fn new(interner: TLLayoutInterner<'a>, target_info: TargetInfo) -> Self {
+    pub fn new(interner: TLLayoutInterner<'a>, target: Target) -> Self {
         let mut cache = std::vec::Vec::with_capacity(4);
         cache.push(Default::default());
         let mut raw_cache = std::vec::Vec::with_capacity(4);
         raw_cache.push(Default::default());
         Self {
-            target_info,
+            target,
             cache,
             raw_function_cache: raw_cache,
 
@@ -160,7 +160,6 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
-            target_info: self.target_info,
             cache: self,
         };
 
@@ -186,7 +185,6 @@ impl<'a> LayoutCache<'a> {
             arena,
             subs,
             seen: Vec::new_in(arena),
-            target_info: self.target_info,
             cache: self,
         };
 
@@ -517,6 +515,7 @@ impl<'a> RawFunctionLayout<'a> {
                 internal_error!("lambda set should only appear under a function, where it's handled independently.");
             }
             ErasedLambda => internal_error!("erased lambda type should only appear under a function, where it's handled independently"),
+            Pure | Effectful => internal_error!("fx vars should only appear under a function"),
             Structure(flat_type) => Self::layout_from_flat_type(env, flat_type),
             RangedNumber(..) => Layout::new_help(env, var, content).then(Self::ZeroArgumentThunk),
 
@@ -574,12 +573,6 @@ impl<'a> RawFunctionLayout<'a> {
                 cacheable(Ok(Self::ZeroArgumentThunk(Layout::F32)))
             }
 
-            // Nat
-            Alias(Symbol::NUM_NAT, args, _, _) => {
-                debug_assert!(args.is_empty());
-                cacheable(Ok(Self::ZeroArgumentThunk(Layout::usize(env.target_info))))
-            }
-
             Alias(Symbol::INSPECT_ELEM_WALKER | Symbol::INSPECT_KEY_VAL_WALKER, _, var, _) => Self::from_var(env, var),
 
             Alias(symbol, _, var, _) if symbol.is_builtin() => {
@@ -600,7 +593,7 @@ impl<'a> RawFunctionLayout<'a> {
         let arena = env.arena;
 
         match flat_type {
-            Func(args, closure_var, ret_var) => {
+            Func(args, closure_var, ret_var, _fx_var) => {
                 let mut fn_args = Vec::with_capacity_in(args.len(), arena);
 
                 let mut cache_criteria = CACHEABLE;
@@ -972,39 +965,39 @@ impl<'a> UnionLayout<'a> {
         self.discriminant().layout()
     }
 
-    fn stores_tag_id_in_pointer_bits(tags: &[&[InLayout<'a>]], target_info: TargetInfo) -> bool {
-        tags.len() < target_info.ptr_width() as usize
+    fn stores_tag_id_in_pointer_bits(tags: &[&[InLayout<'a>]], target: Target) -> bool {
+        tags.len() < target.ptr_width() as usize
     }
 
     pub const POINTER_MASK_32BIT: usize = 0b0000_0111;
     pub const POINTER_MASK_64BIT: usize = 0b0000_0011;
 
-    pub fn tag_id_pointer_bits_and_mask(target_info: TargetInfo) -> (usize, usize) {
-        match target_info.ptr_width() {
+    pub fn tag_id_pointer_bits_and_mask(target: Target) -> (usize, usize) {
+        match target.ptr_width() {
             PtrWidth::Bytes8 => (3, Self::POINTER_MASK_64BIT),
             PtrWidth::Bytes4 => (2, Self::POINTER_MASK_32BIT),
         }
     }
 
     // i.e. it is not implicit and not stored in the pointer bits
-    pub fn stores_tag_id_as_data(&self, target_info: TargetInfo) -> bool {
+    pub fn stores_tag_id_as_data(&self, target: Target) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => true,
             UnionLayout::Recursive(tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
-            } => !Self::stores_tag_id_in_pointer_bits(tags, target_info),
+            } => !Self::stores_tag_id_in_pointer_bits(tags, target),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
 
-    pub fn stores_tag_id_in_pointer(&self, target_info: TargetInfo) -> bool {
+    pub fn stores_tag_id_in_pointer(&self, target: Target) -> bool {
         match self {
             UnionLayout::NonRecursive(_) => false,
             UnionLayout::Recursive(tags)
             | UnionLayout::NullableWrapped {
                 other_tags: tags, ..
-            } => Self::stores_tag_id_in_pointer_bits(tags, target_info),
+            } => Self::stores_tag_id_in_pointer_bits(tags, target),
             UnionLayout::NonNullableUnwrapped(_) | UnionLayout::NullableUnwrapped { .. } => false,
         }
     }
@@ -1035,7 +1028,7 @@ impl<'a> UnionLayout<'a> {
         tags.iter()
             .map(|field_layouts| LayoutRepr::struct_(field_layouts).alignment_bytes(interner))
             .max()
-            .unwrap_or(0)
+            .unwrap_or(1)
     }
 
     pub fn allocation_alignment_bytes<I>(&self, interner: &I) -> u32
@@ -1057,7 +1050,7 @@ impl<'a> UnionLayout<'a> {
         };
 
         // because we store a refcount, the alignment must be at least the size of a pointer
-        allocation.max(interner.target_info().ptr_width() as u32)
+        allocation.max(interner.target().ptr_width() as u32)
     }
 
     /// Size of the data in memory, whether it's stack or heap (for non-null tag ids)
@@ -1067,7 +1060,7 @@ impl<'a> UnionLayout<'a> {
     {
         let (data_width, data_align) = self.data_size_and_alignment_help_match(interner);
 
-        if self.stores_tag_id_as_data(interner.target_info()) {
+        if self.stores_tag_id_as_data(interner.target()) {
             use Discriminant::*;
             match self.discriminant() {
                 U0 => (round_up_to_alignment(data_width, data_align), data_align),
@@ -1097,7 +1090,7 @@ impl<'a> UnionLayout<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        if !self.stores_tag_id_as_data(interner.target_info()) {
+        if !self.stores_tag_id_as_data(interner.target()) {
             return None;
         };
 
@@ -1159,7 +1152,7 @@ impl<'a> UnionLayout<'a> {
             UnionLayout::Recursive(_)
             | UnionLayout::NonNullableUnwrapped(_)
             | UnionLayout::NullableWrapped { .. }
-            | UnionLayout::NullableUnwrapped { .. } => interner.target_info().ptr_width() as u32,
+            | UnionLayout::NullableUnwrapped { .. } => interner.target().ptr_width() as u32,
         }
     }
 
@@ -1204,8 +1197,8 @@ impl Discriminant {
         }
     }
 
-    pub const fn alignment_bytes(&self) -> u32 {
-        self.stack_size()
+    pub fn alignment_bytes(&self) -> u32 {
+        self.stack_size().max(1)
     }
 
     pub const fn layout(&self) -> InLayout<'static> {
@@ -1297,7 +1290,7 @@ enum NichePriv<'a> {
 /// ```roc
 /// capture : _ -> ({} -> Str)
 /// capture = \val ->
-///     forcer = \{} -> Num.toStr val
+///     forcer = \{} -> Num.to_str val
 ///     forcer
 ///
 /// fun = \x ->
@@ -1797,7 +1790,7 @@ impl<'a> LambdaSet<'a> {
         // functions, despite not appearing in the lambda set.
         // We don't want to compile them as thunks, so we need to figure out a special-casing for
         // them.
-        // To reproduce: test cli_run
+        // To reproduce: test cli_tests
         //
         // debug_assert!(
         //     self.set
@@ -1825,9 +1818,8 @@ impl<'a> LambdaSet<'a> {
         args: VariableSubsSlice,
         closure_var: Variable,
         ret_var: Variable,
-        target_info: TargetInfo,
     ) -> Result<Self, LayoutProblem> {
-        let mut env = Env::from_components(cache, subs, arena, target_info);
+        let mut env = Env::from_components(cache, subs, arena);
         Self::from_var(&mut env, args, closure_var, ret_var).value()
     }
 
@@ -2159,7 +2151,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
                 }
-                FlatType::Func(args, lset, ret) => {
+                FlatType::Func(args, lset, ret, _fx_var) => {
                     for var in subs.get_subs_slice(*args) {
                         stack.push((*var, depth_any + 1, depth_lset));
                     }
@@ -2200,7 +2192,7 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
                     }
                     stack.push((ext.var(), depth_any + 1, depth_lset));
                 }
-                FlatType::EmptyRecord | FlatType::EmptyTuple | FlatType::EmptyTagUnion => {}
+                FlatType::EmptyRecord | FlatType::EmptyTagUnion | FlatType::EffectfulFunc => {}
             },
             Content::FlexVar(_)
             | Content::RigidVar(_)
@@ -2208,7 +2200,9 @@ fn lambda_set_size(subs: &Subs, var: Variable) -> (usize, usize, usize) {
             | Content::RigidAbleVar(_, _)
             | Content::RangedNumber(_)
             | Content::Error
-            | Content::ErasedLambda => {}
+            | Content::ErasedLambda
+            | Content::Pure
+            | Content::Effectful => {}
         }
     }
     (max_depth_any_ctor, max_depth_only_lset, total)
@@ -2235,7 +2229,6 @@ macro_rules! list_element_layout {
 }
 
 pub struct Env<'a, 'b> {
-    target_info: TargetInfo,
     pub(crate) arena: &'a Bump,
     seen: Vec<'a, Variable>,
     pub(crate) subs: &'b Subs,
@@ -2247,14 +2240,12 @@ impl<'a, 'b> Env<'a, 'b> {
         cache: &'b mut LayoutCache<'a>,
         subs: &'b Subs,
         arena: &'a Bump,
-        target_info: TargetInfo,
     ) -> Self {
         Self {
             cache,
             subs,
             seen: Vec::new_in(arena),
             arena,
-            target_info,
         }
     }
 
@@ -2393,9 +2384,9 @@ impl<'a, 'b> Env<'a, 'b> {
     }
 }
 
-pub const fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
+pub fn round_up_to_alignment(width: u32, alignment: u32) -> u32 {
     match alignment {
-        0 => width,
+        0 => panic!("Alignment invalid: Got 0, but alignment must be at least 1"),
         1 => width,
         _ => {
             if width % alignment > 0 {
@@ -2491,6 +2482,9 @@ impl<'a> Layout<'a> {
             ErasedLambda => {
                 internal_error!("erased lambda type should only appear under a function, where it's handled independently.");
             }
+            Pure | Effectful => {
+                internal_error!("fx vars should only appear under a function, where they're handled independently.");
+            }
             Structure(flat_type) => layout_from_flat_type(env, flat_type),
 
             Alias(symbol, _args, actual_var, _) => {
@@ -2504,10 +2498,6 @@ impl<'a> Layout<'a> {
 
                 match symbol {
                     Symbol::NUM_DECIMAL => cacheable(Ok(Layout::DEC)),
-
-                    Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                        cacheable(Ok(Layout::usize(env.target_info)))
-                    }
 
                     Symbol::NUM_NUM | Symbol::NUM_INT | Symbol::NUM_INTEGER
                         if is_unresolved_var(env.subs, actual_var) =>
@@ -2528,7 +2518,7 @@ impl<'a> Layout<'a> {
                 }
             }
 
-            RangedNumber(range) => Self::layout_from_ranged_number(env, range),
+            RangedNumber(range) => Self::layout_from_ranged_number(range),
 
             Error => cacheable(Err(LayoutProblem::Erroneous)),
         }
@@ -2549,18 +2539,12 @@ impl<'a> Layout<'a> {
         }
     }
 
-    fn layout_from_ranged_number(
-        env: &mut Env<'a, '_>,
-        range: NumericRange,
-    ) -> Cacheable<LayoutResult<'a>> {
+    fn layout_from_ranged_number(range: NumericRange) -> Cacheable<LayoutResult<'a>> {
         // We don't pass the range down because `RangedNumber`s are somewhat rare, they only
         // appear due to number literals, so no need to increase parameter list sizes.
         let num_layout = range.default_compilation_width();
 
-        cacheable(Ok(Layout::int_literal_width_to_int(
-            num_layout,
-            env.target_info,
-        )))
+        cacheable(Ok(Layout::int_literal_width_to_int(num_layout)))
     }
 
     /// Returns Err(()) if given an error, or Ok(Layout) if given a non-erroneous Structure.
@@ -2708,7 +2692,7 @@ impl<'a> LayoutRepr<'a> {
             LayoutRepr::Builtin(builtin) => {
                 use Builtin::*;
 
-                match interner.target_info().ptr_width() {
+                match interner.target().ptr_width() {
                     PtrWidth::Bytes4 => {
                         // more things fit into a register
                         false
@@ -2722,7 +2706,7 @@ impl<'a> LayoutRepr<'a> {
             LayoutRepr::Union(UnionLayout::NonRecursive(_)) => true,
             LayoutRepr::Struct(_) => {
                 // TODO: write tests for this!
-                self.stack_size(interner) as usize > interner.target_info().max_by_value_size()
+                self.stack_size(interner) as usize > interner.target().max_by_value_size()
             }
 
             LayoutRepr::LambdaSet(lambda_set) => interner
@@ -2761,7 +2745,7 @@ impl<'a> LayoutRepr<'a> {
         use LayoutRepr::*;
 
         match self {
-            Builtin(builtin) => builtin.stack_size(interner.target_info()),
+            Builtin(builtin) => builtin.stack_size(interner.target()),
             Struct(field_layouts) => {
                 let mut sum = 0;
 
@@ -2776,9 +2760,9 @@ impl<'a> LayoutRepr<'a> {
                 .get_repr(lambda_set.runtime_representation())
                 .stack_size_without_alignment(interner),
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
-                interner.target_info().ptr_width() as u32
+                interner.target().ptr_width() as u32
             }
-            Erased(e) => e.stack_size_without_alignment(interner.target_info()),
+            Erased(e) => e.stack_size_without_alignment(interner.target()),
         }
     }
 
@@ -2792,7 +2776,7 @@ impl<'a> LayoutRepr<'a> {
                 .iter()
                 .map(|x| interner.get_repr(*x).alignment_bytes(interner))
                 .max()
-                .unwrap_or(0),
+                .unwrap_or(1),
 
             Union(variant) => {
                 use UnionLayout::*;
@@ -2823,17 +2807,17 @@ impl<'a> LayoutRepr<'a> {
                     Recursive(_)
                     | NullableWrapped { .. }
                     | NullableUnwrapped { .. }
-                    | NonNullableUnwrapped(_) => interner.target_info().ptr_width() as u32,
+                    | NonNullableUnwrapped(_) => interner.target().ptr_width() as u32,
                 }
             }
             LambdaSet(lambda_set) => interner
                 .get_repr(lambda_set.runtime_representation())
                 .alignment_bytes(interner),
-            Builtin(builtin) => builtin.alignment_bytes(interner.target_info()),
+            Builtin(builtin) => builtin.alignment_bytes(interner.target()),
             RecursivePointer(_) | Ptr(_) | FunctionPointer(_) => {
-                interner.target_info().ptr_width() as u32
+                interner.target().ptr_width() as u32
             }
-            Erased(e) => e.alignment_bytes(interner.target_info()),
+            Erased(e) => e.alignment_bytes(interner.target()),
         }
     }
 
@@ -2841,7 +2825,7 @@ impl<'a> LayoutRepr<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let ptr_width = interner.target_info().ptr_width() as u32;
+        let ptr_width = interner.target().ptr_width() as u32;
 
         use LayoutRepr::*;
         match self {
@@ -2856,7 +2840,7 @@ impl<'a> LayoutRepr<'a> {
             }
             Ptr(inner) => interner.get_repr(*inner).alignment_bytes(interner),
             FunctionPointer(_) => ptr_width,
-            Erased(e) => e.allocation_alignment_bytes(interner.target_info()),
+            Erased(e) => e.allocation_alignment_bytes(interner.target()),
         }
     }
 
@@ -3016,15 +3000,15 @@ impl<'a> LayoutRepr<'a> {
 pub type SeenRecPtrs<'a> = VecSet<InLayout<'a>>;
 
 impl<'a> Layout<'a> {
-    pub fn usize(target_info: TargetInfo) -> InLayout<'a> {
-        match target_info.ptr_width() {
+    pub fn usize(target: Target) -> InLayout<'a> {
+        match target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => Layout::U32,
             roc_target::PtrWidth::Bytes8 => Layout::U64,
         }
     }
 
-    pub fn isize(target_info: TargetInfo) -> InLayout<'a> {
-        match target_info.ptr_width() {
+    pub fn isize(target: Target) -> InLayout<'a> {
+        match target.ptr_width() {
             roc_target::PtrWidth::Bytes4 => Layout::I32,
             roc_target::PtrWidth::Bytes8 => Layout::I64,
         }
@@ -3038,10 +3022,7 @@ impl<'a> Layout<'a> {
         Layout::DEC
     }
 
-    pub fn int_literal_width_to_int(
-        width: roc_types::num::IntLitWidth,
-        target_info: TargetInfo,
-    ) -> InLayout<'a> {
+    pub fn int_literal_width_to_int(width: roc_types::num::IntLitWidth) -> InLayout<'a> {
         use roc_types::num::IntLitWidth::*;
         match width {
             U8 => Layout::U8,
@@ -3054,7 +3035,6 @@ impl<'a> Layout<'a> {
             I32 => Layout::I32,
             I64 => Layout::I64,
             I128 => Layout::I128,
-            Nat => Layout::usize(target_info),
             // f32 int literal bounded by +/- 2^24, so fit it into an i32
             F32 => Layout::F32,
             // f64 int literal bounded by +/- 2^53, so fit it into an i32
@@ -3093,10 +3073,10 @@ impl<'a> Builtin<'a> {
     pub const WRAPPER_LEN: u32 = 1;
     pub const WRAPPER_CAPACITY: u32 = 2;
 
-    pub fn stack_size(&self, target_info: TargetInfo) -> u32 {
+    pub fn stack_size(&self, target: Target) -> u32 {
         use Builtin::*;
 
-        let ptr_width = target_info.ptr_width() as u32;
+        let ptr_width = target.ptr_width() as u32;
 
         match self {
             Int(int) => int.stack_size(),
@@ -3108,20 +3088,20 @@ impl<'a> Builtin<'a> {
         }
     }
 
-    pub fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub fn alignment_bytes(&self, target: Target) -> u32 {
         use std::mem::align_of;
         use Builtin::*;
 
-        let ptr_width = target_info.ptr_width() as u32;
+        let ptr_width = target.ptr_width() as u32;
 
         // for our data structures, what counts is the alignment of the `( ptr, len )` tuple, and
         // since both of those are one pointer size, the alignment of that structure is a pointer
         // size
         match self {
-            Int(int_width) => int_width.alignment_bytes(target_info),
-            Float(float_width) => float_width.alignment_bytes(target_info),
+            Int(int_width) => int_width.alignment_bytes(target),
+            Float(float_width) => float_width.alignment_bytes(target),
             Bool => align_of::<bool>() as u32,
-            Decimal => IntWidth::I128.alignment_bytes(target_info),
+            Decimal => IntWidth::I128.alignment_bytes(target),
             // we often treat these as i128 (64-bit systems)
             // or i64 (32-bit systems).
             //
@@ -3212,8 +3192,8 @@ impl<'a> Builtin<'a> {
     where
         I: LayoutInterner<'a>,
     {
-        let target_info = interner.target_info();
-        let ptr_width = target_info.ptr_width() as u32;
+        let target = interner.target();
+        let ptr_width = target.ptr_width() as u32;
 
         let allocation = match self {
             Builtin::Str => ptr_width,
@@ -3222,10 +3202,10 @@ impl<'a> Builtin<'a> {
                 e.alignment_bytes(interner).max(ptr_width)
             }
             // The following are usually not heap-allocated, but they might be when inside a Box.
-            Builtin::Int(int_width) => int_width.alignment_bytes(target_info).max(ptr_width),
-            Builtin::Float(float_width) => float_width.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Int(int_width) => int_width.alignment_bytes(target).max(ptr_width),
+            Builtin::Float(float_width) => float_width.alignment_bytes(target).max(ptr_width),
             Builtin::Bool => (core::mem::align_of::<bool>() as u32).max(ptr_width),
-            Builtin::Decimal => IntWidth::I128.alignment_bytes(target_info).max(ptr_width),
+            Builtin::Decimal => IntWidth::I128.alignment_bytes(target).max(ptr_width),
         };
 
         allocation.max(ptr_width)
@@ -3240,7 +3220,6 @@ fn layout_from_flat_type<'a>(
 
     let arena = env.arena;
     let subs = env.subs;
-    let target_info = env.target_info;
 
     match flat_type {
         Apply(symbol, args) => {
@@ -3248,11 +3227,6 @@ fn layout_from_flat_type<'a>(
 
             match symbol {
                 // Ints
-                Symbol::NUM_NAT => {
-                    debug_assert_eq!(args.len(), 0);
-                    cacheable(Ok(Layout::usize(env.target_info)))
-                }
-
                 Symbol::NUM_I128 => {
                     debug_assert_eq!(args.len(), 0);
                     cacheable(Ok(Layout::I128))
@@ -3316,7 +3290,7 @@ fn layout_from_flat_type<'a>(
                     let var = args[0];
                     let content = subs.get_content_without_compacting(var);
 
-                    layout_from_num_content(content, target_info)
+                    layout_from_num_content(content)
                 }
 
                 Symbol::STR_STR => cacheable(Ok(Layout::STR)),
@@ -3347,7 +3321,7 @@ fn layout_from_flat_type<'a>(
                 }
             }
         }
-        Func(args, closure_var, ret_var) => {
+        Func(args, closure_var, ret_var, _fx_var) => {
             if env.is_seen(closure_var) {
                 // TODO(recursive-layouts): after the naked pointer is updated, we can cache `var` to
                 // point to the updated layout.
@@ -3394,32 +3368,36 @@ fn layout_from_flat_type<'a>(
                 }
             }
 
-            sortables.sort_by(|(label1, layout1), (label2, layout2)| {
-                cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
-            });
-
-            let ordered_field_names = Vec::from_iter_in(
-                sortables
-                    .iter()
-                    .map(|(label, _)| &*arena.alloc_str(label.as_str())),
-                arena,
-            )
-            .into_bump_slice();
-            let semantic = SemanticRepr::record(ordered_field_names);
-
-            let repr = if sortables.len() == 1 {
-                // If the record has only one field that isn't zero-sized,
-                // unwrap it.
-                let inner_repr = sortables.pop().unwrap().1;
-                inner_repr.newtype()
+            if sortables.is_empty() {
+                Cacheable(Ok(Layout::UNIT), criteria)
             } else {
-                let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
-                LayoutRepr::Struct(layouts.into_bump_slice()).direct()
-            };
+                sortables.sort_by(|(label1, layout1), (label2, layout2)| {
+                    cmp_fields(&env.cache.interner, label1, *layout1, label2, *layout2)
+                });
 
-            let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+                let ordered_field_names = Vec::from_iter_in(
+                    sortables
+                        .iter()
+                        .map(|(label, _)| &*arena.alloc_str(label.as_str())),
+                    arena,
+                )
+                .into_bump_slice();
+                let semantic = SemanticRepr::record(ordered_field_names);
 
-            Cacheable(result, criteria)
+                let repr = if sortables.len() == 1 {
+                    // If the record has only one field that isn't zero-sized,
+                    // unwrap it.
+                    let inner_repr = sortables.pop().unwrap().1;
+                    inner_repr.newtype()
+                } else {
+                    let layouts = Vec::from_iter_in(sortables.into_iter().map(|t| t.1), arena);
+                    LayoutRepr::struct_(layouts.into_bump_slice()).direct()
+                };
+
+                let result = Ok(env.cache.put_in(Layout { repr, semantic }));
+
+                Cacheable(result, criteria)
+            }
         }
         Tuple(elems, ext_var) => {
             let mut criteria = CACHEABLE;
@@ -3487,7 +3465,9 @@ fn layout_from_flat_type<'a>(
         }
         EmptyTagUnion => cacheable(Ok(Layout::VOID)),
         EmptyRecord => cacheable(Ok(Layout::UNIT)),
-        EmptyTuple => cacheable(Ok(Layout::UNIT)),
+        EffectfulFunc => {
+            internal_error!("Cannot create a layout for an unconstrained EffectfulFunc")
+        }
     }
 }
 
@@ -4369,15 +4349,48 @@ where
                 NonRecursive {
                     sorted_tag_layouts: tags,
                 } => {
-                    let mut tag_layouts = Vec::with_capacity_in(tags.len(), env.arena);
-                    tag_layouts.extend(tags.iter().map(|r| r.1));
+                    let mut layouts = Vec::with_capacity_in(tags.len(), env.arena);
+
+                    let semantic = match tags.first() {
+                        Some((tag_or_closure, _)) => match tag_or_closure {
+                            TagOrClosure::Tag(_tag) => TagName::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(tag) => {
+                                            layouts.push(*layout);
+                                            tag
+                                        }
+                                        TagOrClosure::Closure(_symbol) => {
+                                            unreachable!()
+                                        }
+                                    }),
+                            ),
+                            TagOrClosure::Closure(_symbol) => Symbol::semantic_repr(
+                                env.arena,
+                                tags.iter()
+                                    .map(|(tag_or_closure, layout)| match tag_or_closure {
+                                        TagOrClosure::Tag(_tag) => unreachable!(),
+                                        TagOrClosure::Closure(symbol) => {
+                                            layouts.push(*layout);
+                                            symbol
+                                        }
+                                    }),
+                            ),
+                        },
+                        None => {
+                            // This would be a tag union with no tags, which should have hit a
+                            // different case earlier.
+                            unreachable!();
+                        }
+                    };
 
                     let layout = Layout {
                         repr: LayoutRepr::Union(UnionLayout::NonRecursive(
-                            tag_layouts.into_bump_slice(),
+                            layouts.into_bump_slice(),
                         ))
                         .direct(),
-                        semantic: SemanticRepr::NONE,
+                        semantic,
                     };
                     env.cache.put_in(layout)
                 }
@@ -4550,10 +4563,7 @@ pub fn ext_var_is_empty_tag_union(_: &Subs, _: TagExt) -> bool {
     unreachable!();
 }
 
-fn layout_from_num_content<'a>(
-    content: &Content,
-    target_info: TargetInfo,
-) -> Cacheable<LayoutResult<'a>> {
+fn layout_from_num_content<'a>(content: &Content) -> Cacheable<LayoutResult<'a>> {
     use roc_types::subs::Content::*;
     use roc_types::subs::FlatType::*;
 
@@ -4569,8 +4579,6 @@ fn layout_from_num_content<'a>(
         FlexAbleVar(_, _) | RigidAbleVar(_, _) => todo_abilities!("Not reachable yet"),
         Structure(Apply(symbol, args)) => match *symbol {
             // Ints
-            Symbol::NUM_NAT => Ok(Layout::usize(target_info)),
-
             Symbol::NUM_INTEGER => Ok(Layout::I64),
             Symbol::NUM_I128 => Ok(Layout::I128),
             Symbol::NUM_I64 => Ok(Layout::I64),
@@ -4599,7 +4607,7 @@ fn layout_from_num_content<'a>(
         Alias(_, _, _, _) => {
             todo!("TODO recursively resolve type aliases in num_from_content");
         }
-        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda => {
+        Structure(_) | RangedNumber(..) | LambdaSet(_) | ErasedLambda | Pure | Effectful => {
             panic!("Invalid Num.Num type application: {content:?}");
         }
         Error => Err(LayoutProblem::Erroneous),
@@ -4641,7 +4649,7 @@ impl LayoutId {
     // Returns something like "#UserApp_foo_1" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         let module_string = interns.module_ids.get_name(symbol.module_id()).unwrap();
         format!("{}_{}_{}", module_string, ident_string, self.0)
     }
@@ -4649,12 +4657,12 @@ impl LayoutId {
     // Returns something like "roc__foo_1_exposed" when given a symbol that interns to "foo"
     // and a LayoutId of 1.
     pub fn to_exposed_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed", ident_string, self.0)
     }
 
     pub fn to_exposed_generic_symbol_string(self, symbol: Symbol, interns: &Interns) -> String {
-        let ident_string = symbol.as_str(interns);
+        let ident_string = symbol.as_unsuffixed_str(interns);
         format!("roc__{}_{}_exposed_generic", ident_string, self.0)
     }
 }
@@ -4792,7 +4800,7 @@ mod test {
 
     #[test]
     fn width_and_alignment_union_empty_struct() {
-        let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let mut interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
 
         let lambda_set = LambdaSet {
             args: &(&[] as &[InLayout]),
@@ -4817,7 +4825,7 @@ mod test {
 
     #[test]
     fn memcpy_size_result_u32_unit() {
-        let mut interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let mut interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
 
         let ok_tag = &[interner.insert(Layout {
             repr: LayoutRepr::Builtin(Builtin::Int(IntWidth::U32)).direct(),
@@ -4833,13 +4841,13 @@ mod test {
 
     #[test]
     fn void_stack_size() {
-        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
         assert_eq!(Layout::VOID_NAKED.repr(&interner).stack_size(&interner), 0);
     }
 
     #[test]
     fn align_u128_in_tag_union() {
-        let interner = STLayoutInterner::with_capacity(4, TargetInfo::default_x86_64());
+        let interner = STLayoutInterner::with_capacity(4, Target::LinuxX64);
         assert_eq!(interner.alignment_bytes(Layout::U128), 16);
     }
 }

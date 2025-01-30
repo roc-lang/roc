@@ -1,0 +1,32 @@
+@0-19 When(
+    @5-8 Var {
+        module_name: "",
+        ident: "nns",
+    },
+    [
+        WhenBranch {
+            patterns: [
+                @12-13 SpaceBefore(
+                    SpaceAfter(
+                        Tag(
+                            "O",
+                        ),
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @18-19 Var {
+                module_name: "",
+                ident: "r",
+            },
+            guard: None,
+        },
+    ],
+)

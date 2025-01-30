@@ -1,3 +1,4 @@
+use crate::keyword::is_allowed_identifier;
 use crate::parser::Progress::{self, *};
 use crate::parser::{BadInputError, EExpr, ParseResult, Parser};
 use crate::state::State;
@@ -45,38 +46,10 @@ pub enum Ident<'a> {
     },
     /// `.foo { foo: 42 }` or `.1 (1, 2, 3)`
     AccessorFunction(Accessor<'a>),
+    /// `&foo { foo: 42 } 3`
+    RecordUpdaterFunction(&'a str),
     /// .Foo or foo. or something like foo.Bar
     Malformed(&'a str, BadIdent),
-}
-
-impl<'a> Ident<'a> {
-    pub fn len(&self) -> usize {
-        use self::Ident::*;
-
-        match self {
-            Tag(string) | OpaqueRef(string) => string.len(),
-            Access { module_name, parts } => {
-                let mut len = if module_name.is_empty() {
-                    0
-                } else {
-                    module_name.len() + 1
-                    // +1 for the dot
-                };
-
-                for part in parts.iter() {
-                    len += part.len() + 1 // +1 for the dot
-                }
-
-                len - 1
-            }
-            AccessorFunction(string) => string.len(),
-            Malformed(string, _) => string.len(),
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.len() == 0
-    }
 }
 
 /// This could be:
@@ -87,7 +60,7 @@ pub fn lowercase_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+            if !is_allowed_identifier(ident) {
                 Err((NoProgress, ()))
             } else {
                 let width = ident.len();
@@ -114,7 +87,7 @@ pub fn lowercase_ident_keyword_e<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_lowercase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+            if !is_allowed_identifier(ident) {
                 Err((MadeProgress, ()))
             } else {
                 let width = ident.len();
@@ -164,7 +137,7 @@ pub fn unqualified_ident<'a>() -> impl Parser<'a, &'a str, ()> {
     move |_, state: State<'a>, _min_indent: u32| match chomp_anycase_part(state.bytes()) {
         Err(progress) => Err((progress, ())),
         Ok(ident) => {
-            if crate::keyword::KEYWORDS.iter().any(|kw| &ident == kw) {
+            if !is_allowed_identifier(ident) {
                 Err((MadeProgress, ()))
             } else {
                 let width = ident.len();
@@ -192,14 +165,14 @@ pub fn parse_ident<'a>(
             let state = advance_state!(state, width as usize)?;
             if let Ident::Access { module_name, parts } = ident {
                 if module_name.is_empty() {
-                    if let Some(first) = parts.first() {
-                        for keyword in crate::keyword::KEYWORDS.iter() {
-                            if first == &Accessor::RecordField(keyword) {
-                                return Err((NoProgress, EExpr::Start(initial.pos())));
-                            }
+                    if let Some(Accessor::RecordField(ident)) = parts.first() {
+                        if !is_allowed_identifier(ident) {
+                            return Err((NoProgress, EExpr::Start(initial.pos())));
                         }
                     }
                 }
+
+                return Ok((MadeProgress, Ident::Access { module_name, parts }, state));
             }
 
             Ok((MadeProgress, ident, state))
@@ -256,6 +229,7 @@ pub enum BadIdent {
 
     UnderscoreAlone(Position),
     UnderscoreInMiddle(Position),
+    TooManyUnderscores(Position),
     UnderscoreAtStart {
         position: Position,
         /// If this variable was already declared in a pattern (e.g. \_x -> _x),
@@ -267,6 +241,7 @@ pub enum BadIdent {
     WeirdDotAccess(Position),
     WeirdDotQualified(Position),
     StrayDot(Position),
+    StrayAmpersand(Position),
     BadOpaqueRef(Position),
     QualifiedTupleAccessor(Position),
 }
@@ -276,21 +251,42 @@ fn is_alnum(ch: char) -> bool {
 }
 
 fn chomp_lowercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_lowercase, is_alnum, buffer)
+    chomp_part(
+        char::is_lowercase,
+        is_plausible_ident_continue,
+        true,
+        buffer,
+    )
 }
 
 fn chomp_uppercase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_uppercase, is_alnum, buffer)
+    chomp_part(
+        char::is_uppercase,
+        is_plausible_ident_continue,
+        false,
+        buffer,
+    )
 }
 
 fn chomp_anycase_part(buffer: &[u8]) -> Result<&str, Progress> {
-    chomp_part(char::is_alphabetic, is_alnum, buffer)
+    use encode_unicode::CharExt;
+
+    let allow_bang =
+        char::from_utf8_slice_start(buffer).map_or(false, |(leading, _)| leading.is_lowercase());
+
+    chomp_part(
+        char::is_alphabetic,
+        is_plausible_ident_continue,
+        allow_bang,
+        buffer,
+    )
 }
 
 fn chomp_integer_part(buffer: &[u8]) -> Result<&str, Progress> {
     chomp_part(
         |ch| char::is_ascii_digit(&ch),
         |ch| char::is_ascii_digit(&ch),
+        false,
         buffer,
     )
 }
@@ -300,7 +296,12 @@ fn is_plausible_ident_continue(ch: char) -> bool {
 }
 
 #[inline(always)]
-fn chomp_part<F, G>(leading_is_good: F, rest_is_good: G, buffer: &[u8]) -> Result<&str, Progress>
+fn chomp_part<F, G>(
+    leading_is_good: F,
+    rest_is_good: G,
+    allow_bang: bool,
+    buffer: &[u8],
+) -> Result<&str, Progress>
 where
     F: Fn(char) -> bool,
     G: Fn(char) -> bool,
@@ -320,6 +321,9 @@ where
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
         if rest_is_good(ch) {
             chomped += width;
+        } else if allow_bang && ch == '!' {
+            chomped += width;
+            break;
         } else {
             // we're done
             break;
@@ -370,6 +374,12 @@ impl<'a> Accessor<'a> {
     }
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Suffix<'a> {
+    Accessor(Accessor<'a>),
+    TrySuffix,
+}
+
 /// a `.foo` or `.1` accessor function
 fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     // assumes the leading `.` has been chomped already
@@ -405,6 +415,18 @@ fn chomp_accessor(buffer: &[u8], pos: Position) -> Result<Accessor, BadIdent> {
     }
 }
 
+/// a `&foo` record updater function
+fn chomp_record_updater(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
+    // assumes the leading `&` has been chomped already
+    match chomp_lowercase_part(buffer) {
+        Ok(name) => Ok(name),
+        Err(_) => {
+            // we've already made progress with the initial `&`
+            Err(BadIdent::StrayAmpersand(pos.bump_column(1)))
+        }
+    }
+}
+
 /// a `@Token` opaque
 fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
     // assumes the leading `@` has NOT been chomped already
@@ -421,7 +443,14 @@ fn chomp_opaque_ref(buffer: &[u8], pos: Position) -> Result<&str, BadIdent> {
                 Err(bad_ident(pos.bump_column(width as u32)))
             } else {
                 let value = unsafe { std::str::from_utf8_unchecked(&buffer[..width]) };
-                Ok(value)
+                if value.contains('_') {
+                    // we don't allow underscores in the middle of a type identifier
+                    // but still parse them (and generate a malformed identifier)
+                    // to give good error messages for this case
+                    Err(BadIdent::UnderscoreInMiddle(pos.bump_column(width as u32)))
+                } else {
+                    Ok(value)
+                }
             }
         }
         Err(_) => Err(bad_ident(pos.bump_column(1))),
@@ -447,6 +476,14 @@ fn chomp_identifier_chain<'a>(
                 }
                 Err(fail) => return Err((1, fail)),
             },
+            '&' => match chomp_record_updater(&buffer[1..], pos) {
+                Ok(updater) => {
+                    let bytes_parsed = 1 + updater.len();
+                    return Ok((bytes_parsed as u32, Ident::RecordUpdaterFunction(updater)));
+                }
+                // return 0 bytes consumed on failure to allow parsing &&
+                Err(fail) => return Err((0, fail)),
+            },
             '@' => match chomp_opaque_ref(buffer, pos) {
                 Ok(tagname) => {
                     let bytes_parsed = tagname.len();
@@ -470,8 +507,18 @@ fn chomp_identifier_chain<'a>(
     }
 
     while let Ok((ch, width)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        if ch.is_alphabetic() || ch.is_ascii_digit() {
+        if ch.is_alphabetic() || ch.is_ascii_digit() || ch == '_' {
             chomped += width;
+        } else if ch == '!' && !first_is_uppercase {
+            chomped += width;
+
+            let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+            let ident = Ident::Access {
+                module_name: "",
+                parts: arena.alloc([Accessor::RecordField(value)]),
+            };
+
+            return Ok((chomped as u32, ident));
         } else {
             // we're done
             break;
@@ -530,25 +577,29 @@ fn chomp_identifier_chain<'a>(
                 BadIdent::WeirdDotAccess(pos.bump_column(chomped as u32 + width)),
             )),
         }
-    } else if let Ok(('_', _)) = char::from_utf8_slice_start(&buffer[chomped..]) {
-        // we don't allow underscores in the middle of an identifier
-        // but still parse them (and generate a malformed identifier)
-        // to give good error messages for this case
-        Err((
-            chomped as u32 + 1,
-            BadIdent::UnderscoreInMiddle(pos.bump_column(chomped as u32 + 1)),
-        ))
     } else if first_is_uppercase {
         // just one segment, starting with an uppercase letter; that's a tag
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
-        Ok((chomped as u32, Ident::Tag(value)))
+        if value.contains('_') {
+            // we don't allow underscores in the middle of a tag identifier
+            // but still parse them (and generate a malformed identifier)
+            // to give good error messages for this case
+            Err((
+                chomped as u32,
+                BadIdent::UnderscoreInMiddle(pos.bump_column(chomped as u32)),
+            ))
+        } else {
+            Ok((chomped as u32, Ident::Tag(value)))
+        }
     } else {
         // just one segment, starting with a lowercase letter; that's a normal identifier
         let value = unsafe { std::str::from_utf8_unchecked(&buffer[..chomped]) };
+
         let ident = Ident::Access {
             module_name: "",
             parts: arena.alloc([Accessor::RecordField(value)]),
         };
+
         Ok((chomped as u32, ident))
     }
 }
@@ -658,5 +709,123 @@ fn chomp_access_chain<'a>(buffer: &'a [u8], parts: &mut Vec<'a, Accessor<'a>>) -
         Err(0)
     } else {
         Ok(chomped as u32)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_ident_parses<'a>(arena: &'a Bump, ident: &str, expected: Ident<'a>) {
+        let s = State::new(ident.as_bytes());
+        let (_, id, _) = parse_ident(arena, s, 0).unwrap();
+        assert_eq!(id, expected);
+    }
+
+    fn assert_ident_parses_tag(arena: &Bump, ident: &str) {
+        assert_ident_parses(arena, ident, Ident::Tag(ident));
+    }
+    fn assert_ident_parses_opaque(arena: &Bump, ident: &str) {
+        assert_ident_parses(arena, ident, Ident::OpaqueRef(ident));
+    }
+    fn assert_ident_parses_simple_access(arena: &Bump, ident: &str) {
+        assert_ident_parses(
+            arena,
+            ident,
+            Ident::Access {
+                module_name: "",
+                parts: arena.alloc([Accessor::RecordField(ident)]),
+            },
+        );
+    }
+
+    fn assert_ident_parses_malformed(arena: &Bump, ident: &str, pos: Position) {
+        assert_ident_parses(
+            arena,
+            ident,
+            Ident::Malformed(ident, BadIdent::UnderscoreInMiddle(pos)),
+        );
+    }
+
+    #[test]
+    fn test_parse_ident_lowercase_camel() {
+        let arena = Bump::new();
+        assert_ident_parses_simple_access(&arena, "hello");
+        assert_ident_parses_simple_access(&arena, "hello23");
+        assert_ident_parses_simple_access(&arena, "helloWorld");
+        assert_ident_parses_simple_access(&arena, "helloWorld23");
+        assert_ident_parses_simple_access(&arena, "helloWorldThisIsQuiteATag");
+        assert_ident_parses_simple_access(&arena, "helloWorldThisIsQuiteATag_");
+        assert_ident_parses_simple_access(&arena, "helloworldthisisquiteatag_");
+        assert_ident_parses_simple_access(&arena, "helloWorldThisIsQuiteATag23");
+        assert_ident_parses_simple_access(&arena, "helloWorldThisIsQuiteATag23_");
+        assert_ident_parses_simple_access(&arena, "helloworldthisisquiteatag23_");
+    }
+
+    #[test]
+    fn test_parse_ident_lowercase_snake() {
+        let arena = Bump::new();
+        assert_ident_parses_simple_access(&arena, "hello_world");
+        assert_ident_parses_simple_access(&arena, "hello_world23");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var_");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var23");
+        assert_ident_parses_simple_access(&arena, "hello_world_this_is_quite_a_var23_");
+    }
+
+    #[test]
+    fn test_parse_tag_camel() {
+        let arena = Bump::new();
+        assert_ident_parses_tag(&arena, "Hello");
+        assert_ident_parses_tag(&arena, "Hello23");
+        assert_ident_parses_tag(&arena, "HelloWorld");
+        assert_ident_parses_tag(&arena, "HelloWorld23");
+        assert_ident_parses_tag(&arena, "HelloWorldThisIsQuiteATag");
+        assert_ident_parses_tag(&arena, "HelloWorldThisIsQuiteATag23");
+    }
+
+    #[test]
+    fn test_parse_tag_snake_is_malformed() {
+        let arena = Bump::new();
+        assert_ident_parses_malformed(&arena, "Hello_World", Position { offset: 11 });
+        assert_ident_parses_malformed(&arena, "Hello_World23", Position { offset: 13 });
+        assert_ident_parses_malformed(
+            &arena,
+            "Hello_World_This_Is_Quite_A_Tag",
+            Position { offset: 31 },
+        );
+        assert_ident_parses_malformed(
+            &arena,
+            "Hello_World_This_Is_Quite_A_Tag23",
+            Position { offset: 33 },
+        );
+    }
+
+    #[test]
+    fn test_parse_opaque_ref_camel() {
+        let arena = Bump::new();
+        assert_ident_parses_opaque(&arena, "@Hello");
+        assert_ident_parses_opaque(&arena, "@Hello23");
+        assert_ident_parses_opaque(&arena, "@HelloWorld");
+        assert_ident_parses_opaque(&arena, "@HelloWorld23");
+        assert_ident_parses_opaque(&arena, "@HelloWorldThisIsQuiteARef");
+        assert_ident_parses_opaque(&arena, "@HelloWorldThisIsQuiteARef23");
+    }
+
+    #[test]
+    fn test_parse_opaque_ref_snake_is_malformed() {
+        let arena = Bump::new();
+        assert_ident_parses_malformed(&arena, "@Hello_World", Position { offset: 12 });
+        assert_ident_parses_malformed(&arena, "@Hello_World23", Position { offset: 14 });
+        assert_ident_parses_malformed(
+            &arena,
+            "@Hello_World_This_Is_Quite_A_Ref",
+            Position { offset: 32 },
+        );
+        assert_ident_parses_malformed(
+            &arena,
+            "@Hello_World_This_Is_Quite_A_Ref23",
+            Position { offset: 34 },
+        );
     }
 }

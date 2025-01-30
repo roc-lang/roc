@@ -1,101 +1,108 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-92,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @4-92 Where(
-                    @4-16 SpaceAfter(
-                        Function(
-                            [
-                                @4-5 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @10-16 Function(
+@0-95 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-92,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @4-92 Where(
+                        @4-16 SpaceAfter(
+                            Function(
                                 [
-                                    @10-11 BoundVariable(
-                                        "b",
+                                    @4-5 BoundVariable(
+                                        "a",
                                     ),
                                 ],
-                                @15-16 BoundVariable(
-                                    "c",
+                                Pure,
+                                @10-16 Function(
+                                    [
+                                        @10-11 BoundVariable(
+                                            "b",
+                                        ),
+                                    ],
+                                    Pure,
+                                    @15-16 BoundVariable(
+                                        "c",
+                                    ),
                                 ),
                             ),
+                            [
+                                Newline,
+                            ],
                         ),
                         [
-                            Newline,
+                            @28-45 ImplementsClause {
+                                var: @28-29 "a",
+                                abilities: [
+                                    @41-45 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                ],
+                            },
+                            @53-68 ImplementsClause {
+                                var: @53-54 SpaceBefore(
+                                    "b",
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                abilities: [
+                                    @66-68 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                ],
+                            },
+                            @76-92 ImplementsClause {
+                                var: @76-77 SpaceBefore(
+                                    "c",
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                abilities: [
+                                    @89-92 Apply(
+                                        "",
+                                        "Ord",
+                                        [],
+                                    ),
+                                ],
+                            },
                         ],
                     ),
-                    [
-                        @28-45 ImplementsClause {
-                            var: @28-29 "a",
-                            abilities: [
-                                @41-45 Apply(
-                                    "",
-                                    "Hash",
-                                    [],
-                                ),
-                            ],
-                        },
-                        @53-68 ImplementsClause {
-                            var: @53-54 SpaceBefore(
-                                "b",
-                                [
-                                    Newline,
-                                ],
-                            ),
-                            abilities: [
-                                @66-68 Apply(
-                                    "",
-                                    "Eq",
-                                    [],
-                                ),
-                            ],
-                        },
-                        @76-92 ImplementsClause {
-                            var: @76-77 SpaceBefore(
-                                "c",
-                                [
-                                    Newline,
-                                ],
-                            ),
-                            abilities: [
-                                @89-92 Apply(
-                                    "",
-                                    "Ord",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
                 ),
-            ),
-        ],
-    },
-    @94-95 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "f",
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @94-95 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

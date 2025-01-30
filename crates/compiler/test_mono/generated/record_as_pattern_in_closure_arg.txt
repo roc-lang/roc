@@ -1,0 +1,31 @@
+procedure Num.19 (#Attr.2, #Attr.3):
+    let Num.284 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.284;
+
+procedure Test.1 (Test.12):
+    let Test.6 : I64 = StructAtIndex 0 Test.12;
+    let Test.5 : I64 = StructAtIndex 1 Test.12;
+    let Test.3 : I64 = StructAtIndex 2 Test.12;
+    let Test.4 : I64 = StructAtIndex 3 Test.12;
+    let Test.18 : I64 = CallByName Num.19 Test.3 Test.5;
+    let Test.19 : I64 = CallByName Num.19 Test.4 Test.6;
+    let Test.17 : {I64, I64} = Struct {Test.18, Test.19};
+    ret Test.17;
+
+procedure Test.2 (Test.9):
+    let Test.7 : I64 = StructAtIndex 2 Test.9;
+    let Test.8 : I64 = StructAtIndex 3 Test.9;
+    let Test.16 : {I64, I64} = CallByName Test.1 Test.9;
+    let Test.10 : I64 = StructAtIndex 0 Test.16;
+    let Test.11 : I64 = StructAtIndex 1 Test.16;
+    let Test.15 : {I64, I64, I64, I64} = Struct {Test.7, Test.8, Test.10, Test.11};
+    ret Test.15;
+
+procedure Test.0 ():
+    let Test.20 : I64 = 4i64;
+    let Test.21 : I64 = 3i64;
+    let Test.22 : I64 = 1i64;
+    let Test.23 : I64 = 2i64;
+    let Test.14 : {I64, I64, I64, I64} = Struct {Test.20, Test.21, Test.22, Test.23};
+    let Test.13 : {I64, I64, I64, I64} = CallByName Test.2 Test.14;
+    ret Test.13;

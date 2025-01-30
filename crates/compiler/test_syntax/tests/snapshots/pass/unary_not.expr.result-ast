@@ -1,4 +1,4 @@
-UnaryOp(
+@0-5 UnaryOp(
     @1-5 Var {
         module_name: "",
         ident: "blah",

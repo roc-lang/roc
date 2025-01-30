@@ -1,63 +1,24 @@
-Defs(
+@0-49 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-39,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @3-27 Function(
-                    [
-                        @3-13 Tuple {
-                            elems: [
-                                @4-7 Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                                @9-12 Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                            ],
-                            ext: None,
-                        },
-                    ],
-                    @17-27 Tuple {
-                        elems: [
-                            @18-21 Apply(
-                                "",
-                                "Str",
-                                [],
-                            ),
-                            @23-26 Apply(
-                                "",
-                                "Str",
-                                [],
-                            ),
-                        ],
-                        ext: None,
-                    },
-                ),
-            ),
             AnnotatedBody {
-                ann_pattern: @0-1 Identifier(
-                    "f",
-                ),
+                ann_pattern: @0-1 Identifier {
+                    ident: "f",
+                },
                 ann_type: @3-27 Function(
                     [
                         @3-13 Tuple {
@@ -76,6 +37,7 @@ Defs(
                             ext: None,
                         },
                     ],
+                    Pure,
                     @17-27 Tuple {
                         elems: [
                             @18-21 Apply(
@@ -92,15 +54,17 @@ Defs(
                         ext: None,
                     },
                 ),
-                comment: None,
-                body_pattern: @28-29 Identifier(
-                    "f",
-                ),
+                lines_between: [
+                    Newline,
+                ],
+                body_pattern: @28-29 Identifier {
+                    ident: "f",
+                },
                 body_expr: @32-39 Closure(
                     [
-                        @33-34 Identifier(
-                            "x",
-                        ),
+                        @33-34 Identifier {
+                            ident: "x",
+                        },
                     ],
                     @38-39 Var {
                         module_name: "",

@@ -1,20 +1,65 @@
 use std::fmt::Debug;
-use std::path::Path;
 
-use crate::header::{AppHeader, HostedHeader, InterfaceHeader, PackageHeader, PlatformHeader};
+use crate::expr::merge_spaces;
+use crate::header::{
+    self, AppHeader, HostedHeader, ModuleHeader, ModuleName, PackageHeader, PlatformHeader,
+};
 use crate::ident::Accessor;
-use crate::parser::ESingleQuote;
+use crate::parser::{ESingleQuote, EString};
 use bumpalo::collections::{String, Vec};
 use bumpalo::Bump;
-use roc_collections::soa::{EitherIndex, Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
+use roc_error_macros::internal_error;
 use roc_module::called_via::{BinOp, CalledVia, UnaryOp};
+use roc_module::ident::QualifiedModuleName;
 use roc_region::all::{Loc, Position, Region};
+use soa::{EitherIndex, Slice};
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct FullAst<'a> {
+    pub header: SpacesBefore<'a, Header<'a>>,
+    pub defs: Defs<'a>,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Spaces<'a, T> {
     pub before: &'a [CommentOrNewline<'a>],
     pub item: T,
     pub after: &'a [CommentOrNewline<'a>],
+}
+
+impl<'a, T: Copy> ExtractSpaces<'a> for Spaces<'a, T> {
+    type Item = T;
+
+    fn extract_spaces(&self) -> Spaces<'a, T> {
+        *self
+    }
+
+    fn without_spaces(&self) -> T {
+        self.item
+    }
+}
+
+impl<'a, T> Spaces<'a, T> {
+    pub fn item(item: T) -> Self {
+        Self {
+            before: &[],
+            item,
+            after: &[],
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesBefore<'a, T> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub item: T,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct SpacesAfter<'a, T> {
+    pub after: &'a [CommentOrNewline<'a>],
+    pub item: T,
 }
 
 #[derive(Copy, Clone, PartialEq)]
@@ -45,6 +90,18 @@ impl<'a, T> Spaced<'a, T> {
             Spaced::SpaceBefore(next, _spaces) | Spaced::SpaceAfter(next, _spaces) => next.item(),
         }
     }
+
+    pub fn map<U, F: Fn(&T) -> U>(&self, arena: &'a Bump, f: F) -> Spaced<'a, U> {
+        match self {
+            Spaced::Item(item) => Spaced::Item(f(item)),
+            Spaced::SpaceBefore(next, spaces) => {
+                Spaced::SpaceBefore(arena.alloc(next.map(arena, f)), spaces)
+            }
+            Spaced::SpaceAfter(next, spaces) => {
+                Spaced::SpaceAfter(arena.alloc(next.map(arena, f)), spaces)
+            }
+        }
+    }
 }
 
 impl<'a, T: Debug> Debug for Spaced<'a, T> {
@@ -68,12 +125,17 @@ impl<'a, T: Debug> Debug for Spaced<'a, T> {
 pub trait ExtractSpaces<'a>: Sized + Copy {
     type Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item>;
+    fn without_spaces(&self) -> Self::Item;
 }
 
 impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for &'a T {
     type Item = T::Item;
     fn extract_spaces(&self) -> Spaces<'a, Self::Item> {
         (*self).extract_spaces()
+    }
+
+    fn without_spaces(&self) -> Self::Item {
+        (*self).without_spaces()
     }
 }
 
@@ -87,17 +149,162 @@ impl<'a, T: ExtractSpaces<'a>> ExtractSpaces<'a> for Loc<T> {
             after: spaces.after,
         }
     }
+
+    fn without_spaces(&self) -> Self::Item {
+        self.value.without_spaces()
+    }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Module<'a> {
-    pub comments: &'a [CommentOrNewline<'a>],
-    pub header: Header<'a>,
+impl<'a> Header<'a> {
+    pub fn upgrade_header_imports(self, arena: &'a Bump) -> (Self, Defs<'a>) {
+        let (header, defs) = match self {
+            Header::Module(header) => (
+                Header::Module(ModuleHeader {
+                    interface_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.interface_imports),
+            ),
+            Header::App(header) => (
+                Header::App(AppHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Hosted(header) => (
+                Header::Hosted(HostedHeader {
+                    old_imports: None,
+                    ..header
+                }),
+                Self::header_imports_to_defs(arena, header.old_imports),
+            ),
+            Header::Package(_) | Header::Platform(_) => (self, Defs::default()),
+        };
+
+        (header, defs)
+    }
+
+    pub fn header_imports_to_defs(
+        arena: &'a Bump,
+        imports: Option<
+            header::KeywordItem<'a, header::ImportsKeyword, header::ImportsCollection<'a>>,
+        >,
+    ) -> Defs<'a> {
+        let mut defs = Defs::default();
+
+        if let Some(imports) = imports {
+            let len = imports.item.len();
+
+            for (index, import) in imports.item.iter().enumerate() {
+                let spaced = import.extract_spaces();
+
+                let value_def = match spaced.item {
+                    header::ImportsEntry::Package(pkg_name, name, exposed) => {
+                        Self::header_import_to_value_def(
+                            Some(pkg_name),
+                            name,
+                            exposed,
+                            import.region,
+                        )
+                    }
+                    header::ImportsEntry::Module(name, exposed) => {
+                        Self::header_import_to_value_def(None, name, exposed, import.region)
+                    }
+                    header::ImportsEntry::IngestedFile(path, typed_ident) => {
+                        let typed_ident = typed_ident.extract_spaces();
+
+                        ValueDef::IngestedFileImport(IngestedFileImport {
+                            before_path: &[],
+                            path: Loc {
+                                value: path,
+                                region: import.region,
+                            },
+                            name: header::KeywordItem {
+                                keyword: Spaces {
+                                    before: &[],
+                                    item: ImportAsKeyword,
+                                    after: &[],
+                                },
+                                item: typed_ident.item.ident,
+                            },
+                            annotation: Some(IngestedFileAnnotation {
+                                before_colon: merge_spaces(
+                                    arena,
+                                    typed_ident.before,
+                                    typed_ident.item.spaces_before_colon,
+                                ),
+                                annotation: typed_ident.item.ann,
+                            }),
+                        })
+                    }
+                };
+
+                defs.push_value_def(
+                    value_def,
+                    import.region,
+                    if index == 0 {
+                        let mut before = vec![CommentOrNewline::Newline, CommentOrNewline::Newline];
+                        before.extend(spaced.before);
+                        arena.alloc(before)
+                    } else {
+                        spaced.before
+                    },
+                    if index == len - 1 {
+                        let mut after = spaced.after.to_vec();
+                        after.extend_from_slice(imports.item.final_comments());
+                        after.push(CommentOrNewline::Newline);
+                        after.push(CommentOrNewline::Newline);
+                        arena.alloc(after)
+                    } else {
+                        spaced.after
+                    },
+                );
+            }
+        }
+        defs
+    }
+
+    fn header_import_to_value_def(
+        pkg_name: Option<&'a str>,
+        name: header::ModuleName<'a>,
+        exposed: Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        region: Region,
+    ) -> ValueDef<'a> {
+        use crate::header::KeywordItem;
+
+        let new_exposed = if exposed.is_empty() {
+            None
+        } else {
+            Some(KeywordItem {
+                keyword: Spaces {
+                    before: &[],
+                    item: ImportExposingKeyword,
+                    after: &[],
+                },
+                item: exposed,
+            })
+        };
+
+        ValueDef::ModuleImport(ModuleImport {
+            before_name: &[],
+            name: Loc {
+                region,
+                value: ImportedModuleName {
+                    package: pkg_name,
+                    name,
+                },
+            },
+            params: None,
+            alias: None,
+            exposed: new_exposed,
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Header<'a> {
-    Interface(InterfaceHeader<'a>),
+    Module(ModuleHeader<'a>),
     App(AppHeader<'a>),
     Package(PackageHeader<'a>),
     Platform(PlatformHeader<'a>),
@@ -122,7 +329,7 @@ pub enum StrSegment<'a> {
     Plaintext(&'a str),              // e.g. "foo"
     Unicode(Loc<&'a str>),           // e.g. "00A0" in "\u(00A0)"
     EscapedChar(EscapedChar),        // e.g. '\n' in "Hello!\n"
-    Interpolated(Loc<&'a Expr<'a>>), // e.g. (name) in "Hi, \(name)!"
+    Interpolated(Loc<&'a Expr<'a>>), // e.g. "$(expr)"
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -141,6 +348,7 @@ pub enum EscapedChar {
     SingleQuote,    // \'
     Backslash,      // \\
     CarriageReturn, // \r
+    Dollar,         // \$
 }
 
 impl EscapedChar {
@@ -155,6 +363,7 @@ impl EscapedChar {
             CarriageReturn => 'r',
             Tab => 't',
             Newline => 'n',
+            Dollar => '$',
         }
     }
 
@@ -168,6 +377,7 @@ impl EscapedChar {
             CarriageReturn => '\r',
             Tab => '\t',
             Newline => '\n',
+            Dollar => '$',
         }
     }
 }
@@ -180,9 +390,9 @@ pub enum SingleQuoteLiteral<'a> {
 }
 
 impl<'a> SingleQuoteLiteral<'a> {
-    pub fn to_str_in(&self, arena: &'a Bump) -> &'a str {
+    pub fn to_str_in(&self, arena: &'a Bump) -> Result<&'a str, EString<'a>> {
         match self {
-            SingleQuoteLiteral::PlainLine(s) => s,
+            SingleQuoteLiteral::PlainLine(s) => Ok(s),
             SingleQuoteLiteral::Line(segments) => {
                 let mut s = String::new_in(arena);
                 for segment in *segments {
@@ -190,15 +400,19 @@ impl<'a> SingleQuoteLiteral<'a> {
                         SingleQuoteSegment::Plaintext(s2) => s.push_str(s2),
                         SingleQuoteSegment::Unicode(loc) => {
                             let s2 = loc.value;
-                            let c = u32::from_str_radix(s2, 16).expect("Invalid unicode escape");
-                            s.push(char::from_u32(c).expect("Invalid unicode codepoint"));
+                            let c = u32::from_str_radix(s2, 16)
+                                .map_err(|_| EString::UnicodeEscapeTooLarge(loc.region))?;
+                            s.push(
+                                char::from_u32(c)
+                                    .ok_or(EString::InvalidUnicodeCodepoint(loc.region))?,
+                            );
                         }
                         SingleQuoteSegment::EscapedChar(c) => {
                             s.push(c.unescape());
                         }
                     }
                 }
-                s.into_bump_str()
+                Ok(s.into_bump_str())
             }
         }
     }
@@ -225,6 +439,12 @@ pub enum StrLiteral<'a> {
     Block(&'a [&'a [StrSegment<'a>]]),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ResultTryKind {
+    KeywordPrefix,
+    OperatorSuffix,
+}
+
 /// A parsed expression. This uses lifetimes extensively for two reasons:
 ///
 /// 1. It uses Bump::alloc for all allocations, which returns a reference.
@@ -245,7 +465,7 @@ pub enum Expr<'a> {
         is_negative: bool,
     },
 
-    // String Literals
+    /// String Literals
     Str(StrLiteral<'a>), // string without escapes in it
     /// eg 'b'
     SingleQuote(&'a str),
@@ -256,8 +476,14 @@ pub enum Expr<'a> {
     /// e.g. `.foo` or `.0`
     AccessorFunction(Accessor<'a>),
 
+    /// Update the value of a field in a record, e.g. `&foo`
+    RecordUpdater(&'a str),
+
     /// Look up exactly one field on a tuple, e.g. `(x, y).1`.
     TupleAccess(&'a Expr<'a>, &'a str),
+
+    /// Early return on failures - e.g. the ? in `File.read_utf8(path)?`
+    TrySuffix(&'a Expr<'a>),
 
     // Collection Literals
     List(Collection<'a, &'a Loc<Expr<'a>>>),
@@ -271,15 +497,19 @@ pub enum Expr<'a> {
 
     Tuple(Collection<'a, &'a Loc<Expr<'a>>>),
 
-    // Record Builders
-    RecordBuilder(Collection<'a, Loc<RecordBuilderField<'a>>>),
-
-    // The name of a file to be ingested directly into a variable.
-    IngestedFile(&'a Path, &'a Loc<TypeAnnotation<'a>>),
+    /// Mapper-based record builders, e.g.
+    /// { Result.parallel <-
+    ///     foo: Http.get_data(Foo),
+    ///     bar: Http.get_data(Bar),
+    /// }
+    RecordBuilder {
+        mapper: &'a Loc<Expr<'a>>,
+        fields: Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>,
+    },
 
     // Lookups
     Var {
-        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.myVar`, module_name will be blank if it was `5 + myVar`
+        module_name: &'a str, // module_name will only be filled if the original Roc code stated something like `5 + SomeModule.my_var`, module_name will be blank if it was `5 + my_var`
         ident: &'a str,
     },
 
@@ -298,19 +528,37 @@ pub enum Expr<'a> {
     Closure(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>),
     /// Multiple defs in a row
     Defs(&'a Defs<'a>, &'a Loc<Expr<'a>>),
-    Backpassing(&'a [Loc<Pattern<'a>>], &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-    Expect(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
-    Dbg(&'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
+
+    Dbg,
+    DbgStmt {
+        first: &'a Loc<Expr<'a>>,
+        extra_args: &'a [&'a Loc<Expr<'a>>],
+        continuation: &'a Loc<Expr<'a>>,
+        pnc_style: bool,
+    },
+
+    /// The `try` keyword that performs early return on errors
+    Try,
+    // This form of try is a desugared Result unwrapper
+    LowLevelTry(&'a Loc<Expr<'a>>, ResultTryKind),
+
+    // This form of debug is a desugared call to roc_dbg
+    LowLevelDbg(&'a (&'a str, &'a str), &'a Loc<Expr<'a>>, &'a Loc<Expr<'a>>),
 
     // Application
     /// To apply by name, do Apply(Var(...), ...)
     /// To apply a tag by name, do Apply(Tag(...), ...)
     Apply(&'a Loc<Expr<'a>>, &'a [&'a Loc<Expr<'a>>], CalledVia),
+    PncApply(&'a Loc<Expr<'a>>, Collection<'a, &'a Loc<Expr<'a>>>),
     BinOps(&'a [(Loc<Expr<'a>>, Loc<BinOp>)], &'a Loc<Expr<'a>>),
     UnaryOp(&'a Loc<Expr<'a>>, Loc<UnaryOp>),
 
     // Conditionals
-    If(&'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)], &'a Loc<Expr<'a>>),
+    If {
+        if_thens: &'a [(Loc<Expr<'a>>, Loc<Expr<'a>>)],
+        final_else: &'a Loc<Expr<'a>>,
+        indented_else: bool,
+    },
     When(
         /// The condition
         &'a Loc<Expr<'a>>,
@@ -322,6 +570,13 @@ pub enum Expr<'a> {
         &'a [&'a WhenBranch<'a>],
     ),
 
+    Return(
+        /// The return value
+        &'a Loc<Expr<'a>>,
+        /// The unused code after the return statement
+        Option<&'a Loc<Expr<'a>>>,
+    ),
+
     // Blank Space (e.g. comments, spaces, newlines) before or after an expression.
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Expr<'a>, &'a [CommentOrNewline<'a>]),
@@ -330,12 +585,46 @@ pub enum Expr<'a> {
 
     // Problems
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    MalformedClosure,
     // Both operators were non-associative, e.g. (True == False == False).
     // We should tell the author to disambiguate by grouping them with parens.
     PrecedenceConflict(&'a PrecedenceConflict<'a>),
-    MultipleRecordBuilders(&'a Loc<Expr<'a>>),
-    UnappliedRecordBuilder(&'a Loc<Expr<'a>>),
+    EmptyRecordBuilder(&'a Loc<Expr<'a>>),
+    SingleFieldRecordBuilder(&'a Loc<Expr<'a>>),
+    OptionalFieldInRecordBuilder(&'a Loc<&'a str>, &'a Loc<Expr<'a>>),
+}
+
+impl Expr<'_> {
+    pub fn get_region_spanning_binops(&self) -> Region {
+        match self {
+            Expr::BinOps(firsts, last) => {
+                let mut region = last.region;
+
+                for (loc_expr, _) in firsts.iter() {
+                    region = Region::span_across(&loc_expr.region, &region);
+                }
+
+                region
+            }
+            _ => internal_error!("other expr types not supported"),
+        }
+    }
+}
+
+pub fn split_loc_exprs_around<'a>(
+    items: &'a [&Loc<Expr<'a>>],
+    index: usize,
+) -> (&'a [&'a Loc<Expr<'a>>], &'a [&'a Loc<Expr<'a>>]) {
+    let (before, rest) = items.split_at(index);
+    let after = &rest[1..]; // Skip the index element
+
+    (before, after)
+}
+
+pub fn split_around<T>(items: &[T], target: usize) -> (&[T], &[T]) {
+    let (before, rest) = items.split_at(target);
+    let after = &rest[1..];
+
+    (before, after)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -351,7 +640,7 @@ pub struct PrecedenceConflict<'a> {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct TypeHeader<'a> {
     pub name: Loc<&'a str>,
-    pub vars: &'a [Loc<Pattern<'a>>],
+    pub vars: &'a [Loc<TypeVar<'a>>],
 }
 
 impl<'a> TypeHeader<'a> {
@@ -362,6 +651,17 @@ impl<'a> TypeHeader<'a> {
                 .chain(self.vars.iter().map(|v| &v.region)),
         )
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TypeVar<'a> {
+    Identifier(&'a str),
+    SpaceBefore(&'a TypeVar<'a>, &'a [CommentOrNewline<'a>]),
+    SpaceAfter(&'a TypeVar<'a>, &'a [CommentOrNewline<'a>]),
+
+    // These are syntactically parsed as exprs first, so if there's anything else here,
+    // we consider it malformed but preserve it for error reporting and more resilient parsing.
+    Malformed(&'a Expr<'a>),
 }
 
 /// The `implements` keyword associated with ability definitions.
@@ -401,7 +701,7 @@ pub enum TypeDef<'a> {
     Opaque {
         header: TypeHeader<'a>,
         typ: Loc<TypeAnnotation<'a>>,
-        derived: Option<Loc<ImplementsAbilities<'a>>>,
+        derived: Option<&'a ImplementsAbilities<'a>>,
     },
 
     /// An ability definition. E.g.
@@ -429,7 +729,7 @@ pub enum ValueDef<'a> {
     AnnotatedBody {
         ann_pattern: &'a Loc<Pattern<'a>>,
         ann_type: &'a Loc<TypeAnnotation<'a>>,
-        comment: Option<&'a str>,
+        lines_between: &'a [CommentOrNewline<'a>],
         body_pattern: &'a Loc<Pattern<'a>>,
         body_expr: &'a Loc<Expr<'a>>,
     },
@@ -444,10 +744,375 @@ pub enum ValueDef<'a> {
         preceding_comment: Region,
     },
 
-    ExpectFx {
-        condition: &'a Loc<Expr<'a>>,
-        preceding_comment: Region,
-    },
+    /// e.g. `import InternalHttp as Http exposing [Req]`.
+    ModuleImport(ModuleImport<'a>),
+
+    /// e.g. `import "path/to/my/file.txt" as myFile : Str`
+    IngestedFileImport(IngestedFileImport<'a>),
+
+    Stmt(&'a Loc<Expr<'a>>),
+
+    StmtAfterExpr,
+}
+
+impl<'a> ValueDef<'a> {
+    pub fn replace_expr(&mut self, new_expr: &'a Loc<Expr<'a>>) {
+        match self {
+            ValueDef::Body(_, expr) => *expr = new_expr,
+            ValueDef::AnnotatedBody { body_expr, .. } => *body_expr = new_expr,
+            _ => internal_error!("replacing expr in unsupported ValueDef"),
+        }
+    }
+}
+
+pub struct RecursiveValueDefIter<'a, 'b> {
+    current: &'b Defs<'a>,
+    index: usize,
+    pending: std::vec::Vec<&'b Defs<'a>>,
+}
+
+impl<'a, 'b> RecursiveValueDefIter<'a, 'b> {
+    pub fn new(defs: &'b Defs<'a>) -> Self {
+        Self {
+            current: defs,
+            index: 0,
+            pending: vec![],
+        }
+    }
+
+    pub fn push_pending_from_expr(&mut self, expr: &'b Expr<'a>) {
+        let mut expr_stack = vec![expr];
+
+        use Expr::*;
+
+        macro_rules! push_stack_from_record_fields {
+            ($fields:expr) => {
+                for field in $fields.items {
+                    let mut current = field.value;
+
+                    loop {
+                        use AssignedField::*;
+
+                        match current {
+                            RequiredValue(_, _, loc_val)
+                            | OptionalValue(_, _, loc_val)
+                            | IgnoredValue(_, _, loc_val) => break expr_stack.push(&loc_val.value),
+                            SpaceBefore(next, _) | SpaceAfter(next, _) => current = *next,
+                            LabelOnly(_) => break,
+                        }
+                    }
+                }
+            };
+        }
+
+        while let Some(next) = expr_stack.pop() {
+            match next {
+                Defs(defs, cont) => {
+                    self.pending.push(defs);
+                    // We purposefully don't push the exprs inside defs here
+                    // because they will be traversed when the iterator
+                    // gets to their parent def.
+                    expr_stack.push(&cont.value);
+                }
+                List(list) => {
+                    expr_stack.reserve(list.len());
+                    for loc_expr in list.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordUpdate { update, fields } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&update.value);
+                    push_stack_from_record_fields!(fields);
+                }
+                Record(fields) => {
+                    expr_stack.reserve(fields.len());
+                    push_stack_from_record_fields!(fields);
+                }
+                Tuple(fields) => {
+                    expr_stack.reserve(fields.len());
+                    for loc_expr in fields.items {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                RecordBuilder {
+                    mapper: map2,
+                    fields,
+                } => {
+                    expr_stack.reserve(fields.len() + 1);
+                    expr_stack.push(&map2.value);
+                    push_stack_from_record_fields!(fields);
+                }
+                Closure(_, body) => expr_stack.push(&body.value),
+                DbgStmt {
+                    first,
+                    extra_args,
+                    continuation,
+                    pnc_style: _,
+                } => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&first.value);
+                    for arg in extra_args.iter() {
+                        expr_stack.push(&arg.value);
+                    }
+                    expr_stack.push(&continuation.value);
+                }
+                LowLevelDbg(_, condition, cont) => {
+                    expr_stack.reserve(2);
+                    expr_stack.push(&condition.value);
+                    expr_stack.push(&cont.value);
+                }
+                LowLevelTry(loc_expr, _) => {
+                    expr_stack.push(&loc_expr.value);
+                }
+                Return(return_value, after_return) => {
+                    if let Some(after_return) = after_return {
+                        expr_stack.reserve(2);
+                        expr_stack.push(&return_value.value);
+                        expr_stack.push(&after_return.value);
+                    } else {
+                        expr_stack.push(&return_value.value);
+                    }
+                }
+                Apply(fun, args, _) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                PncApply(fun, args) => {
+                    expr_stack.reserve(args.len() + 1);
+                    expr_stack.push(&fun.value);
+
+                    for loc_expr in args.iter() {
+                        expr_stack.push(&loc_expr.value);
+                    }
+                }
+                BinOps(ops, expr) => {
+                    expr_stack.reserve(ops.len() + 1);
+
+                    for (a, _) in ops.iter() {
+                        expr_stack.push(&a.value);
+                    }
+                    expr_stack.push(&expr.value);
+                }
+                UnaryOp(expr, _) => expr_stack.push(&expr.value),
+                If {
+                    if_thens,
+                    final_else,
+                    ..
+                } => {
+                    expr_stack.reserve(if_thens.len() * 2 + 1);
+
+                    for (condition, consequent) in if_thens.iter() {
+                        expr_stack.push(&condition.value);
+                        expr_stack.push(&consequent.value);
+                    }
+                    expr_stack.push(&final_else.value);
+                }
+                When(condition, branches) => {
+                    expr_stack.reserve(branches.len() + 1);
+                    expr_stack.push(&condition.value);
+
+                    for WhenBranch {
+                        patterns: _,
+                        value,
+                        guard,
+                    } in branches.iter()
+                    {
+                        expr_stack.push(&value.value);
+
+                        match guard {
+                            None => {}
+                            Some(guard) => expr_stack.push(&guard.value),
+                        }
+                    }
+                }
+                RecordAccess(expr, _)
+                | TupleAccess(expr, _)
+                | TrySuffix(expr)
+                | SpaceBefore(expr, _)
+                | SpaceAfter(expr, _)
+                | ParensAround(expr) => expr_stack.push(expr),
+
+                EmptyRecordBuilder(loc_expr)
+                | SingleFieldRecordBuilder(loc_expr)
+                | OptionalFieldInRecordBuilder(_, loc_expr) => expr_stack.push(&loc_expr.value),
+
+                Float(_)
+                | Num(_)
+                | NonBase10Int { .. }
+                | Str(_)
+                | SingleQuote(_)
+                | AccessorFunction(_)
+                | RecordUpdater(_)
+                | Var { .. }
+                | Underscore(_)
+                | Crash
+                | Dbg
+                | Try
+                | Tag(_)
+                | OpaqueRef(_)
+                | MalformedIdent(_, _)
+                | PrecedenceConflict(_) => { /* terminal */ }
+            }
+        }
+    }
+}
+
+impl<'a, 'b> Iterator for RecursiveValueDefIter<'a, 'b> {
+    type Item = (&'b ValueDef<'a>, &'b Region);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.current.tags.get(self.index) {
+            Some(tag) => {
+                if let Err(def_index) = tag.split() {
+                    let def = &self.current.value_defs[def_index.index()];
+                    let region = &self.current.regions[self.index];
+
+                    match def {
+                        ValueDef::Body(_, body) => self.push_pending_from_expr(&body.value),
+
+                        ValueDef::AnnotatedBody {
+                            ann_pattern: _,
+                            ann_type: _,
+                            lines_between: _,
+                            body_pattern: _,
+                            body_expr,
+                        } => self.push_pending_from_expr(&body_expr.value),
+
+                        ValueDef::Dbg {
+                            condition,
+                            preceding_comment: _,
+                        }
+                        | ValueDef::Expect {
+                            condition,
+                            preceding_comment: _,
+                        } => self.push_pending_from_expr(&condition.value),
+
+                        ValueDef::ModuleImport(ModuleImport {
+                            before_name: _,
+                            name: _,
+                            alias: _,
+                            exposed: _,
+                            params,
+                        }) => {
+                            if let Some(ModuleImportParams { before: _, params }) = params {
+                                for loc_assigned_field in params.value.items {
+                                    if let Some(expr) = loc_assigned_field.value.value() {
+                                        self.push_pending_from_expr(&expr.value);
+                                    }
+                                }
+                            }
+                        }
+                        ValueDef::Stmt(loc_expr) => self.push_pending_from_expr(&loc_expr.value),
+                        ValueDef::Annotation(_, _)
+                        | ValueDef::IngestedFileImport(_)
+                        | ValueDef::StmtAfterExpr => {}
+                    }
+
+                    self.index += 1;
+
+                    Some((def, region))
+                } else {
+                    // Not a value def, try next
+                    self.index += 1;
+                    self.next()
+                }
+            }
+
+            None => {
+                self.current = self.pending.pop()?;
+                self.index = 0;
+                self.next()
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImport<'a> {
+    pub before_name: &'a [CommentOrNewline<'a>],
+    pub name: Loc<ImportedModuleName<'a>>,
+    pub params: Option<ModuleImportParams<'a>>,
+    pub alias: Option<header::KeywordItem<'a, ImportAsKeyword, Loc<ImportAlias<'a>>>>,
+    pub exposed: Option<
+        header::KeywordItem<
+            'a,
+            ImportExposingKeyword,
+            Collection<'a, Loc<Spaced<'a, header::ExposedName<'a>>>>,
+        >,
+    >,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ModuleImportParams<'a> {
+    pub before: &'a [CommentOrNewline<'a>],
+    pub params: Loc<Collection<'a, Loc<AssignedField<'a, Expr<'a>>>>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileImport<'a> {
+    pub before_path: &'a [CommentOrNewline<'a>],
+    pub path: Loc<StrLiteral<'a>>,
+    pub name: header::KeywordItem<'a, ImportAsKeyword, Loc<&'a str>>,
+    pub annotation: Option<IngestedFileAnnotation<'a>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct IngestedFileAnnotation<'a> {
+    pub before_colon: &'a [CommentOrNewline<'a>],
+    pub annotation: Loc<TypeAnnotation<'a>>,
+}
+
+impl<'a> Malformed for IngestedFileAnnotation<'a> {
+    fn is_malformed(&self) -> bool {
+        self.annotation.value.is_malformed()
+    }
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportAsKeyword;
+
+impl header::Keyword for ImportAsKeyword {
+    const KEYWORD: &'static str = "as";
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, Debug)]
+pub struct ImportExposingKeyword;
+
+impl header::Keyword for ImportExposingKeyword {
+    const KEYWORD: &'static str = "exposing";
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportedModuleName<'a> {
+    pub package: Option<&'a str>,
+    pub name: ModuleName<'a>,
+}
+
+impl<'a> From<ImportedModuleName<'a>> for QualifiedModuleName<'a> {
+    fn from(imported: ImportedModuleName<'a>) -> Self {
+        Self {
+            opt_package: imported.package,
+            module: imported.name.into(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ImportAlias<'a>(&'a str);
+
+impl<'a> ImportAlias<'a> {
+    pub const fn new(name: &'a str) -> Self {
+        ImportAlias(name)
+    }
+
+    pub const fn as_str(&'a self) -> &'a str {
+        self.0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -477,11 +1142,103 @@ impl<'a> Defs<'a> {
         })
     }
 
+    pub fn loc_defs<'b>(
+        &'b self,
+    ) -> impl Iterator<Item = Result<Loc<TypeDef<'a>>, Loc<ValueDef<'a>>>> + 'b {
+        self.tags
+            .iter()
+            .enumerate()
+            .map(|(i, tag)| match tag.split() {
+                Ok(type_index) => Ok(Loc::at(self.regions[i], self.type_defs[type_index.index()])),
+                Err(value_index) => Err(Loc::at(
+                    self.regions[i],
+                    self.value_defs[value_index.index()],
+                )),
+            })
+    }
+
+    pub fn list_value_defs(&self) -> impl Iterator<Item = (usize, &ValueDef<'a>)> {
+        self.tags
+            .iter()
+            .enumerate()
+            .filter_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => Some((tag_index, &self.value_defs[value_index.index()])),
+            })
+    }
+
     pub fn last(&self) -> Option<Result<&TypeDef<'a>, &ValueDef<'a>>> {
         self.tags.last().map(|tag| match tag.split() {
             Ok(type_index) => Ok(&self.type_defs[type_index.index()]),
             Err(value_index) => Err(&self.value_defs[value_index.index()]),
         })
+    }
+
+    pub fn pop_last_value(&mut self) -> Option<&'a Loc<Expr<'a>>> {
+        let last_value_suffix = self
+            .tags
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(tag_index, tag)| match tag.split() {
+                Ok(_) => None,
+                Err(value_index) => match self.value_defs[value_index.index()] {
+                    ValueDef::Body(
+                        Loc {
+                            value: Pattern::RecordDestructure(collection),
+                            ..
+                        },
+                        loc_expr,
+                    ) if collection.is_empty() => Some((tag_index, loc_expr)),
+                    ValueDef::Stmt(loc_expr) => Some((tag_index, loc_expr)),
+                    _ => None,
+                },
+            });
+
+        if let Some((tag_index, loc_expr)) = last_value_suffix {
+            self.remove_tag(tag_index);
+            Some(loc_expr)
+        } else {
+            None
+        }
+    }
+
+    pub fn remove_tag(&mut self, tag_index: usize) {
+        match self
+            .tags
+            .get(tag_index)
+            .expect("got an invalid index for Defs")
+            .split()
+        {
+            Ok(type_index) => {
+                // remove from vec
+                self.type_defs.remove(type_index.index());
+
+                // update all of the remaining indexes in type_defs
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
+                    // only update later indexes into type_defs
+                    if current_tag_index > tag_index && tag.split().is_ok() {
+                        tag.decrement_index();
+                    }
+                }
+            }
+            Err(value_index) => {
+                // remove from vec
+                self.value_defs.remove(value_index.index());
+
+                // update all of the remaining indexes in value_defs
+                for (current_tag_index, tag) in self.tags.iter_mut().enumerate() {
+                    // only update later indexes into value_defs
+                    if current_tag_index > tag_index && tag.split().is_err() {
+                        tag.decrement_index();
+                    }
+                }
+            }
+        }
+        self.tags.remove(tag_index);
+        self.regions.remove(tag_index);
+        self.space_after.remove(tag_index);
+        self.space_before.remove(tag_index);
     }
 
     /// NOTE assumes the def itself is pushed already!
@@ -496,10 +1253,10 @@ impl<'a> Defs<'a> {
 
         self.regions.push(region);
 
-        let before = Slice::extend_new(&mut self.spaces, spaces_before.iter().copied());
+        let before = slice_extend_new(&mut self.spaces, spaces_before.iter().copied());
         self.space_before.push(before);
 
-        let after = Slice::extend_new(&mut self.spaces, spaces_after.iter().copied());
+        let after = slice_extend_new(&mut self.spaces, spaces_after.iter().copied());
         self.space_after.push(after);
     }
 
@@ -510,22 +1267,31 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
+        let value_def_index = index_push_new(&mut self.value_defs, value_def);
         let tag = EitherIndex::from_right(value_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
 
+    /// Replace with `value_def` at the given index
     pub fn replace_with_value_def(
         &mut self,
-        index: usize,
+        tag_index: usize,
         value_def: ValueDef<'a>,
         region: Region,
     ) {
-        let value_def_index = Index::push_new(&mut self.value_defs, value_def);
-        let tag = EitherIndex::from_right(value_def_index);
-
-        self.tags[index] = tag;
-        self.regions[index] = region;
+        // split() converts `EitherIndex<TypeDef<'a>, ValueDef<'a>>` to:
+        // `Result<Index<TypeDef<'a>>, Index<ValueDef<'a>>>`
+        //
+        match self.tags[tag_index].split() {
+            Ok(_type_index) => {
+                self.remove_tag(tag_index);
+                self.push_value_def(value_def, region, &[], &[]);
+            }
+            Err(value_index) => {
+                self.regions[tag_index] = region;
+                self.value_defs[value_index.index()] = value_def;
+            }
+        }
     }
 
     pub fn push_type_def(
@@ -535,10 +1301,89 @@ impl<'a> Defs<'a> {
         spaces_before: &[CommentOrNewline<'a>],
         spaces_after: &[CommentOrNewline<'a>],
     ) {
-        let type_def_index = Index::push_new(&mut self.type_defs, type_def);
+        let type_def_index = index_push_new(&mut self.type_defs, type_def);
         let tag = EitherIndex::from_left(type_def_index);
         self.push_def_help(tag, region, spaces_before, spaces_after)
     }
+
+    /// Split the defs around a given target index
+    ///
+    /// This is useful for unwrapping suffixed `!`
+    pub fn split_defs_around(&self, target: usize) -> SplitDefsAround<'a> {
+        let mut before = Defs::default();
+        let mut after = Defs::default();
+
+        for (tag_index, tag) in self.tags.iter().enumerate() {
+            let region = self.regions[tag_index];
+            let space_before = {
+                let start = self.space_before[tag_index].start() as usize;
+                let len = self.space_before[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+            let space_after = {
+                let start = self.space_after[tag_index].start() as usize;
+                let len = self.space_after[tag_index].len();
+
+                &self.spaces[start..(start + len)]
+            };
+
+            match tag.split() {
+                Ok(type_def_index) => {
+                    let type_def = self.type_defs[type_def_index.index()];
+
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let type_def_index = index_push_new(&mut before.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let type_def_index = index_push_new(&mut after.type_defs, type_def);
+                            let tag = EitherIndex::from_left(type_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
+                        }
+                    }
+                }
+                Err(value_def_index) => {
+                    let value_def = self.value_defs[value_def_index.index()];
+
+                    match tag_index.cmp(&target) {
+                        std::cmp::Ordering::Less => {
+                            // before
+                            let new_value_def_index =
+                                index_push_new(&mut before.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            before.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Greater => {
+                            // after
+                            let new_value_def_index =
+                                index_push_new(&mut after.value_defs, value_def);
+                            let tag = EitherIndex::from_right(new_value_def_index);
+                            after.push_def_help(tag, region, space_before, space_after);
+                        }
+                        std::cmp::Ordering::Equal => {
+                            // target, do nothing
+                        }
+                    }
+                }
+            }
+        }
+
+        SplitDefsAround { before, after }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SplitDefsAround<'a> {
+    pub before: Defs<'a>,
+    pub after: Defs<'a>,
 }
 
 /// Should always be a zero-argument `Apply`; we'll check this in canonicalization
@@ -575,37 +1420,29 @@ pub enum ImplementsAbility<'a> {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum ImplementsAbilities<'a> {
-    /// `implements [Eq { eq: myEq }, Hash]`
-    Implements(Collection<'a, Loc<ImplementsAbility<'a>>>),
-
-    // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a ImplementsAbilities<'a>, &'a [CommentOrNewline<'a>]),
+pub struct ImplementsAbilities<'a> {
+    pub before_implements_kw: &'a [CommentOrNewline<'a>],
+    pub implements: Region,
+    pub after_implements_kw: &'a [CommentOrNewline<'a>],
+    pub item: Loc<Collection<'a, Loc<ImplementsAbility<'a>>>>,
 }
 
-impl ImplementsAbilities<'_> {
-    pub fn collection(&self) -> &Collection<Loc<ImplementsAbility>> {
-        let mut it = self;
-        loop {
-            match it {
-                Self::SpaceBefore(inner, _) | Self::SpaceAfter(inner, _) => {
-                    it = inner;
-                }
-                Self::Implements(collection) => return collection,
-            }
-        }
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.collection().is_empty()
-    }
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum FunctionArrow {
+    /// ->
+    Pure,
+    /// =>
+    Effectful,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum TypeAnnotation<'a> {
-    /// A function. The types of its arguments, then the type of its return value.
-    Function(&'a [Loc<TypeAnnotation<'a>>], &'a Loc<TypeAnnotation<'a>>),
+    /// A function. The types of its arguments, the type of arrow used, then the type of its return value.
+    Function(
+        &'a [Loc<TypeAnnotation<'a>>],
+        FunctionArrow,
+        &'a Loc<TypeAnnotation<'a>>,
+    ),
 
     /// Applying a type to some arguments (e.g. Map.Map String Int)
     Apply(&'a str, &'a str, &'a [Loc<TypeAnnotation<'a>>]),
@@ -669,9 +1506,6 @@ pub enum Tag<'a> {
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Tag<'a>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed tag, which will code gen to a runtime error
-    Malformed(&'a str),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -685,39 +1519,31 @@ pub enum AssignedField<'a, Val> {
     // and in destructuring patterns (e.g. `{ name ? "blah" }`)
     OptionalValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
 
+    // An ignored field, e.g. `{ _name: "blah" }` or `{ _ : Str }`
+    IgnoredValue(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Val>),
+
     // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
     LabelOnly(Loc<&'a str>),
 
     // We preserve this for the formatter; canonicalization ignores it.
     SpaceBefore(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a AssignedField<'a, Val>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed assigned field, which will code gen to a runtime error
-    Malformed(&'a str),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum RecordBuilderField<'a> {
-    // A field with a value, e.g. `{ name: "blah" }`
-    Value(Loc<&'a str>, &'a [CommentOrNewline<'a>], &'a Loc<Expr<'a>>),
+impl<'a, Val> AssignedField<'a, Val> {
+    pub fn value(&self) -> Option<&Loc<Val>> {
+        let mut current = self;
 
-    // A field with a function we can apply to build part of the record, e.g. `{ name: <- apply getName }`
-    ApplyValue(
-        Loc<&'a str>,
-        &'a [CommentOrNewline<'a>],
-        &'a [CommentOrNewline<'a>],
-        &'a Loc<Expr<'a>>,
-    ),
-
-    // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
-    LabelOnly(Loc<&'a str>),
-
-    // We preserve this for the formatter; canonicalization ignores it.
-    SpaceBefore(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
-    SpaceAfter(&'a RecordBuilderField<'a>, &'a [CommentOrNewline<'a>]),
-
-    /// A malformed assigned field, which will code gen to a runtime error
-    Malformed(&'a str),
+        loop {
+            match current {
+                Self::RequiredValue(_, _, val)
+                | Self::OptionalValue(_, _, val)
+                | Self::IgnoredValue(_, _, val) => break Some(val),
+                Self::LabelOnly(_) => break None,
+                Self::SpaceBefore(next, _) | Self::SpaceAfter(next, _) => current = *next,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -746,15 +1572,6 @@ impl<'a> CommentOrNewline<'a> {
         }
     }
 
-    pub fn to_string_repr(&self) -> std::string::String {
-        use CommentOrNewline::*;
-        match self {
-            Newline => "\n".to_owned(),
-            LineComment(comment_str) => format!("#{comment_str}"),
-            DocComment(comment_str) => format!("##{comment_str}"),
-        }
-    }
-
     pub fn comment_str(&'a self) -> Option<&'a str> {
         match self {
             CommentOrNewline::LineComment(s) => Some(*s),
@@ -779,13 +1596,21 @@ impl<'a> PatternAs<'a> {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Pattern<'a> {
     // Identifier
-    Identifier(&'a str),
+    Identifier {
+        ident: &'a str,
+    },
+    QualifiedIdentifier {
+        module_name: &'a str,
+        ident: &'a str,
+    },
 
     Tag(&'a str),
 
     OpaqueRef(&'a str),
 
     Apply(&'a Loc<Pattern<'a>>, &'a [Loc<Pattern<'a>>]),
+
+    PncApply(&'a Loc<Pattern<'a>>, Collection<'a, Loc<Pattern<'a>>>),
 
     /// This is Located<Pattern> rather than Located<str> so we can record comments
     /// around the destructured names, e.g. { x ### x does stuff ###, y }
@@ -809,6 +1634,10 @@ pub enum Pattern<'a> {
     },
     FloatLiteral(&'a str),
     StrLiteral(StrLiteral<'a>),
+
+    /// Underscore pattern
+    /// Contains the name of underscore pattern (e.g. "a" is for "_a" in code)
+    /// Empty string is unnamed pattern ("" is for "_" in code)
     Underscore(&'a str),
     SingleQuote(&'a str),
 
@@ -831,10 +1660,7 @@ pub enum Pattern<'a> {
     // Malformed
     Malformed(&'a str),
     MalformedIdent(&'a str, crate::ident::BadIdent),
-    QualifiedIdentifier {
-        module_name: &'a str,
-        ident: &'a str,
-    },
+    MalformedExpr(&'a Expr<'a>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -874,6 +1700,32 @@ impl<'a> Pattern<'a> {
                         .all(|(p, q)| p.value.equivalent(&q.value));
 
                     constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else {
+                    false
+                }
+            }
+            PncApply(constructor_x, args_x) => {
+                if let PncApply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
+                } else if let Apply(constructor_y, args_y) = other {
+                    let equivalent_args = args_x
+                        .iter()
+                        .zip(args_y.iter())
+                        .all(|(p, q)| p.value.equivalent(&q.value));
+
+                    constructor_x.value.equivalent(&constructor_y.value) && equivalent_args
                 } else {
                     false
                 }
@@ -900,11 +1752,12 @@ impl<'a> Pattern<'a> {
             //      { x, y } : { x : Int, y ? Bool }
             //      { x, y ? False } = rec
             OptionalField(x, _) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+                Identifier { ident: y } | OptionalField(y, _) => x == y,
                 _ => false,
             },
-            Identifier(x) => match other {
-                Identifier(y) | OptionalField(y, _) => x == y,
+            Identifier { ident: x } => match other {
+                Identifier { ident: y } => x == y,
+                OptionalField(y, _) => x == y,
                 _ => false,
             },
             NumLiteral(x) => {
@@ -1033,6 +1886,11 @@ impl<'a> Pattern<'a> {
                 } else {
                     false
                 }
+            }
+
+            MalformedExpr(_expr_x) => {
+                // conservatively assume all malformed expr patterns are not-equivalient
+                false
             }
         }
     }
@@ -1168,6 +2026,48 @@ pub trait Spaceable<'a> {
     fn before(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
     fn after(&'a self, _: &'a [CommentOrNewline<'a>]) -> Self;
 
+    fn maybe_before(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).before(spaces)
+        }
+    }
+
+    fn maybe_after(self, arena: &'a Bump, spaces: &'a [CommentOrNewline<'a>]) -> Self
+    where
+        Self: Sized + 'a,
+    {
+        if spaces.is_empty() {
+            self
+        } else {
+            arena.alloc(self).after(spaces)
+        }
+    }
+
+    fn maybe_around_loc(
+        mut me: Loc<Self>,
+        arena: &'a Bump,
+        before: &'a [CommentOrNewline<'a>],
+        after: &'a [CommentOrNewline<'a>],
+    ) -> Loc<Self>
+    where
+        Self: Sized + 'a,
+    {
+        if !after.is_empty() {
+            me.value = arena.alloc(me.value).after(after);
+        }
+
+        if !before.is_empty() {
+            me.value = arena.alloc(me.value).before(before);
+        }
+
+        me
+    }
+
     fn with_spaces_before(&'a self, spaces: &'a [CommentOrNewline<'a>], region: Region) -> Loc<Self>
     where
         Self: Sized,
@@ -1234,15 +2134,6 @@ impl<'a, Val> Spaceable<'a> for AssignedField<'a, Val> {
     }
 }
 
-impl<'a> Spaceable<'a> for RecordBuilderField<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        RecordBuilderField::SpaceAfter(self, spaces)
-    }
-}
-
 impl<'a> Spaceable<'a> for Tag<'a> {
     fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
         Tag::SpaceBefore(self, spaces)
@@ -1279,16 +2170,17 @@ impl<'a> Spaceable<'a> for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Spaceable<'a> for ImplementsAbilities<'a> {
-    fn before(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceBefore(self, spaces)
-    }
-    fn after(&'a self, spaces: &'a [CommentOrNewline<'a>]) -> Self {
-        ImplementsAbilities::SpaceAfter(self, spaces)
-    }
-}
-
 impl<'a> Expr<'a> {
+    pub const REPL_OPAQUE_FUNCTION: Self = Expr::Var {
+        module_name: "",
+        ident: "<function>",
+    };
+
+    pub const REPL_RUNTIME_CRASH: Self = Expr::Var {
+        module_name: "",
+        ident: "*",
+    };
+
     pub fn loc_ref(&'a self, region: Region) -> Loc<&'a Self> {
         Loc {
             region,
@@ -1366,6 +2258,17 @@ macro_rules! impl_extract_spaces {
                     }
                 }
             }
+            fn without_spaces(&self) -> Self::Item {
+                match self {
+                    $t::SpaceBefore(item, _) => {
+                        item.without_spaces()
+                    },
+                    $t::SpaceAfter(item, _) => {
+                        item.without_spaces()
+                    },
+                    _ => *self,
+                }
+            }
         }
     };
 }
@@ -1376,6 +2279,8 @@ impl_extract_spaces!(Tag);
 impl_extract_spaces!(AssignedField<T>);
 impl_extract_spaces!(TypeAnnotation);
 impl_extract_spaces!(ImplementsAbility);
+impl_extract_spaces!(Implements);
+impl_extract_spaces!(TypeVar);
 
 impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
     type Item = T;
@@ -1427,6 +2332,14 @@ impl<'a, T: Copy> ExtractSpaces<'a> for Spaced<'a, T> {
             },
         }
     }
+
+    fn without_spaces(&self) -> T {
+        match self {
+            Spaced::SpaceBefore(item, _) => item.without_spaces(),
+            Spaced::SpaceAfter(item, _) => item.without_spaces(),
+            Spaced::Item(item) => *item,
+        }
+    }
 }
 
 impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
@@ -1469,6 +2382,14 @@ impl<'a> ExtractSpaces<'a> for AbilityImpls<'a> {
             },
         }
     }
+
+    fn without_spaces(&self) -> Self::Item {
+        match self {
+            AbilityImpls::AbilityImpls(inner) => *inner,
+            AbilityImpls::SpaceBefore(item, _) => item.without_spaces(),
+            AbilityImpls::SpaceAfter(item, _) => item.without_spaces(),
+        }
+    }
 }
 
 pub trait Malformed {
@@ -1476,16 +2397,16 @@ pub trait Malformed {
     fn is_malformed(&self) -> bool;
 }
 
-impl<'a> Malformed for Module<'a> {
+impl<'a> Malformed for FullAst<'a> {
     fn is_malformed(&self) -> bool {
-        self.header.is_malformed()
+        self.header.item.is_malformed() || self.defs.is_malformed()
     }
 }
 
 impl<'a> Malformed for Header<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            Header::Interface(header) => header.is_malformed(),
+            Header::Module(header) => header.is_malformed(),
             Header::App(header) => header.is_malformed(),
             Header::Package(header) => header.is_malformed(),
             Header::Platform(header) => header.is_malformed(),
@@ -1500,6 +2421,12 @@ impl<'a, T: Malformed> Malformed for Spaces<'a, T> {
     }
 }
 
+impl<'a, T: Malformed> Malformed for SpacesBefore<'a, T> {
+    fn is_malformed(&self) -> bool {
+        self.item.is_malformed()
+    }
+}
+
 impl<'a> Malformed for Expr<'a> {
     fn is_malformed(&self) -> bool {
         use Expr::*;
@@ -1509,18 +2436,19 @@ impl<'a> Malformed for Expr<'a> {
             Num(_) |
             NonBase10Int { .. } |
             AccessorFunction(_) |
+            RecordUpdater(_) |
             Var { .. } |
             Underscore(_) |
             Tag(_) |
             OpaqueRef(_) |
             SingleQuote(_) | // This is just a &str - not a bunch of segments
-            IngestedFile(_, _) |
             Crash => false,
 
             Str(inner) => inner.is_malformed(),
 
             RecordAccess(inner, _) |
-            TupleAccess(inner, _) => inner.is_malformed(),
+            TupleAccess(inner, _) |
+            TrySuffix(inner) => inner.is_malformed(),
 
             List(items) => items.is_malformed(),
 
@@ -1528,17 +2456,21 @@ impl<'a> Malformed for Expr<'a> {
             Record(items) => items.is_malformed(),
             Tuple(items) => items.is_malformed(),
 
-            RecordBuilder(items) => items.is_malformed(),
+            RecordBuilder { mapper: map2, fields } => map2.is_malformed() || fields.is_malformed(),
 
             Closure(args, body) => args.iter().any(|arg| arg.is_malformed()) || body.is_malformed(),
             Defs(defs, body) => defs.is_malformed() || body.is_malformed(),
-            Backpassing(args, call, body) => args.iter().any(|arg| arg.is_malformed()) || call.is_malformed() || body.is_malformed(),
-            Expect(condition, continuation) |
-            Dbg(condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Dbg => false,
+            DbgStmt { first, extra_args, continuation, pnc_style: _ } => first.is_malformed() || extra_args.iter().any(|a| a.is_malformed()) || continuation.is_malformed(),
+            LowLevelDbg(_, condition, continuation) => condition.is_malformed() || continuation.is_malformed(),
+            Try => false,
+            LowLevelTry(loc_expr, _) => loc_expr.is_malformed(),
+            Return(return_value, after_return) => return_value.is_malformed() || after_return.is_some_and(|ar| ar.is_malformed()),
             Apply(func, args, _) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             BinOps(firsts, last) => firsts.iter().any(|(expr, _)| expr.is_malformed()) || last.is_malformed(),
             UnaryOp(expr, _) => expr.is_malformed(),
-            If(chain, els) => chain.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || els.is_malformed(),
+            If { if_thens, final_else, ..} => if_thens.iter().any(|(cond, body)| cond.is_malformed() || body.is_malformed()) || final_else.is_malformed(),
             When(cond, branches) => cond.is_malformed() || branches.iter().any(|branch| branch.is_malformed()),
 
             SpaceBefore(expr, _) |
@@ -1546,10 +2478,10 @@ impl<'a> Malformed for Expr<'a> {
             ParensAround(expr) => expr.is_malformed(),
 
             MalformedIdent(_, _) |
-            MalformedClosure |
             PrecedenceConflict(_) |
-            MultipleRecordBuilders(_) |
-            UnappliedRecordBuilder(_) => true,
+            EmptyRecordBuilder(_) |
+            SingleFieldRecordBuilder(_) |
+            OptionalFieldInRecordBuilder(_, _) => true,
         }
     }
 }
@@ -1612,27 +2544,13 @@ impl<T: Malformed> Malformed for Option<T> {
 impl<'a, T: Malformed> Malformed for AssignedField<'a, T> {
     fn is_malformed(&self) -> bool {
         match self {
-            AssignedField::RequiredValue(_, _, val) | AssignedField::OptionalValue(_, _, val) => {
-                val.is_malformed()
-            }
+            AssignedField::RequiredValue(_, _, val)
+            | AssignedField::OptionalValue(_, _, val)
+            | AssignedField::IgnoredValue(_, _, val) => val.is_malformed(),
             AssignedField::LabelOnly(_) => false,
             AssignedField::SpaceBefore(field, _) | AssignedField::SpaceAfter(field, _) => {
                 field.is_malformed()
             }
-            AssignedField::Malformed(_) => true,
-        }
-    }
-}
-
-impl<'a> Malformed for RecordBuilderField<'a> {
-    fn is_malformed(&self) -> bool {
-        match self {
-            RecordBuilderField::Value(_, _, expr)
-            | RecordBuilderField::ApplyValue(_, _, _, expr) => expr.is_malformed(),
-            RecordBuilderField::LabelOnly(_) => false,
-            RecordBuilderField::SpaceBefore(field, _)
-            | RecordBuilderField::SpaceAfter(field, _) => field.is_malformed(),
-            RecordBuilderField::Malformed(_) => true,
         }
     }
 }
@@ -1642,10 +2560,11 @@ impl<'a> Malformed for Pattern<'a> {
         use Pattern::*;
 
         match self {
-            Identifier(_) |
+            Identifier{ .. } |
             Tag(_) |
             OpaqueRef(_) => false,
             Apply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
+            PncApply(func, args) => func.is_malformed() || args.iter().any(|arg| arg.is_malformed()),
             RecordDestructure(items) => items.iter().any(|item| item.is_malformed()),
             RequiredField(_, pat) => pat.is_malformed(),
             OptionalField(_, expr) => expr.is_malformed(),
@@ -1666,6 +2585,7 @@ impl<'a> Malformed for Pattern<'a> {
 
             Malformed(_) |
             MalformedIdent(_, _) |
+            MalformedExpr(_) |
             QualifiedIdentifier { .. } => true,
         }
     }
@@ -1685,7 +2605,11 @@ impl<'a> Malformed for TypeDef<'a> {
                 header,
                 typ,
                 derived,
-            } => header.is_malformed() || typ.is_malformed() || derived.is_malformed(),
+            } => {
+                header.is_malformed()
+                    || typ.is_malformed()
+                    || derived.map(|d| d.item.is_malformed()).unwrap_or_default()
+            }
             TypeDef::Ability {
                 header,
                 loc_implements,
@@ -1727,19 +2651,6 @@ impl<'a> Malformed for ImplementsAbility<'a> {
     }
 }
 
-impl<'a> Malformed for ImplementsAbilities<'a> {
-    fn is_malformed(&self) -> bool {
-        match self {
-            ImplementsAbilities::Implements(abilities) => {
-                abilities.iter().any(|ability| ability.is_malformed())
-            }
-            ImplementsAbilities::SpaceBefore(has, _) | ImplementsAbilities::SpaceAfter(has, _) => {
-                has.is_malformed()
-            }
-        }
-    }
-}
-
 impl<'a> Malformed for AbilityImpls<'a> {
     fn is_malformed(&self) -> bool {
         match self {
@@ -1761,7 +2672,7 @@ impl<'a> Malformed for ValueDef<'a> {
             ValueDef::AnnotatedBody {
                 ann_pattern,
                 ann_type,
-                comment: _,
+                lines_between: _,
                 body_pattern,
                 body_expr,
             } => {
@@ -1777,19 +2688,38 @@ impl<'a> Malformed for ValueDef<'a> {
             | ValueDef::Expect {
                 condition,
                 preceding_comment: _,
-            }
-            | ValueDef::ExpectFx {
-                condition,
-                preceding_comment: _,
             } => condition.is_malformed(),
+            ValueDef::ModuleImport(ModuleImport {
+                before_name: _,
+                name: _,
+                params,
+                alias: _,
+                exposed: _,
+            }) => params.is_malformed(),
+            ValueDef::IngestedFileImport(IngestedFileImport {
+                before_path: _,
+                path,
+                name: _,
+                annotation,
+            }) => path.is_malformed() || annotation.is_malformed(),
+            ValueDef::Stmt(loc_expr) => loc_expr.is_malformed(),
+            ValueDef::StmtAfterExpr => false,
         }
+    }
+}
+
+impl<'a> Malformed for ModuleImportParams<'a> {
+    fn is_malformed(&self) -> bool {
+        let Self { before: _, params } = self;
+
+        params.is_malformed()
     }
 }
 
 impl<'a> Malformed for TypeAnnotation<'a> {
     fn is_malformed(&self) -> bool {
         match self {
-            TypeAnnotation::Function(args, ret) => {
+            TypeAnnotation::Function(args, _arrow, ret) => {
                 args.iter().any(|arg| arg.is_malformed()) || ret.is_malformed()
             }
             TypeAnnotation::Apply(_, _, args) => args.iter().any(|arg| arg.is_malformed()),
@@ -1826,12 +2756,21 @@ impl<'a> Malformed for TypeHeader<'a> {
     }
 }
 
+impl<'a> Malformed for TypeVar<'a> {
+    fn is_malformed(&self) -> bool {
+        match self {
+            TypeVar::Identifier(_) => false,
+            TypeVar::Malformed(_) => true,
+            TypeVar::SpaceBefore(var, _) | TypeVar::SpaceAfter(var, _) => var.is_malformed(),
+        }
+    }
+}
+
 impl<'a> Malformed for Tag<'a> {
     fn is_malformed(&self) -> bool {
         match self {
             Tag::Apply { name: _, args } => args.iter().any(|arg| arg.is_malformed()),
             Tag::SpaceBefore(tag, _) | Tag::SpaceAfter(tag, _) => tag.is_malformed(),
-            Tag::Malformed(_) => true,
         }
     }
 }

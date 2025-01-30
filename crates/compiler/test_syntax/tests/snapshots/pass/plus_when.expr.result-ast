@@ -1,54 +1,59 @@
-BinOps(
-    [
-        (
-            @0-1 Num(
-                "1",
+@0-53 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 Num(
+                    "1",
+                ),
+                @2-3 Plus,
             ),
-            @2-3 Plus,
-        ),
-    ],
-    @8-53 SpaceBefore(
-        When(
-            @13-16 Tag(
-                "Foo",
+        ],
+        @8-53 SpaceBefore(
+            When(
+                @13-16 Tag(
+                    "Foo",
+                ),
+                [
+                    WhenBranch {
+                        patterns: [
+                            @28-31 SpaceBefore(
+                                Tag(
+                                    "Foo",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        value: @35-36 Num(
+                            "2",
+                        ),
+                        guard: None,
+                    },
+                    WhenBranch {
+                        patterns: [
+                            @45-48 SpaceBefore(
+                                Tag(
+                                    "Bar",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        value: @52-53 Num(
+                            "3",
+                        ),
+                        guard: None,
+                    },
+                ],
             ),
             [
-                WhenBranch {
-                    patterns: [
-                        @28-31 SpaceBefore(
-                            Tag(
-                                "Foo",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    value: @35-36 Num(
-                        "2",
-                    ),
-                    guard: None,
-                },
-                WhenBranch {
-                    patterns: [
-                        @45-48 SpaceBefore(
-                            Tag(
-                                "Bar",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    value: @52-53 Num(
-                        "3",
-                    ),
-                    guard: None,
-                },
+                Newline,
             ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

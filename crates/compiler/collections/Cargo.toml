@@ -16,3 +16,5 @@ im-rc.workspace = true
 im.workspace = true
 wyhash.workspace = true
 smallvec.workspace = true
+
+soa.workspace = true

@@ -1,31 +1,36 @@
-ParensAround(
-    SpaceAfter(
-        When(
-            @6-7 Var {
-                module_name: "",
-                ident: "x",
-            },
-            [
-                WhenBranch {
-                    patterns: [
-                        @15-17 SpaceBefore(
-                            Tag(
-                                "Ok",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    value: @21-22 Num(
-                        "3",
-                    ),
-                    guard: None,
+@0-29 SpaceAfter(
+    ParensAround(
+        SpaceAfter(
+            When(
+                @6-7 Var {
+                    module_name: "",
+                    ident: "x",
                 },
+                [
+                    WhenBranch {
+                        patterns: [
+                            @15-17 SpaceBefore(
+                                Tag(
+                                    "Ok",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        value: @21-22 Num(
+                            "3",
+                        ),
+                        guard: None,
+                    },
+                ],
+            ),
+            [
+                Newline,
             ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

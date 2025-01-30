@@ -1,0 +1,31 @@
+SpacesBefore {
+    before: [],
+    item: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: Some(
+                ModuleParams {
+                    pattern: @7-20 [
+                        @9-10 Identifier {
+                            ident: "x",
+                        },
+                        @12-18 OptionalField(
+                            "y",
+                            @17-18 Num(
+                                "0",
+                            ),
+                        ),
+                    ],
+                    before_arrow: [],
+                    after_arrow: [],
+                },
+            ),
+            exposes: [
+                @25-29 ExposedName(
+                    "menu",
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

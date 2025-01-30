@@ -1,0 +1,120 @@
+@0-136 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-122,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-13 Identifier {
+                        ident: "nextWhileLess",
+                    },
+                    ann_type: @16-77 Where(
+                        @16-48 Function(
+                            [
+                                @16-27 Apply(
+                                    "",
+                                    "List",
+                                    [
+                                        @21-27 Apply(
+                                            "",
+                                            "Bucket",
+                                            [],
+                                        ),
+                                    ],
+                                ),
+                                @29-30 BoundVariable(
+                                    "k",
+                                ),
+                                @32-34 Apply(
+                                    "",
+                                    "U8",
+                                    [],
+                                ),
+                            ],
+                            Pure,
+                            @38-48 Tuple {
+                                elems: [
+                                    @39-42 Apply(
+                                        "",
+                                        "U64",
+                                        [],
+                                    ),
+                                    @44-47 Apply(
+                                        "",
+                                        "U32",
+                                        [],
+                                    ),
+                                ],
+                                ext: None,
+                            },
+                        ),
+                        [
+                            @55-77 ImplementsClause {
+                                var: @55-56 "k",
+                                abilities: [
+                                    @68-72 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                    @75-77 Apply(
+                                        "",
+                                        "Eq",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
+                    ),
+                    lines_between: [
+                        Newline,
+                    ],
+                    body_pattern: @78-91 Identifier {
+                        ident: "nextWhileLess",
+                    },
+                    body_expr: @94-122 Closure(
+                        [
+                            @95-102 Identifier {
+                                ident: "buckets",
+                            },
+                            @104-107 Identifier {
+                                ident: "key",
+                            },
+                            @109-115 Identifier {
+                                ident: "shifts",
+                            },
+                        ],
+                        @119-122 Var {
+                            module_name: "",
+                            ident: "foo",
+                        },
+                    ),
+                },
+            ],
+        },
+        @123-136 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "nextWhileLess",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

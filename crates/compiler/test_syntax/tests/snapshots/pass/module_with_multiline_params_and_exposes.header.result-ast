@@ -1,0 +1,44 @@
+SpacesBefore {
+    before: [],
+    item: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: Some(
+                ModuleParams {
+                    pattern: @7-45 [
+                        @8-12 Identifier {
+                            ident: "echo",
+                        },
+                        @39-43 SpaceBefore(
+                            Identifier {
+                                ident: "read",
+                            },
+                            [
+                                Newline,
+                                LineComment(
+                                    " comment before param",
+                                ),
+                            ],
+                        ),
+                    ],
+                    before_arrow: [],
+                    after_arrow: [],
+                },
+            ),
+            exposes: [
+                @50-58 ExposedName(
+                    "mainMenu",
+                ),
+                @64-71 SpaceBefore(
+                    ExposedName(
+                        "credits",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

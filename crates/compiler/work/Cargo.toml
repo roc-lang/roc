@@ -1,0 +1,13 @@
+[package]
+name = "roc_work"
+description = "This is used in loading."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_error_macros.workspace = true

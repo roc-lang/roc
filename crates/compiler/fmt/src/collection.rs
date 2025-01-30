@@ -1,11 +1,13 @@
-use roc_parse::ast::{Collection, CommentOrNewline, ExtractSpaces};
+use roc_parse::{
+    ast::{Collection, CommentOrNewline, ExtractSpaces},
+    expr::merge_spaces,
+};
 
 use crate::{
     annotation::{is_collection_multiline, Formattable, Newlines},
     spaces::{fmt_comments_only, NewlineAt, INDENT},
     Buf,
 };
-
 #[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Braces {
     Round,
@@ -13,26 +15,36 @@ pub enum Braces {
     Curly,
 }
 
-pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
+impl Braces {
+    pub fn start(self) -> char {
+        match self {
+            Braces::Round => '(',
+            Braces::Curly => '{',
+            Braces::Square => '[',
+        }
+    }
+
+    pub fn end(self) -> char {
+        match self {
+            Braces::Round => ')',
+            Braces::Curly => '}',
+            Braces::Square => ']',
+        }
+    }
+}
+
+pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable + std::fmt::Debug>(
     buf: &mut Buf<'buf>,
+
     indent: u16,
     braces: Braces,
     items: Collection<'a, T>,
     newline: Newlines,
 ) where
-    <T as ExtractSpaces<'a>>::Item: Formattable,
+    <T as ExtractSpaces<'a>>::Item: Formattable + std::fmt::Debug,
 {
-    let start = match braces {
-        Braces::Round => '(',
-        Braces::Curly => '{',
-        Braces::Square => '[',
-    };
-
-    let end = match braces {
-        Braces::Round => ')',
-        Braces::Curly => '}',
-        Braces::Square => ']',
-    };
+    let start = braces.start();
+    let end = braces.end();
 
     if is_collection_multiline(&items) {
         let braces_indent = indent;
@@ -43,10 +55,21 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
         buf.indent(braces_indent);
         buf.push(start);
 
+        let mut last_after: &[CommentOrNewline<'_>] = &[];
+
         for (index, item) in items.iter().enumerate() {
             let is_first_item = index == 0;
             let item = item.extract_spaces();
             let is_only_newlines = item.before.iter().all(|s| s.is_newline());
+            let last_after_was_only_newlines = last_after.iter().all(|s| s.is_newline());
+
+            if !last_after.is_empty() {
+                if last_after.iter().any(|s| s.is_newline()) {
+                    buf.newline();
+                }
+
+                fmt_comments_only(buf, last_after.iter(), NewlineAt::None, item_indent);
+            }
 
             if item.before.is_empty() || is_only_newlines {
                 buf.ensure_ends_with_newline();
@@ -64,13 +87,14 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
                     if item
                         .before
                         .starts_with(&[CommentOrNewline::Newline, CommentOrNewline::Newline])
+                        && last_after_was_only_newlines
                     {
                         // If there's a comment, and it's not on the first item,
                         // and it's preceded by at least one blank line, maintain 1 blank line.
                         // (We already ensured that it ends in a newline, so this will turn that
                         // into a blank line.)
 
-                        buf.newline();
+                        buf.ensure_ends_with_blank_line();
                     }
                 }
 
@@ -88,34 +112,33 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
             buf.indent(item_indent);
             item.item.format(buf, item_indent);
 
+            buf.indent(item_indent);
             buf.push(',');
 
-            if !item.after.is_empty() {
-                if item.after.iter().any(|s| s.is_newline()) {
-                    buf.newline();
-                }
+            last_after = item.after;
+        }
 
-                fmt_comments_only(buf, item.after.iter(), NewlineAt::None, item_indent);
+        let final_comments = if !last_after.is_empty() {
+            if last_after.iter().any(|s| s.is_newline()) {
+                buf.newline();
             }
-        }
 
-        if items.final_comments().iter().any(|s| s.is_newline()) {
-            buf.newline();
-        }
+            merge_spaces(buf.text.bump(), last_after, items.final_comments())
+        } else {
+            if items.final_comments().iter().any(|s| s.is_newline()) {
+                buf.newline();
+            }
 
-        if items
-            .final_comments()
-            .starts_with(&[CommentOrNewline::Newline, CommentOrNewline::Newline])
+            items.final_comments()
+        };
+
+        if has_comments(final_comments)
+            && final_comments.starts_with(&[CommentOrNewline::Newline, CommentOrNewline::Newline])
         {
-            buf.newline();
+            buf.ensure_ends_with_blank_line();
         }
 
-        fmt_comments_only(
-            buf,
-            items.final_comments().iter(),
-            NewlineAt::None,
-            item_indent,
-        );
+        fmt_comments_only(buf, final_comments.iter(), NewlineAt::None, item_indent);
 
         buf.ensure_ends_with_newline();
         buf.indent(braces_indent);
@@ -142,4 +165,14 @@ pub fn fmt_collection<'a, 'buf, T: ExtractSpaces<'a> + Formattable>(
     }
 
     buf.push(end);
+}
+
+fn has_comments(spaces: &[CommentOrNewline<'_>]) -> bool {
+    for space in spaces {
+        match space {
+            CommentOrNewline::Newline => {}
+            CommentOrNewline::LineComment(_) | CommentOrNewline::DocComment(_) => return true,
+        }
+    }
+    false
 }

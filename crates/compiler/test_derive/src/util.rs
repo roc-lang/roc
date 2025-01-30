@@ -1,12 +1,11 @@
-use std::fmt::Write as _; // import without risk of name clashing
-use std::path::PathBuf;
-
 use bumpalo::Bump;
 use roc_packaging::cache::RocCacheDir;
 use roc_solve::{
     module::{SolveConfig, SolveOutput},
     FunctionKind,
 };
+use std::fmt::Write as _;
+use std::path::PathBuf;
 use ven_pretty::DocAllocator;
 
 use roc_can::{
@@ -68,6 +67,11 @@ fn module_source_and_path(builtin: DeriveBuiltin) -> (ModuleId, &'static str, Pa
             module_source(ModuleId::BOOL),
             builtins_path.join("Bool.roc"),
         ),
+        DeriveBuiltin::ToInspector => (
+            ModuleId::INSPECT,
+            module_source(ModuleId::INSPECT),
+            builtins_path.join("Inspect.roc"),
+        ),
     }
 }
 
@@ -111,12 +115,12 @@ macro_rules! v {
          }
      }};
      ([ $($tag:ident $($payload:expr)*),* ] as $rec_var:ident) => {{
-         use roc_types::subs::{Subs, SubsIndex, Variable, Content, FlatType, TagExt, UnionTags};
+         use roc_types::subs::{Subs, Variable, Content, FlatType, TagExt, UnionTags};
          use roc_module::ident::TagName;
          |subs: &mut Subs| {
              let $rec_var = subs.fresh_unnamed_flex_var();
              let rec_name_index =
-                 SubsIndex::push_new(&mut subs.field_names, stringify!($rec).into());
+                 roc_collections::soa::index_push_new(&mut subs.field_names, stringify!($rec).into());
 
              $(
              let $tag = vec![ $( $payload(subs), )* ];
@@ -153,11 +157,11 @@ macro_rules! v {
          }
      }};
      (Symbol::$sym:ident $($arg:expr)*) => {{
-         use roc_types::subs::{Subs, SubsSlice, Content, FlatType};
+         use roc_types::subs::{Subs, Content, FlatType};
          use roc_module::symbol::Symbol;
          |subs: &mut Subs| {
              let $sym = vec![ $( $arg(subs) ,)* ];
-             let var_slice = SubsSlice::insert_into_subs(subs, $sym);
+             let var_slice = subs.insert_into_vars($sym);
              roc_derive::synth_var(subs, Content::Structure(FlatType::Apply(Symbol::$sym, var_slice)))
          }
      }};
@@ -188,12 +192,12 @@ macro_rules! v {
          |subs: &mut Subs| { roc_derive::synth_var(subs, Content::FlexVar(None)) }
      }};
      ($name:ident implements $ability:path) => {{
-         use roc_types::subs::{Subs, SubsIndex, SubsSlice, Content};
+         use roc_types::subs::{Subs,  Content};
          |subs: &mut Subs| {
              let name_index =
-                 SubsIndex::push_new(&mut subs.field_names, stringify!($name).into());
+                 roc_collections::soa::index_push_new(&mut subs.field_names, stringify!($name).into());
 
-             let abilities_slice = SubsSlice::extend_new(&mut subs.symbol_names, [$ability]);
+             let abilities_slice = roc_collections::soa::slice_extend_new(&mut subs.symbol_names, [$ability]);
 
              roc_derive::synth_var(subs, Content::FlexAbleVar(Some(name_index), abilities_slice))
          }
@@ -400,7 +404,7 @@ fn check_derived_typechecks_and_golden(
     let mut def_types = Default::default();
     let mut rigid_vars = Default::default();
     let mut flex_vars = Default::default();
-    let (import_variables, abilities_store) = add_imports(
+    let (import_variables, imported_param_vars, abilities_store) = add_imports(
         test_module,
         &mut constraints,
         &mut test_subs,
@@ -433,6 +437,9 @@ fn check_derived_typechecks_and_golden(
         pending_derives: Default::default(),
         exposed_by_module: &exposed_for_module.exposed_by_module,
         derived_module: Default::default(),
+        module_params: None,
+        module_params_vars: imported_param_vars,
+        host_exposed_symbols: None,
 
         #[cfg(debug_assertions)]
         checkmate: None,
@@ -512,7 +519,7 @@ where
 {
     let arena = Bump::new();
     let (builtin_module, source, path) = module_source_and_path(builtin);
-    let target_info = roc_target::TargetInfo::default_x86_64();
+    let target = roc_target::Target::LinuxX64;
 
     let LoadedModule {
         mut interns,
@@ -525,8 +532,9 @@ where
         path.file_name().unwrap().into(),
         source,
         path.parent().unwrap().to_path_buf(),
+        None,
         Default::default(),
-        target_info,
+        target,
         FunctionKind::LambdaSet,
         roc_reporting::report::RenderTarget::ColorTerminal,
         roc_reporting::report::DEFAULT_PALETTE,

@@ -1,24 +1,29 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "n",
-    },
-    [
-        WhenBranch {
-            patterns: [
-                @12-16 SpaceBefore(
-                    OpaqueRef(
-                        "@Age",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @20-21 Num(
-                "1",
-            ),
-            guard: None,
+@0-21 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "n",
         },
+        [
+            WhenBranch {
+                patterns: [
+                    @12-16 SpaceBefore(
+                        OpaqueRef(
+                            "@Age",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @20-21 Num(
+                    "1",
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

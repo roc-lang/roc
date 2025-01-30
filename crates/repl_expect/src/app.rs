@@ -1,7 +1,7 @@
 use roc_parse::ast::Expr;
 use roc_repl_eval::{ReplApp, ReplAppMemory};
 use roc_std::RocStr;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 pub(crate) struct ExpectMemory {
     pub(crate) start: *const u8,
@@ -18,7 +18,7 @@ macro_rules! deref_number {
 
 impl ReplAppMemory for ExpectMemory {
     fn deref_bool(&self, addr: usize) -> bool {
-        let ptr = unsafe { self.start.add(addr) } as *const u8;
+        let ptr = unsafe { self.start.add(addr) };
         let value = unsafe { std::ptr::read_unaligned(ptr) };
 
         // bool values should only ever be 0 or 1
@@ -59,7 +59,9 @@ impl ReplAppMemory for ExpectMemory {
             roc_str.as_str()
         } else {
             let offset = self.deref_usize(addr);
-            let length = self.deref_usize(addr + std::mem::size_of::<usize>());
+            let seamless_slice_mask = usize::MAX >> 1;
+            let length =
+                self.deref_usize(addr + std::mem::size_of::<usize>()) & seamless_slice_mask;
             let _capacity = self.deref_usize(addr + 2 * std::mem::size_of::<usize>());
 
             unsafe {
@@ -116,10 +118,10 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
 
     fn call_function_returns_roc_str<T, F>(
         &mut self,
-        _target_info: TargetInfo,
+        _target: Target,
         main_fn_name: &str,
         transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: Fn(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
@@ -136,11 +138,11 @@ impl<'a> ReplApp<'a> for ExpectReplApp<'a> {
         _main_fn_name: &str,
         _ret_bytes: usize,
         mut transform: F,
-    ) -> T
+    ) -> Option<T>
     where
         F: FnMut(&'a Self::Memory, usize) -> T,
         Self::Memory: 'a,
     {
-        transform(self.memory, self.offset)
+        Some(transform(self.memory, self.offset))
     }
 }

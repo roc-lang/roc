@@ -1,0 +1,25 @@
+@0-8 SpaceAfter(
+    Record(
+        Collection {
+            items: [
+                @1-4 SpaceAfter(
+                    LabelOnly(
+                        @1-2 "t",
+                    ),
+                    [
+                        LineComment(
+                            "",
+                        ),
+                    ],
+                ),
+            ],
+            final_comments: [
+                Newline,
+                Newline,
+            ],
+        },
+    ),
+    [
+        Newline,
+    ],
+)

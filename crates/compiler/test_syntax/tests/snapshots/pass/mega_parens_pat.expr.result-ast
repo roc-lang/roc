@@ -1,0 +1,84 @@
+@0-21 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-19,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-17 PncApply(
+                        @0-9 PncApply(
+                            @0-1 NumLiteral(
+                                "1",
+                            ),
+                            [
+                                @2-8 Apply(
+                                    @3-4 SpaceAfter(
+                                        NumLiteral(
+                                            "0",
+                                        ),
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
+                                    [
+                                        @7-8 Identifier {
+                                            ident: "f",
+                                        },
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            @10-16 Apply(
+                                @11-12 SpaceAfter(
+                                    NumLiteral(
+                                        "0",
+                                    ),
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
+                                ),
+                                [
+                                    @15-16 Identifier {
+                                        ident: "f",
+                                    },
+                                ],
+                            ),
+                        ],
+                    ),
+                    @18-19 BoundVariable(
+                        "f",
+                    ),
+                ),
+            ],
+        },
+        @20-21 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "e",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

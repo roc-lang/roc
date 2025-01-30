@@ -1,24 +1,25 @@
 on:
+  #pull_request:
   workflow_dispatch:
   schedule:
     - cron:  '0 9 * * *'
 
 name: Nightly Release Old Linux arm64 using Earthly
-    
+
 jobs:
   build:
     name: build and package nightly release
     runs-on: [self-hosted, Linux, ARM64]
     timeout-minutes: 180
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: get commit SHA
         run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
-        
+
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
-        
+
       - name: build file name
         env:
             DATE: ${{ env.DATE }}
@@ -31,7 +32,7 @@ jobs:
         run: earthly +build-nightly-release  --RELEASE_FOLDER_NAME=${{ env.RELEASE_FOLDER_NAME }} --ZIG_ARCH=aarch64
 
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
            name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
            path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz

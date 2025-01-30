@@ -1,78 +1,85 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-        ],
-        regions: [
-            @0-52,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [
-            Ability {
-                header: TypeHeader {
-                    name: @0-4 "Hash",
-                    vars: [],
+@0-55 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-52,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-4 "Hash",
+                        vars: [],
+                    },
+                    loc_implements: @5-15 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @18-22 SpaceBefore(
+                                "hash",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            typ: @25-33 Function(
+                                [
+                                    @25-26 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                Pure,
+                                @30-33 Apply(
+                                    "",
+                                    "U64",
+                                    [],
+                                ),
+                            ),
+                        },
+                        AbilityMember {
+                            name: @36-41 SpaceBefore(
+                                "hash2",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            typ: @44-52 Function(
+                                [
+                                    @44-45 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                Pure,
+                                @49-52 Apply(
+                                    "",
+                                    "U64",
+                                    [],
+                                ),
+                            ),
+                        },
+                    ],
                 },
-                loc_implements: @5-15 Implements,
-                members: [
-                    AbilityMember {
-                        name: @18-22 SpaceBefore(
-                            "hash",
-                            [
-                                Newline,
-                            ],
-                        ),
-                        typ: @25-33 Function(
-                            [
-                                @25-26 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @30-33 Apply(
-                                "",
-                                "U64",
-                                [],
-                            ),
-                        ),
-                    },
-                    AbilityMember {
-                        name: @36-41 SpaceBefore(
-                            "hash2",
-                            [
-                                Newline,
-                            ],
-                        ),
-                        typ: @44-52 Function(
-                            [
-                                @44-45 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @49-52 Apply(
-                                "",
-                                "U64",
-                                [],
-                            ),
-                        ),
-                    },
-                ],
-            },
-        ],
-        value_defs: [],
-    },
-    @54-55 SpaceBefore(
-        Num(
-            "1",
+            ],
+            value_defs: [],
+        },
+        @54-55 SpaceBefore(
+            Num(
+                "1",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

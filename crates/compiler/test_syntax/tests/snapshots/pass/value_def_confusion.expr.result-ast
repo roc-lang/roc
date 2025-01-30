@@ -1,20 +1,20 @@
-Defs(
+@0-12 Defs(
     Defs {
         tags: [
-            Index(2147483648),
-            Index(0),
+            EitherIndex(2147483648),
+            EitherIndex(0),
         ],
         regions: [
             @0-3,
             @4-8,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
-            Slice(start = 0, length = 1),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
-            Slice(start = 1, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
         ],
         spaces: [
             Newline,
@@ -32,9 +32,9 @@ Defs(
         ],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "a",
-                ),
+                @0-1 Identifier {
+                    ident: "a",
+                },
                 @2-3 Apply(
                     "",
                     "F",

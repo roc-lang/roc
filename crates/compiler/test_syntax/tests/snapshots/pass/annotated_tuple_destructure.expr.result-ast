@@ -1,87 +1,77 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483649),
-        ],
-        regions: [
-            @0-41,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-8 Tuple(
-                    [
-                        @2-3 Identifier(
-                            "x",
-                        ),
-                        @5-6 Identifier(
-                            "y",
-                        ),
+@0-44 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-41,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-8 Tuple(
+                        [
+                            @2-3 Identifier {
+                                ident: "x",
+                            },
+                            @5-6 Identifier {
+                                ident: "y",
+                            },
+                        ],
+                    ),
+                    ann_type: @11-14 Apply(
+                        "",
+                        "Foo",
+                        [],
+                    ),
+                    lines_between: [
+                        Newline,
                     ],
-                ),
-                @11-14 Apply(
-                    "",
-                    "Foo",
-                    [],
-                ),
-            ),
-            AnnotatedBody {
-                ann_pattern: @0-8 Tuple(
-                    [
-                        @2-3 Identifier(
-                            "x",
-                        ),
-                        @5-6 Identifier(
-                            "y",
-                        ),
-                    ],
-                ),
-                ann_type: @11-14 Apply(
-                    "",
-                    "Foo",
-                    [],
-                ),
-                comment: None,
-                body_pattern: @15-23 Tuple(
-                    [
-                        @17-18 Identifier(
-                            "x",
-                        ),
-                        @20-21 Identifier(
-                            "y",
-                        ),
-                    ],
-                ),
-                body_expr: @26-41 Tuple(
-                    [
-                        @28-33 Str(
-                            PlainLine(
-                                "foo",
+                    body_pattern: @15-23 Tuple(
+                        [
+                            @17-18 Identifier {
+                                ident: "x",
+                            },
+                            @20-21 Identifier {
+                                ident: "y",
+                            },
+                        ],
+                    ),
+                    body_expr: @26-41 Tuple(
+                        [
+                            @28-33 Str(
+                                PlainLine(
+                                    "foo",
+                                ),
                             ),
-                        ),
-                        @35-39 Float(
-                            "3.14",
-                        ),
-                    ],
-                ),
-            },
-        ],
-    },
-    @43-44 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "x",
+                            @35-39 Float(
+                                "3.14",
+                            ),
+                        ],
+                    ),
+                },
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @43-44 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "x",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

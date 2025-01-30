@@ -60,3 +60,7 @@ pub(crate) fn debug_name_tag(tags: &[(TagName, u16)]) -> String {
     str.push(']');
     str
 }
+
+pub(crate) fn debug_name_fn(arity: u32) -> String {
+    format!("(arity:{arity} -> _)")
+}

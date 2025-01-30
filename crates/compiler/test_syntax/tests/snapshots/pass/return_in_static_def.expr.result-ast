@@ -1,0 +1,174 @@
+@0-159 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-142,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-14 Identifier {
+                        ident: "staticValueDef",
+                    },
+                    @21-142 SpaceBefore(
+                        Defs(
+                            Defs {
+                                tags: [
+                                    EitherIndex(2147483648),
+                                ],
+                                regions: [
+                                    @21-125,
+                                ],
+                                space_before: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                ],
+                                space_after: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                ],
+                                spaces: [],
+                                type_defs: [],
+                                value_defs: [
+                                    Body(
+                                        @21-28 Identifier {
+                                            ident: "someVal",
+                                        },
+                                        @39-125 SpaceBefore(
+                                            If {
+                                                if_thens: [
+                                                    (
+                                                        @42-48 BinOps(
+                                                            [
+                                                                (
+                                                                    @42-44 Num(
+                                                                        "10",
+                                                                    ),
+                                                                    @45-46 GreaterThan,
+                                                                ),
+                                                            ],
+                                                            @47-48 Num(
+                                                                "5",
+                                                            ),
+                                                        ),
+                                                        @67-97 SpaceBefore(
+                                                            SpaceAfter(
+                                                                Defs(
+                                                                    Defs {
+                                                                        tags: [
+                                                                            EitherIndex(2147483648),
+                                                                        ],
+                                                                        regions: [
+                                                                            @67-72,
+                                                                        ],
+                                                                        space_before: [
+                                                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                                                        ],
+                                                                        space_after: [
+                                                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                                                        ],
+                                                                        spaces: [],
+                                                                        type_defs: [],
+                                                                        value_defs: [
+                                                                            Body(
+                                                                                @67-68 Identifier {
+                                                                                    ident: "x",
+                                                                                },
+                                                                                @71-72 Num(
+                                                                                    "5",
+                                                                                ),
+                                                                            ),
+                                                                        ],
+                                                                    },
+                                                                    @86-97 SpaceBefore(
+                                                                        Return(
+                                                                            @86-97 Var {
+                                                                                module_name: "",
+                                                                                ident: "x",
+                                                                            },
+                                                                            None,
+                                                                        ),
+                                                                        [
+                                                                            Newline,
+                                                                        ],
+                                                                    ),
+                                                                ),
+                                                                [
+                                                                    Newline,
+                                                                ],
+                                                            ),
+                                                            [
+                                                                Newline,
+                                                            ],
+                                                        ),
+                                                    ),
+                                                ],
+                                                final_else: @124-125 SpaceBefore(
+                                                    Num(
+                                                        "6",
+                                                    ),
+                                                    [
+                                                        Newline,
+                                                    ],
+                                                ),
+                                                indented_else: false,
+                                            },
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ),
+                                ],
+                            },
+                            @131-142 SpaceBefore(
+                                BinOps(
+                                    [
+                                        (
+                                            @131-138 Var {
+                                                module_name: "",
+                                                ident: "someVal",
+                                            },
+                                            @139-140 Plus,
+                                        ),
+                                    ],
+                                    @141-142 Num(
+                                        "2",
+                                    ),
+                                ),
+                                [
+                                    Newline,
+                                    Newline,
+                                ],
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @145-159 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "staticValueDef",
+            },
+            [
+                Newline,
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

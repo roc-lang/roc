@@ -82,9 +82,11 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
     .to_str()
     .unwrap();
 
+    let additional_path_display = "in";
+    let additional_path_display_width = additional_path_display.len() + 1;
     let title_width = title.len() + 4;
-    let relative_path_width = relative_path.len() + 3;
-    let available_path_width = HEADER_WIDTH - title_width - 1;
+    let relative_path_width = relative_path.len() + 1;
+    let available_path_width = HEADER_WIDTH - title_width - additional_path_display_width - 1;
 
     // If path is too long to fit in 80 characters with everything else then truncate it
     let path_width = relative_path_width.min(available_path_width);
@@ -95,11 +97,15 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
         relative_path.to_string()
     };
 
+    // ensure path conatians only unix slashes
+    let path = path.replace('\\', "/");
+
     let header = format!(
-        "── {} {} {} ─",
+        "── {} {} {} {}",
         title,
-        "─".repeat(HEADER_WIDTH - (title_width + path_width)),
-        path
+        additional_path_display,
+        path,
+        "─".repeat(HEADER_WIDTH - (title_width + path_width + additional_path_display_width))
     );
 
     header
@@ -109,6 +115,7 @@ pub fn pretty_header_with_path(title: &str, path: &Path) -> String {
 pub enum RenderTarget {
     ColorTerminal,
     Generic,
+    LanguageServer,
 }
 
 /// A textual report.
@@ -130,11 +137,12 @@ impl<'b> Report<'b> {
         match target {
             RenderTarget::Generic => self.render_ci(buf, alloc),
             RenderTarget::ColorTerminal => self.render_color_terminal(buf, alloc, palette),
+            RenderTarget::LanguageServer => self.render_language_server(buf, alloc),
         }
     }
 
     /// Render to CI console output, where no colors are available.
-    pub fn render_ci(self, buf: &'b mut String, alloc: &'b RocDocAllocator<'b>) {
+    pub fn render_ci(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
         let err_msg = "<buffer is not a utf-8 encoded string>";
 
         self.pretty(alloc)
@@ -163,7 +171,7 @@ impl<'b> Report<'b> {
         if self.title.is_empty() {
             self.doc
         } else {
-            let header = if self.filename == PathBuf::from("") {
+            let header = if self.filename == PathBuf::from("replfile.roc") {
                 crate::report::pretty_header(&self.title)
             } else {
                 crate::report::pretty_header_with_path(&self.title, &self.filename)
@@ -171,6 +179,18 @@ impl<'b> Report<'b> {
 
             alloc.stack([alloc.text(header).annotate(Annotation::Header), self.doc])
         }
+    }
+
+    /// Render report for the language server, where the window is narrower.
+    /// Path is not included, and the header is not emphasized with "─".
+    pub fn render_language_server(self, buf: &mut String, alloc: &'b RocDocAllocator<'b>) {
+        let err_msg = "<buffer is not a utf-8 encoded string>";
+
+        alloc
+            .stack([alloc.text(self.title), self.doc])
+            .1
+            .render_raw(60, &mut CiWrite::new(buf))
+            .expect(err_msg)
     }
 
     pub fn horizontal_rule(palette: &'b Palette) -> String {
@@ -206,6 +226,7 @@ pub struct Palette {
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
+    pub warning: &'static str,
 }
 
 /// Set the default styles for various semantic elements,
@@ -216,7 +237,7 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         code_block: codes.white,
         keyword: codes.green,
         ellipsis: codes.green,
-        variable: codes.blue,
+        variable: codes.cyan,
         type_variable: codes.yellow,
         structure: codes.green,
         alias: codes.yellow,
@@ -233,6 +254,36 @@ const fn default_palette_from_style_codes(codes: StyleCodes) -> Palette {
         bold: codes.bold,
         underline: codes.underline,
         reset: codes.reset,
+        warning: codes.yellow,
+    }
+}
+
+/// Set colorless styles for printing with no color,
+/// given a set of StyleCodes for an environment (web or terminal).
+const fn no_color_palette_from_style_codes(codes: StyleCodes) -> Palette {
+    Palette {
+        primary: codes.no_color,
+        code_block: codes.no_color,
+        keyword: codes.no_color,
+        ellipsis: codes.no_color,
+        variable: codes.no_color,
+        type_variable: codes.no_color,
+        structure: codes.no_color,
+        alias: codes.no_color,
+        opaque: codes.no_color,
+        error: codes.no_color,
+        line_number: codes.no_color,
+        header: codes.no_color,
+        gutter_bar: codes.no_color,
+        module_name: codes.no_color,
+        binop: codes.no_color,
+        typo: codes.no_color,
+        typo_suggestion: codes.no_color,
+        parser_suggestion: codes.no_color,
+        bold: codes.no_color,
+        underline: codes.no_color,
+        reset: codes.no_color,
+        warning: codes.no_color,
     }
 }
 
@@ -240,34 +291,34 @@ pub const DEFAULT_PALETTE: Palette = default_palette_from_style_codes(ANSI_STYLE
 
 pub const DEFAULT_PALETTE_HTML: Palette = default_palette_from_style_codes(HTML_STYLE_CODES);
 
+pub const NO_COLOR_PALETTE: Palette = no_color_palette_from_style_codes(ANSI_STYLE_CODES);
+
+pub const NO_COLOR_PALETTE_HTML: Palette = no_color_palette_from_style_codes(HTML_STYLE_CODES);
+
 /// A machine-readable format for text styles (colors and other styles)
 #[derive(Debug, PartialEq)]
 pub struct StyleCodes {
     pub red: &'static str,
     pub green: &'static str,
     pub yellow: &'static str,
-    pub blue: &'static str,
-    pub magenta: &'static str,
     pub cyan: &'static str,
     pub white: &'static str,
     pub bold: &'static str,
     pub underline: &'static str,
     pub reset: &'static str,
-    pub color_reset: &'static str,
+    pub no_color: &'static str,
 }
 
 pub const ANSI_STYLE_CODES: StyleCodes = StyleCodes {
-    red: "\u{001b}[31m",
-    green: "\u{001b}[32m",
-    yellow: "\u{001b}[33m",
-    blue: "\u{001b}[34m",
-    magenta: "\u{001b}[35m",
-    cyan: "\u{001b}[36m",
+    red: "\u{001b}[1;31m",
+    green: "\u{001b}[1;32m",
+    yellow: "\u{001b}[1;33m",
+    cyan: "\u{001b}[1;36m",
     white: "\u{001b}[37m",
     bold: "\u{001b}[1m",
     underline: "\u{001b}[4m",
     reset: "\u{001b}[0m",
-    color_reset: "\u{1b}[39m",
+    no_color: "",
 };
 
 macro_rules! html_color {
@@ -280,15 +331,25 @@ pub const HTML_STYLE_CODES: StyleCodes = StyleCodes {
     red: html_color!("red"),
     green: html_color!("green"),
     yellow: html_color!("yellow"),
-    blue: html_color!("blue"),
-    magenta: html_color!("magenta"),
     cyan: html_color!("cyan"),
     white: html_color!("white"),
     bold: "<span class='bold'>",
     underline: "<span class='underline'>",
     reset: "</span>",
-    color_reset: "</span>",
+    no_color: "",
 };
+
+// useful for tests
+pub fn strip_colors(str: &str) -> String {
+    str.replace(ANSI_STYLE_CODES.red, "")
+        .replace(ANSI_STYLE_CODES.green, "")
+        .replace(ANSI_STYLE_CODES.yellow, "")
+        .replace(ANSI_STYLE_CODES.cyan, "")
+        .replace(ANSI_STYLE_CODES.white, "")
+        .replace(ANSI_STYLE_CODES.bold, "")
+        .replace(ANSI_STYLE_CODES.underline, "")
+        .replace(ANSI_STYLE_CODES.reset, "")
+}
 
 // define custom allocator struct so we can `impl RocDocAllocator` custom helpers
 pub struct RocDocAllocator<'a> {
@@ -483,11 +544,33 @@ impl<'a> RocDocAllocator<'a> {
         .annotate(Annotation::Module)
     }
 
+    pub fn shorthand(&'a self, name: &'a str) -> DocBuilder<'a, Self, Annotation> {
+        self.text(name).annotate(Annotation::Shorthand)
+    }
+
+    pub fn backwards_arrow(&'a self) -> DocBuilder<'a, Self, Annotation> {
+        self.text("<-").annotate(Annotation::BinOp)
+    }
+
     pub fn binop(
         &'a self,
         content: roc_module::called_via::BinOp,
     ) -> DocBuilder<'a, Self, Annotation> {
         self.text(content.to_string()).annotate(Annotation::BinOp)
+    }
+
+    pub fn unop(
+        &'a self,
+        content: roc_module::called_via::UnaryOp,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
+    }
+
+    pub fn suffix(
+        &'a self,
+        content: roc_module::called_via::Suffix,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.text(content.to_string()).annotate(Annotation::UnaryOp)
     }
 
     /// Turns off backticks/colors in a block
@@ -648,6 +731,7 @@ impl<'a> RocDocAllocator<'a> {
         &'a self,
         region: LineColumnRegion,
         sub_region: LineColumnRegion,
+        severity: Severity,
     ) -> DocBuilder<'a, Self, Annotation> {
         // debug_assert!(region.contains(&sub_region));
 
@@ -657,9 +741,14 @@ impl<'a> RocDocAllocator<'a> {
             // attempting this will recurse forever, so don't do that! Instead, give up and
             // accept that this report will take up more than 1 full screen.
             if !sub_region.contains(&region) {
-                return self.region_with_subregion(sub_region, sub_region);
+                return self.region_with_subregion(sub_region, sub_region, severity);
             }
         }
+
+        let annotation = match severity {
+            Severity::RuntimeError | Severity::Fatal => Annotation::Error,
+            Severity::Warning => Annotation::Warning,
+        };
 
         // if true, the final line of the snippet will be some ^^^ that point to the region where
         // the problem is. Otherwise, the snippet will have a > on the lines that are in the region
@@ -700,7 +789,7 @@ impl<'a> RocDocAllocator<'a> {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
                     .append(self.text(line_number).annotate(Annotation::LineNumber))
                     .append(self.text(GUTTER_BAR).annotate(Annotation::GutterBar))
-                    .append(self.text(">").annotate(Annotation::Error))
+                    .append(self.text(">").annotate(annotation))
                     .append(rest_of_line)
             } else if error_highlight_line {
                 self.text(" ".repeat(max_line_number_length - this_line_number_length))
@@ -742,7 +831,7 @@ impl<'a> RocDocAllocator<'a> {
                 } else {
                     self.text(" ".repeat(sub_region.start().column as usize))
                         .indent(indent)
-                        .append(self.text(highlight_text).annotate(Annotation::Error))
+                        .append(self.text(highlight_text).annotate(annotation))
                 });
 
             result = result.append(highlight_line);
@@ -751,8 +840,12 @@ impl<'a> RocDocAllocator<'a> {
         result
     }
 
-    pub fn region(&'a self, region: LineColumnRegion) -> DocBuilder<'a, Self, Annotation> {
-        self.region_with_subregion(region, region)
+    pub fn region(
+        &'a self,
+        region: LineColumnRegion,
+        severity: Severity,
+    ) -> DocBuilder<'a, Self, Annotation> {
+        self.region_with_subregion(region, region, severity)
     }
 
     pub fn region_without_error(
@@ -826,6 +919,13 @@ impl<'a> RocDocAllocator<'a> {
         }
         self.text(result.chars().rev().collect::<String>())
     }
+
+    pub fn file_path(&'a self, path: &Path) -> DocBuilder<'a, Self, Annotation> {
+        let cwd = std::env::current_dir().unwrap();
+        let relative_path = path.strip_prefix(cwd).unwrap_or(path).to_str().unwrap();
+
+        self.text(relative_path.to_string())
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -836,6 +936,7 @@ pub enum Annotation {
     Ellipsis,
     Tag,
     RecordField,
+    RecordUpdater,
     TupleElem,
     TypeVariable,
     Alias,
@@ -843,6 +944,7 @@ pub enum Annotation {
     Structure,
     Symbol,
     BinOp,
+    UnaryOp,
     Error,
     GutterBar,
     LineNumber,
@@ -851,11 +953,13 @@ pub enum Annotation {
     TypeBlock,
     InlineTypeBlock,
     Module,
+    Shorthand,
     Typo,
     TypoSuggestion,
     Tip,
     Header,
     ParserSuggestion,
+    Warning,
 }
 
 /// Render with minimal formatting
@@ -1027,6 +1131,9 @@ where
             BinOp => {
                 self.write_str(self.palette.alias)?;
             }
+            UnaryOp => {
+                self.write_str(self.palette.alias)?;
+            }
             Symbol => {
                 self.write_str(self.palette.variable)?;
             }
@@ -1054,6 +1161,9 @@ where
             Module => {
                 self.write_str(self.palette.module_name)?;
             }
+            Shorthand => {
+                self.write_str(self.palette.module_name)?;
+            }
             Typo => {
                 self.write_str(self.palette.typo)?;
             }
@@ -1063,7 +1173,11 @@ where
             ParserSuggestion => {
                 self.write_str(self.palette.parser_suggestion)?;
             }
-            TypeBlock | InlineTypeBlock | Tag | RecordField | TupleElem => { /* nothing yet */ }
+            Warning => {
+                self.write_str(self.palette.warning)?;
+            }
+            TypeBlock | InlineTypeBlock | Tag | RecordField | RecordUpdater | TupleElem => { /* nothing yet */
+            }
         }
         self.style_stack.push(*annotation);
         Ok(())
@@ -1075,14 +1189,15 @@ where
         match self.style_stack.pop() {
             None => {}
             Some(annotation) => match annotation {
-                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | Error | GutterBar
-                | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure | CodeBlock
-                | PlainText | LineNumber | Tip | Module | Header | Keyword => {
+                Emphasized | Url | TypeVariable | Alias | Symbol | BinOp | UnaryOp | Error
+                | GutterBar | Ellipsis | Typo | TypoSuggestion | ParserSuggestion | Structure
+                | CodeBlock | PlainText | LineNumber | Tip | Module | Shorthand | Header
+                | Keyword | Warning => {
                     self.write_str(self.palette.reset)?;
                 }
 
-                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | TupleElem => { /* nothing yet */
-                }
+                TypeBlock | InlineTypeBlock | Tag | Opaque | RecordField | RecordUpdater
+                | TupleElem => { /* nothing yet */ }
             },
         }
         Ok(())
@@ -1090,7 +1205,11 @@ where
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> String {
+pub fn to_https_problem_report_string(
+    url: &str,
+    https_problem: Problem,
+    filename: PathBuf,
+) -> String {
     let src_lines: Vec<&str> = Vec::new();
 
     let mut module_ids = ModuleIds::default();
@@ -1104,7 +1223,7 @@ pub fn to_https_problem_report_string(url: &str, https_problem: Problem) -> Stri
 
     let mut buf = String::new();
     let palette = DEFAULT_PALETTE;
-    let report = to_https_problem_report(&alloc, url, https_problem);
+    let report = to_https_problem_report(&alloc, url, https_problem, filename);
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
     buf
@@ -1115,11 +1234,12 @@ pub fn to_https_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
     url: &'b str,
     https_problem: Problem,
+    filename: PathBuf,
 ) -> Report<'b> {
     match https_problem {
         Problem::UnsupportedEncoding(not_supported_encoding) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with a "),
@@ -1143,7 +1263,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "UNSUPPORTED ENCODING".to_string(),
                 severity: Severity::Fatal,
@@ -1151,7 +1271,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::MultipleEncodings(multiple_encodings) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc.string((&url).to_string()).annotate(Annotation::Url).indent(4),
                 alloc.concat([
                     alloc.reflow(r"But the server replied with multiple "),
@@ -1178,7 +1298,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MULTIPLE ENCODINGS".to_string(),
                 severity: Severity::Fatal,
@@ -1213,16 +1333,33 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID CONTENT HASH".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        Problem::NotFound => {
+            let doc = alloc.stack([
+                alloc.reflow(r"I tried to download from this URL:"),
+                alloc
+                    .string((&url).to_string())
+                    .annotate(Annotation::Url)
+                    .indent(4),
+                alloc.concat([alloc.reflow(r"But the file was not found (404).")]),
+                alloc.concat([alloc.tip(), alloc.reflow(r"Is the URL correct?")]),
+            ]);
+            Report {
+                filename,
+                doc,
+                title: "NOTFOUND".to_string(),
                 severity: Severity::Fatal,
             }
         }
         // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::IoErr(io_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1240,7 +1377,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "IO ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1249,7 +1386,7 @@ pub fn to_https_problem_report<'b>(
         // TODO: The reporting text for IoErr and FsExtraErr could probably be unified
         Problem::FsExtraErr(fs_extra_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1267,7 +1404,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "IO ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1275,7 +1412,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::HttpErr(reqwest_error) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1296,7 +1433,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "HTTP ERROR".to_string(),
                 severity: Severity::Fatal,
@@ -1312,7 +1449,7 @@ pub fn to_https_problem_report<'b>(
             };
 
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1337,7 +1474,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID EXTENSION SUFFIX".to_string(),
                 severity: Severity::Fatal,
@@ -1345,7 +1482,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingTarExt) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1370,7 +1507,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID EXTENSION".to_string(),
                 severity: Severity::Fatal,
@@ -1380,7 +1517,7 @@ pub fn to_https_problem_report<'b>(
             invalid_fragment,
         )) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1408,7 +1545,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "INVALID FRAGMENT".to_string(),
                 severity: Severity::Fatal,
@@ -1416,7 +1553,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHash) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1446,7 +1583,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MISSING PACKAGE HASH".to_string(),
                 severity: Severity::Fatal,
@@ -1454,7 +1591,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MissingHttps) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1472,7 +1609,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "HTTPS MANDATORY".to_string(),
                 severity: Severity::Fatal,
@@ -1480,7 +1617,7 @@ pub fn to_https_problem_report<'b>(
         }
         Problem::InvalidUrl(roc_packaging::https::UrlProblem::MisleadingCharacter) => {
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1515,7 +1652,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "MISLEADING CHARACTERS".to_string(),
                 severity: Severity::Fatal,
@@ -1526,7 +1663,7 @@ pub fn to_https_problem_report<'b>(
                 .get_appropriate_unit(false)
                 .format(3);
             let doc = alloc.stack([
-                alloc.reflow(r"I was trying to download this URL:"),
+                alloc.reflow(r"I tried to download from this URL:"),
                 alloc
                     .string((&url).to_string())
                     .annotate(Annotation::Url)
@@ -1545,7 +1682,7 @@ pub fn to_https_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE TOO LARGE".to_string(),
                 severity: Severity::Fatal,
@@ -1554,20 +1691,25 @@ pub fn to_https_problem_report<'b>(
     }
 }
 
-pub fn to_file_problem_report_string(filename: &Path, error: io::ErrorKind) -> String {
+pub fn to_file_problem_report_string(
+    filename: PathBuf,
+    error: io::ErrorKind,
+    has_color: bool,
+) -> String {
     let src_lines: Vec<&str> = Vec::new();
-
     let mut module_ids = ModuleIds::default();
-
     let module_id = module_ids.get_or_insert(&"find module name somehow?".into());
-
     let interns = Interns::default();
 
     // Report parsing and canonicalization problems
     let alloc = RocDocAllocator::new(&src_lines, module_id, &interns);
 
     let mut buf = String::new();
-    let palette = DEFAULT_PALETTE;
+    let palette = if has_color {
+        DEFAULT_PALETTE
+    } else {
+        NO_COLOR_PALETTE
+    };
     let report = to_file_problem_report(&alloc, filename, error);
     report.render_color_terminal(&mut buf, &alloc, &palette);
 
@@ -1576,16 +1718,16 @@ pub fn to_file_problem_report_string(filename: &Path, error: io::ErrorKind) -> S
 
 pub fn to_file_problem_report<'b>(
     alloc: &'b RocDocAllocator<'b>,
-    filename: &Path,
+    filename: PathBuf,
     error: io::ErrorKind,
 ) -> Report<'b> {
-    let filename: String = filename.to_str().unwrap().to_string();
+    let filename_str: String = filename.to_str().unwrap().to_string();
     match error {
         io::ErrorKind::NotFound => {
             let doc = alloc.stack([
                 alloc.reflow(r"I am looking for this file, but it's not there:"),
                 alloc
-                    .string(filename)
+                    .string(filename_str)
                     .annotate(Annotation::ParserSuggestion)
                     .indent(4),
                 alloc.concat([
@@ -1595,7 +1737,7 @@ pub fn to_file_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE NOT FOUND".to_string(),
                 severity: Severity::Fatal,
@@ -1605,7 +1747,7 @@ pub fn to_file_problem_report<'b>(
             let doc = alloc.stack([
                 alloc.reflow(r"I don't have the required permissions to read this file:"),
                 alloc
-                    .string(filename)
+                    .string(filename_str)
                     .annotate(Annotation::ParserSuggestion)
                     .indent(4),
                 alloc
@@ -1613,9 +1755,45 @@ pub fn to_file_problem_report<'b>(
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE PERMISSION DENIED".to_string(),
+                severity: Severity::Fatal,
+            }
+        }
+        io::ErrorKind::Unsupported => {
+            let doc = match filename.extension() {
+                Some(ext) => alloc.concat(vec![
+                    alloc.reflow(r"I expected a file with extension `.roc` or without extension."),
+                    alloc.hardline(),
+                    alloc.reflow(r"Instead I received a file with extension `."),
+                    alloc.as_string(ext.to_string_lossy()),
+                    alloc.as_string("`."),
+                ]),
+                None => {
+                    alloc.stack(vec![
+                        alloc.vcat(vec![
+                            alloc.reflow(r"I expected a file with either:"),
+                            alloc.reflow("- extension `.roc`"),
+                            alloc.intersperse(
+                                "- no extension and a roc shebang as the first line, e.g. `#!/home/username/bin/roc_nightly/roc`"
+                                    .split(char::is_whitespace),
+                                alloc.concat(vec![ alloc.hardline(), alloc.text("  ")]).flat_alt(alloc.space()).group()
+                            ),
+                        ]),
+                        alloc.concat(vec![
+                            alloc.reflow("The provided file did not start with a shebang `#!` containing the string `roc`. Is "),
+                            alloc.as_string(filename.to_string_lossy()),
+                            alloc.reflow(" a Roc file?"),
+                        ])
+                    ])
+                }
+            };
+
+            Report {
+                filename,
+                doc,
+                title: "NOT A ROC FILE".to_string(),
                 severity: Severity::Fatal,
             }
         }
@@ -1624,13 +1802,16 @@ pub fn to_file_problem_report<'b>(
             let formatted = format!("{error}");
             let doc = alloc.stack([
                 alloc.reflow(r"I tried to read this file:"),
-                alloc.string(filename).annotate(Annotation::Error).indent(4),
+                alloc
+                    .string(filename_str)
+                    .annotate(Annotation::Error)
+                    .indent(4),
                 alloc.reflow(r"But ran into:"),
                 alloc.text(formatted).annotate(Annotation::Error).indent(4),
             ]);
 
             Report {
-                filename: "UNKNOWN.roc".into(),
+                filename,
                 doc,
                 title: "FILE PROBLEM".to_string(),
                 severity: Severity::Fatal,

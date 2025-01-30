@@ -1,24 +1,24 @@
-Defs(
+@0-23 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-19,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
             Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
+                @0-1 Identifier {
+                    ident: "f",
+                },
                 @17-19 SpaceBefore(
                     Record {
                         fields: [],

@@ -1,0 +1,41 @@
+@0-15 Closure(
+    [
+        @1-12 Apply(
+            @1-2 Tag(
+                "I",
+            ),
+            [
+                @2-12 List(
+                    [
+                        @3-11 List(
+                            [
+                                @5-6 SpaceBefore(
+                                    SpaceAfter(
+                                        Tag(
+                                            "O",
+                                        ),
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @9-10 Identifier {
+                                    ident: "i",
+                                },
+                            ],
+                        ),
+                    ],
+                ),
+            ],
+        ),
+    ],
+    @14-15 Var {
+        module_name: "",
+        ident: "i",
+    },
+)

@@ -1,1 +1,1 @@
-Expr(When(Arrow(@26), @0), @0)
+Expr(When(IndentPattern(@26), @0), @0)

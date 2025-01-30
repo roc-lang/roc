@@ -8,31 +8,31 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_bitcode = { path = "../builtins/bitcode" }
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_constrain = { path = "../constrain" }
-roc_error_macros = { path = "../../error_macros" }
-roc_gen_dev = { path = "../gen_dev", default-features = false }
-roc_gen_llvm = { path = "../gen_llvm" }
-roc_gen_wasm = { path = "../gen_wasm" }
-roc_linker = { path = "../../linker" }
-roc_load = { path = "../load" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_packaging = { path = "../../packaging" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_reporting = { path = "../../reporting" }
-roc_solve_problem = { path = "../solve_problem" }
-roc_std = { path = "../../roc_std" }
-roc_target = { path = "../roc_target" }
-roc_types = { path = "../types" }
-roc_unify = { path = "../unify" }
-roc_command_utils = { path = "../../utils/command" }
-
-wasi_libc_sys = { path = "../../wasi-libc-sys" }
+roc_bitcode.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_constrain.workspace = true
+roc_debug_flags.workspace = true
+roc_error_macros.workspace = true
+roc_gen_dev.workspace = true
+roc_gen_llvm.workspace = true
+roc_gen_wasm.workspace = true
+roc_linker.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_packaging.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve_problem.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
+roc_unify.workspace = true
+roc_command_utils.workspace = true
+wasi_libc_sys.workspace = true
 
 bumpalo.workspace = true
 indoc.workspace = true

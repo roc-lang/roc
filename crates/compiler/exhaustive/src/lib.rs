@@ -160,6 +160,14 @@ impl Error {
             Error::Unmatchable { .. } => Warning,
         }
     }
+
+    pub fn region(&self) -> Region {
+        match self {
+            Error::Incomplete(region, _, _) => *region,
+            Error::Redundant { branch_region, .. } => *branch_region,
+            Error::Unmatchable { branch_region, .. } => *branch_region,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -381,7 +389,6 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                             vector.extend(args);
                         } else {
                             // TODO turn this into an iteration over the outer loop rather than bouncing
-                            vector.extend(args);
                             for list_ctor in spec_list_ctors {
                                 let mut old_matrix = old_matrix.clone();
                                 let mut spec_matrix = Vec::with_capacity(old_matrix.len());
@@ -392,10 +399,19 @@ pub fn is_useful(mut old_matrix: PatternMatrix, mut vector: Row) -> bool {
                                     &mut spec_matrix,
                                 );
 
-                                if is_useful(spec_matrix, vector.clone()) {
+                                let mut vector = vector.clone();
+                                specialize_row_with_polymorphic_list(
+                                    &mut vector,
+                                    &args,
+                                    arity,
+                                    list_ctor,
+                                );
+
+                                if is_useful(spec_matrix, vector) {
                                     return true;
                                 }
                             }
+
                             return false;
                         }
                     }
@@ -494,6 +510,36 @@ fn specialize_matrix_by_list(
             spec_matrix.push(spec_row);
         }
     }
+}
+
+fn specialize_row_with_polymorphic_list(
+    row: &mut Vec<Pattern>,
+    list_element_patterns: &[Pattern],
+    polymorphic_list_ctor: ListArity,
+    specialized_list_ctor: ListArity,
+) {
+    let min_len = specialized_list_ctor.min_len();
+    if list_element_patterns.len() > min_len {
+        row.extend(list_element_patterns.iter().cloned());
+    }
+
+    let (patterns_before, patterns_after) = match polymorphic_list_ctor {
+        ListArity::Slice(before, after) => (
+            &list_element_patterns[..before],
+            &list_element_patterns[list_element_patterns.len() - after..],
+        ),
+        ListArity::Exact(_) => (list_element_patterns, &[] as &[Pattern]),
+    };
+
+    let middle_any_patterns_needed =
+        specialized_list_ctor.min_len() - polymorphic_list_ctor.min_len();
+    let middle_patterns = std::iter::repeat(Anything).take(middle_any_patterns_needed);
+
+    row.extend(
+        (patterns_before.iter().cloned())
+            .chain(middle_patterns)
+            .chain(patterns_after.iter().cloned()),
+    );
 }
 
 // Specialize a row that matches a list's constructor(s).

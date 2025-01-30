@@ -1,44 +1,49 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
+@0-31 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @11-13 SpaceBefore(
+                        StrLiteral(
+                            PlainLine(
+                                "",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @17-18 Num(
+                    "1",
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @20-26 SpaceBefore(
+                        StrLiteral(
+                            PlainLine(
+                                "mise",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @30-31 Num(
+                    "2",
+                ),
+                guard: None,
+            },
+        ],
+    ),
     [
-        WhenBranch {
-            patterns: [
-                @11-13 SpaceBefore(
-                    StrLiteral(
-                        PlainLine(
-                            "",
-                        ),
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @17-18 Num(
-                "1",
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @20-26 SpaceBefore(
-                    StrLiteral(
-                        PlainLine(
-                            "mise",
-                        ),
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @30-31 Num(
-                "2",
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

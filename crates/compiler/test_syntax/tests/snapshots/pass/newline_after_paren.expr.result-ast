@@ -1,4 +1,4 @@
-ParensAround(
+@0-4 ParensAround(
     SpaceBefore(
         Tag(
             "A",

@@ -1,0 +1,115 @@
+on:
+  workflow_dispatch:
+  #pull_request:
+
+name: Docker images tests
+
+jobs:
+  nightly-ubuntu-latest:
+    name: nightly-ubuntu-latest
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-ubuntu-latest/docker-compose.example.yml docker/nightly-ubuntu-latest/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-ubuntu-latest/docker-compose.yml run roc main.roc
+
+
+  nightly-ubuntu-2204:
+    name: nightly-ubuntu-2204
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-ubuntu-2204/docker-compose.example.yml docker/nightly-ubuntu-2204/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-ubuntu-2204/docker-compose.yml run roc main.roc
+
+  nightly-ubuntu-2004:
+    name: nightly-ubuntu-2004
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-ubuntu-2004/docker-compose.example.yml docker/nightly-ubuntu-2004/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-ubuntu-2004/docker-compose.yml run roc main.roc
+
+  nightly-debian-latest:
+    name: nightly-debian-latest
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-debian-latest/docker-compose.example.yml docker/nightly-debian-latest/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-debian-latest/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-debian-latest/docker-compose.yml run roc main.roc
+
+  nightly-debian-bookworm:
+    name: nightly-debian-bookworm
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-debian-bookworm/docker-compose.example.yml docker/nightly-debian-bookworm/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-debian-bookworm/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc main.roc
+
+  nightly-debian-buster:
+    name: nightly-debian-buster
+    runs-on: [ubuntu-22.04]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Copy example docker file
+        run: cp docker/nightly-debian-buster/docker-compose.example.yml docker/nightly-debian-buster/docker-compose.yml
+
+      - name: Build image
+        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml build
+
+      - name: Test with hello world
+        run: |
+          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+          docker compose -f docker/nightly-debian-buster/docker-compose.yml run roc main.roc

@@ -1,61 +1,66 @@
-SpaceBefore(
-    Defs(
-        Defs {
-            tags: [
-                Index(2147483648),
-                Index(2147483649),
-            ],
-            regions: [
-                @18-30,
-                @31-36,
-            ],
-            space_before: [
-                Slice(start = 0, length = 0),
-                Slice(start = 0, length = 1),
-            ],
-            space_after: [
-                Slice(start = 0, length = 0),
-                Slice(start = 1, length = 0),
-            ],
-            spaces: [
-                Newline,
-            ],
-            type_defs: [],
-            value_defs: [
-                Body(
-                    @18-26 RecordDestructure(
-                        [
-                            @20-21 Identifier(
-                                "x",
-                            ),
-                            @23-25 Identifier(
-                                "y",
-                            ),
-                        ],
+@18-40 SpaceBefore(
+    SpaceAfter(
+        Defs(
+            Defs {
+                tags: [
+                    EitherIndex(2147483648),
+                    EitherIndex(2147483649),
+                ],
+                regions: [
+                    @18-30,
+                    @31-36,
+                ],
+                space_before: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                ],
+                space_after: [
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                    Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                ],
+                spaces: [
+                    Newline,
+                ],
+                type_defs: [],
+                value_defs: [
+                    Body(
+                        @18-26 RecordDestructure(
+                            [
+                                @20-21 Identifier {
+                                    ident: "x",
+                                },
+                                @23-25 Identifier {
+                                    ident: "y",
+                                },
+                            ],
+                        ),
+                        @29-30 Num(
+                            "5",
+                        ),
                     ),
-                    @29-30 Num(
-                        "5",
+                    Body(
+                        @31-32 Identifier {
+                            ident: "y",
+                        },
+                        @35-36 Num(
+                            "6",
+                        ),
                     ),
+                ],
+            },
+            @38-40 SpaceBefore(
+                Num(
+                    "42",
                 ),
-                Body(
-                    @31-32 Identifier(
-                        "y",
-                    ),
-                    @35-36 Num(
-                        "6",
-                    ),
-                ),
-            ],
-        },
-        @38-40 SpaceBefore(
-            Num(
-                "42",
+                [
+                    Newline,
+                    Newline,
+                ],
             ),
-            [
-                Newline,
-                Newline,
-            ],
         ),
+        [
+            Newline,
+        ],
     ),
     [
         LineComment(

@@ -1,4 +1,4 @@
-Apply(
+@0-8 Apply(
     @1-5 ParensAround(
         Var {
             module_name: "",

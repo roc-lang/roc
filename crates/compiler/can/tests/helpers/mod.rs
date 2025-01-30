@@ -2,17 +2,18 @@ extern crate bumpalo;
 
 use self::bumpalo::Bump;
 use roc_can::env::Env;
-use roc_can::expr::Output;
 use roc_can::expr::{canonicalize_expr, Expr};
-use roc_can::operator;
 use roc_can::scope::Scope;
+use roc_can_solo::env::SoloEnv;
+use roc_can_solo::scope::SoloScope;
 use roc_collections::all::MutMap;
-use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, Symbol};
+use roc_module::symbol::{IdentIds, Interns, ModuleId, ModuleIds, PackageModuleIds, Symbol};
 use roc_problem::can::Problem;
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{AliasVar, Type};
 use std::hash::Hash;
+use std::path::Path;
 
 pub fn test_home() -> ModuleId {
     ModuleIds::default().get_or_insert(&"Test".into())
@@ -25,12 +26,8 @@ pub fn can_expr(expr_str: &str) -> CanExprOut {
 
 pub struct CanExprOut {
     pub loc_expr: Loc<Expr>,
-    pub output: Output,
     pub problems: Vec<Problem>,
-    pub home: ModuleId,
     pub interns: Interns,
-    pub var_store: VarStore,
-    pub var: Variable,
 }
 
 #[allow(dead_code)]
@@ -42,8 +39,25 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     });
 
     let mut var_store = VarStore::default();
-    let var = var_store.fresh();
-    let module_ids = ModuleIds::default();
+    let qualified_module_ids = PackageModuleIds::default();
+
+    let mut scope = Scope::new(
+        home,
+        "TestPath".into(),
+        IdentIds::default(),
+        Default::default(),
+    );
+
+    let dep_idents = IdentIds::exposed_builtins(0);
+    let mut env = Env::new(
+        arena,
+        expr_str,
+        home,
+        Path::new("Test.roc"),
+        &dep_idents,
+        &qualified_module_ids,
+        None,
+    );
 
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
@@ -52,9 +66,10 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = operator::desugar_expr(arena, &loc_expr);
+    let mut solo_env = SoloEnv::new(arena, expr_str, Path::new("Test.roc"));
+    let mut solo_scope = SoloScope::new();
+    let loc_expr = roc_can_solo::desugar::desugar_expr(&mut solo_env, &mut solo_scope, &loc_expr);
 
-    let mut scope = Scope::new(home, IdentIds::default(), Default::default());
     scope.add_alias(
         Symbol::NUM_INT,
         Region::zero(),
@@ -67,9 +82,7 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
         roc_types::types::AliasKind::Structural,
     );
 
-    let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(arena, home, &dep_idents, &module_ids);
-    let (loc_expr, output) = canonicalize_expr(
+    let (loc_expr, _) = canonicalize_expr(
         &mut env,
         &mut var_store,
         &mut scope,
@@ -81,18 +94,14 @@ pub fn can_expr_with(arena: &Bump, home: ModuleId, expr_str: &str) -> CanExprOut
     all_ident_ids.insert(home, scope.locals.ident_ids);
 
     let interns = Interns {
-        module_ids: env.module_ids.clone(),
+        module_ids: env.qualified_module_ids.clone().into_module_ids(),
         all_ident_ids,
     };
 
     CanExprOut {
         loc_expr,
-        output,
         problems: env.problems,
-        home: env.home,
-        var_store,
         interns,
-        var,
     }
 }
 

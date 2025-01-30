@@ -1,3 +1,6 @@
+#![allow(clippy::redundant_closure_call)]
+//|> clippy false positive: https://github.com/rust-lang/rust-clippy/issues/1553
+
 pub fn merge_instructions_without_line_numbers(instructions: capstone::Instructions) -> String {
     instructions
         .iter()

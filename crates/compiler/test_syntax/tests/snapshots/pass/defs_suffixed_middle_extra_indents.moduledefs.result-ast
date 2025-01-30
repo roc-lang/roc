@@ -1,0 +1,159 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+    ],
+    regions: [
+        @24-150,
+        @176-266,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        Body(
+            @24-28 Identifier {
+                ident: "main",
+            },
+            @59-150 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            EitherIndex(2147483648),
+                            EitherIndex(2147483649),
+                        ],
+                        regions: [
+                            @59-68,
+                            @97-111,
+                        ],
+                        space_before: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                        ],
+                        space_after: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                        ],
+                        spaces: [
+                            Newline,
+                        ],
+                        type_defs: [],
+                        value_defs: [
+                            Body(
+                                @59-60 Identifier {
+                                    ident: "a",
+                                },
+                                @63-68 Str(
+                                    PlainLine(
+                                        "Foo",
+                                    ),
+                                ),
+                            ),
+                            Stmt(
+                                @97-111 Apply(
+                                    @97-108 TrySuffix(
+                                        Var {
+                                            module_name: "Stdout",
+                                            ident: "line",
+                                        },
+                                    ),
+                                    [
+                                        @110-111 Var {
+                                            module_name: "",
+                                            ident: "a",
+                                        },
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                    },
+                    @141-150 SpaceBefore(
+                        TrySuffix(
+                            Var {
+                                module_name: "",
+                                ident: "printBar",
+                            },
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+        Body(
+            @176-184 Identifier {
+                ident: "printBar",
+            },
+            @215-266 SpaceBefore(
+                Defs(
+                    Defs {
+                        tags: [
+                            EitherIndex(2147483648),
+                        ],
+                        regions: [
+                            @215-224,
+                        ],
+                        space_before: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        ],
+                        space_after: [
+                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        ],
+                        spaces: [],
+                        type_defs: [],
+                        value_defs: [
+                            Body(
+                                @215-216 Identifier {
+                                    ident: "b",
+                                },
+                                @219-224 Str(
+                                    PlainLine(
+                                        "Bar",
+                                    ),
+                                ),
+                            ),
+                        ],
+                    },
+                    @253-266 SpaceBefore(
+                        Apply(
+                            @253-264 Var {
+                                module_name: "Stdout",
+                                ident: "line",
+                            },
+                            [
+                                @265-266 Var {
+                                    module_name: "",
+                                    ident: "b",
+                                },
+                            ],
+                            Space,
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ],
+}

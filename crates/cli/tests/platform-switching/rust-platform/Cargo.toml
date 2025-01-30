@@ -1,0 +1,16 @@
+[package]
+name = "rust-platform"
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+version = "0.0.1"
+build = "build.rs"
+
+[lib]
+name = "rustplatform"
+path = "src/lib.rs"
+crate-type = ["staticlib"]
+
+[dependencies]
+libc = "0.2"
+roc_std = { path = "../../../crates/roc_std" }

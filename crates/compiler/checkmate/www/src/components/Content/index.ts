@@ -56,8 +56,6 @@ export function contentStyles(desc: TypeDescriptor | undefined): ContentStyles {
       return { name: "ℕ", bg: "bg-lime-400" };
     case "EmptyRecord":
       return { name: "{}", bg: "bg-purple-400" };
-    case "EmptyTuple":
-      return { name: "()", bg: "bg-deep-purple-400" };
     case "EmptyTagUnion":
       return { name: "[]", bg: "bg-cyan-200" };
     case "Error":

@@ -20,6 +20,17 @@ pub enum RocCacheDir<'a> {
     Temp(&'a tempfile::TempDir),
 }
 
+impl RocCacheDir<'_> {
+    pub fn as_persistent_path(&self) -> Option<&Path> {
+        match self {
+            RocCacheDir::Persistent(path) => Some(path),
+            RocCacheDir::Disallowed => None,
+            #[cfg(test)]
+            RocCacheDir::Temp(_) => None,
+        }
+    }
+}
+
 // Errors in case NixOS users try to use a dynamically linked platform
 #[cfg(target_os = "linux")]
 fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
@@ -43,8 +54,7 @@ fn nixos_error_if_dynamic(url: &str, dest_dir: &Path) {
                         Dynamically linked platforms can't be used on NixOS.\n\n\
                         You can:\n\n\t\
                             - Download the source of the platform and build it locally, like in this example:\n\t  \
-                                https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rocLovesRust.roc.\n\t  \
-                                When building your roc application, you can use the flag `--prebuilt-platform` to prevent the platform from being rebuilt every time.\n\t  \
+                                https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rocLovesC.roc.\n\t  \
                                 For some graphical platforms you may need to use https://github.com/guibou/nixGL.\n\n\t\
                             - Contact the author of the platform to ask them to statically link their platform.\n\t  \
                                 musl can be used to prevent a dynamic dependency on the systems' libc.\n\t  \
@@ -70,6 +80,8 @@ pub fn install_package<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     url: &'a str,
 ) -> Result<(PathBuf, Option<&'a str>), Problem> {
+    use std::io::ErrorKind;
+
     let PackageMetadata {
         cache_subdir,
         content_hash,
@@ -110,10 +122,24 @@ pub fn install_package<'a>(
                     // Now that we've verified the hash, rename the tempdir to the real dir.
 
                     // Create the destination dir's parent dir, since it may not exist yet.
-                    fs::create_dir_all(parent_dir).map_err(Problem::IoErr)?;
+                    fs::create_dir_all(parent_dir).or_else(|err| match err.kind() {
+                        // It's fine if the destination dir's parent already exists
+                        ErrorKind::AlreadyExists => Ok(()),
+                        _ => Err(Problem::IoErr(err)),
+                    })?;
 
                     // This rename should be super cheap if it succeeds - just an inode change.
-                    if fs::rename(tempdir_path, &dest_dir).is_err() {
+                    let rename_err_kind = fs::rename(tempdir_path, &dest_dir)
+                        .err()
+                        .map(|err| err.kind());
+
+                    // It's okay if the rename failed because the destination already existed.
+                    // This could be a race condition between multiple downloads happening concurrently.
+                    // (This has happened in our test suite, for example!) Both downloads should have
+                    // the same content, so the rename failing for that reason should be no problem.
+                    if rename_err_kind.is_some()
+                        && rename_err_kind != Some(ErrorKind::AlreadyExists)
+                    {
                         // If the rename failed, try a recursive copy -
                         // it could have failed due to std::io::ErrorKind::CrossesDevices
                         // (e.g. if the source an destination directories are on different disks)
@@ -122,7 +148,12 @@ pub fn install_package<'a>(
                         // but if that's what happened, this should work!
 
                         // fs_extra::dir::copy needs the destination directory to exist already.
-                        fs::create_dir(&dest_dir).map_err(Problem::IoErr)?;
+                        fs::create_dir(&dest_dir).or_else(|err| match err.kind() {
+                            // It's fine if the destination dir already exists
+                            ErrorKind::AlreadyExists => Ok(()),
+                            _ => Err(Problem::IoErr(err)),
+                        })?;
+
                         fs_extra::dir::copy(
                             tempdir_path,
                             &dest_dir,
@@ -131,7 +162,12 @@ pub fn install_package<'a>(
                                 ..Default::default()
                             },
                         )
-                        .map_err(Problem::FsExtraErr)?;
+                        .or_else(|err| match err.kind {
+                            // It's fine if the destination file already exists; this could be the same
+                            // as the rename race condition mentioned above.
+                            fs_extra::error::ErrorKind::AlreadyExists => Ok(0),
+                            _ => Err(Problem::FsExtraErr(err)),
+                        })?;
                     }
 
                     #[cfg(target_os = "linux")]
@@ -170,7 +206,7 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 
 /// This looks up environment variables, so it should ideally be called once and then cached!
 ///
-/// Returns a path of the form cache_dir_path.join(ROC_CACHE_DIR_NAME).join("packages")
+/// Returns a path of the form cache_dir_path.join(ROC_CACHE_DIR_NAME)
 /// where cache_dir_path is:
 /// - The XDG_CACHE_HOME environment varaible, if it's set.
 /// - Otherwise, ~/.cache on UNIX and %APPDATA% on Windows.
@@ -185,14 +221,10 @@ const ROC_CACHE_DIR_NAME: &str = "roc";
 pub fn roc_cache_dir() -> PathBuf {
     use std::{env, process};
 
-    const PACKAGES_DIR_NAME: &str = "packages";
-
     // Respect XDG, if the system appears to be using it.
     // https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html
     match env::var_os("XDG_CACHE_HOME") {
-        Some(xdg_cache_home) => Path::new(&xdg_cache_home)
-            .join(ROC_CACHE_DIR_NAME)
-            .join(PACKAGES_DIR_NAME),
+        Some(xdg_cache_home) => Path::new(&xdg_cache_home).join(ROC_CACHE_DIR_NAME),
         None => {
             #[cfg(windows)]
             {
@@ -202,9 +234,7 @@ pub fn roc_cache_dir() -> PathBuf {
                     // https://learn.microsoft.com/en-us/windows/deployment/usmt/usmt-recognized-environment-variables
                     env::var_os("APPDATA").or_else(|| env::var_os("CSIDL_APPDATA"))
                 {
-                    Path::new(&appdata)
-                        .join(ROC_CACHE_DIR_NAME)
-                        .join(PACKAGES_DIR_NAME)
+                    Path::new(&appdata).join(ROC_CACHE_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the %APPDATA% or else the %XDG_CACHE_HOME% environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
@@ -215,10 +245,7 @@ pub fn roc_cache_dir() -> PathBuf {
             {
                 // e.g. $HOME/.cache/roc
                 if let Some(home) = env::var_os("HOME") {
-                    Path::new(&home)
-                        .join(".cache")
-                        .join(ROC_CACHE_DIR_NAME)
-                        .join(PACKAGES_DIR_NAME)
+                    Path::new(&home).join(".cache").join(ROC_CACHE_DIR_NAME)
                 } else {
                     eprintln!("roc needs either the $HOME or else the $XDG_CACHE_HOME environment variables set. Please set one of these environment variables and re-run roc!");
                     process::exit(1);
@@ -233,4 +260,10 @@ pub fn roc_cache_dir() -> PathBuf {
 #[cfg(target_family = "wasm")]
 pub fn roc_cache_dir() -> PathBuf {
     PathBuf::from(".cache").join(ROC_CACHE_DIR_NAME)
+}
+
+/// Returns a path of the form roc_cache_dir().join("packages")
+pub fn roc_cache_packages_dir() -> PathBuf {
+    const PACKAGES_DIR_NAME: &str = "packages";
+    roc_cache_dir().join(PACKAGES_DIR_NAME)
 }

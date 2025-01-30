@@ -1,6 +1,6 @@
 
 VERSION 0.6
-FROM rust:1.71.1-slim-buster # make sure to update rust-toolchain.toml too so that everything uses the same rust version
+FROM rust:1.77.2-slim-buster # make sure to update rust-toolchain.toml too so that everything uses the same rust version
 WORKDIR /earthbuild
 
 prep-debian:
@@ -16,24 +16,25 @@ install-zig-llvm:
     ARG ZIG_ARCH
     FROM +install-other-libs
     # zig
-    RUN wget -c https://ziglang.org/download/0.9.1/zig-linux-$ZIG_ARCH-0.9.1.tar.xz --no-check-certificate
-    RUN tar -xf zig-linux-$ZIG_ARCH-0.9.1.tar.xz
-    RUN ln -s /earthbuild/zig-linux-$ZIG_ARCH-0.9.1/zig /bin/zig
+    RUN wget -c https://ziglang.org/download/0.13.0/zig-linux-$ZIG_ARCH-0.13.0.tar.xz --no-check-certificate
+    RUN tar -xf zig-linux-$ZIG_ARCH-0.13.0.tar.xz
+    RUN ln -s /earthbuild/zig-linux-$ZIG_ARCH-0.13.0/zig /bin/zig
     # zig builtins wasm tests
     RUN apt -y install build-essential
     # llvm
     RUN apt -y install lsb-release software-properties-common gnupg
     RUN wget https://apt.llvm.org/llvm.sh
     RUN chmod +x llvm.sh
-    RUN ./llvm.sh 13
-    RUN ln -s /usr/bin/clang-13 /usr/bin/clang
+    RUN ./llvm.sh 18
+    RUN ln -s /usr/bin/clang-18 /usr/bin/clang
     # use lld as linker
-    RUN ln -s /usr/bin/lld-13 /usr/bin/ld.lld
+    RUN ln -s /usr/bin/lld-18 /usr/bin/ld.lld
+    RUN apt -y install libpolly-18-dev # required by llvm-sys crate
     ENV RUSTFLAGS="-C link-arg=-fuse-ld=lld -C target-cpu=native"
     RUN apt -y install libssl-dev
-    RUN OPENSSL_NO_VENDOR=1 cargo install wasm-pack
+    RUN wget https://rustwasm.github.io/wasm-pack/installer/init.sh -O init.sh && sh init.sh
     # sccache
-    RUN cargo install sccache
+    RUN cargo install sccache --locked
     RUN sccache -V
     ENV RUSTC_WRAPPER=/usr/local/cargo/bin/sccache
     ENV SCCACHE_DIR=/earthbuild/sccache_dir
@@ -52,9 +53,7 @@ build-nightly-release:
     COPY --dir .git LICENSE LEGAL_DETAILS ci ./
     # version.txt is used by the CLI: roc --version
     RUN ./ci/write_version.sh
-    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc
-    # strip debug info
-    RUN strip ./target/release-with-lto/roc
+    RUN RUSTFLAGS=$RUSTFLAGS cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
     RUN ./ci/package_release.sh $RELEASE_FOLDER_NAME
     RUN ls
     SAVE ARTIFACT ./$RELEASE_FOLDER_NAME.tar.gz AS LOCAL $RELEASE_FOLDER_NAME.tar.gz

@@ -1,0 +1,6 @@
+app "test" provides [main] to "./platform"
+
+Op := U8 implements [Inspect]
+
+main = Inspect.to_inspector (@Op 1u8) |> Inspect.apply (Inspect.init {})
+#      ^^^^^^^^^^^^^^^^^^^^ Op#Inspect.to_inspector(3): Op -[[#Op_to_inspector(3)]]-> Inspector f where f implements InspectFormatter

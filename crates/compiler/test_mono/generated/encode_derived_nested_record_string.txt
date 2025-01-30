@@ -7,8 +7,9 @@ procedure #Derived.2 (#Derived.3, #Derived.4, #Derived.1):
     let #Derived_gen.8 : Str = CallByName #Derived.5 #Derived.1;
     let #Derived_gen.6 : {Str, Str} = Struct {#Derived_gen.7, #Derived_gen.8};
     let #Derived_gen.5 : List {Str, Str} = Array [#Derived_gen.6];
-    let #Derived_gen.4 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.5;
+    let #Derived_gen.4 : List {Str, Str} = CallByName Test.22 #Derived_gen.5;
     let #Derived_gen.3 : List U8 = CallByName Encode.24 #Derived.3 #Derived_gen.4 #Derived.4;
+    dec #Derived_gen.4;
     ret #Derived_gen.3;
 
 procedure #Derived.5 (#Derived.6):
@@ -17,1469 +18,263 @@ procedure #Derived.5 (#Derived.6):
 
 procedure #Derived.7 (#Derived.8, #Derived.9, #Derived.6):
     let #Derived_gen.17 : Str = "b";
-    let #Derived_gen.18 : Str = CallByName TotallyNotJson.25 #Derived.6;
+    let #Derived_gen.18 : Str = CallByName Test.20 #Derived.6;
     let #Derived_gen.16 : {Str, Str} = Struct {#Derived_gen.17, #Derived_gen.18};
     let #Derived_gen.15 : List {Str, Str} = Array [#Derived_gen.16];
-    let #Derived_gen.14 : List {Str, Str} = CallByName TotallyNotJson.29 #Derived_gen.15;
+    let #Derived_gen.14 : List {Str, Str} = CallByName Test.22 #Derived_gen.15;
     let #Derived_gen.13 : List U8 = CallByName Encode.24 #Derived.8 #Derived_gen.14 #Derived.9;
+    dec #Derived_gen.14;
     ret #Derived_gen.13;
 
-procedure Bool.1 ():
-    let Bool.76 : Int1 = false;
-    ret Bool.76;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.77 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.77;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Bool.2 ():
-    let Bool.75 : Int1 = true;
-    ret Bool.75;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
+procedure Encode.23 (Encode.100):
+    ret Encode.100;
 
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
-
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
-
-procedure Encode.23 (Encode.98):
-    ret Encode.98;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.111 : List U8 = CallByName #Derived.2 Encode.99 Encode.101 Encode.107;
-    ret Encode.111;
-
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.113 : List U8 = CallByName TotallyNotJson.234 Encode.99 Encode.101 Encode.107;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.113 : List U8 = CallByName #Derived.2 Encode.101 Encode.103 Encode.109;
     ret Encode.113;
 
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.115 : List U8 = CallByName #Derived.7 Encode.99 Encode.101 Encode.107;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.115 : List U8 = CallByName Test.68 Encode.101 Encode.103 Encode.109;
     ret Encode.115;
 
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.117 : List U8 = CallByName TotallyNotJson.234 Encode.99 Encode.101 Encode.107;
-    ret Encode.117;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.118 : List U8 = CallByName #Derived.7 Encode.101 Encode.103 Encode.109;
+    ret Encode.118;
 
-procedure Encode.24 (Encode.99, Encode.107, Encode.101):
-    let Encode.120 : List U8 = CallByName TotallyNotJson.182 Encode.99 Encode.101 Encode.107;
-    ret Encode.120;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.121 : List U8 = CallByName Test.68 Encode.101 Encode.103 Encode.109;
+    ret Encode.121;
 
-procedure Encode.26 (Encode.105, Encode.106):
-    let Encode.109 : List U8 = Array [];
-    let Encode.110 : Str = CallByName #Derived.0 Encode.105;
-    let Encode.108 : List U8 = CallByName Encode.24 Encode.109 Encode.110 Encode.106;
-    ret Encode.108;
+procedure Encode.24 (Encode.101, Encode.109, Encode.103):
+    let Encode.126 : List U8 = CallByName Test.57 Encode.101 Encode.103 Encode.109;
+    ret Encode.126;
 
-procedure List.13 (#Attr.2, #Attr.3):
-    let List.689 : List Str = lowlevel ListPrepend #Attr.2 #Attr.3;
-    ret List.689;
+procedure Encode.26 (Encode.107, Encode.108):
+    let Encode.111 : List U8 = Array [];
+    let Encode.112 : Str = CallByName #Derived.0 Encode.107;
+    let Encode.110 : List U8 = CallByName Encode.24 Encode.111 Encode.112 Encode.108;
+    ret Encode.110;
 
-procedure List.18 (List.147, List.148, List.149):
-    let List.575 : U64 = 0i64;
-    let List.576 : U64 = CallByName List.6 List.147;
-    let List.574 : {List U8, U64} = CallByName List.87 List.147 List.148 List.149 List.575 List.576;
-    ret List.574;
-
-procedure List.18 (List.147, List.148, List.149):
-    let List.635 : U64 = 0i64;
-    let List.636 : U64 = CallByName List.6 List.147;
-    let List.634 : {List U8, U64} = CallByName List.87 List.147 List.148 List.149 List.635 List.636;
-    ret List.634;
-
-procedure List.18 (List.147, List.148, List.149):
-    let List.647 : U64 = 0i64;
-    let List.648 : U64 = CallByName List.6 List.147;
-    let List.646 : List U8 = CallByName List.87 List.147 List.148 List.149 List.647 List.648;
-    ret List.646;
-
-procedure List.26 (List.174, List.175, List.176):
-    let List.706 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.98 List.174 List.175 List.176;
-    let List.709 : U8 = 1i64;
-    let List.710 : U8 = GetTagId List.706;
-    let List.711 : Int1 = lowlevel Eq List.709 List.710;
-    if List.711 then
-        let List.177 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.706;
-        ret List.177;
-    else
-        let List.178 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.706;
-        ret List.178;
-
-procedure List.31 (#Attr.2, #Attr.3):
-    let List.671 : List Str = lowlevel ListDropAt #Attr.2 #Attr.3;
-    ret List.671;
-
-procedure List.38 (List.313):
-    let List.679 : U64 = 0i64;
-    let List.678 : List Str = CallByName List.31 List.313 List.679;
-    ret List.678;
-
-procedure List.4 (List.118, List.119):
-    let List.630 : U64 = 1i64;
-    let List.629 : List Str = CallByName List.70 List.118 List.630;
-    let List.628 : List Str = CallByName List.71 List.629 List.119;
-    ret List.628;
-
-procedure List.4 (List.118, List.119):
-    let List.633 : U64 = 1i64;
-    let List.632 : List U8 = CallByName List.70 List.118 List.633;
-    let List.631 : List U8 = CallByName List.71 List.632 List.119;
-    ret List.631;
-
-procedure List.49 (List.392, List.393):
-    let List.698 : U64 = StructAtIndex 0 List.393;
-    let List.699 : U64 = 0i64;
-    let List.696 : Int1 = CallByName Bool.11 List.698 List.699;
-    if List.696 then
-        dec List.392;
-        let List.697 : List U8 = Array [];
-        ret List.697;
-    else
-        let List.693 : U64 = StructAtIndex 1 List.393;
-        let List.694 : U64 = StructAtIndex 0 List.393;
-        let List.692 : List U8 = CallByName List.72 List.392 List.693 List.694;
-        ret List.692;
-
-procedure List.52 (List.407, List.408):
-    let List.409 : U64 = CallByName List.6 List.407;
-    joinpoint List.704 List.410:
-        let List.702 : U64 = 0i64;
-        let List.701 : {U64, U64} = Struct {List.410, List.702};
-        inc List.407;
-        let List.411 : List U8 = CallByName List.49 List.407 List.701;
-        let List.700 : U64 = CallByName Num.75 List.409 List.410;
-        let List.691 : {U64, U64} = Struct {List.700, List.410};
-        let List.412 : List U8 = CallByName List.49 List.407 List.691;
-        let List.690 : {List U8, List U8} = Struct {List.411, List.412};
-        ret List.690;
+procedure List.101 (#Derived_gen.35, #Derived_gen.36, #Derived_gen.37, #Derived_gen.38, #Derived_gen.39):
+    joinpoint List.678 List.175 List.176 List.177 List.178 List.179:
+        let List.680 : Int1 = CallByName Num.22 List.178 List.179;
+        if List.680 then
+            let List.684 : {Str, Str} = CallByName List.66 List.175 List.178;
+            inc List.684;
+            let List.180 : List U8 = CallByName Test.71 List.176 List.684;
+            let List.683 : U64 = 1i64;
+            let List.682 : U64 = CallByName Num.51 List.178 List.683;
+            jump List.678 List.175 List.180 List.177 List.682 List.179;
+        else
+            dec List.175;
+            ret List.176;
     in
-    let List.705 : Int1 = CallByName Num.24 List.409 List.408;
-    if List.705 then
-        jump List.704 List.408;
-    else
-        jump List.704 List.409;
+    inc #Derived_gen.35;
+    jump List.678 #Derived_gen.35 #Derived_gen.36 #Derived_gen.37 #Derived_gen.38 #Derived_gen.39;
+
+procedure List.101 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
+    joinpoint List.704 List.175 List.176 List.177 List.178 List.179:
+        let List.706 : Int1 = CallByName Num.22 List.178 List.179;
+        if List.706 then
+            let List.710 : {Str, Str} = CallByName List.66 List.175 List.178;
+            inc List.710;
+            let List.180 : List U8 = CallByName Test.71 List.176 List.710;
+            let List.709 : U64 = 1i64;
+            let List.708 : U64 = CallByName Num.51 List.178 List.709;
+            jump List.704 List.175 List.180 List.177 List.708 List.179;
+        else
+            dec List.175;
+            ret List.176;
+    in
+    inc #Derived_gen.40;
+    jump List.704 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
+
+procedure List.18 (List.172, List.173, List.174):
+    let List.676 : U64 = 0i64;
+    let List.677 : U64 = CallByName List.6 List.172;
+    let List.675 : List U8 = CallByName List.101 List.172 List.173 List.174 List.676 List.677;
+    ret List.675;
+
+procedure List.18 (List.172, List.173, List.174):
+    let List.702 : U64 = 0i64;
+    let List.703 : U64 = CallByName List.6 List.172;
+    let List.701 : List U8 = CallByName List.101 List.172 List.173 List.174 List.702 List.703;
+    ret List.701;
+
+procedure List.4 (List.136, List.137):
+    let List.723 : U64 = 1i64;
+    let List.722 : List U8 = CallByName List.70 List.136 List.723;
+    let List.721 : List U8 = CallByName List.71 List.722 List.137;
+    ret List.721;
 
 procedure List.6 (#Attr.2):
-    let List.604 : U64 = lowlevel ListLen #Attr.2;
-    ret List.604;
+    let List.700 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.700;
 
 procedure List.6 (#Attr.2):
-    let List.685 : U64 = lowlevel ListLen #Attr.2;
+    let List.726 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.726;
+
+procedure List.66 (#Attr.2, #Attr.3):
+    let List.685 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
     ret List.685;
 
-procedure List.6 (#Attr.2):
-    let List.686 : U64 = lowlevel ListLen #Attr.2;
-    ret List.686;
-
-procedure List.6 (#Attr.2):
-    let List.688 : U64 = lowlevel ListLen #Attr.2;
-    ret List.688;
-
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.584 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.584;
-
-procedure List.66 (#Attr.2, #Attr.3):
-    let List.644 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.644;
-
-procedure List.66 (#Attr.2, #Attr.3):
-    let List.656 : U8 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.656;
-
-procedure List.68 (#Attr.2):
-    let List.681 : List Str = lowlevel ListWithCapacity #Attr.2;
-    ret List.681;
-
-procedure List.68 (#Attr.2):
-    let List.683 : List U8 = lowlevel ListWithCapacity #Attr.2;
-    ret List.683;
+    let List.711 : {Str, Str} = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.711;
 
 procedure List.70 (#Attr.2, #Attr.3):
-    let List.610 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.610;
-
-procedure List.70 (#Attr.2, #Attr.3):
-    let List.627 : List Str = lowlevel ListReserve #Attr.2 #Attr.3;
-    ret List.627;
+    let List.717 : List U8 = lowlevel ListReserve #Attr.2 #Attr.3;
+    ret List.717;
 
 procedure List.71 (#Attr.2, #Attr.3):
-    let List.608 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.608;
-
-procedure List.71 (#Attr.2, #Attr.3):
-    let List.625 : List Str = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
-    ret List.625;
-
-procedure List.72 (#Attr.2, #Attr.3, #Attr.4):
-    let List.695 : List U8 = lowlevel ListSublist #Attr.2 #Attr.3 #Attr.4;
-    ret List.695;
+    let List.715 : List U8 = lowlevel ListAppendUnsafe #Attr.2 #Attr.3;
+    ret List.715;
 
 procedure List.8 (#Attr.2, #Attr.3):
-    let List.660 : List Str = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.660;
-
-procedure List.8 (#Attr.2, #Attr.3):
-    let List.668 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
-    ret List.668;
-
-procedure List.80 (#Derived_gen.35, #Derived_gen.36, #Derived_gen.37, #Derived_gen.38, #Derived_gen.39):
-    joinpoint List.715 List.463 List.464 List.465 List.466 List.467:
-        let List.717 : Int1 = CallByName Num.22 List.466 List.467;
-        if List.717 then
-            let List.726 : U8 = CallByName List.66 List.463 List.466;
-            let List.718 : [C {U64, Int1}, C {U64, Int1}] = CallByName TotallyNotJson.189 List.464 List.726;
-            let List.723 : U8 = 1i64;
-            let List.724 : U8 = GetTagId List.718;
-            let List.725 : Int1 = lowlevel Eq List.723 List.724;
-            if List.725 then
-                let List.468 : {U64, Int1} = UnionAtIndex (Id 1) (Index 0) List.718;
-                let List.721 : U64 = 1i64;
-                let List.720 : U64 = CallByName Num.51 List.466 List.721;
-                jump List.715 List.463 List.468 List.465 List.720 List.467;
-            else
-                dec List.463;
-                let List.469 : {U64, Int1} = UnionAtIndex (Id 0) (Index 0) List.718;
-                let List.722 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) List.469;
-                ret List.722;
-        else
-            dec List.463;
-            let List.716 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) List.464;
-            ret List.716;
-    in
-    jump List.715 #Derived_gen.35 #Derived_gen.36 #Derived_gen.37 #Derived_gen.38 #Derived_gen.39;
-
-procedure List.87 (#Derived_gen.23, #Derived_gen.24, #Derived_gen.25, #Derived_gen.26, #Derived_gen.27):
-    joinpoint List.649 List.150 List.151 List.152 List.153 List.154:
-        let List.651 : Int1 = CallByName Num.22 List.153 List.154;
-        if List.651 then
-            let List.655 : U8 = CallByName List.66 List.150 List.153;
-            let List.155 : List U8 = CallByName TotallyNotJson.215 List.151 List.655;
-            let List.654 : U64 = 1i64;
-            let List.653 : U64 = CallByName Num.51 List.153 List.654;
-            jump List.649 List.150 List.155 List.152 List.653 List.154;
-        else
-            dec List.150;
-            ret List.151;
-    in
-    jump List.649 #Derived_gen.23 #Derived_gen.24 #Derived_gen.25 #Derived_gen.26 #Derived_gen.27;
-
-procedure List.87 (#Derived_gen.40, #Derived_gen.41, #Derived_gen.42, #Derived_gen.43, #Derived_gen.44):
-    joinpoint List.577 List.150 List.151 List.152 List.153 List.154:
-        let List.579 : Int1 = CallByName Num.22 List.153 List.154;
-        if List.579 then
-            let List.583 : {Str, Str} = CallByName List.66 List.150 List.153;
-            inc List.583;
-            let List.155 : {List U8, U64} = CallByName TotallyNotJson.237 List.151 List.583 List.152;
-            let List.582 : U64 = 1i64;
-            let List.581 : U64 = CallByName Num.51 List.153 List.582;
-            jump List.577 List.150 List.155 List.152 List.581 List.154;
-        else
-            dec List.150;
-            ret List.151;
-    in
-    jump List.577 #Derived_gen.40 #Derived_gen.41 #Derived_gen.42 #Derived_gen.43 #Derived_gen.44;
-
-procedure List.87 (#Derived_gen.51, #Derived_gen.52, #Derived_gen.53, #Derived_gen.54, #Derived_gen.55):
-    joinpoint List.637 List.150 List.151 List.152 List.153 List.154:
-        let List.639 : Int1 = CallByName Num.22 List.153 List.154;
-        if List.639 then
-            let List.643 : {Str, Str} = CallByName List.66 List.150 List.153;
-            inc List.643;
-            let List.155 : {List U8, U64} = CallByName TotallyNotJson.237 List.151 List.643 List.152;
-            let List.642 : U64 = 1i64;
-            let List.641 : U64 = CallByName Num.51 List.153 List.642;
-            jump List.637 List.150 List.155 List.152 List.641 List.154;
-        else
-            dec List.150;
-            ret List.151;
-    in
-    jump List.637 #Derived_gen.51 #Derived_gen.52 #Derived_gen.53 #Derived_gen.54 #Derived_gen.55;
-
-procedure List.98 (List.460, List.461, List.462):
-    let List.713 : U64 = 0i64;
-    let List.714 : U64 = CallByName List.6 List.460;
-    let List.712 : [C {U64, Int1}, C {U64, Int1}] = CallByName List.80 List.460 List.461 List.462 List.713 List.714;
-    ret List.712;
+    let List.725 : List U8 = lowlevel ListConcat #Attr.2 #Attr.3;
+    ret List.725;
 
 procedure Num.127 (#Attr.2):
-    let Num.306 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.306;
-
-procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.310 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.310;
-
-procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.307 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.307;
-
-procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.312 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.312;
+    let Num.288 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.288;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.318 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.318;
-
-procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.320 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.320;
+    let Num.290 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.315 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.315;
+    let Num.289 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.289;
 
-procedure Num.75 (#Attr.2, #Attr.3):
-    let Num.319 : U64 = lowlevel NumSubWrap #Attr.2 #Attr.3;
-    ret Num.319;
-
-procedure Num.94 (#Attr.2, #Attr.3):
-    let Num.311 : U64 = lowlevel NumDivCeilUnchecked #Attr.2 #Attr.3;
-    ret Num.311;
+procedure Num.96 (#Attr.2):
+    let Num.287 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.287;
 
 procedure Str.12 (#Attr.2):
-    let Str.310 : List U8 = lowlevel StrToUtf8 #Attr.2;
-    ret Str.310;
+    let Str.398 : List U8 = lowlevel StrToUtf8 #Attr.2;
+    ret Str.398;
 
-procedure Str.4 (#Attr.2, #Attr.3):
-    let Str.313 : Str = lowlevel StrJoinWith #Attr.2 #Attr.3;
-    ret Str.313;
+procedure Str.36 (#Attr.2):
+    let Str.399 : U64 = lowlevel StrCountUtf8Bytes #Attr.2;
+    ret Str.399;
 
-procedure Str.48 (#Attr.2, #Attr.3, #Attr.4):
-    let Str.301 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8Range #Attr.2 #Attr.3 #Attr.4;
-    ret Str.301;
+procedure Str.43 (#Attr.2):
+    let Str.393 : {U64, Str, Int1, U8} = lowlevel StrFromUtf8 #Attr.2;
+    ret Str.393;
 
-procedure Str.55 (#Attr.2):
-    let Str.316 : List Str = lowlevel StrGraphemes #Attr.2;
-    ret Str.316;
-
-procedure Str.9 (Str.80):
-    let Str.299 : U64 = 0i64;
-    let Str.300 : U64 = CallByName List.6 Str.80;
-    let Str.81 : {U64, Str, Int1, U8} = CallByName Str.48 Str.80 Str.299 Str.300;
-    let Str.296 : Int1 = StructAtIndex 2 Str.81;
-    if Str.296 then
-        let Str.298 : Str = StructAtIndex 1 Str.81;
-        let Str.297 : [C {U64, U8}, C Str] = TagId(1) Str.298;
-        ret Str.297;
+procedure Str.9 (Str.79):
+    let Str.80 : {U64, Str, Int1, U8} = CallByName Str.43 Str.79;
+    let Str.390 : Int1 = StructAtIndex 2 Str.80;
+    if Str.390 then
+        let Str.392 : Str = StructAtIndex 1 Str.80;
+        let Str.391 : [C {U64, U8}, C Str] = TagId(1) Str.392;
+        ret Str.391;
     else
-        let Str.294 : U8 = StructAtIndex 3 Str.81;
-        let Str.295 : U64 = StructAtIndex 0 Str.81;
-        let #Derived_gen.58 : Str = StructAtIndex 1 Str.81;
-        dec #Derived_gen.58;
-        let Str.293 : {U64, U8} = Struct {Str.295, Str.294};
-        let Str.292 : [C {U64, U8}, C Str] = TagId(0) Str.293;
-        ret Str.292;
+        let Str.388 : U64 = StructAtIndex 0 Str.80;
+        let Str.389 : U8 = StructAtIndex 3 Str.80;
+        let #Derived_gen.45 : Str = StructAtIndex 1 Str.80;
+        dec #Derived_gen.45;
+        let Str.387 : {U64, U8} = Struct {Str.388, Str.389};
+        let Str.385 : [C {U64, U8}, C Str] = TagId(0) Str.387;
+        ret Str.385;
 
-procedure TotallyNotJson.100 (TotallyNotJson.850):
-    let TotallyNotJson.1830 : Str = "a";
-    let TotallyNotJson.1831 : Int1 = lowlevel Eq TotallyNotJson.1830 TotallyNotJson.850;
-    dec TotallyNotJson.1830;
-    if TotallyNotJson.1831 then
-        dec TotallyNotJson.850;
-        let TotallyNotJson.1753 : Str = "A";
-        ret TotallyNotJson.1753;
-    else
-        let TotallyNotJson.1828 : Str = "b";
-        let TotallyNotJson.1829 : Int1 = lowlevel Eq TotallyNotJson.1828 TotallyNotJson.850;
-        dec TotallyNotJson.1828;
-        if TotallyNotJson.1829 then
-            dec TotallyNotJson.850;
-            let TotallyNotJson.1754 : Str = "B";
-            ret TotallyNotJson.1754;
-        else
-            let TotallyNotJson.1826 : Str = "c";
-            let TotallyNotJson.1827 : Int1 = lowlevel Eq TotallyNotJson.1826 TotallyNotJson.850;
-            dec TotallyNotJson.1826;
-            if TotallyNotJson.1827 then
-                dec TotallyNotJson.850;
-                let TotallyNotJson.1755 : Str = "C";
-                ret TotallyNotJson.1755;
-            else
-                let TotallyNotJson.1824 : Str = "d";
-                let TotallyNotJson.1825 : Int1 = lowlevel Eq TotallyNotJson.1824 TotallyNotJson.850;
-                dec TotallyNotJson.1824;
-                if TotallyNotJson.1825 then
-                    dec TotallyNotJson.850;
-                    let TotallyNotJson.1756 : Str = "D";
-                    ret TotallyNotJson.1756;
-                else
-                    let TotallyNotJson.1822 : Str = "e";
-                    let TotallyNotJson.1823 : Int1 = lowlevel Eq TotallyNotJson.1822 TotallyNotJson.850;
-                    dec TotallyNotJson.1822;
-                    if TotallyNotJson.1823 then
-                        dec TotallyNotJson.850;
-                        let TotallyNotJson.1757 : Str = "E";
-                        ret TotallyNotJson.1757;
-                    else
-                        let TotallyNotJson.1820 : Str = "f";
-                        let TotallyNotJson.1821 : Int1 = lowlevel Eq TotallyNotJson.1820 TotallyNotJson.850;
-                        dec TotallyNotJson.1820;
-                        if TotallyNotJson.1821 then
-                            dec TotallyNotJson.850;
-                            let TotallyNotJson.1758 : Str = "F";
-                            ret TotallyNotJson.1758;
-                        else
-                            let TotallyNotJson.1818 : Str = "g";
-                            let TotallyNotJson.1819 : Int1 = lowlevel Eq TotallyNotJson.1818 TotallyNotJson.850;
-                            dec TotallyNotJson.1818;
-                            if TotallyNotJson.1819 then
-                                dec TotallyNotJson.850;
-                                let TotallyNotJson.1759 : Str = "G";
-                                ret TotallyNotJson.1759;
-                            else
-                                let TotallyNotJson.1816 : Str = "h";
-                                let TotallyNotJson.1817 : Int1 = lowlevel Eq TotallyNotJson.1816 TotallyNotJson.850;
-                                dec TotallyNotJson.1816;
-                                if TotallyNotJson.1817 then
-                                    dec TotallyNotJson.850;
-                                    let TotallyNotJson.1760 : Str = "H";
-                                    ret TotallyNotJson.1760;
-                                else
-                                    let TotallyNotJson.1814 : Str = "i";
-                                    let TotallyNotJson.1815 : Int1 = lowlevel Eq TotallyNotJson.1814 TotallyNotJson.850;
-                                    dec TotallyNotJson.1814;
-                                    if TotallyNotJson.1815 then
-                                        dec TotallyNotJson.850;
-                                        let TotallyNotJson.1761 : Str = "I";
-                                        ret TotallyNotJson.1761;
-                                    else
-                                        let TotallyNotJson.1812 : Str = "j";
-                                        let TotallyNotJson.1813 : Int1 = lowlevel Eq TotallyNotJson.1812 TotallyNotJson.850;
-                                        dec TotallyNotJson.1812;
-                                        if TotallyNotJson.1813 then
-                                            dec TotallyNotJson.850;
-                                            let TotallyNotJson.1762 : Str = "J";
-                                            ret TotallyNotJson.1762;
-                                        else
-                                            let TotallyNotJson.1810 : Str = "k";
-                                            let TotallyNotJson.1811 : Int1 = lowlevel Eq TotallyNotJson.1810 TotallyNotJson.850;
-                                            dec TotallyNotJson.1810;
-                                            if TotallyNotJson.1811 then
-                                                dec TotallyNotJson.850;
-                                                let TotallyNotJson.1763 : Str = "K";
-                                                ret TotallyNotJson.1763;
-                                            else
-                                                let TotallyNotJson.1808 : Str = "l";
-                                                let TotallyNotJson.1809 : Int1 = lowlevel Eq TotallyNotJson.1808 TotallyNotJson.850;
-                                                dec TotallyNotJson.1808;
-                                                if TotallyNotJson.1809 then
-                                                    dec TotallyNotJson.850;
-                                                    let TotallyNotJson.1764 : Str = "L";
-                                                    ret TotallyNotJson.1764;
-                                                else
-                                                    let TotallyNotJson.1806 : Str = "m";
-                                                    let TotallyNotJson.1807 : Int1 = lowlevel Eq TotallyNotJson.1806 TotallyNotJson.850;
-                                                    dec TotallyNotJson.1806;
-                                                    if TotallyNotJson.1807 then
-                                                        dec TotallyNotJson.850;
-                                                        let TotallyNotJson.1765 : Str = "M";
-                                                        ret TotallyNotJson.1765;
-                                                    else
-                                                        let TotallyNotJson.1804 : Str = "n";
-                                                        let TotallyNotJson.1805 : Int1 = lowlevel Eq TotallyNotJson.1804 TotallyNotJson.850;
-                                                        dec TotallyNotJson.1804;
-                                                        if TotallyNotJson.1805 then
-                                                            dec TotallyNotJson.850;
-                                                            let TotallyNotJson.1766 : Str = "N";
-                                                            ret TotallyNotJson.1766;
-                                                        else
-                                                            let TotallyNotJson.1802 : Str = "o";
-                                                            let TotallyNotJson.1803 : Int1 = lowlevel Eq TotallyNotJson.1802 TotallyNotJson.850;
-                                                            dec TotallyNotJson.1802;
-                                                            if TotallyNotJson.1803 then
-                                                                dec TotallyNotJson.850;
-                                                                let TotallyNotJson.1767 : Str = "O";
-                                                                ret TotallyNotJson.1767;
-                                                            else
-                                                                let TotallyNotJson.1800 : Str = "p";
-                                                                let TotallyNotJson.1801 : Int1 = lowlevel Eq TotallyNotJson.1800 TotallyNotJson.850;
-                                                                dec TotallyNotJson.1800;
-                                                                if TotallyNotJson.1801 then
-                                                                    dec TotallyNotJson.850;
-                                                                    let TotallyNotJson.1768 : Str = "P";
-                                                                    ret TotallyNotJson.1768;
-                                                                else
-                                                                    let TotallyNotJson.1798 : Str = "q";
-                                                                    let TotallyNotJson.1799 : Int1 = lowlevel Eq TotallyNotJson.1798 TotallyNotJson.850;
-                                                                    dec TotallyNotJson.1798;
-                                                                    if TotallyNotJson.1799 then
-                                                                        dec TotallyNotJson.850;
-                                                                        let TotallyNotJson.1769 : Str = "Q";
-                                                                        ret TotallyNotJson.1769;
-                                                                    else
-                                                                        let TotallyNotJson.1796 : Str = "r";
-                                                                        let TotallyNotJson.1797 : Int1 = lowlevel Eq TotallyNotJson.1796 TotallyNotJson.850;
-                                                                        dec TotallyNotJson.1796;
-                                                                        if TotallyNotJson.1797 then
-                                                                            dec TotallyNotJson.850;
-                                                                            let TotallyNotJson.1770 : Str = "R";
-                                                                            ret TotallyNotJson.1770;
-                                                                        else
-                                                                            let TotallyNotJson.1794 : Str = "s";
-                                                                            let TotallyNotJson.1795 : Int1 = lowlevel Eq TotallyNotJson.1794 TotallyNotJson.850;
-                                                                            dec TotallyNotJson.1794;
-                                                                            if TotallyNotJson.1795 then
-                                                                                dec TotallyNotJson.850;
-                                                                                let TotallyNotJson.1771 : Str = "S";
-                                                                                ret TotallyNotJson.1771;
-                                                                            else
-                                                                                let TotallyNotJson.1792 : Str = "t";
-                                                                                let TotallyNotJson.1793 : Int1 = lowlevel Eq TotallyNotJson.1792 TotallyNotJson.850;
-                                                                                dec TotallyNotJson.1792;
-                                                                                if TotallyNotJson.1793 then
-                                                                                    dec TotallyNotJson.850;
-                                                                                    let TotallyNotJson.1772 : Str = "T";
-                                                                                    ret TotallyNotJson.1772;
-                                                                                else
-                                                                                    let TotallyNotJson.1790 : Str = "u";
-                                                                                    let TotallyNotJson.1791 : Int1 = lowlevel Eq TotallyNotJson.1790 TotallyNotJson.850;
-                                                                                    dec TotallyNotJson.1790;
-                                                                                    if TotallyNotJson.1791 then
-                                                                                        dec TotallyNotJson.850;
-                                                                                        let TotallyNotJson.1773 : Str = "U";
-                                                                                        ret TotallyNotJson.1773;
-                                                                                    else
-                                                                                        let TotallyNotJson.1788 : Str = "v";
-                                                                                        let TotallyNotJson.1789 : Int1 = lowlevel Eq TotallyNotJson.1788 TotallyNotJson.850;
-                                                                                        dec TotallyNotJson.1788;
-                                                                                        if TotallyNotJson.1789 then
-                                                                                            dec TotallyNotJson.850;
-                                                                                            let TotallyNotJson.1774 : Str = "V";
-                                                                                            ret TotallyNotJson.1774;
-                                                                                        else
-                                                                                            let TotallyNotJson.1786 : Str = "w";
-                                                                                            let TotallyNotJson.1787 : Int1 = lowlevel Eq TotallyNotJson.1786 TotallyNotJson.850;
-                                                                                            dec TotallyNotJson.1786;
-                                                                                            if TotallyNotJson.1787 then
-                                                                                                dec TotallyNotJson.850;
-                                                                                                let TotallyNotJson.1775 : Str = "W";
-                                                                                                ret TotallyNotJson.1775;
-                                                                                            else
-                                                                                                let TotallyNotJson.1784 : Str = "x";
-                                                                                                let TotallyNotJson.1785 : Int1 = lowlevel Eq TotallyNotJson.1784 TotallyNotJson.850;
-                                                                                                dec TotallyNotJson.1784;
-                                                                                                if TotallyNotJson.1785 then
-                                                                                                    dec TotallyNotJson.850;
-                                                                                                    let TotallyNotJson.1776 : Str = "X";
-                                                                                                    ret TotallyNotJson.1776;
-                                                                                                else
-                                                                                                    let TotallyNotJson.1782 : Str = "y";
-                                                                                                    let TotallyNotJson.1783 : Int1 = lowlevel Eq TotallyNotJson.1782 TotallyNotJson.850;
-                                                                                                    dec TotallyNotJson.1782;
-                                                                                                    if TotallyNotJson.1783 then
-                                                                                                        dec TotallyNotJson.850;
-                                                                                                        let TotallyNotJson.1777 : Str = "Y";
-                                                                                                        ret TotallyNotJson.1777;
-                                                                                                    else
-                                                                                                        let TotallyNotJson.1780 : Str = "z";
-                                                                                                        let TotallyNotJson.1781 : Int1 = lowlevel Eq TotallyNotJson.1780 TotallyNotJson.850;
-                                                                                                        dec TotallyNotJson.1780;
-                                                                                                        if TotallyNotJson.1781 then
-                                                                                                            dec TotallyNotJson.850;
-                                                                                                            let TotallyNotJson.1778 : Str = "Z";
-                                                                                                            ret TotallyNotJson.1778;
-                                                                                                        else
-                                                                                                            ret TotallyNotJson.850;
+procedure Test.20 (Test.56):
+    let Test.325 : Str = CallByName Encode.23 Test.56;
+    ret Test.325;
 
-procedure TotallyNotJson.101 (TotallyNotJson.851):
-    let TotallyNotJson.1654 : Str = "A";
-    let TotallyNotJson.1655 : Int1 = lowlevel Eq TotallyNotJson.1654 TotallyNotJson.851;
-    dec TotallyNotJson.1654;
-    if TotallyNotJson.1655 then
-        dec TotallyNotJson.851;
-        let TotallyNotJson.1577 : Str = "a";
-        ret TotallyNotJson.1577;
-    else
-        let TotallyNotJson.1652 : Str = "B";
-        let TotallyNotJson.1653 : Int1 = lowlevel Eq TotallyNotJson.1652 TotallyNotJson.851;
-        dec TotallyNotJson.1652;
-        if TotallyNotJson.1653 then
-            dec TotallyNotJson.851;
-            let TotallyNotJson.1578 : Str = "b";
-            ret TotallyNotJson.1578;
-        else
-            let TotallyNotJson.1650 : Str = "C";
-            let TotallyNotJson.1651 : Int1 = lowlevel Eq TotallyNotJson.1650 TotallyNotJson.851;
-            dec TotallyNotJson.1650;
-            if TotallyNotJson.1651 then
-                dec TotallyNotJson.851;
-                let TotallyNotJson.1579 : Str = "c";
-                ret TotallyNotJson.1579;
-            else
-                let TotallyNotJson.1648 : Str = "D";
-                let TotallyNotJson.1649 : Int1 = lowlevel Eq TotallyNotJson.1648 TotallyNotJson.851;
-                dec TotallyNotJson.1648;
-                if TotallyNotJson.1649 then
-                    dec TotallyNotJson.851;
-                    let TotallyNotJson.1580 : Str = "d";
-                    ret TotallyNotJson.1580;
-                else
-                    let TotallyNotJson.1646 : Str = "E";
-                    let TotallyNotJson.1647 : Int1 = lowlevel Eq TotallyNotJson.1646 TotallyNotJson.851;
-                    dec TotallyNotJson.1646;
-                    if TotallyNotJson.1647 then
-                        dec TotallyNotJson.851;
-                        let TotallyNotJson.1581 : Str = "e";
-                        ret TotallyNotJson.1581;
-                    else
-                        let TotallyNotJson.1644 : Str = "F";
-                        let TotallyNotJson.1645 : Int1 = lowlevel Eq TotallyNotJson.1644 TotallyNotJson.851;
-                        dec TotallyNotJson.1644;
-                        if TotallyNotJson.1645 then
-                            dec TotallyNotJson.851;
-                            let TotallyNotJson.1582 : Str = "f";
-                            ret TotallyNotJson.1582;
-                        else
-                            let TotallyNotJson.1642 : Str = "G";
-                            let TotallyNotJson.1643 : Int1 = lowlevel Eq TotallyNotJson.1642 TotallyNotJson.851;
-                            dec TotallyNotJson.1642;
-                            if TotallyNotJson.1643 then
-                                dec TotallyNotJson.851;
-                                let TotallyNotJson.1583 : Str = "g";
-                                ret TotallyNotJson.1583;
-                            else
-                                let TotallyNotJson.1640 : Str = "H";
-                                let TotallyNotJson.1641 : Int1 = lowlevel Eq TotallyNotJson.1640 TotallyNotJson.851;
-                                dec TotallyNotJson.1640;
-                                if TotallyNotJson.1641 then
-                                    dec TotallyNotJson.851;
-                                    let TotallyNotJson.1584 : Str = "h";
-                                    ret TotallyNotJson.1584;
-                                else
-                                    let TotallyNotJson.1638 : Str = "I";
-                                    let TotallyNotJson.1639 : Int1 = lowlevel Eq TotallyNotJson.1638 TotallyNotJson.851;
-                                    dec TotallyNotJson.1638;
-                                    if TotallyNotJson.1639 then
-                                        dec TotallyNotJson.851;
-                                        let TotallyNotJson.1585 : Str = "i";
-                                        ret TotallyNotJson.1585;
-                                    else
-                                        let TotallyNotJson.1636 : Str = "J";
-                                        let TotallyNotJson.1637 : Int1 = lowlevel Eq TotallyNotJson.1636 TotallyNotJson.851;
-                                        dec TotallyNotJson.1636;
-                                        if TotallyNotJson.1637 then
-                                            dec TotallyNotJson.851;
-                                            let TotallyNotJson.1586 : Str = "j";
-                                            ret TotallyNotJson.1586;
-                                        else
-                                            let TotallyNotJson.1634 : Str = "K";
-                                            let TotallyNotJson.1635 : Int1 = lowlevel Eq TotallyNotJson.1634 TotallyNotJson.851;
-                                            dec TotallyNotJson.1634;
-                                            if TotallyNotJson.1635 then
-                                                dec TotallyNotJson.851;
-                                                let TotallyNotJson.1587 : Str = "k";
-                                                ret TotallyNotJson.1587;
-                                            else
-                                                let TotallyNotJson.1632 : Str = "L";
-                                                let TotallyNotJson.1633 : Int1 = lowlevel Eq TotallyNotJson.1632 TotallyNotJson.851;
-                                                dec TotallyNotJson.1632;
-                                                if TotallyNotJson.1633 then
-                                                    dec TotallyNotJson.851;
-                                                    let TotallyNotJson.1588 : Str = "l";
-                                                    ret TotallyNotJson.1588;
-                                                else
-                                                    let TotallyNotJson.1630 : Str = "M";
-                                                    let TotallyNotJson.1631 : Int1 = lowlevel Eq TotallyNotJson.1630 TotallyNotJson.851;
-                                                    dec TotallyNotJson.1630;
-                                                    if TotallyNotJson.1631 then
-                                                        dec TotallyNotJson.851;
-                                                        let TotallyNotJson.1589 : Str = "m";
-                                                        ret TotallyNotJson.1589;
-                                                    else
-                                                        let TotallyNotJson.1628 : Str = "N";
-                                                        let TotallyNotJson.1629 : Int1 = lowlevel Eq TotallyNotJson.1628 TotallyNotJson.851;
-                                                        dec TotallyNotJson.1628;
-                                                        if TotallyNotJson.1629 then
-                                                            dec TotallyNotJson.851;
-                                                            let TotallyNotJson.1590 : Str = "n";
-                                                            ret TotallyNotJson.1590;
-                                                        else
-                                                            let TotallyNotJson.1626 : Str = "O";
-                                                            let TotallyNotJson.1627 : Int1 = lowlevel Eq TotallyNotJson.1626 TotallyNotJson.851;
-                                                            dec TotallyNotJson.1626;
-                                                            if TotallyNotJson.1627 then
-                                                                dec TotallyNotJson.851;
-                                                                let TotallyNotJson.1591 : Str = "o";
-                                                                ret TotallyNotJson.1591;
-                                                            else
-                                                                let TotallyNotJson.1624 : Str = "P";
-                                                                let TotallyNotJson.1625 : Int1 = lowlevel Eq TotallyNotJson.1624 TotallyNotJson.851;
-                                                                dec TotallyNotJson.1624;
-                                                                if TotallyNotJson.1625 then
-                                                                    dec TotallyNotJson.851;
-                                                                    let TotallyNotJson.1592 : Str = "p";
-                                                                    ret TotallyNotJson.1592;
-                                                                else
-                                                                    let TotallyNotJson.1622 : Str = "Q";
-                                                                    let TotallyNotJson.1623 : Int1 = lowlevel Eq TotallyNotJson.1622 TotallyNotJson.851;
-                                                                    dec TotallyNotJson.1622;
-                                                                    if TotallyNotJson.1623 then
-                                                                        dec TotallyNotJson.851;
-                                                                        let TotallyNotJson.1593 : Str = "q";
-                                                                        ret TotallyNotJson.1593;
-                                                                    else
-                                                                        let TotallyNotJson.1620 : Str = "R";
-                                                                        let TotallyNotJson.1621 : Int1 = lowlevel Eq TotallyNotJson.1620 TotallyNotJson.851;
-                                                                        dec TotallyNotJson.1620;
-                                                                        if TotallyNotJson.1621 then
-                                                                            dec TotallyNotJson.851;
-                                                                            let TotallyNotJson.1594 : Str = "r";
-                                                                            ret TotallyNotJson.1594;
-                                                                        else
-                                                                            let TotallyNotJson.1618 : Str = "S";
-                                                                            let TotallyNotJson.1619 : Int1 = lowlevel Eq TotallyNotJson.1618 TotallyNotJson.851;
-                                                                            dec TotallyNotJson.1618;
-                                                                            if TotallyNotJson.1619 then
-                                                                                dec TotallyNotJson.851;
-                                                                                let TotallyNotJson.1595 : Str = "s";
-                                                                                ret TotallyNotJson.1595;
-                                                                            else
-                                                                                let TotallyNotJson.1616 : Str = "T";
-                                                                                let TotallyNotJson.1617 : Int1 = lowlevel Eq TotallyNotJson.1616 TotallyNotJson.851;
-                                                                                dec TotallyNotJson.1616;
-                                                                                if TotallyNotJson.1617 then
-                                                                                    dec TotallyNotJson.851;
-                                                                                    let TotallyNotJson.1596 : Str = "t";
-                                                                                    ret TotallyNotJson.1596;
-                                                                                else
-                                                                                    let TotallyNotJson.1614 : Str = "U";
-                                                                                    let TotallyNotJson.1615 : Int1 = lowlevel Eq TotallyNotJson.1614 TotallyNotJson.851;
-                                                                                    dec TotallyNotJson.1614;
-                                                                                    if TotallyNotJson.1615 then
-                                                                                        dec TotallyNotJson.851;
-                                                                                        let TotallyNotJson.1597 : Str = "u";
-                                                                                        ret TotallyNotJson.1597;
-                                                                                    else
-                                                                                        let TotallyNotJson.1612 : Str = "V";
-                                                                                        let TotallyNotJson.1613 : Int1 = lowlevel Eq TotallyNotJson.1612 TotallyNotJson.851;
-                                                                                        dec TotallyNotJson.1612;
-                                                                                        if TotallyNotJson.1613 then
-                                                                                            dec TotallyNotJson.851;
-                                                                                            let TotallyNotJson.1598 : Str = "v";
-                                                                                            ret TotallyNotJson.1598;
-                                                                                        else
-                                                                                            let TotallyNotJson.1610 : Str = "W";
-                                                                                            let TotallyNotJson.1611 : Int1 = lowlevel Eq TotallyNotJson.1610 TotallyNotJson.851;
-                                                                                            dec TotallyNotJson.1610;
-                                                                                            if TotallyNotJson.1611 then
-                                                                                                dec TotallyNotJson.851;
-                                                                                                let TotallyNotJson.1599 : Str = "w";
-                                                                                                ret TotallyNotJson.1599;
-                                                                                            else
-                                                                                                let TotallyNotJson.1608 : Str = "X";
-                                                                                                let TotallyNotJson.1609 : Int1 = lowlevel Eq TotallyNotJson.1608 TotallyNotJson.851;
-                                                                                                dec TotallyNotJson.1608;
-                                                                                                if TotallyNotJson.1609 then
-                                                                                                    dec TotallyNotJson.851;
-                                                                                                    let TotallyNotJson.1600 : Str = "x";
-                                                                                                    ret TotallyNotJson.1600;
-                                                                                                else
-                                                                                                    let TotallyNotJson.1606 : Str = "Y";
-                                                                                                    let TotallyNotJson.1607 : Int1 = lowlevel Eq TotallyNotJson.1606 TotallyNotJson.851;
-                                                                                                    dec TotallyNotJson.1606;
-                                                                                                    if TotallyNotJson.1607 then
-                                                                                                        dec TotallyNotJson.851;
-                                                                                                        let TotallyNotJson.1601 : Str = "y";
-                                                                                                        ret TotallyNotJson.1601;
-                                                                                                    else
-                                                                                                        let TotallyNotJson.1604 : Str = "Z";
-                                                                                                        let TotallyNotJson.1605 : Int1 = lowlevel Eq TotallyNotJson.1604 TotallyNotJson.851;
-                                                                                                        dec TotallyNotJson.1604;
-                                                                                                        if TotallyNotJson.1605 then
-                                                                                                            dec TotallyNotJson.851;
-                                                                                                            let TotallyNotJson.1602 : Str = "z";
-                                                                                                            ret TotallyNotJson.1602;
-                                                                                                        else
-                                                                                                            ret TotallyNotJson.851;
+procedure Test.22 (Test.67):
+    let Test.261 : List {Str, Str} = CallByName Encode.23 Test.67;
+    ret Test.261;
 
-procedure TotallyNotJson.102 (TotallyNotJson.852):
-    let TotallyNotJson.1741 : Str = "A";
-    let TotallyNotJson.1742 : Int1 = lowlevel Eq TotallyNotJson.1741 TotallyNotJson.852;
-    dec TotallyNotJson.1741;
-    if TotallyNotJson.1742 then
-        dec TotallyNotJson.852;
-        let TotallyNotJson.1664 : Int1 = CallByName Bool.2;
-        ret TotallyNotJson.1664;
-    else
-        let TotallyNotJson.1739 : Str = "B";
-        let TotallyNotJson.1740 : Int1 = lowlevel Eq TotallyNotJson.1739 TotallyNotJson.852;
-        dec TotallyNotJson.1739;
-        if TotallyNotJson.1740 then
-            dec TotallyNotJson.852;
-            let TotallyNotJson.1665 : Int1 = CallByName Bool.2;
-            ret TotallyNotJson.1665;
-        else
-            let TotallyNotJson.1737 : Str = "C";
-            let TotallyNotJson.1738 : Int1 = lowlevel Eq TotallyNotJson.1737 TotallyNotJson.852;
-            dec TotallyNotJson.1737;
-            if TotallyNotJson.1738 then
-                dec TotallyNotJson.852;
-                let TotallyNotJson.1666 : Int1 = CallByName Bool.2;
-                ret TotallyNotJson.1666;
-            else
-                let TotallyNotJson.1735 : Str = "D";
-                let TotallyNotJson.1736 : Int1 = lowlevel Eq TotallyNotJson.1735 TotallyNotJson.852;
-                dec TotallyNotJson.1735;
-                if TotallyNotJson.1736 then
-                    dec TotallyNotJson.852;
-                    let TotallyNotJson.1667 : Int1 = CallByName Bool.2;
-                    ret TotallyNotJson.1667;
-                else
-                    let TotallyNotJson.1733 : Str = "E";
-                    let TotallyNotJson.1734 : Int1 = lowlevel Eq TotallyNotJson.1733 TotallyNotJson.852;
-                    dec TotallyNotJson.1733;
-                    if TotallyNotJson.1734 then
-                        dec TotallyNotJson.852;
-                        let TotallyNotJson.1668 : Int1 = CallByName Bool.2;
-                        ret TotallyNotJson.1668;
-                    else
-                        let TotallyNotJson.1731 : Str = "F";
-                        let TotallyNotJson.1732 : Int1 = lowlevel Eq TotallyNotJson.1731 TotallyNotJson.852;
-                        dec TotallyNotJson.1731;
-                        if TotallyNotJson.1732 then
-                            dec TotallyNotJson.852;
-                            let TotallyNotJson.1669 : Int1 = CallByName Bool.2;
-                            ret TotallyNotJson.1669;
-                        else
-                            let TotallyNotJson.1729 : Str = "G";
-                            let TotallyNotJson.1730 : Int1 = lowlevel Eq TotallyNotJson.1729 TotallyNotJson.852;
-                            dec TotallyNotJson.1729;
-                            if TotallyNotJson.1730 then
-                                dec TotallyNotJson.852;
-                                let TotallyNotJson.1670 : Int1 = CallByName Bool.2;
-                                ret TotallyNotJson.1670;
-                            else
-                                let TotallyNotJson.1727 : Str = "H";
-                                let TotallyNotJson.1728 : Int1 = lowlevel Eq TotallyNotJson.1727 TotallyNotJson.852;
-                                dec TotallyNotJson.1727;
-                                if TotallyNotJson.1728 then
-                                    dec TotallyNotJson.852;
-                                    let TotallyNotJson.1671 : Int1 = CallByName Bool.2;
-                                    ret TotallyNotJson.1671;
-                                else
-                                    let TotallyNotJson.1725 : Str = "I";
-                                    let TotallyNotJson.1726 : Int1 = lowlevel Eq TotallyNotJson.1725 TotallyNotJson.852;
-                                    dec TotallyNotJson.1725;
-                                    if TotallyNotJson.1726 then
-                                        dec TotallyNotJson.852;
-                                        let TotallyNotJson.1672 : Int1 = CallByName Bool.2;
-                                        ret TotallyNotJson.1672;
-                                    else
-                                        let TotallyNotJson.1723 : Str = "J";
-                                        let TotallyNotJson.1724 : Int1 = lowlevel Eq TotallyNotJson.1723 TotallyNotJson.852;
-                                        dec TotallyNotJson.1723;
-                                        if TotallyNotJson.1724 then
-                                            dec TotallyNotJson.852;
-                                            let TotallyNotJson.1673 : Int1 = CallByName Bool.2;
-                                            ret TotallyNotJson.1673;
-                                        else
-                                            let TotallyNotJson.1721 : Str = "K";
-                                            let TotallyNotJson.1722 : Int1 = lowlevel Eq TotallyNotJson.1721 TotallyNotJson.852;
-                                            dec TotallyNotJson.1721;
-                                            if TotallyNotJson.1722 then
-                                                dec TotallyNotJson.852;
-                                                let TotallyNotJson.1674 : Int1 = CallByName Bool.2;
-                                                ret TotallyNotJson.1674;
-                                            else
-                                                let TotallyNotJson.1719 : Str = "L";
-                                                let TotallyNotJson.1720 : Int1 = lowlevel Eq TotallyNotJson.1719 TotallyNotJson.852;
-                                                dec TotallyNotJson.1719;
-                                                if TotallyNotJson.1720 then
-                                                    dec TotallyNotJson.852;
-                                                    let TotallyNotJson.1675 : Int1 = CallByName Bool.2;
-                                                    ret TotallyNotJson.1675;
-                                                else
-                                                    let TotallyNotJson.1717 : Str = "M";
-                                                    let TotallyNotJson.1718 : Int1 = lowlevel Eq TotallyNotJson.1717 TotallyNotJson.852;
-                                                    dec TotallyNotJson.1717;
-                                                    if TotallyNotJson.1718 then
-                                                        dec TotallyNotJson.852;
-                                                        let TotallyNotJson.1676 : Int1 = CallByName Bool.2;
-                                                        ret TotallyNotJson.1676;
-                                                    else
-                                                        let TotallyNotJson.1715 : Str = "N";
-                                                        let TotallyNotJson.1716 : Int1 = lowlevel Eq TotallyNotJson.1715 TotallyNotJson.852;
-                                                        dec TotallyNotJson.1715;
-                                                        if TotallyNotJson.1716 then
-                                                            dec TotallyNotJson.852;
-                                                            let TotallyNotJson.1677 : Int1 = CallByName Bool.2;
-                                                            ret TotallyNotJson.1677;
-                                                        else
-                                                            let TotallyNotJson.1713 : Str = "O";
-                                                            let TotallyNotJson.1714 : Int1 = lowlevel Eq TotallyNotJson.1713 TotallyNotJson.852;
-                                                            dec TotallyNotJson.1713;
-                                                            if TotallyNotJson.1714 then
-                                                                dec TotallyNotJson.852;
-                                                                let TotallyNotJson.1678 : Int1 = CallByName Bool.2;
-                                                                ret TotallyNotJson.1678;
-                                                            else
-                                                                let TotallyNotJson.1711 : Str = "P";
-                                                                let TotallyNotJson.1712 : Int1 = lowlevel Eq TotallyNotJson.1711 TotallyNotJson.852;
-                                                                dec TotallyNotJson.1711;
-                                                                if TotallyNotJson.1712 then
-                                                                    dec TotallyNotJson.852;
-                                                                    let TotallyNotJson.1679 : Int1 = CallByName Bool.2;
-                                                                    ret TotallyNotJson.1679;
-                                                                else
-                                                                    let TotallyNotJson.1709 : Str = "Q";
-                                                                    let TotallyNotJson.1710 : Int1 = lowlevel Eq TotallyNotJson.1709 TotallyNotJson.852;
-                                                                    dec TotallyNotJson.1709;
-                                                                    if TotallyNotJson.1710 then
-                                                                        dec TotallyNotJson.852;
-                                                                        let TotallyNotJson.1680 : Int1 = CallByName Bool.2;
-                                                                        ret TotallyNotJson.1680;
-                                                                    else
-                                                                        let TotallyNotJson.1707 : Str = "R";
-                                                                        let TotallyNotJson.1708 : Int1 = lowlevel Eq TotallyNotJson.1707 TotallyNotJson.852;
-                                                                        dec TotallyNotJson.1707;
-                                                                        if TotallyNotJson.1708 then
-                                                                            dec TotallyNotJson.852;
-                                                                            let TotallyNotJson.1681 : Int1 = CallByName Bool.2;
-                                                                            ret TotallyNotJson.1681;
-                                                                        else
-                                                                            let TotallyNotJson.1705 : Str = "S";
-                                                                            let TotallyNotJson.1706 : Int1 = lowlevel Eq TotallyNotJson.1705 TotallyNotJson.852;
-                                                                            dec TotallyNotJson.1705;
-                                                                            if TotallyNotJson.1706 then
-                                                                                dec TotallyNotJson.852;
-                                                                                let TotallyNotJson.1682 : Int1 = CallByName Bool.2;
-                                                                                ret TotallyNotJson.1682;
-                                                                            else
-                                                                                let TotallyNotJson.1703 : Str = "T";
-                                                                                let TotallyNotJson.1704 : Int1 = lowlevel Eq TotallyNotJson.1703 TotallyNotJson.852;
-                                                                                dec TotallyNotJson.1703;
-                                                                                if TotallyNotJson.1704 then
-                                                                                    dec TotallyNotJson.852;
-                                                                                    let TotallyNotJson.1683 : Int1 = CallByName Bool.2;
-                                                                                    ret TotallyNotJson.1683;
-                                                                                else
-                                                                                    let TotallyNotJson.1701 : Str = "U";
-                                                                                    let TotallyNotJson.1702 : Int1 = lowlevel Eq TotallyNotJson.1701 TotallyNotJson.852;
-                                                                                    dec TotallyNotJson.1701;
-                                                                                    if TotallyNotJson.1702 then
-                                                                                        dec TotallyNotJson.852;
-                                                                                        let TotallyNotJson.1684 : Int1 = CallByName Bool.2;
-                                                                                        ret TotallyNotJson.1684;
-                                                                                    else
-                                                                                        let TotallyNotJson.1699 : Str = "V";
-                                                                                        let TotallyNotJson.1700 : Int1 = lowlevel Eq TotallyNotJson.1699 TotallyNotJson.852;
-                                                                                        dec TotallyNotJson.1699;
-                                                                                        if TotallyNotJson.1700 then
-                                                                                            dec TotallyNotJson.852;
-                                                                                            let TotallyNotJson.1685 : Int1 = CallByName Bool.2;
-                                                                                            ret TotallyNotJson.1685;
-                                                                                        else
-                                                                                            let TotallyNotJson.1697 : Str = "W";
-                                                                                            let TotallyNotJson.1698 : Int1 = lowlevel Eq TotallyNotJson.1697 TotallyNotJson.852;
-                                                                                            dec TotallyNotJson.1697;
-                                                                                            if TotallyNotJson.1698 then
-                                                                                                dec TotallyNotJson.852;
-                                                                                                let TotallyNotJson.1686 : Int1 = CallByName Bool.2;
-                                                                                                ret TotallyNotJson.1686;
-                                                                                            else
-                                                                                                let TotallyNotJson.1695 : Str = "X";
-                                                                                                let TotallyNotJson.1696 : Int1 = lowlevel Eq TotallyNotJson.1695 TotallyNotJson.852;
-                                                                                                dec TotallyNotJson.1695;
-                                                                                                if TotallyNotJson.1696 then
-                                                                                                    dec TotallyNotJson.852;
-                                                                                                    let TotallyNotJson.1687 : Int1 = CallByName Bool.2;
-                                                                                                    ret TotallyNotJson.1687;
-                                                                                                else
-                                                                                                    let TotallyNotJson.1693 : Str = "Y";
-                                                                                                    let TotallyNotJson.1694 : Int1 = lowlevel Eq TotallyNotJson.1693 TotallyNotJson.852;
-                                                                                                    dec TotallyNotJson.1693;
-                                                                                                    if TotallyNotJson.1694 then
-                                                                                                        dec TotallyNotJson.852;
-                                                                                                        let TotallyNotJson.1688 : Int1 = CallByName Bool.2;
-                                                                                                        ret TotallyNotJson.1688;
-                                                                                                    else
-                                                                                                        let TotallyNotJson.1691 : Str = "Z";
-                                                                                                        let TotallyNotJson.1692 : Int1 = lowlevel Eq TotallyNotJson.1691 TotallyNotJson.852;
-                                                                                                        dec TotallyNotJson.1691;
-                                                                                                        dec TotallyNotJson.852;
-                                                                                                        if TotallyNotJson.1692 then
-                                                                                                            let TotallyNotJson.1689 : Int1 = CallByName Bool.2;
-                                                                                                            ret TotallyNotJson.1689;
-                                                                                                        else
-                                                                                                            let TotallyNotJson.1690 : Int1 = CallByName Bool.1;
-                                                                                                            ret TotallyNotJson.1690;
+procedure Test.22 (Test.67):
+    let Test.293 : List {Str, Str} = CallByName Encode.23 Test.67;
+    ret Test.293;
 
-procedure TotallyNotJson.182 (TotallyNotJson.183, TotallyNotJson.1879, TotallyNotJson.181):
-    let TotallyNotJson.1882 : List U8 = CallByName TotallyNotJson.26 TotallyNotJson.181;
-    let TotallyNotJson.1881 : List U8 = CallByName List.8 TotallyNotJson.183 TotallyNotJson.1882;
-    ret TotallyNotJson.1881;
+procedure Test.3 ():
+    let Test.258 : {} = Struct {};
+    ret Test.258;
 
-procedure TotallyNotJson.189 (TotallyNotJson.1930, TotallyNotJson.192):
-    let TotallyNotJson.190 : U64 = StructAtIndex 0 TotallyNotJson.1930;
-    let TotallyNotJson.191 : Int1 = StructAtIndex 1 TotallyNotJson.1930;
-    switch TotallyNotJson.192:
-        case 34:
-            let TotallyNotJson.1933 : Int1 = false;
-            let TotallyNotJson.1932 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1933};
-            let TotallyNotJson.1931 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1932;
-            ret TotallyNotJson.1931;
-    
-        case 92:
-            let TotallyNotJson.1936 : Int1 = false;
-            let TotallyNotJson.1935 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1936};
-            let TotallyNotJson.1934 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1935;
-            ret TotallyNotJson.1934;
-    
-        case 47:
-            let TotallyNotJson.1939 : Int1 = false;
-            let TotallyNotJson.1938 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1939};
-            let TotallyNotJson.1937 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1938;
-            ret TotallyNotJson.1937;
-    
-        case 8:
-            let TotallyNotJson.1942 : Int1 = false;
-            let TotallyNotJson.1941 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1942};
-            let TotallyNotJson.1940 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1941;
-            ret TotallyNotJson.1940;
-    
-        case 12:
-            let TotallyNotJson.1945 : Int1 = false;
-            let TotallyNotJson.1944 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1945};
-            let TotallyNotJson.1943 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1944;
-            ret TotallyNotJson.1943;
-    
-        case 10:
-            let TotallyNotJson.1948 : Int1 = false;
-            let TotallyNotJson.1947 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1948};
-            let TotallyNotJson.1946 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1947;
-            ret TotallyNotJson.1946;
-    
-        case 13:
-            let TotallyNotJson.1951 : Int1 = false;
-            let TotallyNotJson.1950 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1951};
-            let TotallyNotJson.1949 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1950;
-            ret TotallyNotJson.1949;
-    
-        case 9:
-            let TotallyNotJson.1954 : Int1 = false;
-            let TotallyNotJson.1953 : {U64, Int1} = Struct {TotallyNotJson.190, TotallyNotJson.1954};
-            let TotallyNotJson.1952 : [C {U64, Int1}, C {U64, Int1}] = TagId(0) TotallyNotJson.1953;
-            ret TotallyNotJson.1952;
-    
-        default:
-            let TotallyNotJson.1958 : U64 = 1i64;
-            let TotallyNotJson.1957 : U64 = CallByName Num.19 TotallyNotJson.190 TotallyNotJson.1958;
-            let TotallyNotJson.1956 : {U64, Int1} = Struct {TotallyNotJson.1957, TotallyNotJson.191};
-            let TotallyNotJson.1955 : [C {U64, Int1}, C {U64, Int1}] = TagId(1) TotallyNotJson.1956;
-            ret TotallyNotJson.1955;
-    
+procedure Test.4 (Test.49, Test.50, Test.51):
+    let Test.322 : U8 = CallByName Num.127 Test.50;
+    let Test.319 : List U8 = CallByName List.4 Test.49 Test.322;
+    let Test.321 : Str = CallByName Num.96 Test.51;
+    let Test.320 : List U8 = CallByName Str.12 Test.321;
+    let Test.317 : List U8 = CallByName List.8 Test.319 Test.320;
+    let Test.318 : U8 = 32i64;
+    let Test.316 : List U8 = CallByName List.4 Test.317 Test.318;
+    ret Test.316;
 
-procedure TotallyNotJson.215 (TotallyNotJson.216, TotallyNotJson.217):
-    let TotallyNotJson.1901 : List U8 = CallByName TotallyNotJson.27 TotallyNotJson.217;
-    let TotallyNotJson.1900 : List U8 = CallByName List.8 TotallyNotJson.216 TotallyNotJson.1901;
-    ret TotallyNotJson.1900;
+procedure Test.57 (Test.58, Test.275, Test.56):
+    let Test.314 : I64 = 115i64;
+    let Test.315 : U64 = CallByName Str.36 Test.56;
+    let Test.312 : List U8 = CallByName Test.4 Test.58 Test.314 Test.315;
+    let Test.313 : List U8 = CallByName Str.12 Test.56;
+    let Test.310 : List U8 = CallByName List.8 Test.312 Test.313;
+    let Test.311 : U8 = 32i64;
+    let Test.309 : List U8 = CallByName List.4 Test.310 Test.311;
+    ret Test.309;
 
-procedure TotallyNotJson.234 (TotallyNotJson.235, TotallyNotJson.1175, TotallyNotJson.233):
-    let TotallyNotJson.1525 : I64 = 123i64;
-    let TotallyNotJson.1524 : U8 = CallByName Num.127 TotallyNotJson.1525;
-    let TotallyNotJson.238 : List U8 = CallByName List.4 TotallyNotJson.235 TotallyNotJson.1524;
-    let TotallyNotJson.1523 : U64 = CallByName List.6 TotallyNotJson.233;
-    let TotallyNotJson.1183 : {List U8, U64} = Struct {TotallyNotJson.238, TotallyNotJson.1523};
-    let TotallyNotJson.1182 : {List U8, U64} = CallByName List.18 TotallyNotJson.233 TotallyNotJson.1183 TotallyNotJson.1175;
-    let TotallyNotJson.240 : List U8 = StructAtIndex 0 TotallyNotJson.1182;
-    let TotallyNotJson.1181 : I64 = 125i64;
-    let TotallyNotJson.1180 : U8 = CallByName Num.127 TotallyNotJson.1181;
-    let TotallyNotJson.1179 : List U8 = CallByName List.4 TotallyNotJson.240 TotallyNotJson.1180;
-    ret TotallyNotJson.1179;
+procedure Test.68 (Test.69, Test.263, Test.67):
+    let Test.291 : I64 = 114i64;
+    let Test.292 : U64 = CallByName List.6 Test.67;
+    let Test.70 : List U8 = CallByName Test.4 Test.69 Test.291 Test.292;
+    let Test.266 : {} = Struct {};
+    let Test.265 : List U8 = CallByName List.18 Test.67 Test.70 Test.266;
+    ret Test.265;
 
-procedure TotallyNotJson.234 (TotallyNotJson.235, TotallyNotJson.1175, TotallyNotJson.233):
-    let TotallyNotJson.1876 : I64 = 123i64;
-    let TotallyNotJson.1875 : U8 = CallByName Num.127 TotallyNotJson.1876;
-    let TotallyNotJson.238 : List U8 = CallByName List.4 TotallyNotJson.235 TotallyNotJson.1875;
-    let TotallyNotJson.1874 : U64 = CallByName List.6 TotallyNotJson.233;
-    let TotallyNotJson.1534 : {List U8, U64} = Struct {TotallyNotJson.238, TotallyNotJson.1874};
-    let TotallyNotJson.1533 : {List U8, U64} = CallByName List.18 TotallyNotJson.233 TotallyNotJson.1534 TotallyNotJson.1175;
-    let TotallyNotJson.240 : List U8 = StructAtIndex 0 TotallyNotJson.1533;
-    let TotallyNotJson.1532 : I64 = 125i64;
-    let TotallyNotJson.1531 : U8 = CallByName Num.127 TotallyNotJson.1532;
-    let TotallyNotJson.1530 : List U8 = CallByName List.4 TotallyNotJson.240 TotallyNotJson.1531;
-    ret TotallyNotJson.1530;
+procedure Test.68 (Test.69, Test.263, Test.67):
+    let Test.323 : I64 = 114i64;
+    let Test.324 : U64 = CallByName List.6 Test.67;
+    let Test.70 : List U8 = CallByName Test.4 Test.69 Test.323 Test.324;
+    let Test.298 : {} = Struct {};
+    let Test.297 : List U8 = CallByName List.18 Test.67 Test.70 Test.298;
+    ret Test.297;
 
-procedure TotallyNotJson.237 (TotallyNotJson.1177, TotallyNotJson.1178, TotallyNotJson.236):
-    let TotallyNotJson.243 : Str = StructAtIndex 0 TotallyNotJson.1178;
-    let TotallyNotJson.244 : Str = StructAtIndex 1 TotallyNotJson.1178;
-    let TotallyNotJson.241 : List U8 = StructAtIndex 0 TotallyNotJson.1177;
-    let TotallyNotJson.242 : U64 = StructAtIndex 1 TotallyNotJson.1177;
-    let TotallyNotJson.245 : Str = CallByName TotallyNotJson.82 TotallyNotJson.243 TotallyNotJson.236;
-    let TotallyNotJson.1205 : I64 = 34i64;
-    let TotallyNotJson.1204 : U8 = CallByName Num.127 TotallyNotJson.1205;
-    let TotallyNotJson.1202 : List U8 = CallByName List.4 TotallyNotJson.241 TotallyNotJson.1204;
-    let TotallyNotJson.1203 : List U8 = CallByName Str.12 TotallyNotJson.245;
-    let TotallyNotJson.1199 : List U8 = CallByName List.8 TotallyNotJson.1202 TotallyNotJson.1203;
-    let TotallyNotJson.1201 : I64 = 34i64;
-    let TotallyNotJson.1200 : U8 = CallByName Num.127 TotallyNotJson.1201;
-    let TotallyNotJson.1196 : List U8 = CallByName List.4 TotallyNotJson.1199 TotallyNotJson.1200;
-    let TotallyNotJson.1198 : I64 = 58i64;
-    let TotallyNotJson.1197 : U8 = CallByName Num.127 TotallyNotJson.1198;
-    let TotallyNotJson.1194 : List U8 = CallByName List.4 TotallyNotJson.1196 TotallyNotJson.1197;
-    let TotallyNotJson.246 : List U8 = CallByName Encode.24 TotallyNotJson.1194 TotallyNotJson.244 TotallyNotJson.236;
-    joinpoint TotallyNotJson.1189 TotallyNotJson.247:
-        let TotallyNotJson.1187 : U64 = 1i64;
-        let TotallyNotJson.1186 : U64 = CallByName Num.20 TotallyNotJson.242 TotallyNotJson.1187;
-        let TotallyNotJson.1185 : {List U8, U64} = Struct {TotallyNotJson.247, TotallyNotJson.1186};
-        ret TotallyNotJson.1185;
-    in
-    let TotallyNotJson.1193 : U64 = 1i64;
-    let TotallyNotJson.1190 : Int1 = CallByName Num.24 TotallyNotJson.242 TotallyNotJson.1193;
-    if TotallyNotJson.1190 then
-        let TotallyNotJson.1192 : I64 = 44i64;
-        let TotallyNotJson.1191 : U8 = CallByName Num.127 TotallyNotJson.1192;
-        let TotallyNotJson.1188 : List U8 = CallByName List.4 TotallyNotJson.246 TotallyNotJson.1191;
-        jump TotallyNotJson.1189 TotallyNotJson.1188;
-    else
-        jump TotallyNotJson.1189 TotallyNotJson.246;
+procedure Test.71 (Test.72, Test.267):
+    let Test.73 : Str = StructAtIndex 0 Test.267;
+    let Test.74 : Str = StructAtIndex 1 Test.267;
+    let Test.271 : Str = CallByName Test.20 Test.73;
+    let Test.272 : {} = Struct {};
+    let Test.269 : List U8 = CallByName Encode.24 Test.72 Test.271 Test.272;
+    let Test.270 : {} = Struct {};
+    let Test.268 : List U8 = CallByName Encode.24 Test.269 Test.74 Test.270;
+    ret Test.268;
 
-procedure TotallyNotJson.237 (TotallyNotJson.1177, TotallyNotJson.1178, TotallyNotJson.236):
-    let TotallyNotJson.243 : Str = StructAtIndex 0 TotallyNotJson.1178;
-    let TotallyNotJson.244 : Str = StructAtIndex 1 TotallyNotJson.1178;
-    let TotallyNotJson.241 : List U8 = StructAtIndex 0 TotallyNotJson.1177;
-    let TotallyNotJson.242 : U64 = StructAtIndex 1 TotallyNotJson.1177;
-    let TotallyNotJson.245 : Str = CallByName TotallyNotJson.82 TotallyNotJson.243 TotallyNotJson.236;
-    let TotallyNotJson.1556 : I64 = 34i64;
-    let TotallyNotJson.1555 : U8 = CallByName Num.127 TotallyNotJson.1556;
-    let TotallyNotJson.1553 : List U8 = CallByName List.4 TotallyNotJson.241 TotallyNotJson.1555;
-    let TotallyNotJson.1554 : List U8 = CallByName Str.12 TotallyNotJson.245;
-    let TotallyNotJson.1550 : List U8 = CallByName List.8 TotallyNotJson.1553 TotallyNotJson.1554;
-    let TotallyNotJson.1552 : I64 = 34i64;
-    let TotallyNotJson.1551 : U8 = CallByName Num.127 TotallyNotJson.1552;
-    let TotallyNotJson.1547 : List U8 = CallByName List.4 TotallyNotJson.1550 TotallyNotJson.1551;
-    let TotallyNotJson.1549 : I64 = 58i64;
-    let TotallyNotJson.1548 : U8 = CallByName Num.127 TotallyNotJson.1549;
-    let TotallyNotJson.1545 : List U8 = CallByName List.4 TotallyNotJson.1547 TotallyNotJson.1548;
-    let TotallyNotJson.246 : List U8 = CallByName Encode.24 TotallyNotJson.1545 TotallyNotJson.244 TotallyNotJson.236;
-    joinpoint TotallyNotJson.1540 TotallyNotJson.247:
-        let TotallyNotJson.1538 : U64 = 1i64;
-        let TotallyNotJson.1537 : U64 = CallByName Num.20 TotallyNotJson.242 TotallyNotJson.1538;
-        let TotallyNotJson.1536 : {List U8, U64} = Struct {TotallyNotJson.247, TotallyNotJson.1537};
-        ret TotallyNotJson.1536;
-    in
-    let TotallyNotJson.1544 : U64 = 1i64;
-    let TotallyNotJson.1541 : Int1 = CallByName Num.24 TotallyNotJson.242 TotallyNotJson.1544;
-    if TotallyNotJson.1541 then
-        let TotallyNotJson.1543 : I64 = 44i64;
-        let TotallyNotJson.1542 : U8 = CallByName Num.127 TotallyNotJson.1543;
-        let TotallyNotJson.1539 : List U8 = CallByName List.4 TotallyNotJson.246 TotallyNotJson.1542;
-        jump TotallyNotJson.1540 TotallyNotJson.1539;
-    else
-        jump TotallyNotJson.1540 TotallyNotJson.246;
-
-procedure TotallyNotJson.25 (TotallyNotJson.181):
-    let TotallyNotJson.1877 : Str = CallByName Encode.23 TotallyNotJson.181;
-    ret TotallyNotJson.1877;
-
-procedure TotallyNotJson.26 (TotallyNotJson.184):
-    let TotallyNotJson.185 : List U8 = CallByName Str.12 TotallyNotJson.184;
-    let TotallyNotJson.1959 : U64 = 0i64;
-    let TotallyNotJson.1960 : Int1 = true;
-    let TotallyNotJson.186 : {U64, Int1} = Struct {TotallyNotJson.1959, TotallyNotJson.1960};
-    let TotallyNotJson.1929 : {} = Struct {};
-    inc TotallyNotJson.185;
-    let TotallyNotJson.187 : {U64, Int1} = CallByName List.26 TotallyNotJson.185 TotallyNotJson.186 TotallyNotJson.1929;
-    let TotallyNotJson.1883 : Int1 = StructAtIndex 1 TotallyNotJson.187;
-    let TotallyNotJson.1927 : Int1 = true;
-    let TotallyNotJson.1928 : Int1 = lowlevel Eq TotallyNotJson.1927 TotallyNotJson.1883;
-    if TotallyNotJson.1928 then
-        let TotallyNotJson.1893 : U64 = CallByName List.6 TotallyNotJson.185;
-        let TotallyNotJson.1894 : U64 = 2i64;
-        let TotallyNotJson.1892 : U64 = CallByName Num.19 TotallyNotJson.1893 TotallyNotJson.1894;
-        let TotallyNotJson.1889 : List U8 = CallByName List.68 TotallyNotJson.1892;
-        let TotallyNotJson.1891 : U8 = 34i64;
-        let TotallyNotJson.1890 : List U8 = Array [TotallyNotJson.1891];
-        let TotallyNotJson.1888 : List U8 = CallByName List.8 TotallyNotJson.1889 TotallyNotJson.1890;
-        let TotallyNotJson.1885 : List U8 = CallByName List.8 TotallyNotJson.1888 TotallyNotJson.185;
-        let TotallyNotJson.1887 : U8 = 34i64;
-        let TotallyNotJson.1886 : List U8 = Array [TotallyNotJson.1887];
-        let TotallyNotJson.1884 : List U8 = CallByName List.8 TotallyNotJson.1885 TotallyNotJson.1886;
-        ret TotallyNotJson.1884;
-    else
-        inc TotallyNotJson.185;
-        let TotallyNotJson.1926 : U64 = StructAtIndex 0 TotallyNotJson.187;
-        let TotallyNotJson.1925 : {List U8, List U8} = CallByName List.52 TotallyNotJson.185 TotallyNotJson.1926;
-        let TotallyNotJson.211 : List U8 = StructAtIndex 0 TotallyNotJson.1925;
-        let TotallyNotJson.213 : List U8 = StructAtIndex 1 TotallyNotJson.1925;
-        let TotallyNotJson.1923 : U64 = CallByName List.6 TotallyNotJson.185;
-        dec TotallyNotJson.185;
-        let TotallyNotJson.1924 : U64 = 120i64;
-        let TotallyNotJson.1921 : U64 = CallByName Num.21 TotallyNotJson.1923 TotallyNotJson.1924;
-        let TotallyNotJson.1922 : U64 = 100i64;
-        let TotallyNotJson.1920 : U64 = CallByName Num.94 TotallyNotJson.1921 TotallyNotJson.1922;
-        let TotallyNotJson.1917 : List U8 = CallByName List.68 TotallyNotJson.1920;
-        let TotallyNotJson.1919 : U8 = 34i64;
-        let TotallyNotJson.1918 : List U8 = Array [TotallyNotJson.1919];
-        let TotallyNotJson.1916 : List U8 = CallByName List.8 TotallyNotJson.1917 TotallyNotJson.1918;
-        let TotallyNotJson.214 : List U8 = CallByName List.8 TotallyNotJson.1916 TotallyNotJson.211;
-        let TotallyNotJson.1899 : {} = Struct {};
-        let TotallyNotJson.1896 : List U8 = CallByName List.18 TotallyNotJson.213 TotallyNotJson.214 TotallyNotJson.1899;
-        let TotallyNotJson.1898 : U8 = 34i64;
-        let TotallyNotJson.1897 : List U8 = Array [TotallyNotJson.1898];
-        let TotallyNotJson.1895 : List U8 = CallByName List.8 TotallyNotJson.1896 TotallyNotJson.1897;
-        ret TotallyNotJson.1895;
-
-procedure TotallyNotJson.27 (TotallyNotJson.218):
-    switch TotallyNotJson.218:
-        case 34:
-            let TotallyNotJson.1902 : List U8 = Array [92i64, 34i64];
-            ret TotallyNotJson.1902;
-    
-        case 92:
-            let TotallyNotJson.1903 : List U8 = Array [92i64, 92i64];
-            ret TotallyNotJson.1903;
-    
-        case 47:
-            let TotallyNotJson.1904 : List U8 = Array [92i64, 47i64];
-            ret TotallyNotJson.1904;
-    
-        case 8:
-            let TotallyNotJson.1906 : U8 = 98i64;
-            let TotallyNotJson.1905 : List U8 = Array [92i64, TotallyNotJson.1906];
-            ret TotallyNotJson.1905;
-    
-        case 12:
-            let TotallyNotJson.1908 : U8 = 102i64;
-            let TotallyNotJson.1907 : List U8 = Array [92i64, TotallyNotJson.1908];
-            ret TotallyNotJson.1907;
-    
-        case 10:
-            let TotallyNotJson.1910 : U8 = 110i64;
-            let TotallyNotJson.1909 : List U8 = Array [92i64, TotallyNotJson.1910];
-            ret TotallyNotJson.1909;
-    
-        case 13:
-            let TotallyNotJson.1912 : U8 = 114i64;
-            let TotallyNotJson.1911 : List U8 = Array [92i64, TotallyNotJson.1912];
-            ret TotallyNotJson.1911;
-    
-        case 9:
-            let TotallyNotJson.1914 : U8 = 114i64;
-            let TotallyNotJson.1913 : List U8 = Array [92i64, TotallyNotJson.1914];
-            ret TotallyNotJson.1913;
-    
-        default:
-            let TotallyNotJson.1915 : List U8 = Array [TotallyNotJson.218];
-            ret TotallyNotJson.1915;
-    
-
-procedure TotallyNotJson.29 (TotallyNotJson.233):
-    let TotallyNotJson.1173 : List {Str, Str} = CallByName Encode.23 TotallyNotJson.233;
-    ret TotallyNotJson.1173;
-
-procedure TotallyNotJson.29 (TotallyNotJson.233):
-    let TotallyNotJson.1526 : List {Str, Str} = CallByName Encode.23 TotallyNotJson.233;
-    ret TotallyNotJson.1526;
-
-procedure TotallyNotJson.8 ():
-    let TotallyNotJson.1172 : [C , C [], C , C , C , C ] = TagId(2) ;
-    ret TotallyNotJson.1172;
-
-procedure TotallyNotJson.82 (TotallyNotJson.802, TotallyNotJson.803):
-    let TotallyNotJson.1873 : U8 = GetTagId TotallyNotJson.803;
-    switch TotallyNotJson.1873:
-        case 2:
-            ret TotallyNotJson.802;
-    
-        case 5:
-            let TotallyNotJson.1558 : Str = CallByName TotallyNotJson.87 TotallyNotJson.802;
-            ret TotallyNotJson.1558;
-    
-        case 4:
-            let TotallyNotJson.1748 : Str = CallByName TotallyNotJson.88 TotallyNotJson.802;
-            ret TotallyNotJson.1748;
-    
-        case 3:
-            let TotallyNotJson.1837 : Str = CallByName TotallyNotJson.89 TotallyNotJson.802;
-            ret TotallyNotJson.1837;
-    
-        case 0:
-            let TotallyNotJson.1869 : Str = CallByName TotallyNotJson.90 TotallyNotJson.802;
-            ret TotallyNotJson.1869;
-    
-        default:
-            dec TotallyNotJson.802;
-            let TotallyNotJson.804 : [] = UnionAtIndex (Id 1) (Index 0) TotallyNotJson.803;
-            let TotallyNotJson.1872 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
-            Crash TotallyNotJson.1872
-    
-
-procedure TotallyNotJson.832 (TotallyNotJson.1493):
-    let TotallyNotJson.1845 : List Str = StructAtIndex 1 TotallyNotJson.1493;
-    let #Derived_gen.59 : List Str = StructAtIndex 0 TotallyNotJson.1493;
-    dec #Derived_gen.59;
-    ret TotallyNotJson.1845;
-
-procedure TotallyNotJson.840 (TotallyNotJson.1214):
-    let TotallyNotJson.1566 : List Str = StructAtIndex 1 TotallyNotJson.1214;
-    let #Derived_gen.57 : List Str = StructAtIndex 0 TotallyNotJson.1214;
-    dec #Derived_gen.57;
-    ret TotallyNotJson.1566;
-
-procedure TotallyNotJson.87 (TotallyNotJson.809):
-    let TotallyNotJson.1559 : Str = CallByName TotallyNotJson.97 TotallyNotJson.809;
-    ret TotallyNotJson.1559;
-
-procedure TotallyNotJson.88 (TotallyNotJson.810):
-    let TotallyNotJson.1749 : Str = CallByName TotallyNotJson.94 TotallyNotJson.810;
-    ret TotallyNotJson.1749;
-
-procedure TotallyNotJson.89 (TotallyNotJson.811):
-    let TotallyNotJson.1838 : Str = CallByName TotallyNotJson.95 TotallyNotJson.811;
-    ret TotallyNotJson.1838;
-
-procedure TotallyNotJson.90 (TotallyNotJson.812):
-    ret TotallyNotJson.812;
-
-procedure TotallyNotJson.94 (TotallyNotJson.824):
-    let TotallyNotJson.825 : List Str = CallByName Str.55 TotallyNotJson.824;
-    let TotallyNotJson.1834 : U64 = lowlevel ListLen TotallyNotJson.825;
-    let TotallyNotJson.1835 : U64 = 1i64;
-    let TotallyNotJson.1836 : Int1 = lowlevel NumGte TotallyNotJson.1834 TotallyNotJson.1835;
-    if TotallyNotJson.1836 then
-        dec TotallyNotJson.824;
-        let TotallyNotJson.1833 : U64 = 0i64;
-        let TotallyNotJson.826 : Str = lowlevel ListGetUnsafe TotallyNotJson.825 TotallyNotJson.1833;
-        inc TotallyNotJson.826;
-        let TotallyNotJson.827 : Str = CallByName TotallyNotJson.100 TotallyNotJson.826;
-        let TotallyNotJson.828 : List Str = CallByName List.38 TotallyNotJson.825;
-        let TotallyNotJson.1751 : List Str = CallByName List.13 TotallyNotJson.828 TotallyNotJson.827;
-        let TotallyNotJson.1752 : Str = "";
-        let TotallyNotJson.1750 : Str = CallByName Str.4 TotallyNotJson.1751 TotallyNotJson.1752;
-        dec TotallyNotJson.1752;
-        dec TotallyNotJson.1751;
-        ret TotallyNotJson.1750;
-    else
-        dec TotallyNotJson.825;
-        ret TotallyNotJson.824;
-
-procedure TotallyNotJson.95 (TotallyNotJson.829):
-    let TotallyNotJson.830 : List Str = CallByName Str.55 TotallyNotJson.829;
-    dec TotallyNotJson.829;
-    let TotallyNotJson.1868 : U64 = CallByName List.6 TotallyNotJson.830;
-    let TotallyNotJson.831 : List Str = CallByName List.68 TotallyNotJson.1868;
-    let TotallyNotJson.1846 : {List Str, List Str} = Struct {TotallyNotJson.830, TotallyNotJson.831};
-    let TotallyNotJson.1842 : {List Str, List Str} = CallByName TotallyNotJson.96 TotallyNotJson.1846;
-    let TotallyNotJson.1843 : {} = Struct {};
-    let TotallyNotJson.1840 : List Str = CallByName TotallyNotJson.832 TotallyNotJson.1842;
-    let TotallyNotJson.1841 : Str = "";
-    let TotallyNotJson.1839 : Str = CallByName Str.4 TotallyNotJson.1840 TotallyNotJson.1841;
-    dec TotallyNotJson.1841;
-    dec TotallyNotJson.1840;
-    ret TotallyNotJson.1839;
-
-procedure TotallyNotJson.96 (#Derived_gen.56):
-    joinpoint TotallyNotJson.1847 TotallyNotJson.1168:
-        let TotallyNotJson.834 : List Str = StructAtIndex 0 TotallyNotJson.1168;
-        let TotallyNotJson.833 : List Str = StructAtIndex 1 TotallyNotJson.1168;
-        let TotallyNotJson.1865 : U64 = lowlevel ListLen TotallyNotJson.834;
-        let TotallyNotJson.1866 : U64 = 1i64;
-        let TotallyNotJson.1867 : Int1 = lowlevel NumGte TotallyNotJson.1865 TotallyNotJson.1866;
-        if TotallyNotJson.1867 then
-            let TotallyNotJson.1864 : U64 = 0i64;
-            let TotallyNotJson.835 : Str = lowlevel ListGetUnsafe TotallyNotJson.834 TotallyNotJson.1864;
-            inc 2 TotallyNotJson.835;
-            joinpoint TotallyNotJson.1862 TotallyNotJson.1861:
-                if TotallyNotJson.1861 then
-                    let TotallyNotJson.1851 : List Str = CallByName List.38 TotallyNotJson.834;
-                    let TotallyNotJson.1854 : Str = "-";
-                    let TotallyNotJson.1855 : Str = CallByName TotallyNotJson.101 TotallyNotJson.835;
-                    let TotallyNotJson.1853 : List Str = Array [TotallyNotJson.1854, TotallyNotJson.1855];
-                    let TotallyNotJson.1852 : List Str = CallByName List.8 TotallyNotJson.833 TotallyNotJson.1853;
-                    let TotallyNotJson.1850 : {List Str, List Str} = Struct {TotallyNotJson.1851, TotallyNotJson.1852};
-                    jump TotallyNotJson.1847 TotallyNotJson.1850;
-                else
-                    dec TotallyNotJson.835;
-                    let TotallyNotJson.1860 : U64 = 0i64;
-                    let TotallyNotJson.836 : Str = lowlevel ListGetUnsafe TotallyNotJson.834 TotallyNotJson.1860;
-                    inc TotallyNotJson.836;
-                    let TotallyNotJson.1858 : List Str = CallByName List.38 TotallyNotJson.834;
-                    let TotallyNotJson.1859 : List Str = CallByName List.4 TotallyNotJson.833 TotallyNotJson.836;
-                    let TotallyNotJson.1857 : {List Str, List Str} = Struct {TotallyNotJson.1858, TotallyNotJson.1859};
-                    jump TotallyNotJson.1847 TotallyNotJson.1857;
-            in
-            let TotallyNotJson.1863 : Int1 = CallByName TotallyNotJson.102 TotallyNotJson.835;
-            jump TotallyNotJson.1862 TotallyNotJson.1863;
-        else
-            let TotallyNotJson.1848 : {List Str, List Str} = Struct {TotallyNotJson.834, TotallyNotJson.833};
-            ret TotallyNotJson.1848;
-    in
-    jump TotallyNotJson.1847 #Derived_gen.56;
-
-procedure TotallyNotJson.97 (TotallyNotJson.837):
-    let TotallyNotJson.838 : List Str = CallByName Str.55 TotallyNotJson.837;
-    dec TotallyNotJson.837;
-    let TotallyNotJson.1747 : U64 = CallByName List.6 TotallyNotJson.838;
-    let TotallyNotJson.839 : List Str = CallByName List.68 TotallyNotJson.1747;
-    let TotallyNotJson.1567 : {List Str, List Str} = Struct {TotallyNotJson.838, TotallyNotJson.839};
-    let TotallyNotJson.1563 : {List Str, List Str} = CallByName TotallyNotJson.98 TotallyNotJson.1567;
-    let TotallyNotJson.1564 : {} = Struct {};
-    let TotallyNotJson.1561 : List Str = CallByName TotallyNotJson.840 TotallyNotJson.1563;
-    let TotallyNotJson.1562 : Str = "";
-    let TotallyNotJson.1560 : Str = CallByName Str.4 TotallyNotJson.1561 TotallyNotJson.1562;
-    dec TotallyNotJson.1561;
-    dec TotallyNotJson.1562;
-    ret TotallyNotJson.1560;
-
-procedure TotallyNotJson.98 (#Derived_gen.34):
-    joinpoint TotallyNotJson.1568 TotallyNotJson.1169:
-        let TotallyNotJson.842 : List Str = StructAtIndex 0 TotallyNotJson.1169;
-        let TotallyNotJson.841 : List Str = StructAtIndex 1 TotallyNotJson.1169;
-        let TotallyNotJson.1744 : U64 = lowlevel ListLen TotallyNotJson.842;
-        let TotallyNotJson.1745 : U64 = 1i64;
-        let TotallyNotJson.1746 : Int1 = lowlevel NumGte TotallyNotJson.1744 TotallyNotJson.1745;
-        if TotallyNotJson.1746 then
-            let TotallyNotJson.1743 : U64 = 0i64;
-            let TotallyNotJson.843 : Str = lowlevel ListGetUnsafe TotallyNotJson.842 TotallyNotJson.1743;
-            inc 2 TotallyNotJson.843;
-            joinpoint TotallyNotJson.1662 TotallyNotJson.1661:
-                if TotallyNotJson.1661 then
-                    let TotallyNotJson.1572 : List Str = CallByName List.38 TotallyNotJson.842;
-                    let TotallyNotJson.1575 : Str = "_";
-                    let TotallyNotJson.1576 : Str = CallByName TotallyNotJson.101 TotallyNotJson.843;
-                    let TotallyNotJson.1574 : List Str = Array [TotallyNotJson.1575, TotallyNotJson.1576];
-                    let TotallyNotJson.1573 : List Str = CallByName List.8 TotallyNotJson.841 TotallyNotJson.1574;
-                    let TotallyNotJson.1571 : {List Str, List Str} = Struct {TotallyNotJson.1572, TotallyNotJson.1573};
-                    jump TotallyNotJson.1568 TotallyNotJson.1571;
-                else
-                    dec TotallyNotJson.843;
-                    let TotallyNotJson.1660 : U64 = 0i64;
-                    let TotallyNotJson.844 : Str = lowlevel ListGetUnsafe TotallyNotJson.842 TotallyNotJson.1660;
-                    inc TotallyNotJson.844;
-                    let TotallyNotJson.1658 : List Str = CallByName List.38 TotallyNotJson.842;
-                    let TotallyNotJson.1659 : List Str = CallByName List.4 TotallyNotJson.841 TotallyNotJson.844;
-                    let TotallyNotJson.1657 : {List Str, List Str} = Struct {TotallyNotJson.1658, TotallyNotJson.1659};
-                    jump TotallyNotJson.1568 TotallyNotJson.1657;
-            in
-            let TotallyNotJson.1663 : Int1 = CallByName TotallyNotJson.102 TotallyNotJson.843;
-            jump TotallyNotJson.1662 TotallyNotJson.1663;
-        else
-            let TotallyNotJson.1569 : {List Str, List Str} = Struct {TotallyNotJson.842, TotallyNotJson.841};
-            ret TotallyNotJson.1569;
-    in
-    jump TotallyNotJson.1568 #Derived_gen.34;
+procedure Test.71 (Test.72, Test.267):
+    let Test.73 : Str = StructAtIndex 0 Test.267;
+    let Test.74 : Str = StructAtIndex 1 Test.267;
+    let Test.303 : Str = CallByName Test.20 Test.73;
+    let Test.304 : {} = Struct {};
+    let Test.301 : List U8 = CallByName Encode.24 Test.72 Test.303 Test.304;
+    let Test.302 : {} = Struct {};
+    let Test.300 : List U8 = CallByName Encode.24 Test.301 Test.74 Test.302;
+    ret Test.300;
 
 procedure Test.0 ():
-    let Test.12 : Str = "bar";
-    let Test.10 : [C , C [], C , C , C , C ] = CallByName TotallyNotJson.8;
-    let Test.8 : List U8 = CallByName Encode.26 Test.12 Test.10;
-    let Test.1 : [C {U64, U8}, C Str] = CallByName Str.9 Test.8;
-    let Test.5 : U8 = 1i64;
-    let Test.6 : U8 = GetTagId Test.1;
-    let Test.7 : Int1 = lowlevel Eq Test.5 Test.6;
-    if Test.7 then
-        let Test.2 : Str = UnionAtIndex (Id 1) (Index 0) Test.1;
-        ret Test.2;
+    let Test.260 : Str = "bar";
+    let Test.257 : {} = CallByName Test.3;
+    let Test.255 : List U8 = CallByName Encode.26 Test.260 Test.257;
+    let Test.210 : [C {U64, U8}, C Str] = CallByName Str.9 Test.255;
+    let Test.252 : U8 = 1i64;
+    let Test.253 : U8 = GetTagId Test.210;
+    let Test.254 : Int1 = lowlevel Eq Test.252 Test.253;
+    if Test.254 then
+        let Test.211 : Str = UnionAtIndex (Id 1) (Index 0) Test.210;
+        ret Test.211;
     else
-        dec Test.1;
-        let Test.4 : Str = "<bad>";
-        ret Test.4;
+        dec Test.210;
+        let Test.251 : Str = "<bad>";
+        ret Test.251;

@@ -1,6 +1,6 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.292 : I128 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.292;
+    let Num.284 : I128 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.0 ():
     let Test.6 : I128 = 18446744073709551616i64;

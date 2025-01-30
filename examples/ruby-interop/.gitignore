@@ -1,6 +1,0 @@
-libhello
-libhello.*
-*.log
-Makefile
-*.bundle
-extconf.h

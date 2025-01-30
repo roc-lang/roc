@@ -1,0 +1,11 @@
+[package]
+name = "fs"
+description = "no_std filesystem access. These operations all use native OS strings and do not allocate."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+widestring.workspace = true

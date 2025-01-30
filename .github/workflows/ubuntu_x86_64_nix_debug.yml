@@ -1,0 +1,31 @@
+on:
+    workflow_call:
+  
+name: cargo test debug nix
+
+env:
+    RUST_BACKTRACE: 1
+
+jobs:
+    cargo-test-debug-nix:
+        name: cargo test debug nix
+        runs-on: [ubuntu-22.04]
+        timeout-minutes: 90
+        steps:
+        - uses: actions/checkout@v4
+
+        # install nix
+        - uses: cachix/install-nix-action@v23
+          with:
+            nix_path: nixpkgs=channel:nixos-unstable
+
+        - name: Check if debug flag files are in sync
+          run: ./ci/check_debug_vars.sh
+
+        - name: cargo test without --release
+          # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test --locked -- --skip glue_cli_tests'
+
+        - name: glue_cli_tests
+          # single threaded due to difficult bug when multithreading, see #7476
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test --locked glue_cli_tests -- --test-threads=1'

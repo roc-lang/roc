@@ -8,19 +8,21 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-morphic_lib = { path = "../../vendor/morphic_lib" }
-roc_alias_analysis = { path = "../alias_analysis" }
-roc_bitcode_bc = { path = "../builtins/bitcode/bc" }
-roc_builtins = { path = "../builtins" }
-roc_collections = { path = "../collections" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_error_macros = { path = "../../error_macros" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_region = { path = "../region" }
-roc_std = { path = "../../roc_std" }
-roc_target = { path = "../roc_target" }
-
+morphic_lib.workspace = true
+roc_alias_analysis.workspace = true
+roc_bitcode_bc.workspace = true
+roc_builtins.workspace = true
+roc_collections.workspace = true
+roc_debug_flags.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_region.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
 bumpalo.workspace = true
 inkwell.workspace = true
 target-lexicon.workspace = true
+
+[package.metadata.cargo-udeps.ignore]
+normal = ["roc_bitcode_bc"]

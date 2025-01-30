@@ -32,18 +32,18 @@ pub unsafe extern "C" fn roc_dealloc(c_ptr: *mut c_void, _alignment: u32) {
 
 #[cfg(test)]
 #[no_mangle]
-pub unsafe extern "C" fn roc_panic(c_ptr: *mut c_void, tag_id: u32) {
-    use std::ffi::CStr;
-    use std::os::raw::c_char;
+pub unsafe extern "C" fn roc_panic(msg: *mut roc_std::RocStr, _tag_id: u32) {
+    panic!("roc_panic during test: {}", &*msg);
+}
 
-    match tag_id {
-        0 => {
-            let c_str = CStr::from_ptr(c_ptr as *const c_char);
-            let string = c_str.to_str().unwrap();
-            panic!("roc_panic during test: {string}");
-        }
-        _ => todo!(),
-    }
+#[cfg(test)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_dbg(
+    loc: *mut roc_std::RocStr,
+    msg: *mut roc_std::RocStr,
+    src: *mut roc_std::RocStr,
+) {
+    eprintln!("[{}] {} = {}", &*loc, &*src, &*msg);
 }
 
 #[cfg(test)]
@@ -300,6 +300,40 @@ mod test_roc_std {
 
         let example = RocDec::from_str("1000.000").unwrap();
         assert_eq!(format!("{example}"), "1000");
+
+        // truncate if there are more digits than supported
+        let example =
+            RocDec::from_str("3.14159265358979323846264338327950288419716939937510").unwrap();
+        assert_eq!(format!("{example}"), "3.141592653589793238");
+    }
+
+    #[test]
+    fn roc_dec_sort() {
+        let neg_one_point_five = RocDec::from_str("-1.5").unwrap();
+
+        let mut sorted_by_ord = [
+            neg_one_point_five,
+            RocDec::from(35),
+            RocDec::from(-10057),
+            RocDec::from(0),
+        ];
+
+        sorted_by_ord.sort();
+
+        let manually_sorted = [
+            RocDec::from(-10057),
+            neg_one_point_five,
+            RocDec::from(0),
+            RocDec::from(35),
+        ];
+
+        assert_eq!(sorted_by_ord, manually_sorted);
+    }
+
+    #[test]
+    fn roc_dec_default() {
+        // check if derived Default still returns zero if the implementation ever changes
+        assert_eq!(RocDec::from(0), RocDec::default());
     }
 
     #[test]
@@ -357,6 +391,79 @@ mod test_roc_std {
     fn empty_list_is_unique() {
         let roc_list = RocList::<RocStr>::empty();
         assert!(roc_list.is_unique());
+    }
+
+    #[test]
+    fn slicing_and_dicing_list() {
+        let example = RocList::from_slice(b"chaos is a ladder");
+
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_slice(), b"chaos");
+
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_slice(), b"is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_slice(), b"cha");
+    }
+
+    #[test]
+    fn slicing_and_dicing_str() {
+        let example = RocStr::from("chaos is a ladder");
+
+        // basic slice from the start
+        assert_eq!(example.slice_range(0..5).as_str(), "chaos");
+
+        // slice in the middle
+        assert_eq!(example.slice_range(6..10).as_str(), "is a");
+
+        // slice of slice
+        let first = example.slice_range(0..5);
+        assert_eq!(first.slice_range(0..3).as_str(), "cha");
+    }
+
+    #[test]
+    fn roc_list_push() {
+        let mut example = RocList::from_slice(&[1, 2, 3]);
+
+        // basic slice from the start
+        example.push(4);
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        // slice in the middle
+        let mut sliced = example.slice_range(0..3);
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+
+        // original did not change
+        assert_eq!(example.as_slice(), &[1, 2, 3, 4]);
+
+        drop(sliced);
+
+        let mut sliced = example.slice_range(0..3);
+        // make the slice unique
+        drop(example);
+
+        sliced.push(5);
+        assert_eq!(sliced.as_slice(), &[1, 2, 3, 5]);
+    }
+
+    #[test]
+    fn split_whitespace() {
+        let example = RocStr::from("chaos is a ladder");
+
+        let split: Vec<_> = example.split_whitespace().collect();
+
+        assert_eq!(
+            split,
+            vec![
+                RocStr::from("chaos"),
+                RocStr::from("is"),
+                RocStr::from("a"),
+                RocStr::from("ladder"),
+            ]
+        );
     }
 }
 

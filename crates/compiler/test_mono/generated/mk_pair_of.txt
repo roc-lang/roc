@@ -1,9 +1,10 @@
 procedure Test.1 (Test.2):
-    inc Test.2;
+    inc 2 Test.2;
     let Test.6 : {List I64, List I64} = Struct {Test.2, Test.2};
     ret Test.6;
 
 procedure Test.0 ():
     let Test.5 : List I64 = Array [1i64, 2i64, 3i64];
     let Test.4 : {List I64, List I64} = CallByName Test.1 Test.5;
+    dec Test.5;
     ret Test.4;

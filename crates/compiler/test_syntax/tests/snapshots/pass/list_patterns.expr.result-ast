@@ -1,228 +1,233 @@
-When(
-    @5-7 List(
-        [],
+@0-169 SpaceAfter(
+    When(
+        @5-7 List(
+            [],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @13-15 SpaceBefore(
+                        List(
+                            [],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @19-21 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @24-28 SpaceBefore(
+                        List(
+                            [
+                                @25-27 ListRest(
+                                    None,
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @32-34 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @37-51 SpaceBefore(
+                        List(
+                            [
+                                @38-39 Underscore(
+                                    "",
+                                ),
+                                @41-43 ListRest(
+                                    None,
+                                ),
+                                @45-46 Underscore(
+                                    "",
+                                ),
+                                @48-50 ListRest(
+                                    None,
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @55-57 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @60-72 SpaceBefore(
+                        List(
+                            [
+                                @61-62 Identifier {
+                                    ident: "a",
+                                },
+                                @64-65 Identifier {
+                                    ident: "b",
+                                },
+                                @67-68 Identifier {
+                                    ident: "c",
+                                },
+                                @70-71 Identifier {
+                                    ident: "d",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @76-78 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @81-91 SpaceBefore(
+                        List(
+                            [
+                                @82-83 Identifier {
+                                    ident: "a",
+                                },
+                                @85-86 Identifier {
+                                    ident: "b",
+                                },
+                                @88-90 ListRest(
+                                    None,
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @95-97 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @100-110 SpaceBefore(
+                        List(
+                            [
+                                @101-103 ListRest(
+                                    None,
+                                ),
+                                @105-106 Identifier {
+                                    ident: "c",
+                                },
+                                @108-109 Identifier {
+                                    ident: "d",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @114-116 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @119-135 SpaceBefore(
+                        List(
+                            [
+                                @120-123 List(
+                                    [
+                                        @121-122 Tag(
+                                            "A",
+                                        ),
+                                    ],
+                                ),
+                                @125-129 List(
+                                    [
+                                        @126-128 ListRest(
+                                            None,
+                                        ),
+                                    ],
+                                ),
+                                @131-134 List(
+                                    [
+                                        @132-133 Identifier {
+                                            ident: "a",
+                                        },
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @139-141 Record(
+                    [],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @144-163 SpaceBefore(
+                        List(
+                            [
+                                @145-153 List(
+                                    [
+                                        @146-148 List(
+                                            [],
+                                        ),
+                                        @150-152 List(
+                                            [],
+                                        ),
+                                    ],
+                                ),
+                                @155-162 List(
+                                    [
+                                        @156-158 List(
+                                            [],
+                                        ),
+                                        @160-161 Identifier {
+                                            ident: "x",
+                                        },
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @167-169 Record(
+                    [],
+                ),
+                guard: None,
+            },
+        ],
     ),
     [
-        WhenBranch {
-            patterns: [
-                @13-15 SpaceBefore(
-                    List(
-                        [],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @19-21 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @24-28 SpaceBefore(
-                    List(
-                        [
-                            @25-27 ListRest(
-                                None,
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @32-34 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @37-51 SpaceBefore(
-                    List(
-                        [
-                            @38-39 Underscore(
-                                "",
-                            ),
-                            @41-43 ListRest(
-                                None,
-                            ),
-                            @45-46 Underscore(
-                                "",
-                            ),
-                            @48-50 ListRest(
-                                None,
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @55-57 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @60-72 SpaceBefore(
-                    List(
-                        [
-                            @61-62 Identifier(
-                                "a",
-                            ),
-                            @64-65 Identifier(
-                                "b",
-                            ),
-                            @67-68 Identifier(
-                                "c",
-                            ),
-                            @70-71 Identifier(
-                                "d",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @76-78 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @81-91 SpaceBefore(
-                    List(
-                        [
-                            @82-83 Identifier(
-                                "a",
-                            ),
-                            @85-86 Identifier(
-                                "b",
-                            ),
-                            @88-90 ListRest(
-                                None,
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @95-97 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @100-110 SpaceBefore(
-                    List(
-                        [
-                            @101-103 ListRest(
-                                None,
-                            ),
-                            @105-106 Identifier(
-                                "c",
-                            ),
-                            @108-109 Identifier(
-                                "d",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @114-116 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @119-135 SpaceBefore(
-                    List(
-                        [
-                            @120-123 List(
-                                [
-                                    @121-122 Tag(
-                                        "A",
-                                    ),
-                                ],
-                            ),
-                            @125-129 List(
-                                [
-                                    @126-128 ListRest(
-                                        None,
-                                    ),
-                                ],
-                            ),
-                            @131-134 List(
-                                [
-                                    @132-133 Identifier(
-                                        "a",
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @139-141 Record(
-                [],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @144-163 SpaceBefore(
-                    List(
-                        [
-                            @145-153 List(
-                                [
-                                    @146-148 List(
-                                        [],
-                                    ),
-                                    @150-152 List(
-                                        [],
-                                    ),
-                                ],
-                            ),
-                            @155-162 List(
-                                [
-                                    @156-158 List(
-                                        [],
-                                    ),
-                                    @160-161 Identifier(
-                                        "x",
-                                    ),
-                                ],
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @167-169 Record(
-                [],
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

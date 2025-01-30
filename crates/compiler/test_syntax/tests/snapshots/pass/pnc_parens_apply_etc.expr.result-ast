@@ -1,0 +1,54 @@
+@0-12 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-8,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @2-6 PncApply(
+                        @2-3 SpaceBefore(
+                            NumLiteral(
+                                "3",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [],
+                    ),
+                    @7-8 Apply(
+                        "",
+                        "B",
+                        [],
+                    ),
+                ),
+            ],
+        },
+        @9-12 SpaceBefore(
+            ParensAround(
+                Var {
+                    module_name: "",
+                    ident: "z",
+                },
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

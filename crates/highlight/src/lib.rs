@@ -1,5 +1,4 @@
 use roc_parse::highlight::Token;
-use roc_region::all::Loc;
 
 pub fn highlight_roc_code(code: &str) -> String {
     let buf = highlight(code);
@@ -14,11 +13,22 @@ pub fn highlight_roc_code_inline(code: &str) -> String {
 }
 
 pub fn highlight(code: &str) -> Vec<String> {
-    let locations: Vec<Loc<Token>> = roc_parse::highlight::highlight(code);
     let mut buf: Vec<String> = Vec::new();
     let mut offset = 0;
 
-    for location in locations {
+    // Sometimes code snippets start with "»" in order to show that they're in the repl.
+    // Special-case that even though it's normally not a valid highlight.
+    const REPL_PROMPT: &str = "»";
+
+    let code = if let Some(stripped) = code.strip_prefix(REPL_PROMPT) {
+        buf = push_html_span(buf, REPL_PROMPT, "kw");
+
+        stripped
+    } else {
+        code
+    };
+
+    for location in roc_parse::highlight::highlight(code) {
         let current_text = &code[offset..location.byte_range().end];
 
         match location.value {
@@ -41,11 +51,10 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::Backslash
             | Token::Pizza
             | Token::Arrow
-            | Token::Backpass
+            | Token::BackArrow
             | Token::ColonEquals
             | Token::Colon
             | Token::And
-            | Token::AtSign
             | Token::QuestionMark => {
                 buf = push_html_span(buf, current_text, "kw");
             }
@@ -79,7 +88,7 @@ pub fn highlight(code: &str) -> Vec<String> {
                 buf = push_html_span(buf, current_text, "delimeter");
             }
             // Types, Tags, and Modules
-            Token::UpperIdent => {
+            Token::UpperIdent | Token::AtSign => {
                 buf = push_html_span(buf, current_text, "upperident");
             }
             // Variables modules and field names

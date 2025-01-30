@@ -1,65 +1,70 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-23,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-1 Identifier(
-                    "x",
-                ),
-                @4-23 Apply(
-                    @4-7 Var {
-                        module_name: "",
-                        ident: "foo",
+@0-25 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-23,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-1 Identifier {
+                        ident: "x",
                     },
-                    [
-                        @8-23 Record(
-                            [
-                                @12-21 SpaceBefore(
-                                    SpaceAfter(
-                                        RequiredValue(
-                                            @12-15 "bar",
-                                            [],
-                                            @17-21 Var {
-                                                module_name: "",
-                                                ident: "blah",
-                                            },
+                    @4-23 Apply(
+                        @4-7 Var {
+                            module_name: "",
+                            ident: "foo",
+                        },
+                        [
+                            @8-23 Record(
+                                [
+                                    @12-21 SpaceBefore(
+                                        SpaceAfter(
+                                            RequiredValue(
+                                                @12-15 "bar",
+                                                [],
+                                                @17-21 Var {
+                                                    module_name: "",
+                                                    ident: "blah",
+                                                },
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
                                         ),
                                         [
                                             Newline,
                                         ],
                                     ),
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                            ],
-                        ),
-                    ],
-                    Space,
+                                ],
+                            ),
+                        ],
+                        Space,
+                    ),
                 ),
-            ),
-        ],
-    },
-    @24-25 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "x",
+            ],
         },
-        [
-            Newline,
-        ],
+        @24-25 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "x",
+            },
+            [
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

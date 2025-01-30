@@ -16,10 +16,12 @@ mod test_can {
     use bumpalo::Bump;
     use core::panic;
     use roc_can::expr::Expr::{self, *};
-    use roc_can::expr::{ClosureData, IntValue, Recursive};
-    use roc_module::symbol::Symbol;
+    use roc_can::expr::{ClosureData, IntValue, Recursive, WhenBranch};
+    use roc_can::pattern::Pattern;
+    use roc_module::called_via::CalledVia;
     use roc_problem::can::{CycleEntry, FloatErrorKind, IntErrorKind, Problem, RuntimeError};
-    use roc_region::all::{Position, Region};
+    use roc_region::all::{Loc, Position, Region};
+    use roc_types::subs::Variable;
     use std::{f64, i64};
 
     fn assert_can_runtime_error(input: &str, expected: RuntimeError) {
@@ -280,12 +282,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
-                f = \ a -> a
+                f = | a| a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -296,12 +298,12 @@ mod test_can {
     #[test]
     fn correct_annotated_body_with_comments() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
-                f = \ a -> a
+                f = | a| a
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -312,12 +314,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
-                g = \ a -> a
+                g = | a| a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -340,12 +342,12 @@ mod test_can {
     #[test]
     fn name_mismatch_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int * # comment
-                g = \ a -> a
+                g = | a| a
 
                 g
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -368,60 +370,52 @@ mod test_can {
     #[test]
     fn separated_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
-                f = \ a -> a
+                f = | a| a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
-        assert!(problems.iter().any(|problem| matches!(
-            problem,
-            Problem::RuntimeError(RuntimeError::Shadowing { .. })
-        )));
+        assert_eq!(problems, Vec::new());
     }
 
     #[test]
     fn separated_annotated_body_with_comment() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
                 # comment
-                f = \ a -> a
+                f = | a| a
 
                 f 42
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
-        assert!(problems.iter().any(|problem| matches!(
-            problem,
-            Problem::RuntimeError(RuntimeError::Shadowing { .. })
-        )));
+        assert_eq!(problems, Vec::new());
     }
 
     #[test]
     fn shadowed_annotation() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int * -> Num.Int *
 
                 f : Num.Int * -> Num.Int *
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 2);
+        assert_eq!(problems.len(), 1);
         println!("{problems:#?}");
         assert!(problems.iter().any(|problem| matches!(
             problem,
@@ -432,7 +426,7 @@ mod test_can {
     #[test]
     fn correct_nested_unannotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -440,7 +434,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -451,7 +445,7 @@ mod test_can {
     #[test]
     fn correct_nested_annotated_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -460,7 +454,7 @@ mod test_can {
                     g + 1
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -471,7 +465,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_annotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g : Num.Int *
@@ -482,7 +476,7 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -493,7 +487,7 @@ mod test_can {
     #[test]
     fn correct_nested_body_unannotated_multiple_lines() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g = 42
@@ -503,17 +497,18 @@ mod test_can {
                     g + h + z
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
 
         assert_eq!(problems, Vec::new());
     }
+
     #[test]
     fn correct_double_nested_body() {
         let src = indoc!(
-            r#"
+            r"
                 f : Num.Int *
                 f =
                     g =
@@ -523,7 +518,7 @@ mod test_can {
 
 
                 f
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -534,13 +529,13 @@ mod test_can {
     #[test]
     fn annotation_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 F : Str
 
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -554,7 +549,7 @@ mod test_can {
     #[test]
     fn two_annotations_followed_with_unrelated_affectation() {
         let src = indoc!(
-            r#"
+            r"
                 G : Str
 
                 F : {}
@@ -562,7 +557,7 @@ mod test_can {
                 x = 1
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -581,11 +576,11 @@ mod test_can {
     //     // it only exists in the closure's arguments.
     //     let arena = Bump::new();
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         func = \arg -> arg
 
     //         func 2
-    //     "#
+    //     "
     //     );
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
     //         can_expr_with(&arena, test_home(), src);
@@ -608,13 +603,13 @@ mod test_can {
     // fn call_by_pointer_for_fn_args() {
     //     // This function will get passed in as a pointer.
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //         apply = \f, x -> f x
 
     //         identity = \a -> a
 
     //         apply identity 5
-    //     "#
+    //     "
     //     );
     //     let arena = Bump::new();
     //     let (_actual, output, problems, _var_store, _vars, _constraint) =
@@ -637,9 +632,9 @@ mod test_can {
     #[test]
     fn incorrect_optional_value() {
         let src = indoc!(
-            r#"
+            r"
                 { x ? 42 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -658,101 +653,6 @@ mod test_can {
     }
 
     // RECORD BUILDERS
-    #[test]
-    fn record_builder_desugar() {
-        let src = indoc!(
-            r#"
-                succeed = \_ -> crash "succeed"
-                apply = \_ -> crash "get"
-
-                d = 3
-
-                succeed {
-                    a: 1,
-                    b: <- apply "b",
-                    c: <- apply "c",
-                    d
-                }
-            "#
-        );
-        let arena = Bump::new();
-        let out = can_expr_with(&arena, test_home(), src);
-
-        assert_eq!(out.problems.len(), 0);
-
-        // Assert that we desugar to:
-        //
-        // (apply "c") ((apply "b") (succeed \b -> \c -> { a: 1, b, c, d }))
-
-        // (apply "c") ..
-        let (apply_c, c_to_b) = simplify_curried_call(&out.loc_expr.value);
-        assert_apply_call(apply_c, "c", &out.interns);
-
-        // (apply "b") ..
-        let (apply_b, b_to_succeed) = simplify_curried_call(c_to_b);
-        assert_apply_call(apply_b, "b", &out.interns);
-
-        // (succeed ..)
-        let (succeed, b_closure) = simplify_curried_call(b_to_succeed);
-
-        match succeed {
-            Var(sym, _) => assert_eq!(sym.as_str(&out.interns), "succeed"),
-            _ => panic!("Not calling succeed: {:?}", succeed),
-        }
-
-        // \b -> ..
-        let (b_sym, c_closure) = simplify_builder_closure(b_closure);
-
-        // \c -> ..
-        let (c_sym, c_body) = simplify_builder_closure(c_closure);
-
-        // { a: 1, b, c, d }
-        match c_body {
-            Record { fields, .. } => {
-                match get_field_expr(fields, "a") {
-                    Num(_, num_str, _, _) => {
-                        assert_eq!(num_str.to_string(), "1");
-                    }
-                    expr => panic!("a is not a Num: {:?}", expr),
-                }
-
-                assert_eq!(get_field_var_sym(fields, "b"), b_sym);
-                assert_eq!(get_field_var_sym(fields, "c"), c_sym);
-                assert_eq!(get_field_var_sym(fields, "d").as_str(&out.interns), "d");
-            }
-            _ => panic!("Closure body wasn't a Record: {:?}", c_body),
-        }
-    }
-
-    fn simplify_curried_call(expr: &Expr) -> (&Expr, &Expr) {
-        match expr {
-            LetNonRec(_, loc_expr) => simplify_curried_call(&loc_expr.value),
-            Call(fun, args, _) => (&fun.1.value, &args[0].1.value),
-            _ => panic!("Final Expr is not a Call: {:?}", expr),
-        }
-    }
-
-    fn assert_apply_call(expr: &Expr, expected: &str, interns: &roc_module::symbol::Interns) {
-        match simplify_curried_call(expr) {
-            (Var(sym, _), Str(val)) => {
-                assert_eq!(sym.as_str(interns), "apply");
-                assert_eq!(val.to_string(), expected);
-            }
-            call => panic!("Not a valid (get {}) call: {:?}", expected, call),
-        };
-    }
-
-    fn simplify_builder_closure(expr: &Expr) -> (Symbol, &Expr) {
-        use roc_can::pattern::Pattern::*;
-
-        match expr {
-            Closure(closure) => match &closure.arguments[0].2.value {
-                Identifier(sym) => (*sym, &closure.loc_body.value),
-                pattern => panic!("Not an identifier pattern: {:?}", pattern),
-            },
-            _ => panic!("Not a closure: {:?}", expr),
-        }
-    }
 
     fn get_field_expr<'a>(
         fields: &'a roc_collections::SendMap<roc_module::ident::Lowercase, roc_can::expr::Field>,
@@ -774,18 +674,19 @@ mod test_can {
     }
 
     #[test]
-    fn record_builder_field_names_do_not_shadow() {
+    fn record_builder_desugar() {
         let src = indoc!(
             r#"
-            succeed = \_ -> crash "succeed"
-            parse = \_ -> crash "parse"
+                map2 = |a, b, combine| combine a b
+                double = |n| n * 2
 
-            number = "42"
+                c = 3
 
-            succeed { 
-                number: <- parse number,
-                raw: number,
-            }
+                { map2 <-
+                    a: 1,
+                    b: double 2,
+                    c
+                }
             "#
         );
         let arena = Bump::new();
@@ -793,74 +694,673 @@ mod test_can {
 
         assert_eq!(out.problems.len(), 0);
 
-        let (_, number_to_succeed) = simplify_curried_call(&out.loc_expr.value);
-        let (_, number_closure) = simplify_curried_call(number_to_succeed);
-        let (apply_number_sym, record) = simplify_builder_closure(number_closure);
+        // Assert that we desugar to:
+        //
+        // map2
+        //     (1)
+        //     (map2
+        //         (double 2)
+        //         (c)
+        //         (\#a, #b -> (#a, #b))
+        //     )
+        //     (\a, (b, c) -> { a: #a, b: #b, c: #c })
 
-        match record {
-            Record { fields, .. } => {
-                assert_eq!(get_field_var_sym(fields, "number"), apply_number_sym);
+        let first_map2_args = assert_func_call(
+            &out.loc_expr.value,
+            "map2",
+            CalledVia::RecordBuilder,
+            &out.interns,
+        );
+        let (first_arg, second_arg, third_arg) = match &first_map2_args[..] {
+            [first, second, third] => (&first.1.value, &second.1.value, &third.1.value),
+            _ => panic!("map2 didn't receive three arguments"),
+        };
 
-                match get_field_expr(fields, "raw") {
-                    Var(number_sym, _) => {
-                        assert_ne!(number_sym.ident_id(), apply_number_sym.ident_id());
-                        assert_eq!(number_sym.as_str(&out.interns), "number")
+        assert_num_value(first_arg, 1);
+
+        let inner_map2_args =
+            assert_func_call(second_arg, "map2", CalledVia::RecordBuilder, &out.interns);
+        let (first_inner_arg, second_inner_arg, third_inner_arg) = match &inner_map2_args[..] {
+            [first, second, third] => (&first.1.value, &second.1.value, &third.1.value),
+            _ => panic!("inner map2 didn't receive three arguments"),
+        };
+
+        let double_args =
+            assert_func_call(first_inner_arg, "double", CalledVia::Space, &out.interns);
+        assert_eq!(double_args.len(), 1);
+        assert_num_value(&double_args[0].1.value, 2);
+
+        assert_var_usage(second_inner_arg, "c", &out.interns);
+
+        match third_inner_arg {
+            Expr::Closure(ClosureData {
+                arguments,
+                loc_body,
+                ..
+            }) => {
+                assert_eq!(arguments.len(), 2);
+                assert_pattern_name(
+                    &arguments[0].2.value,
+                    "#record_builder_closure_arg_a",
+                    &out.interns,
+                );
+                assert_pattern_name(
+                    &arguments[1].2.value,
+                    "#record_builder_closure_arg_b",
+                    &out.interns,
+                );
+
+                match &loc_body.value {
+                    Expr::Tuple { elems, .. } => {
+                        assert_eq!(elems.len(), 2);
+                        assert_var_usage(
+                            &elems[0].1.value,
+                            "#record_builder_closure_arg_a",
+                            &out.interns,
+                        );
+                        assert_var_usage(
+                            &elems[1].1.value,
+                            "#record_builder_closure_arg_b",
+                            &out.interns,
+                        );
                     }
-                    expr => panic!("a is not a Num: {:?}", expr),
+                    _ => panic!("Closure body was not a tuple"),
                 }
             }
-            _ => panic!("Closure body wasn't a Record: {:?}", record),
+            _ => panic!("inner map2's combiner was not a closure"),
+        }
+
+        match third_arg {
+            Expr::Closure(ClosureData {
+                arguments,
+                loc_body,
+                ..
+            }) => {
+                assert_eq!(arguments.len(), 2);
+                assert_pattern_name(&arguments[0].2.value, "#a", &out.interns);
+                match &arguments[1].2.value {
+                    Pattern::TupleDestructure { destructs, .. } => {
+                        assert_eq!(destructs.len(), 2);
+                        assert_pattern_name(&destructs[0].value.typ.1.value, "#b", &out.interns);
+                        assert_pattern_name(&destructs[1].value.typ.1.value, "#c", &out.interns);
+                    }
+                    _ => panic!("Second arg to builder func was not a tuple destructure"),
+                }
+
+                match &loc_body.value {
+                    Expr::Record { fields, .. } => {
+                        assert_eq!(fields.len(), 3);
+
+                        assert_eq!(get_field_var_sym(fields, "a").as_str(&out.interns), "#a");
+                        assert_eq!(get_field_var_sym(fields, "b").as_str(&out.interns), "#b");
+                        assert_eq!(get_field_var_sym(fields, "c").as_str(&out.interns), "#c");
+                    }
+                    _ => panic!("Closure body was not a tuple"),
+                }
+            }
+            _ => panic!("inner map2's combiner was not a closure"),
         }
     }
 
     #[test]
-    fn multiple_record_builders_error() {
+    fn question_suffix_simple() {
         let src = indoc!(
             r#"
-                succeed 
-                    { a: <- apply "a" }
-                    { b: <- apply "b" }
+                (Str.to_u64 "123")?
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, loc_expr, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let out = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
-            problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
-        )));
+        assert_eq!(out.problems, Vec::new());
 
-        assert!(matches!(
-            loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::MultipleRecordBuilders { .. })
-        ));
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
     }
 
     #[test]
-    fn hanging_record_builder() {
+    fn question_suffix_after_function() {
         let src = indoc!(
             r#"
-                { a: <- apply "a" }
+                Str.to_u64? "123"
             "#
         );
         let arena = Bump::new();
-        let CanExprOut {
-            problems, loc_expr, ..
-        } = can_expr_with(&arena, test_home(), src);
+        let out = can_expr_with(&arena, test_home(), src);
 
-        assert_eq!(problems.len(), 1);
-        assert!(problems.iter().all(|problem| matches!(
-            problem,
-            Problem::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
-        )));
+        assert_eq!(out.problems, Vec::new());
 
-        assert!(matches!(
-            loc_expr.value,
-            Expr::RuntimeError(roc_problem::can::RuntimeError::UnappliedRecordBuilder { .. })
-        ));
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.to_u64?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn question_suffix_pipe_nested() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.to_u64? (Ok 123)?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123" Try(Ok 123))
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 2);
+
+        assert_str_value(&cond_args[0].1.value, "123");
+
+        let ok_tag = assert_try_expr(&cond_args[1].1.value);
+        let tag_args = assert_tag_application(ok_tag, "Ok");
+
+        assert_eq!(tag_args.len(), 1);
+
+        assert_num_value(&tag_args[0].1.value, 123);
+    }
+
+    #[test]
+    fn try_desugar_plain_prefix() {
+        let src = indoc!(
+            r#"
+                try Str.to_u64 "123"
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn try_desugar_pipe_prefix() {
+        let src = indoc!(
+            r#"
+                "123" |> try Str.to_u64
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Try, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn try_desugar_pipe_suffix() {
+        let src = indoc!(
+            r#"
+                Str.to_u64 "123" |> try
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn try_desugar_pipe_suffix_pnc() {
+        let src = indoc!(
+            r#"
+                "123" |> Str.to_u64()?
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // Try(Str.to_u64 "123")
+
+        let cond_expr = assert_try_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+    }
+
+    #[test]
+    fn try_desugar_works_elsewhere() {
+        let src = indoc!(
+            r#"
+                when Foo 123 is
+                    Foo try -> try
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we don't treat `try` as a keyword here
+        // by desugaring to:
+        //
+        // when Foo 123 is
+        //     Foo try -> try
+
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
+        match cond_expr {
+            Expr::Tag {
+                name, arguments, ..
+            } => {
+                assert_eq!(name.0.to_string(), "Foo");
+                assert_eq!(arguments.len(), 1);
+                assert_num_value(&arguments[0].1.value, 123);
+            }
+            _ => panic!("cond_expr was not a Tag: {:?}", cond_expr),
+        }
+
+        assert_eq!(branches.len(), 1);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert!(!branches[0].patterns[0].degenerate);
+
+        match &branches[0].patterns[0].pattern.value {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } => {
+                assert_eq!(tag_name.0.to_string(), "Foo");
+                assert_eq!(arguments.len(), 1);
+                assert_pattern_name(&arguments[0].1.value, "try", &out.interns);
+            }
+            other => panic!("First argument was not an applied tag: {:?}", other),
+        }
+
+        assert_var_usage(&branches[0].value.value, "try", &out.interns);
+        assert!(&branches[0].guard.is_none());
+    }
+
+    #[test]
+    fn desugar_double_question_binop() {
+        let src = indoc!(
+            r#"
+                Str.to_u64("123") ?? Num.max_u64
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // when Str.to_u64("123")
+        //   Ok(#double_question_ok_0_17) -> Ok(#double_question_ok_0_17)
+        //   Err(_) -> Num.max_u64
+
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert_eq!(branches[1].patterns.len(), 1);
+
+        assert_pattern_tag_apply_with_ident(
+            &branches[0].patterns[0].pattern.value,
+            "Ok",
+            "#double_question_ok_0_17",
+            &out.interns,
+        );
+        assert_var_usage(
+            &branches[0].value.value,
+            "#double_question_ok_0_17",
+            &out.interns,
+        );
+
+        assert_pattern_tag_apply_with_underscore(&branches[1].patterns[0].pattern.value, "Err");
+        assert_var_usage(&branches[1].value.value, "max_u64", &out.interns);
+    }
+
+    #[test]
+    fn desugar_single_question_binop() {
+        let src = indoc!(
+            r#"
+                Str.to_u64("123") ? FailedToConvert
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // when Str.to_u64("123")
+        //   Ok(#single_question_ok_0_17) -> #single_question_ok_0_17
+        //   Err(#single_question_err_0_17) -> return Err(FailedToConvert(#single_question_err_0_17))
+
+        let (cond_expr, branches) = assert_when_expr(&out.loc_expr.value);
+        let cond_args = assert_func_call(cond_expr, "to_u64", CalledVia::Space, &out.interns);
+
+        assert_eq!(cond_args.len(), 1);
+        assert_str_value(&cond_args[0].1.value, "123");
+
+        assert_eq!(branches.len(), 2);
+        assert_eq!(branches[0].patterns.len(), 1);
+        assert_eq!(branches[1].patterns.len(), 1);
+
+        assert_pattern_tag_apply_with_ident(
+            &branches[0].patterns[0].pattern.value,
+            "Ok",
+            "#single_question_ok_0_17",
+            &out.interns,
+        );
+        assert_var_usage(
+            &branches[0].value.value,
+            "#single_question_ok_0_17",
+            &out.interns,
+        );
+
+        assert_pattern_tag_apply_with_ident(
+            &branches[1].patterns[0].pattern.value,
+            "Err",
+            "#single_question_err_0_17",
+            &out.interns,
+        );
+
+        let err_expr = assert_return_expr(&branches[1].value.value);
+        let mapped_err = assert_tag_application(err_expr, "Err");
+        assert_eq!(mapped_err.len(), 1);
+        let inner_err = assert_tag_application(&mapped_err[0].1.value, "FailedToConvert");
+        assert_eq!(inner_err.len(), 1);
+        assert_var_usage(
+            &inner_err[0].1.value,
+            "#single_question_err_0_17",
+            &out.interns,
+        );
+    }
+
+    #[test]
+    fn desugar_and_operator() {
+        let src = indoc!(
+            r#"
+                left = Bool.true
+                right = Bool.false
+
+                left and right
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // if left then right else Bool.false
+
+        let continuation1 = assert_let_expr(&out.loc_expr.value);
+        let continuation2 = assert_let_expr(&continuation1.value);
+        let (branches, final_else) = assert_if_expr(&continuation2.value);
+
+        assert_eq!(branches.len(), 1);
+
+        assert_var_usage(&branches[0].0.value, "left", &out.interns);
+        assert_var_usage(&branches[0].1.value, "right", &out.interns);
+        assert_var_usage(&final_else.value, "false", &out.interns);
+    }
+
+    #[test]
+    fn desugar_or_operator() {
+        let src = indoc!(
+            r#"
+                left = Bool.true
+                right = Bool.false
+
+                left or right
+            "#
+        );
+        let arena = Bump::new();
+        let out = can_expr_with(&arena, test_home(), src);
+
+        assert_eq!(out.problems, Vec::new());
+
+        // Assert that we desugar to:
+        //
+        // if left then Bool.true else right
+
+        let continuation1 = assert_let_expr(&out.loc_expr.value);
+        let continuation2 = assert_let_expr(&continuation1.value);
+        let (branches, final_else) = assert_if_expr(&continuation2.value);
+
+        assert_eq!(branches.len(), 1);
+
+        assert_var_usage(&branches[0].0.value, "left", &out.interns);
+        assert_var_usage(&branches[0].1.value, "true", &out.interns);
+        assert_var_usage(&final_else.value, "right", &out.interns);
+    }
+
+    fn assert_num_value(expr: &Expr, num: usize) {
+        match expr {
+            Expr::Num(_, num_str, _, _) => {
+                assert_eq!(&**num_str, &num.to_string())
+            }
+            _ => panic!("Expr wasn't a Num with value {num}: {:?}", expr),
+        }
+    }
+
+    fn assert_str_value(expr: &Expr, str_val: &str) {
+        match expr {
+            Expr::Str(str_expr) => {
+                assert_eq!(&**str_expr, str_val)
+            }
+            _ => panic!("Expr wasn't a Str with value {str_val}: {:?}", expr),
+        }
+    }
+
+    fn assert_var_usage(expr: &Expr, name: &str, interns: &roc_module::symbol::Interns) {
+        match expr {
+            Expr::Var(sym, _) => assert_eq!(sym.as_str(interns), name),
+            _ => panic!("Expr was not a variable usage: {:?}", expr),
+        }
+    }
+
+    fn assert_func_call(
+        expr: &Expr,
+        name: &str,
+        called_via: CalledVia,
+        interns: &roc_module::symbol::Interns,
+    ) -> Vec<(Variable, Loc<Expr>)> {
+        match expr {
+            Expr::LetNonRec(_, loc_expr) => {
+                assert_func_call(&loc_expr.value, name, called_via, interns)
+            }
+            Expr::Call(fun, args, called) if called == &called_via => {
+                match &fun.1.value {
+                    Expr::Var(sym, _) => assert_eq!(sym.as_str(interns), name),
+                    _ => panic!("Builder didn't desugar with mapper at front"),
+                };
+
+                args.clone()
+            }
+            _ => panic!(
+                "Expr was not a Call with CalledVia={:?}: {:?}",
+                called_via, expr
+            ),
+        }
+    }
+
+    fn assert_tag_application(expr: &Expr, tag_name: &str) -> Vec<(Variable, Loc<Expr>)> {
+        match expr {
+            Expr::LetNonRec(_, loc_expr) => assert_tag_application(&loc_expr.value, tag_name),
+            Expr::Tag {
+                name, arguments, ..
+            } if *name == tag_name.into() => arguments.clone(),
+            _ => panic!("Expr was not a Tag named {tag_name:?}: {expr:?}",),
+        }
+    }
+
+    fn assert_pattern_name(pattern: &Pattern, name: &str, interns: &roc_module::symbol::Interns) {
+        match pattern {
+            Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), name),
+            _ => panic!("Pattern was not an identifier: {:?}", pattern),
+        }
+    }
+
+    fn assert_pattern_tag_apply_with_ident(
+        pattern: &Pattern,
+        name: &str,
+        ident: &str,
+        interns: &roc_module::symbol::Interns,
+    ) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Identifier(sym) => assert_eq!(sym.as_str(interns), ident),
+                    _ => panic!(
+                        "The tag was expected to be applied with {:?} but we instead found {:?}",
+                        ident, arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
+        }
+    }
+
+    fn assert_pattern_tag_apply_with_underscore(pattern: &Pattern, name: &str) {
+        match pattern {
+            Pattern::AppliedTag {
+                tag_name,
+                arguments,
+                ..
+            } if arguments.len() == 1 => {
+                assert_eq!(tag_name.as_ident_str().as_str(), name);
+                match arguments[0].1.value {
+                    Pattern::Underscore => {},
+                    _ => panic!(
+                        "The tag was expected to be applied with an underscore but we instead found {:?}",
+                        arguments[0].1.value
+                    ),
+                }
+            }
+            _ => panic!("Pattern was not an applied tag: {:?}", pattern),
+        }
+    }
+
+    fn assert_let_expr(expr: &Expr) -> &Loc<Expr> {
+        match expr {
+            Expr::LetNonRec(_, continuation) | Expr::LetRec(_, continuation, _) => continuation,
+            _ => panic!("Expr was not a Let(Non)?Rec: {expr:?}",),
+        }
+    }
+
+    fn assert_when_expr(expr: &Expr) -> (&Expr, &Vec<WhenBranch>) {
+        match expr {
+            Expr::When {
+                loc_cond, branches, ..
+            } => (&loc_cond.value, branches),
+            _ => panic!("Expr was not a When: {:?}", expr),
+        }
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn assert_if_expr(expr: &Expr) -> (&[(Loc<Expr>, Loc<Expr>)], &Loc<Expr>) {
+        match expr {
+            Expr::If {
+                branches,
+                final_else,
+                ..
+            } => (&branches, &**final_else),
+            _ => panic!("Expr was not a When: {:?}", expr),
+        }
+    }
+
+    fn assert_try_expr(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Try { result_expr, .. } => &result_expr.value,
+            _ => panic!("Expr was not a Try: {:?}", expr),
+        }
+    }
+
+    fn assert_return_expr(expr: &Expr) -> &Expr {
+        match expr {
+            Expr::Return { return_value, .. } => &return_value.value,
+            _ => panic!("Expr was not a Return: {:?}", expr),
+        }
     }
 
     // TAIL CALLS
@@ -911,21 +1411,21 @@ mod test_can {
     #[test]
     fn recognize_tail_calls() {
         let src = indoc!(
-            r#"
-                g = \x ->
+            r"
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x - 1)
 
                 # use parens to force the ordering!
                 (
-                    h = \x ->
+                    h = |x|
                         when x is
                             0 -> 0
                             _ -> g (x - 1)
 
                     (
-                        p = \x ->
+                        p = |x|
                             when x is
                                 0 -> 0
                                 1 -> g (x - 1)
@@ -936,7 +1436,7 @@ mod test_can {
                         { x: p, y: h }
                     )
                 )
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -963,7 +1463,7 @@ mod test_can {
     // #[test]
     // fn reproduce_incorrect_unused_defs() {
     //     let src = indoc!(
-    //         r#"
+    //         r"
     //             g = \x ->
     //                 when x is
     //                     0 -> 0
@@ -983,7 +1483,7 @@ mod test_can {
     //             # variables must be (indirectly) referenced in the body for analysis to work
     //             # { x: p, y: h }
     //             g
-    //         "#
+    //         "
     //     );
     //     let arena = Bump::new();
     //     let CanExprOut {
@@ -1012,14 +1512,14 @@ mod test_can {
     #[test]
     fn when_tail_call() {
         let src = indoc!(
-            r#"
-                g = \x ->
+            r"
+                g = |x|
                     when x is
                         0 -> 0
                         _ -> g (x + 1)
 
                 g 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1034,11 +1534,11 @@ mod test_can {
     #[test]
     fn immediate_tail_call() {
         let src = indoc!(
-            r#"
-                f = \x -> f x
+            r"
+                f = |x| f x
 
                 f 0
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1055,13 +1555,13 @@ mod test_can {
     #[test]
     fn when_condition_is_no_tail_call() {
         let src = indoc!(
-            r#"
-            q = \x ->
+            r"
+            q = |x|
                     when q x is
                         _ -> 0
 
             q 0
-        "#
+        "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1076,19 +1576,19 @@ mod test_can {
     #[test]
     fn good_mutual_recursion() {
         let src = indoc!(
-            r#"
-                q = \x ->
+            r"
+                q = |x|
                         when x is
                             0 -> 0
                             _ -> p (x - 1)
 
-                p = \x ->
+                p = |x|
                         when x is
                             0 -> 0
                             _ -> q (x - 1)
 
                 q p
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1107,11 +1607,11 @@ mod test_can {
     #[test]
     fn valid_self_recursion() {
         let src = indoc!(
-            r#"
-                boom = \_ -> boom {}
+            r"
+                boom = |_| boom {}
 
                 boom
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut {
@@ -1128,13 +1628,13 @@ mod test_can {
     #[test]
     fn invalid_mutual_recursion() {
         let src = indoc!(
-            r#"
+            r"
                 x = y
                 y = z
                 z = x
 
                 x
-            "#
+            "
         );
         let home = test_home();
         let arena = Bump::new();
@@ -1176,11 +1676,11 @@ mod test_can {
     #[test]
     fn dict() {
         let src = indoc!(
-            r#"
+            r"
                 x = Dict.empty {}
 
                 Dict.len x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1191,7 +1691,7 @@ mod test_can {
     #[test]
     fn unused_def_regression() {
         let src = indoc!(
-            r#"
+            r"
                 Booly : [Yes, No, Maybe]
 
                 y : Booly
@@ -1205,7 +1705,7 @@ mod test_can {
                 x = [y]
 
                 x
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1216,14 +1716,14 @@ mod test_can {
     #[test]
     fn optional_field_not_unused() {
         let src = indoc!(
-            r#"
+            r"
                 fallbackZ = 3
 
-                fn = \{ x, y, z ? fallbackZ } ->
+                fn = |{ x, y, z ? fallbackZ }|
                     { x, y, z }
 
                 fn { x: 0, y: 1 }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1234,12 +1734,12 @@ mod test_can {
     #[test]
     fn issue_2534() {
         let src = indoc!(
-            r#"
+            r"
             x = { a: 1 }
             {
                 x & a: 2
             }
-            "#
+            "
         );
         let arena = Bump::new();
         let CanExprOut { problems, .. } = can_expr_with(&arena, test_home(), src);
@@ -1252,13 +1752,13 @@ mod test_can {
     //    // "local" should be used, because the closure used it.
     //    // However, "unused" should be unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + local
 
     //        3 + func 2
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1283,13 +1783,13 @@ mod test_can {
     //fn unused_closure() {
     //    // "unused" should be unused because it's in func, which is unused.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        local = 5
     //        unused = 6
     //        func = \arg -> arg + unused
 
     //        local
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1316,9 +1816,9 @@ mod test_can {
     //     #[test]
     //     fn basic_unrecognized_constant() {
     //         let (expr, output, problems, _) = can_expr(indoc!(
-    //             r#"
+    //             r"
     //             x
-    //         "#
+    //         "
     //         ));
 
     //         assert_eq!(
@@ -1342,12 +1842,12 @@ mod test_can {
     //#[test]
     //fn complex_unrecognized_constant() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = 5
     //        b = 6
 
     //        a + b * z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1368,20 +1868,20 @@ mod test_can {
     //    );
     //}
 
-    //// UNUSED
+    // // UNUSED
 
     //#[test]
     //fn mutual_unused_circular_vars() {
     //    // This should report that both a and b are unused, since the return expr never references them.
     //    // It should not report them as circular, since we haven't solved the halting problem here.
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \arg -> if arg > 0 then b 7 else 0
     //        b = \arg -> if arg > 0 then a (arg - 1) else 0
     //        c = 5
 
     //        c
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![unused("a"), unused("b")]);
@@ -1400,7 +1900,7 @@ mod test_can {
     //#[test]
     //fn can_fibonacci() {
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        fibonacci = \num ->
     //            if num < 2 then
     //                num
@@ -1408,7 +1908,7 @@ mod test_can {
     //                fibonacci (num - 1) + fibonacci (num - 2)
 
     //        fibonacci 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1430,7 +1930,7 @@ mod test_can {
     //    // is considered a tail call, even though it only
     //    // calls itself from one branch!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        factorial = \num ->
     //            factorialHelp num 0
 
@@ -1441,7 +1941,7 @@ mod test_can {
     //                factorialHelp (num - 1) (total * num)
 
     //        factorial 9
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1462,12 +1962,12 @@ mod test_can {
     //    // This should report that neither a nor b are unused,
     //    // since if you never call a function but do return it, that's okay!
     //    let (_, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        a = \_ -> 42
     //        b = a
 
     //        b
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, Vec::new());
@@ -1483,19 +1983,19 @@ mod test_can {
     //    );
     //}
 
-    //// ASSIGNMENT REORDERING
+    // // ASSIGNMENT REORDERING
 
     //#[test]
     //fn reorder_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        increment = \arg -> arg + 1
     //        z = (increment 2) + y
     //        y = x + 1
     //        x = 9
 
     //        z * 3
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1526,7 +2026,7 @@ mod test_can {
     //#[test]
     //fn reorder_closed_over_assignments() {
     //    let (expr, output, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        z = func1 x
     //        x = 9
     //        y = func2 3
@@ -1534,7 +2034,7 @@ mod test_can {
     //        func2 = \arg -> arg + x
 
     //        z
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
@@ -1623,19 +2123,19 @@ mod test_can {
     //    }
     //}
 
-    //// CIRCULAR ASSIGNMENT
+    // // CIRCULAR ASSIGNMENT
 
     //#[test]
     //fn circular_assignment() {
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        c = d + 3
     //        b = 2 + c
     //        d = a + 7
     //        a = b + 1
 
     //        2 + d
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(
@@ -1655,82 +2155,82 @@ mod test_can {
     //    // There was a bug where this reported UnusedArgument("val")
     //    // since it was used only in the returned function only.
     //    let (_, _, problems, _) = can_expr(indoc!(
-    //        r#"
+    //        r"
     //        \val -> \_ -> val
-    //    "#
+    //    "
     //    ));
 
     //    assert_eq!(problems, vec![]);
     //}
 
-    //// TODO verify that Apply handles output.references.calls correctly
+    // // TODO verify that Apply handles output.references.calls correctly
 
-    //// UNSUPPORTED PATTERNS
+    // // UNSUPPORTED PATTERNS
 
-    //// TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
+    // // TODO verify that in closures and assignments, you can't assign to int/string/underscore/etc
 
-    //// OPERATOR PRECEDENCE
+    // // OPERATOR PRECEDENCE
 
-    //// fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
-    ////     parse_without_loc(input)
-    ////         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
-    //// }
+    // // fn parse_with_precedence(input: &str) -> Result<(Expr, &str), easy::Errors<char, &str, IndentablePosition>> {
+    // //     parse_without_loc(input)
+    // //         .map(|(expr, remaining)| (expr::apply_precedence_and_associativity(loc(expr)).unwrap().value, remaining))
+    // // }
 
-    //// #[test]
-    //// fn two_operator_precedence() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x + y * 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(var("x")),
-    ////                 loc(Plus),
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("y")),
-    ////                         loc(Star),
-    ////                         loc_box(Int(5))
-    ////                     )
-    ////                 ),
-    ////             ),
-    ////         ""))
-    ////     );
+    // // #[test]
+    // // fn two_operator_precedence() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x + y * 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(var("x")),
+    // //                 loc(Plus),
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("y")),
+    // //                         loc(Star),
+    // //                         loc_box(Int(5))
+    // //                     )
+    // //                 ),
+    // //             ),
+    // //         ""))
+    // //     );
 
-    ////     assert_eq!(
-    ////         parse_with_precedence("x * y + 5"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(Star),
-    ////                         loc_box(var("y")),
-    ////                     )
-    ////                 ),
-    ////                 loc(Plus),
-    ////                 loc_box(Int(5))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // //     assert_eq!(
+    // //         parse_with_precedence("x * y + 5"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(Star),
+    // //                         loc_box(var("y")),
+    // //                     )
+    // //                 ),
+    // //                 loc(Plus),
+    // //                 loc_box(Int(5))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// #[test]
-    //// fn compare_and() {
-    ////     assert_eq!(
-    ////         parse_with_precedence("x > 1 || True"),
-    ////         Ok((BinOp(
-    ////                 loc_box(
-    ////                     BinOp(
-    ////                         loc_box(var("x")),
-    ////                         loc(GreaterThan),
-    ////                         loc_box(Int(1))
-    ////                     )
-    ////                 ),
-    ////                 loc(Or),
-    ////                 loc_box(ApplyVariant(vname("True"), None))
-    ////             ),
-    ////         ""))
-    ////     );
-    //// }
+    // // #[test]
+    // // fn compare_and() {
+    // //     assert_eq!(
+    // //         parse_with_precedence("x > 1 || True"),
+    // //         Ok((BinOp(
+    // //                 loc_box(
+    // //                     BinOp(
+    // //                         loc_box(var("x")),
+    // //                         loc(GreaterThan),
+    // //                         loc_box(Int(1))
+    // //                     )
+    // //                 ),
+    // //                 loc(Or),
+    // //                 loc_box(ApplyVariant(vname("True"), None))
+    // //             ),
+    // //         ""))
+    // //     );
+    // // }
 
-    //// HELPERS
+    // // HELPERS
 
     //#[test]
     //fn sort_cyclic_idents() {
@@ -1822,18 +2322,18 @@ mod test_can {
     //         );
     //     }
 
-    //     #[test]
-    //     fn string_with_escaped_interpolation() {
-    //         assert_parses_to(
-    //             // This should NOT be string interpolation, because of the \\
-    //             indoc!(
-    //                 r#"
-    //                      "abcd\\(efg)hij"
+    // #[test]
+    // fn string_with_escaped_interpolation() {
+    //     assert_parses_to(
+    //         // This should NOT be string interpolation, because of the \\
+    //         indoc!(
+    //             r#"
+    //                      "abcd\${efg}hij"
     //                      "#
-    //             ),
-    //             Str(r#"abcd\(efg)hij"#.into()),
-    //         );
-    //     }
+    //         ),
+    //         Str(r"abcd${efg}hij".into()),
+    //     );
+    // }
 
     //     #[test]
     //     fn string_without_escape() {
@@ -1848,7 +2348,7 @@ mod test_can {
 
     //     #[test]
     //     fn string_with_special_escapes() {
-    //         expect_parsed_str(r#"x\x"#, r#""x\\x""#);
+    //         expect_parsed_str(r"x\x", r#""x\\x""#);
     //         expect_parsed_str(r#"x"x"#, r#""x\"x""#);
     //         expect_parsed_str("x\tx", r#""x\tx""#);
     //         expect_parsed_str("x\rx", r#""x\rx""#);

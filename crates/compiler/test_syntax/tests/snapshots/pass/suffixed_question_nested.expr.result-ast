@@ -1,0 +1,43 @@
+@0-33 Apply(
+    @0-3 TrySuffix(
+        Var {
+            module_name: "",
+            ident: "foo",
+        },
+    ),
+    [
+        @9-17 ParensAround(
+            Apply(
+                @9-12 TrySuffix(
+                    Var {
+                        module_name: "",
+                        ident: "bar",
+                    },
+                ),
+                [
+                    @14-17 Var {
+                        module_name: "",
+                        ident: "baz",
+                    },
+                ],
+                Space,
+            ),
+        ),
+        @22-32 ParensAround(
+            Apply(
+                @22-26 Var {
+                    module_name: "",
+                    ident: "blah",
+                },
+                [
+                    @27-32 Var {
+                        module_name: "",
+                        ident: "stuff",
+                    },
+                ],
+                Space,
+            ),
+        ),
+    ],
+    Space,
+)

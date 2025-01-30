@@ -70,9 +70,7 @@ impl FlatHash {
                 FlatType::Tuple(elems, ext) => {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |ext| {
-                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
-                    })?;
+                    check_derivable_ext_var(subs, ext, |_| false)?;
 
                     Ok(Key(FlatHashKey::Tuple(elems_iter.count() as _)))
                 }
@@ -112,10 +110,9 @@ impl FlatHash {
                         .collect(),
                 ))),
                 FlatType::EmptyRecord => Ok(Key(FlatHashKey::Record(vec![]))),
-                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => Ok(Key(FlatHashKey::TagUnion(vec![]))),
                 //
-                FlatType::Func(..) => Err(Underivable),
+                FlatType::Func(..) | FlatType::EffectfulFunc => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match builtin_symbol_to_hash_lambda(sym) {
                 Some(lambda) => Ok(lambda),
@@ -149,6 +146,7 @@ impl FlatHash {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
             Content::LambdaSet(_) | Content::ErasedLambda => Err(Underivable),
+            Content::Pure | Content::Effectful => Err(Underivable),
         }
     }
 
@@ -190,9 +188,6 @@ const fn builtin_symbol_to_hash_lambda(symbol: Symbol) -> Option<FlatHash> {
         }
         Symbol::NUM_I128 | Symbol::NUM_SIGNED128 => {
             Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_I128))
-        }
-        Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-            Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_NAT))
         }
         Symbol::NUM_DEC | Symbol::NUM_DECIMAL => {
             Some(SingleLambdaSetImmediate(Symbol::HASH_HASH_DEC))

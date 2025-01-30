@@ -8,38 +8,22 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can = { path = "../compiler/can" }
-roc_collections = { path = "../compiler/collections" }
-roc_error_macros = { path = "../error_macros" }
-roc_exhaustive = { path = "../compiler/exhaustive" }
-roc_fmt = { path = "../compiler/fmt" }
-roc_module = { path = "../compiler/module" }
-roc_parse = { path = "../compiler/parse" }
-roc_packaging = { path = "../packaging" }
-roc_problem = { path = "../compiler/problem" }
-roc_region = { path = "../compiler/region" }
-roc_solve_problem = { path = "../compiler/solve_problem" }
-roc_std = { path = "../roc_std" }
-roc_types = { path = "../compiler/types" }
-ven_pretty = { path = "../vendor/pretty" }
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_error_macros.workspace = true
+roc_exhaustive.workspace = true
+roc_fmt.workspace = true
+roc_module.workspace = true
+roc_parse.workspace = true
+roc_packaging.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_solve_problem.workspace = true
+roc_std.workspace = true
+roc_types.workspace = true
+ven_pretty.workspace = true
 byte-unit = "4.0.19"
 itertools = "0.10.5"
 
 bumpalo.workspace = true
 distance.workspace = true
-
-[dev-dependencies]
-roc_builtins = { path = "../compiler/builtins" }
-roc_constrain = { path = "../compiler/constrain" }
-roc_derive = { path = "../compiler/derive" }
-roc_load = { path = "../compiler/load" }
-roc_packaging = { path = "../packaging" }
-roc_parse = { path = "../compiler/parse" }
-roc_problem = { path = "../compiler/problem" }
-roc_solve = { path = "../compiler/solve" }
-roc_target = { path = "../compiler/roc_target" }
-roc_test_utils = { path = "../test_utils" }
-
-indoc.workspace = true
-insta.workspace = true
-pretty_assertions.workspace = true

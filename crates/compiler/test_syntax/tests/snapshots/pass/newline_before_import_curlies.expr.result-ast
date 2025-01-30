@@ -1,0 +1,55 @@
+@0-14 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-12,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @7-8 ImportedModuleName {
+                            package: None,
+                            name: ModuleName(
+                                "P",
+                            ),
+                        },
+                        params: Some(
+                            ModuleImportParams {
+                                before: [
+                                    Newline,
+                                ],
+                                params: @10-12 [],
+                            },
+                        ),
+                        alias: None,
+                        exposed: None,
+                    },
+                ),
+            ],
+        },
+        @13-14 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "y",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -18,16 +18,16 @@ use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_mono::code_gen_help::CodeGenHelp;
 use roc_mono::ir::{Proc, ProcLayout};
 use roc_mono::layout::{LayoutIds, STLayoutInterner};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use roc_wasm_module::parse::ParseError;
 use roc_wasm_module::{Align, LocalId, ValueType, WasmModule};
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
 use crate::code_builder::CodeBuilder;
 
-const TARGET_INFO: TargetInfo = TargetInfo::default_wasm32();
+const TARGET: Target = Target::Wasm32;
 const PTR_SIZE: u32 = {
-    let value = TARGET_INFO.ptr_width() as u32;
+    let value = TARGET.ptr_width() as u32;
 
     // const assert that our pointer width is actually 4
     // the code relies on the pointer width being exactly 4
@@ -38,8 +38,6 @@ const PTR_SIZE: u32 = {
 const PTR_TYPE: ValueType = ValueType::I32;
 
 pub const MEMORY_NAME: &str = "memory";
-pub const BUILTINS_IMPORT_MODULE_NAME: &str = "env";
-pub const STACK_POINTER_NAME: &str = "__stack_pointer";
 
 pub struct Env<'a> {
     pub arena: &'a Bump,
@@ -135,7 +133,7 @@ pub fn build_app_module<'a, 'r>(
         host_to_app_map,
         host_module,
         fn_index_offset,
-        CodeGenHelp::new(env.arena, TargetInfo::default_wasm32(), env.module_id),
+        CodeGenHelp::new(env.arena, Target::Wasm32, env.module_id),
     );
 
     if DEBUG_SETTINGS.user_procs_ir {
@@ -178,7 +176,6 @@ pub fn build_app_module<'a, 'r>(
         match source {
             Roc => { /* already generated */ }
             Helper => backend.build_proc(helper_iter.next().unwrap()),
-            HigherOrderMapper(inner_idx) => backend.build_higher_order_mapper(idx, *inner_idx),
             HigherOrderCompare(inner_idx) => backend.build_higher_order_compare(idx, *inner_idx),
         }
     }
@@ -249,7 +246,7 @@ pub const DEBUG_SETTINGS: WasmDebugSettings = WasmDebugSettings {
     let_stmt_ir: false && cfg!(debug_assertions),
     instructions: false && cfg!(debug_assertions),
     storage_map: false && cfg!(debug_assertions),
-    keep_test_binary: false && cfg!(debug_assertions), // see also ROC_WRITE_FINAL_WASM
+    keep_test_binary: false && cfg!(debug_assertions),
 };
 
 #[cfg(test)]
@@ -287,6 +284,11 @@ mod dummy_platform_functions {
     #[no_mangle]
     pub unsafe extern "C" fn roc_panic(_c_ptr: *mut c_void, _tag_id: u32) {
         unimplemented!("It is not valid to call roc panic from within the compiler. Please use the \"platform\" feature if this is a platform.")
+    }
+
+    #[no_mangle]
+    pub unsafe extern "C" fn roc_dbg(_loc: *mut c_void, _msg: *mut c_void, _src: *mut c_void) {
+        unimplemented!("It is not valid to call roc dbg from within the compiler. Please use the \"platform\" feature if this is a platform.")
     }
 
     #[no_mangle]

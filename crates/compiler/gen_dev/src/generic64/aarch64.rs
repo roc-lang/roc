@@ -1,3 +1,6 @@
+#![allow(clippy::redundant_closure_call)]
+//|> clippy false positive: https://github.com/rust-lang/rust-clippy/issues/1553
+
 use crate::generic64::{storage::StorageManager, Assembler, CallConv, RegTrait};
 use crate::{
     pointer_layouts, single_register_floats, single_register_int_builtins,
@@ -365,6 +368,7 @@ impl CallConv<AArch64GeneralReg, AArch64FloatReg, AArch64Assembler> for AArch64C
     ///  213568:       f90033fd        str     x29, [sp, #96]
     const SHADOW_SPACE_SIZE: u8 = 16;
 
+    // These are registers that a called function must save and restore if it wants to use them.
     #[inline(always)]
     fn general_callee_saved(reg: &AArch64GeneralReg) -> bool {
         matches!(
@@ -1242,6 +1246,16 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn abs_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fabs_freg_freg(buf, FloatWidth::F32, dst, src);
+    }
+
+    #[inline(always)]
     fn add_reg64_reg64_imm32(
         buf: &mut Vec<'_, u8>,
         dst: AArch64GeneralReg,
@@ -1265,6 +1279,7 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     ) {
         add_reg64_reg64_reg64(buf, dst, src1, src2);
     }
+
     #[inline(always)]
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
@@ -1282,6 +1297,25 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
         src2: AArch64FloatReg,
     ) {
         fadd_freg_freg_freg(buf, FloatWidth::F64, dst, src1, src2);
+    }
+
+    #[inline(always)]
+    fn sub_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+    ) {
+        fsub_freg_freg_freg(buf, FloatWidth::F32, dst, src1, src2);
+    }
+    #[inline(always)]
+    fn sub_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: AArch64FloatReg,
+        src1: AArch64FloatReg,
+        src2: AArch64FloatReg,
+    ) {
+        fsub_freg_freg_freg(buf, FloatWidth::F64, dst, src1, src2);
     }
 
     #[inline(always)]
@@ -1638,6 +1672,11 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     }
 
     #[inline(always)]
+    fn mov_freg32_base32(buf: &mut Vec<'_, u8>, dst: AArch64FloatReg, offset: i32) {
+        Self::mov_freg32_mem32_offset32(buf, dst, AArch64GeneralReg::FP, offset)
+    }
+
+    #[inline(always)]
     fn mov_reg_mem_offset32(
         buf: &mut Vec<'_, u8>,
         register_width: RegisterWidth,
@@ -1805,6 +1844,26 @@ impl Assembler<AArch64GeneralReg, AArch64FloatReg> for AArch64Assembler {
     #[inline(always)]
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: AArch64GeneralReg, src: AArch64GeneralReg) {
         neg_reg64_reg64(buf, dst, src);
+    }
+
+    #[inline(always)]
+    fn neg_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fneg_freg_freg(buf, FloatWidth::F64, dst, src);
+    }
+
+    #[inline(always)]
+    fn neg_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        _relocs: &mut Vec<'_, Relocation>,
+        dst: AArch64FloatReg,
+        src: AArch64FloatReg,
+    ) {
+        fneg_freg_freg(buf, FloatWidth::F32, dst, src);
     }
 
     #[inline(always)]
@@ -3890,6 +3949,45 @@ fn fadd_freg_freg_freg(
             rm: src2,
         });
 
+    buf.extend(inst.bytes());
+}
+
+/// `FSUB Sd/Dd, Sn/Dn, Sm/Dm` -> Sub Sn/Dn and Sm/Dm and place the result into Sd/Dd.
+#[inline(always)]
+fn fsub_freg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64FloatReg,
+    src1: AArch64FloatReg,
+    src2: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingTwoSource::new(FloatingPointDataProcessingTwoSourceParams {
+            opcode: 0b0011,
+            ptype: ftype,
+            rd: dst,
+            rn: src1,
+            rm: src2,
+        });
+
+    buf.extend(inst.bytes());
+}
+
+/// `FNEG Sd/Dd, Sn/Dn`
+#[inline(always)]
+fn fneg_freg_freg(
+    buf: &mut Vec<'_, u8>,
+    ftype: FloatWidth,
+    dst: AArch64FloatReg,
+    src: AArch64FloatReg,
+) {
+    let inst =
+        FloatingPointDataProcessingOneSource::new(FloatingPointDataProcessingOneSourceParams {
+            ptype: ftype,
+            opcode: 0b00010,
+            rn: src,
+            rd: dst,
+        });
     buf.extend(inst.bytes());
 }
 

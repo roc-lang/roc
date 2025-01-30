@@ -1,0 +1,618 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+        EitherIndex(2147483650),
+        EitherIndex(2147483651),
+        EitherIndex(2147483652),
+        EitherIndex(2147483653),
+        EitherIndex(2147483654),
+        EitherIndex(2147483655),
+        EitherIndex(2147483656),
+        EitherIndex(2147483657),
+        EitherIndex(2147483658),
+        EitherIndex(2147483659),
+        EitherIndex(2147483660),
+    ],
+    regions: [
+        @0-49,
+        @51-100,
+        @102-136,
+        @138-187,
+        @189-252,
+        @254-312,
+        @314-363,
+        @365-409,
+        @411-460,
+        @462-513,
+        @515-672,
+        @675-683,
+        @710-718,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 10, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 12, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 14, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 16, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 18, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 20, length: 3 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 23, length: 2 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 10, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 12, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 14, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 16, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 18, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 20, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 23, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 25, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        LineComment(
+            " comment between imports",
+        ),
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport(
+            ModuleImport {
+                before_name: [
+                    Newline,
+                    LineComment(
+                        " comment",
+                    ),
+                ],
+                name: @25-29 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @33-34 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @45-48 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @58-62 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @84-85 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @96-99 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @109-113 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                        },
+                        item: @135-136 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @145-149 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                        },
+                        item: @171-172 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @183-186 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @196-200 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                        },
+                        item: @222-223 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @234-237 ExposedName(
+                                "map",
+                            ),
+                            @247-251 SpaceBefore(
+                                ExposedName(
+                                    "map2",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @261-265 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @294-297 ExposedName(
+                                "map",
+                            ),
+                            @307-311 SpaceBefore(
+                                ExposedName(
+                                    "map2",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @321-325 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @329-330 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @359-362 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @372-376 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                        },
+                        item: [
+                            @405-408 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @418-422 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @426-427 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment",
+                                ),
+                            ],
+                        },
+                        item: [
+                            @456-459 ExposedName(
+                                "map",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @469-473 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @477-478 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @508-511 SpaceBefore(
+                                SpaceAfter(
+                                    ExposedName(
+                                        "map",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                    LineComment(
+                                        " comment",
+                                    ),
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [
+                    Newline,
+                    LineComment(
+                        " comment 1",
+                    ),
+                ],
+                name: @542-546 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                                LineComment(
+                                    " comment 2",
+                                ),
+                            ],
+                            item: ImportAsKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment 3",
+                                ),
+                            ],
+                        },
+                        item: @590-591 ImportAlias(
+                            "J",
+                        ),
+                    },
+                ),
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [
+                                Newline,
+                                LineComment(
+                                    " comment 4",
+                                ),
+                            ],
+                            item: ImportExposingKeyword,
+                            after: [
+                                Newline,
+                                LineComment(
+                                    " comment 5",
+                                ),
+                            ],
+                        },
+                        item: [
+                            @663-666 SpaceBefore(
+                                SpaceAfter(
+                                    ExposedName(
+                                        "map",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                    LineComment(
+                                        " comment 6",
+                                    ),
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @682-683 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "A",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @717-718 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "B",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: None,
+            },
+        ),
+    ],
+}

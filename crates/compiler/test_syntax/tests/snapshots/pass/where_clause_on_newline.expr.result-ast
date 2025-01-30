@@ -1,66 +1,72 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-40,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @4-40 Where(
-                    @4-12 SpaceAfter(
-                        Function(
-                            [
-                                @4-5 BoundVariable(
-                                    "a",
-                                ),
-                            ],
-                            @9-12 Apply(
-                                "",
-                                "U64",
-                                [],
-                            ),
-                        ),
-                        [
-                            Newline,
-                        ],
-                    ),
-                    [
-                        @23-40 ImplementsClause {
-                            var: @23-24 "a",
-                            abilities: [
-                                @36-40 Apply(
+@0-43 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-40,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @4-40 Where(
+                        @4-12 SpaceAfter(
+                            Function(
+                                [
+                                    @4-5 BoundVariable(
+                                        "a",
+                                    ),
+                                ],
+                                Pure,
+                                @9-12 Apply(
                                     "",
-                                    "Hash",
+                                    "U64",
                                     [],
                                 ),
+                            ),
+                            [
+                                Newline,
                             ],
-                        },
-                    ],
+                        ),
+                        [
+                            @23-40 ImplementsClause {
+                                var: @23-24 "a",
+                                abilities: [
+                                    @36-40 Apply(
+                                        "",
+                                        "Hash",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
+                    ),
                 ),
-            ),
-        ],
-    },
-    @42-43 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "f",
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @42-43 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

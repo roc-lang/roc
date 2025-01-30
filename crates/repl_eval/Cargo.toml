@@ -8,21 +8,21 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_builtins = { path = "../compiler/builtins" }
-roc_can = { path = "../compiler/can" }
-roc_collections = { path = "../compiler/collections" }
-roc_fmt = { path = "../compiler/fmt" }
-roc_load = { path = "../compiler/load" }
-roc_module = { path = "../compiler/module" }
-roc_mono = { path = "../compiler/mono" }
-roc_packaging = { path = "../packaging" }
-roc_parse = { path = "../compiler/parse" }
-roc_problem = { path = "../compiler/problem" }
-roc_region = { path = "../compiler/region" }
-roc_reporting = { path = "../reporting" }
-roc_solve = { path = "../compiler/solve" }
-roc_std = { path = "../roc_std" }
-roc_target = { path = "../compiler/roc_target" }
-roc_types = { path = "../compiler/types" }
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_fmt.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_packaging.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
 
 bumpalo.workspace = true

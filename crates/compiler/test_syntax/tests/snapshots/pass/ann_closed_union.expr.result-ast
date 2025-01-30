@@ -1,48 +1,24 @@
-Defs(
+@0-42 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-38,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
-                @6-27 TagUnion {
-                    ext: None,
-                    tags: [
-                        @7-11 Apply {
-                            name: @7-11 "True",
-                            args: [],
-                        },
-                        @13-26 Apply {
-                            name: @13-20 "Perhaps",
-                            args: [
-                                @21-26 Apply(
-                                    "",
-                                    "Thing",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
-                },
-            ),
             AnnotatedBody {
-                ann_pattern: @0-3 Identifier(
-                    "foo",
-                ),
+                ann_pattern: @0-3 Identifier {
+                    ident: "foo",
+                },
                 ann_type: @6-27 TagUnion {
                     ext: None,
                     tags: [
@@ -62,10 +38,12 @@ Defs(
                         },
                     ],
                 },
-                comment: None,
-                body_pattern: @28-31 Identifier(
-                    "foo",
-                ),
+                lines_between: [
+                    Newline,
+                ],
+                body_pattern: @28-31 Identifier {
+                    ident: "foo",
+                },
                 body_expr: @34-38 Tag(
                     "True",
                 ),

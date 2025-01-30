@@ -1,15 +1,15 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.291 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.283 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.294 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.294;
+    let Str.387 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.387;
 
 procedure Test.11 (Test.29, #Attr.12):
     let Test.32 : {} = UnionAtIndex (Id 0) (Index 0) #Attr.12;
-    let #Derived_gen.11 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-    if #Derived_gen.11 then
+    let Bool.30 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+    if Bool.30 then
         free #Attr.12;
         ret Test.32;
     else
@@ -19,11 +19,11 @@ procedure Test.11 (Test.29, #Attr.12):
 procedure Test.11 (Test.29, Test.10):
     ret Test.10;
 
-procedure Test.14 (#Derived_gen.0, #Derived_gen.1):
+procedure Test.14 (Bool.28, Bool.29):
     joinpoint Test.38 Test.37 #Attr.12:
         let Test.46 : {} = UnionAtIndex (Id 1) (Index 1) #Attr.12;
         let Test.45 : I64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-        joinpoint #Derived_gen.9:
+        joinpoint Bool.31:
             let Test.44 : {} = Struct {};
             let Test.43 : {} = CallByName Test.11 Test.44 Test.46;
             let Test.39 : [<r>C {}, C I64 {}] = CallByName Test.9 Test.43 Test.45;
@@ -38,15 +38,15 @@ procedure Test.14 (#Derived_gen.0, #Derived_gen.1):
                     jump Test.38 Test.41 Test.39;
             
         in
-        let #Derived_gen.10 : Int1 = lowlevel RefCountIsUnique #Attr.12;
-        if #Derived_gen.10 then
+        let Bool.32 : Int1 = lowlevel RefCountIsUnique #Attr.12;
+        if Bool.32 then
             free #Attr.12;
-            jump #Derived_gen.9;
+            jump Bool.31;
         else
             decref #Attr.12;
-            jump #Derived_gen.9;
+            jump Bool.31;
     in
-    jump Test.38 #Derived_gen.0 #Derived_gen.1;
+    jump Test.38 Bool.28 Bool.29;
 
 procedure Test.2 ():
     let Test.6 : Str = "Hello";

@@ -1,0 +1,75 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+    ],
+    regions: [
+        @0-23,
+        @24-50,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @7-17 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "JsonEncode",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @21-23 ImportAlias(
+                            "JE",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @31-43 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Bytes.Decode",
+                    ),
+                },
+                params: None,
+                alias: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportAsKeyword,
+                            after: [],
+                        },
+                        item: @48-50 ImportAlias(
+                            "BD",
+                        ),
+                    },
+                ),
+                exposed: None,
+            },
+        ),
+    ],
+}

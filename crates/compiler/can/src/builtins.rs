@@ -33,7 +33,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U32 => Some(lowlevel_1(Symbol::NUM_TO_U32, LowLevel::NumIntCast, var_store)),
                 Symbol::NUM_TO_U64 => Some(lowlevel_1(Symbol::NUM_TO_U64, LowLevel::NumIntCast, var_store)),
                 Symbol::NUM_TO_U128 => Some(lowlevel_1(Symbol::NUM_TO_U128, LowLevel::NumIntCast, var_store)),
-                Symbol::NUM_TO_NAT => Some(lowlevel_1(Symbol::NUM_TO_NAT, LowLevel::NumIntCast, var_store)),
 
                 Symbol::NUM_INT_CAST => Some(lowlevel_1(Symbol::NUM_INT_CAST, LowLevel::NumIntCast, var_store)),
 
@@ -50,7 +49,6 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 Symbol::NUM_TO_U32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U32_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U64_CHECKED, var_store, LowLevel::NumToIntChecked)),
                 Symbol::NUM_TO_U128_CHECKED => Some(to_num_checked(Symbol::NUM_TO_U128_CHECKED, var_store, LowLevel::NumToIntChecked)),
-                Symbol::NUM_TO_NAT_CHECKED => Some(to_num_checked(Symbol::NUM_TO_NAT_CHECKED, var_store, LowLevel::NumToIntChecked)),
 
                 Symbol::NUM_TO_F32_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F32_CHECKED, var_store, LowLevel::NumToFloatChecked)),
                 Symbol::NUM_TO_F64_CHECKED => Some(to_num_checked(Symbol::NUM_TO_F64_CHECKED, var_store, LowLevel::NumToFloatChecked)),
@@ -93,6 +91,8 @@ macro_rules! map_symbol_to_lowlevel_and_arity {
                 LowLevel::RefCountIncDataPtr => unimplemented!(),
                 LowLevel::RefCountDecDataPtr=> unimplemented!(),
                 LowLevel::RefCountIsUnique => unimplemented!(),
+                LowLevel::ListIncref => unimplemented!(),
+                LowLevel::ListDecref => unimplemented!(),
 
                 LowLevel::SetJmp => unimplemented!(),
                 LowLevel::LongJmp => unimplemented!(),
@@ -115,48 +115,44 @@ map_symbol_to_lowlevel_and_arity! {
     StrJoinWith; STR_JOIN_WITH; 2,
     StrIsEmpty; STR_IS_EMPTY; 1,
     StrStartsWith; STR_STARTS_WITH; 2,
-    StrStartsWithScalar; STR_STARTS_WITH_SCALAR; 2,
     StrEndsWith; STR_ENDS_WITH; 2,
-    StrSplit; STR_SPLIT; 2,
-    StrCountGraphemes; STR_COUNT_GRAPHEMES; 1,
+    StrSplitOn; STR_SPLIT_ON; 2,
     StrCountUtf8Bytes; STR_COUNT_UTF8_BYTES; 1,
-    StrFromUtf8Range; STR_FROM_UTF8_RANGE_LOWLEVEL; 3,
+    StrFromUtf8; STR_FROM_UTF8_LOWLEVEL; 1,
+    StrFromUtf8Lossy; STR_FROM_UTF8_LOSSY; 1,
     StrToUtf8; STR_TO_UTF8; 1,
     StrRepeat; STR_REPEAT; 2,
     StrTrim; STR_TRIM; 1,
     StrTrimStart; STR_TRIM_START; 1,
     StrTrimEnd; STR_TRIM_END; 1,
-    StrToScalars; STR_TO_SCALARS; 1,
     StrGetUnsafe; STR_GET_UNSAFE; 2,
     StrSubstringUnsafe; STR_SUBSTRING_UNSAFE; 3,
     StrReserve; STR_RESERVE; 2,
-    StrAppendScalar; STR_APPEND_SCALAR_UNSAFE; 2,
-    StrGetScalarUnsafe; STR_GET_SCALAR_UNSAFE; 2,
     StrToNum; STR_TO_NUM; 1,
-    StrGetCapacity; STR_CAPACITY; 1,
     StrWithCapacity; STR_WITH_CAPACITY; 1,
-    StrGraphemes; STR_GRAPHEMES; 1,
     StrReleaseExcessCapacity; STR_RELEASE_EXCESS_CAPACITY; 1,
+    StrWithAsciiLowercased; STR_WITH_ASCII_LOWERCASED; 1,
+    StrWithAsciiUppercased; STR_WITH_ASCII_UPPERCASED; 1,
+    StrCaselessAsciiEquals; STR_CASELESS_ASCII_EQUALS; 2,
 
-    ListLen; LIST_LEN; 1,
+    ListLenUsize; LIST_LEN_USIZE; 1,
+    ListLenU64; LIST_LEN_U64; 1,
     ListWithCapacity; LIST_WITH_CAPACITY; 1,
     ListReserve; LIST_RESERVE; 2,
     ListIsUnique; LIST_IS_UNIQUE; 1,
+    ListClone; LIST_CLONE; 1,
     ListAppendUnsafe; LIST_APPEND_UNSAFE; 2,
     ListPrepend; LIST_PREPEND; 2,
     ListGetUnsafe; LIST_GET_UNSAFE; 2,
     ListReplaceUnsafe; LIST_REPLACE_UNSAFE; 3,
     ListConcat; LIST_CONCAT; 2,
-    ListMap; LIST_MAP; 2,
-    ListMap2; LIST_MAP2; 3,
-    ListMap3; LIST_MAP3; 4,
-    ListMap4; LIST_MAP4; 5,
     ListSortWith; LIST_SORT_WITH; 2,
     ListSublist; LIST_SUBLIST_LOWLEVEL; 3,
     ListDropAt; LIST_DROP_AT; 2,
     ListSwap; LIST_SWAP; 3,
     ListGetCapacity; LIST_CAPACITY; 1,
     ListReleaseExcessCapacity; LIST_RELEASE_EXCESS_CAPACITY; 1,
+    ListConcatUtf8; LIST_CONCAT_UTF8; 2,
 
     ListGetUnsafe; DICT_LIST_GET_UNSAFE; 2,
 
@@ -178,9 +174,9 @@ map_symbol_to_lowlevel_and_arity! {
     NumLte; NUM_LTE; 2,
     NumCompare; NUM_COMPARE; 2,
     NumDivFrac; NUM_DIV_FRAC; 2,
-    NumDivTruncUnchecked; NUM_DIV_TRUNC; 2,
+    NumDivTruncUnchecked; NUM_DIV_TRUNC_UNCHECKED; 2,
     NumDivCeilUnchecked; NUM_DIV_CEIL; 2,
-    NumRemUnchecked; NUM_REM; 2,
+    NumRemUnchecked; NUM_REM_UNCHECKED; 2,
     NumIsMultipleOf; NUM_IS_MULTIPLE_OF; 2,
     NumAbs; NUM_ABS; 1,
     NumNeg; NUM_NEG; 1,
@@ -201,10 +197,6 @@ map_symbol_to_lowlevel_and_arity! {
     NumAtan; NUM_ATAN; 1,
     NumAcos; NUM_ACOS; 1,
     NumAsin; NUM_ASIN; 1,
-    NumBytesToU16; NUM_BYTES_TO_U16_LOWLEVEL; 2,
-    NumBytesToU32; NUM_BYTES_TO_U32_LOWLEVEL; 2,
-    NumBytesToU64; NUM_BYTES_TO_U64_LOWLEVEL; 2,
-    NumBytesToU128; NUM_BYTES_TO_U128_LOWLEVEL; 2,
     NumBitwiseAnd; NUM_BITWISE_AND; 2,
     NumBitwiseXor; NUM_BITWISE_XOR; 2,
     NumBitwiseOr; NUM_BITWISE_OR; 2,
@@ -215,12 +207,15 @@ map_symbol_to_lowlevel_and_arity! {
     NumCountLeadingZeroBits; NUM_COUNT_LEADING_ZERO_BITS; 1,
     NumCountTrailingZeroBits; NUM_COUNT_TRAILING_ZERO_BITS; 1,
     NumCountOneBits; NUM_COUNT_ONE_BITS; 1,
-    I128OfDec; I128_OF_DEC; 1,
+    NumWithoutDecimalPoint; NUM_WITHOUT_DECIMAL_POINT; 1,
+    NumWithDecimalPoint; NUM_WITH_DECIMAL_POINT; 1,
+    NumF32ToParts; NUM_F32_TO_PARTS; 1,
+    NumF64ToParts; NUM_F64_TO_PARTS; 1,
+    NumF32FromParts; NUM_F32_FROM_PARTS; 1,
+    NumF64FromParts; NUM_F64_FROM_PARTS; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,
-    And; BOOL_AND; 2,
-    Or; BOOL_OR; 2,
     Not; BOOL_NOT; 1,
     BoxExpr; BOX_BOX_FUNCTION; 1,
     UnboxExpr; BOX_UNBOX; 1,
@@ -231,7 +226,7 @@ map_symbol_to_lowlevel_and_arity! {
 /// Some builtins cannot be constructed in code gen alone, and need to be defined
 /// as separate Roc defs. For example, List.get has this type:
 ///
-/// List.get : List elem, Nat -> Result elem [OutOfBounds]*
+/// List.get : List elem, U64 -> Result elem [OutOfBounds]*
 ///
 /// Because this returns an open tag union for its Err type, it's not possible
 /// for code gen to return a hardcoded value for OutOfBounds. For example,
@@ -425,6 +420,7 @@ fn defn(
         expr_var: var_store.fresh(),
         pattern_vars: SendMap::default(),
         annotation: None,
+        kind: crate::def::DefKind::Let,
     }
 }
 
@@ -453,6 +449,8 @@ fn defn_help(
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
         return_type: ret_var,
+        fx_type: Variable::PURE,
+        early_returns: vec![],
         name: fn_name,
         captured_symbols: Vec::new(),
         recursive: Recursive::NotRecursive,
@@ -553,6 +551,7 @@ fn to_num_checked(symbol: Symbol, var_store: &mut VarStore, lowlevel: LowLevel) 
         expr_var: record_var,
         pattern_vars: SendMap::default(),
         annotation: None,
+        kind: crate::def::DefKind::Let,
     };
 
     let body = LetNonRec(Box::new(def), Box::new(no_region(cont)));

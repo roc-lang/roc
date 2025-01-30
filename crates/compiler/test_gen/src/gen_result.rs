@@ -17,12 +17,12 @@ use roc_std::{RocResult, RocStr};
 fn with_default_ok() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 12345
 
-            Result.withDefault result 0
-            "#
+            Result.with_default result 0
+            "
         ),
         12345,
         i64
@@ -34,12 +34,12 @@ fn with_default_ok() {
 fn with_default_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
-            Result.withDefault result 0
-            "#
+            Result.with_default result 0
+            "
         ),
         0,
         i64
@@ -51,14 +51,14 @@ fn with_default_err() {
 fn result_map() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
             result
-                |> Result.map (\x -> x + 1)
-                |> Result.withDefault 0
-            "#
+                |> Result.map_ok (\x -> x + 1)
+                |> Result.with_default 0
+            "
         ),
         3,
         i64
@@ -66,14 +66,14 @@ fn result_map() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
             result
-                |> Result.map (\x -> x + 1)
-                |> Result.withDefault 0
-            "#
+                |> Result.map_ok (\x -> x + 1)
+                |> Result.with_default 0
+            "
         ),
         0,
         i64
@@ -85,14 +85,14 @@ fn result_map() {
 fn result_map_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result {} I64
             result = Err 2
 
-            when Result.mapErr result (\x -> x + 1) is
+            when Result.map_err result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
-            "#
+            "
         ),
         3,
         i64
@@ -100,14 +100,14 @@ fn result_map_err() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result {} I64
             result = Ok {}
 
-            when Result.mapErr result (\x -> x + 1) is
+            when Result.map_err result (\x -> x + 1) is
                 Err n -> n
                 Ok _ -> 0
-            "#
+            "
         ),
         0,
         i64
@@ -119,10 +119,10 @@ fn result_map_err() {
 fn err_type_var() {
     assert_evals_to!(
         indoc!(
-            r#"
-            Result.map (Ok 3) (\x -> x + 1)
-                |> Result.withDefault -1
-            "#
+            r"
+            Result.map_ok (Ok 3) (\x -> x + 1)
+                |> Result.with_default -1
+            "
         ),
         4,
         i64
@@ -134,13 +134,13 @@ fn err_type_var() {
 fn err_type_var_annotation() {
     assert_evals_to!(
         indoc!(
-            r#"
-            ok : Result I64 *
+            r"
+            ok : Result I64 _
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
-                |> Result.withDefault -1
-            "#
+            Result.map_ok ok (\x -> x + 1)
+                |> Result.with_default -1
+            "
         ),
         4,
         i64
@@ -152,13 +152,13 @@ fn err_type_var_annotation() {
 fn err_empty_tag_union() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             ok : Result I64 []
             ok = Ok 3
 
-            Result.map ok (\x -> x + 1)
-                |> Result.withDefault -1
-            "#
+            Result.map_ok ok (\x -> x + 1)
+                |> Result.with_default -1
+            "
         ),
         4,
         i64
@@ -170,12 +170,12 @@ fn err_empty_tag_union() {
 fn is_ok() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
-            Result.isOk result
-            "#
+            Result.is_ok result
+            "
         ),
         true,
         bool
@@ -183,12 +183,12 @@ fn is_ok() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
-            Result.isOk result
-            "#
+            Result.is_ok result
+            "
         ),
         false,
         bool
@@ -200,12 +200,12 @@ fn is_ok() {
 fn is_err() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 2
 
-            Result.isErr result
-            "#
+            Result.is_err result
+            "
         ),
         false,
         bool
@@ -213,12 +213,12 @@ fn is_err() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Err {}
 
-            Result.isErr result
-            "#
+            Result.is_err result
+            "
         ),
         true,
         bool
@@ -230,12 +230,12 @@ fn is_err() {
 fn roc_result_ok_i64() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result I64 {}
             result = Ok 42
 
             result
-            "#
+            "
         ),
         RocResult::ok(42),
         RocResult<i64, ()>
@@ -250,12 +250,12 @@ fn roc_result_ok_f64() {
 
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             result : Result F64 {}
             result = Ok 42.0
 
             result
-            "#
+            "
         ),
         RocResult::ok(42.0),
         RocResult<f64, ()>
@@ -284,7 +284,7 @@ fn roc_result_err() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     assert_evals_to!(
         r#"
-        if Bool.true then List.first [15] else Str.toI64 ""
+        if Bool.true then List.first [15] else Str.to_i64 ""
         "#,
         RocResult::ok(15i64),
         RocResult<i64, bool>
@@ -331,7 +331,7 @@ fn roc_result_after_err() {
             r#"
             result : Result Str I64
             result =
-              Result.onErr (Ok "already a string") \num ->
+              Result.on_err (Ok "already a string") \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
@@ -345,12 +345,94 @@ fn roc_result_after_err() {
         r#"
             result : Result Str I64
             result =
-              Result.onErr (Err 100) \num ->
+              Result.on_err (Err 100) \num ->
                 if num < 0 then Ok "negative!" else Err -num
 
             result
             "#),
         RocResult::err(-100),
         RocResult<RocStr, i64>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn roc_result_map_both() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 I64
+            result = Ok 42
+
+            result |> Result.map_both Num.to_str Num.to_str
+            "#
+        ),
+        RocResult::ok(RocStr::from("42")),
+        RocResult<RocStr, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            result : Result I64 I64
+            result = Err 24
+
+            result |> Result.map_both Num.to_str Num.to_str
+            "#
+        ),
+        RocResult::err(RocStr::from("24")),
+        RocResult<RocStr, RocStr>
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn roc_result_map_two() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Ok 24
+
+            second : Result I64 Str
+            second = Ok -10
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::ok(14i64),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Err "foo"
+
+            second : Result I64 Str
+            second = Err "bar"
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::err(RocStr::from("foo")),
+        RocResult<i64, RocStr>
+    );
+
+    assert_evals_to!(
+        indoc!(
+            r#"
+            first : Result I64 Str
+            first = Ok 42
+
+            second : Result I64 Str
+            second = Err "bar"
+
+            Result.map2 first second \a, b -> a + b
+            "#
+        ),
+        RocResult::err(RocStr::from("bar")),
+        RocResult<i64, RocStr>
     );
 }

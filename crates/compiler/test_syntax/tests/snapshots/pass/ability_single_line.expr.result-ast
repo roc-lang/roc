@@ -1,67 +1,73 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-        ],
-        regions: [
-            @0-55,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [
-            Ability {
-                header: TypeHeader {
-                    name: @0-4 "Hash",
-                    vars: [],
-                },
-                loc_implements: @5-15 Implements,
-                members: [
-                    AbilityMember {
-                        name: @16-20 "hash",
-                        typ: @23-55 Where(
-                            @23-31 Function(
-                                [
-                                    @23-24 BoundVariable(
-                                        "a",
-                                    ),
-                                ],
-                                @28-31 Apply(
-                                    "",
-                                    "U64",
-                                    [],
-                                ),
-                            ),
-                            [
-                                @38-55 ImplementsClause {
-                                    var: @38-39 "a",
-                                    abilities: [
-                                        @51-55 Apply(
-                                            "",
-                                            "Hash",
-                                            [],
+@0-58 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-55,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-4 "Hash",
+                        vars: [],
+                    },
+                    loc_implements: @5-15 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @16-20 "hash",
+                            typ: @23-55 Where(
+                                @23-31 Function(
+                                    [
+                                        @23-24 BoundVariable(
+                                            "a",
                                         ),
                                     ],
-                                },
-                            ],
-                        ),
-                    },
-                ],
-            },
-        ],
-        value_defs: [],
-    },
-    @57-58 SpaceBefore(
-        Num(
-            "1",
+                                    Pure,
+                                    @28-31 Apply(
+                                        "",
+                                        "U64",
+                                        [],
+                                    ),
+                                ),
+                                [
+                                    @38-55 ImplementsClause {
+                                        var: @38-39 "a",
+                                        abilities: [
+                                            @51-55 Apply(
+                                                "",
+                                                "Hash",
+                                                [],
+                                            ),
+                                        ],
+                                    },
+                                ],
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @57-58 SpaceBefore(
+            Num(
+                "1",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

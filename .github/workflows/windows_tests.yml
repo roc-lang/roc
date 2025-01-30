@@ -1,11 +1,7 @@
 on:
-    pull_request:
+  workflow_call:
 
 name: windows - subset of tests
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -15,11 +11,11 @@ jobs:
     name: windows-test-subset
     runs-on: windows-2022
     env:
-      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
+      LLVM_SYS_180_PREFIX: C:\LLVM-18.1.8-win64
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
@@ -29,10 +25,10 @@ jobs:
 
       - name: download and install zig
         run: |
-          curl.exe -f --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
+          curl.exe -f --output "C:\zig-windows-x86_64-0.13.0.zip" --url https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
           cd C:\
-          7z x zig-windows-x86_64-0.9.1.zip
-          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.9.1\"
+          7z x zig-windows-x86_64-0.13.0.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.13.0\"
 
       - run: zig version
 
@@ -41,29 +37,26 @@ jobs:
           cd crates\compiler\builtins\bitcode\
           zig build test
 
-      - name: install rust nightly 1.71.0
-        run: rustup install nightly-2023-05-28
+      - name: install rust nightly 1.77.0
+        run: rustup install nightly-2024-02-03
 
-      - name: set up llvm 13
+      - name: set up llvm 18
         run: |
-          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
-          7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
+          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z
+          7z x LLVM-18.1.8-win64.7z -oC:\LLVM-18.1.8-win64
 
-      - name: Build tests --release without running. Twice for zig lld-link error.
-        run: cargo test --locked --release --no-run || cargo test --locked --release --no-run
+      - name: Build tests --release without running.
+        run: cargo test --locked --release --no-run
 
       # Why are these tests not build with previous command? => fingerprint error. Use `CARGO_LOG=cargo::core::compiler::fingerprint=info` to investigate
-      - name: Build specific tests without running. Twice for zig lld-link error.
-        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli -p test_gen || cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli -p test_gen
+      - name: Build specific tests without running.
+        run: cargo test --locked --release --no-run -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli -p test_gen
 
       - name: Test setjmp/longjmp logic
         run: cargo test-gen-dev --locked --release nat_alias && cargo test-gen-dev --locked --release a_crash
 
       - name: Run gen tests
-        run: cargo test-gen-llvm --locked --release gen_str 
-        
+        run: cargo test-gen-llvm --locked --release gen_str
+
       - name: Actually run the tests.
         run: cargo test --locked --release -p roc_ident -p roc_region -p roc_collections -p roc_can -p roc_types -p roc_solve -p roc_mono -p roc_gen_dev -p roc_gen_wasm -p roc_serialize -p roc_linker -p roc_cli
-
-      
-

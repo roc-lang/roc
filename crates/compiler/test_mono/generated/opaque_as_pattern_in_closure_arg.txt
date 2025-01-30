@@ -1,0 +1,18 @@
+procedure Num.21 (#Attr.2, #Attr.3):
+    let Num.283 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.283;
+
+procedure Test.2 (Test.8):
+    let Test.14 : U64 = 2i64;
+    let Test.13 : U64 = CallByName Num.21 Test.8 Test.14;
+    ret Test.13;
+
+procedure Test.3 (Test.7):
+    let Test.12 : U64 = CallByName Test.2 Test.7;
+    let Test.11 : {U64, U64} = Struct {Test.7, Test.12};
+    ret Test.11;
+
+procedure Test.0 ():
+    let Test.10 : U64 = 42i64;
+    let Test.9 : {U64, U64} = CallByName Test.3 Test.10;
+    ret Test.9;

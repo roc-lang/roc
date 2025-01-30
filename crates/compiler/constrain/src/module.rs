@@ -1,9 +1,12 @@
 use crate::expr::{constrain_def_make_constraint, constrain_def_pattern, Env};
+use crate::pattern::{constrain_pattern, PatternState};
 use roc_can::abilities::{PendingAbilitiesStore, PendingMemberType};
 use roc_can::constraint::{Constraint, Constraints, Generalizable};
-use roc_can::expected::Expected;
+use roc_can::expected::{Expected, PExpected};
 use roc_can::expr::Declarations;
+use roc_can::module::ModuleParams;
 use roc_can::pattern::Pattern;
+use roc_collections::MutMap;
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::types::{AnnotationSource, Category, Type, Types};
@@ -14,9 +17,18 @@ pub fn constrain_module(
     symbols_from_requires: Vec<(Loc<Symbol>, Loc<Type>)>,
     abilities_store: &PendingAbilitiesStore,
     declarations: &Declarations,
+    opt_module_params: &Option<ModuleParams>,
     home: ModuleId,
 ) -> Constraint {
     let constraint = crate::expr::constrain_decls(types, constraints, home, declarations);
+
+    let constraint = match opt_module_params {
+        Some(params_pattern) => {
+            constrain_params(types, constraints, home, constraint, params_pattern)
+        }
+        None => constraint,
+    };
+
     let constraint = constrain_symbols_from_requires(
         types,
         constraints,
@@ -31,6 +43,54 @@ pub fn constrain_module(
     debug_assert!(constraints.contains_save_the_environment(&constraint));
 
     constraint
+}
+
+fn constrain_params(
+    types: &mut Types,
+    constraints: &mut Constraints,
+    home: ModuleId,
+    constraint: Constraint,
+    module_params: &ModuleParams,
+) -> Constraint {
+    let mut env = Env {
+        home,
+        rigids: MutMap::default(),
+        resolutions_to_make: vec![],
+        fx_expectation: None,
+    };
+
+    let index = constraints.push_variable(module_params.whole_var);
+    let expected_params = constraints.push_pat_expected_type(PExpected::NoExpectation(index));
+
+    let mut state = PatternState::default();
+
+    let empty_rec = constraints.push_type(types, Types::EMPTY_RECORD);
+    let closed_con = constraints.store(empty_rec, module_params.record_ext_var, file!(), line!());
+
+    state.constraints.push(closed_con);
+
+    constrain_pattern(
+        types,
+        constraints,
+        &mut env,
+        &module_params.pattern().value,
+        module_params.region,
+        expected_params,
+        &mut state,
+    );
+
+    let pattern_constraints = constraints.and_constraint(state.constraints);
+
+    let cons = constraints.let_constraint(
+        [],
+        state.vars.into_iter().map(Loc::at_zero),
+        state.headers,
+        pattern_constraints,
+        constraint,
+        Generalizable(true),
+    );
+
+    constraints.exists([module_params.whole_var], cons)
 }
 
 fn constrain_symbols_from_requires(
@@ -55,6 +115,7 @@ fn constrain_symbols_from_requires(
                     home,
                     rigids,
                     resolutions_to_make: vec![],
+                    fx_expectation: None,
                 };
                 let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(loc_symbol.value));
 
@@ -122,6 +183,7 @@ pub fn frontload_ability_constraints(
                 home,
                 rigids,
                 resolutions_to_make: vec![],
+                fx_expectation: None,
             };
             let pattern = Loc::at_zero(roc_can::pattern::Pattern::Identifier(*member_name));
 
@@ -137,8 +199,12 @@ pub fn frontload_ability_constraints(
 
             def_pattern_state.vars.push(signature_var);
 
-            let rigid_variables = vars.rigid_vars.iter().chain(vars.able_vars.iter()).copied();
-            let infer_variables = vars.flex_vars.iter().copied();
+            let rigid_variables = (vars.rigid_vars.iter())
+                .chain(vars.able_vars.iter())
+                .copied()
+                .map(Loc::at_zero);
+
+            let infer_variables = vars.flex_vars.iter().copied().map(Loc::at_zero);
 
             let signature_expectation =
                 constraints.push_expected_type(Expected::NoExpectation(signature_index));

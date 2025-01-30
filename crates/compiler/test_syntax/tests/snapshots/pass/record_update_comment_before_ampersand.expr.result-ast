@@ -1,0 +1,14 @@
+@0-6 RecordUpdate {
+    update: @1-2 SpaceAfter(
+        Var {
+            module_name: "",
+            ident: "i",
+        },
+        [
+            LineComment(
+                "",
+            ),
+        ],
+    ),
+    fields: [],
+}

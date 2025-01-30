@@ -1,54 +1,59 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-36,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-5 Apply(
-                    @0-5 Tag(
-                        "Email",
-                    ),
-                    [
-                        @6-9 Identifier(
-                            "str",
+@0-40 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-36,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-9 Apply(
+                        @0-5 Tag(
+                            "Email",
                         ),
-                    ],
-                ),
-                @12-36 Apply(
-                    @12-17 Tag(
-                        "Email",
+                        [
+                            @6-9 Identifier {
+                                ident: "str",
+                            },
+                        ],
                     ),
-                    [
-                        @18-36 Str(
-                            PlainLine(
-                                "blah@example.com",
+                    @12-36 Apply(
+                        @12-17 Tag(
+                            "Email",
+                        ),
+                        [
+                            @18-36 Str(
+                                PlainLine(
+                                    "blah@example.com",
+                                ),
                             ),
-                        ),
-                    ],
-                    Space,
+                        ],
+                        Space,
+                    ),
                 ),
-            ),
-        ],
-    },
-    @37-40 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "str",
+            ],
         },
-        [
-            Newline,
-        ],
+        @37-40 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "str",
+            },
+            [
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

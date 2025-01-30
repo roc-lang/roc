@@ -1,29 +1,29 @@
-Defs(
+@0-46 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-43,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
             Body(
-                @0-4 Identifier(
-                    "func",
-                ),
+                @0-4 Identifier {
+                    ident: "func",
+                },
                 @7-43 Closure(
                     [
-                        @8-9 Identifier(
-                            "x",
-                        ),
+                        @8-9 Identifier {
+                            ident: "x",
+                        },
                     ],
                     @13-43 When(
                         @18-19 Var {

@@ -49,7 +49,15 @@ pub fn apply_trmc<'a, 'i>(
 
     let env = &mut env;
 
-    for proc in procs.values_mut() {
+    // TODO temporary workaround for #7531, remove this cloning and sorting once that is fixed
+    let clone_procs = procs.clone();
+    let mut procs_key_value_list = clone_procs.iter().collect::<std::vec::Vec<_>>();
+
+    procs_key_value_list.sort_by(|a, b| a.0 .0.cmp(&b.0 .0));
+
+    for (key, _) in procs_key_value_list {
+        let proc = procs.get_mut(key).unwrap();
+
         use self::SelfRecursive::*;
         if let SelfRecursive(id) = proc.is_self_recursive {
             let trmc_candidate_symbols = trmc_candidates(env.interner, proc);
@@ -330,6 +338,8 @@ fn insert_jumps<'a>(
         }
 
         Dbg {
+            source_location,
+            source,
             symbol,
             variable,
             remainder,
@@ -342,6 +352,8 @@ fn insert_jumps<'a>(
             needle_result,
         ) {
             Some(cont) => Some(arena.alloc(Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: cont,
@@ -364,30 +376,6 @@ fn insert_jumps<'a>(
             needle_result,
         ) {
             Some(cont) => Some(arena.alloc(Expect {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: cont,
-            })),
-            None => None,
-        },
-
-        ExpectFx {
-            condition,
-            region,
-            lookups,
-            variables,
-            remainder,
-        } => match insert_jumps(
-            arena,
-            remainder,
-            goal_id,
-            needle,
-            needle_arguments,
-            needle_result,
-        ) {
-            Some(cont) => Some(arena.alloc(ExpectFx {
                 condition: *condition,
                 region: *region,
                 lookups,
@@ -547,9 +535,9 @@ fn trmc_candidates_help(
             }
         }
         Stmt::Refcounting(_, next) => trmc_candidates_help(function_name, next, candidates),
-        Stmt::Expect { remainder, .. }
-        | Stmt::ExpectFx { remainder, .. }
-        | Stmt::Dbg { remainder, .. } => trmc_candidates_help(function_name, remainder, candidates),
+        Stmt::Expect { remainder, .. } | Stmt::Dbg { remainder, .. } => {
+            trmc_candidates_help(function_name, remainder, candidates)
+        }
         Stmt::Join {
             body, remainder, ..
         } => {
@@ -565,7 +553,7 @@ fn trmc_candidates_help(
 // ```roc
 // LinkedList a : [ Nil, Cons a (LinkedList a) ]
 //
-// repeat : a, Nat -> LinkedList a
+// repeat : a, U64 -> LinkedList a
 // repeat = \element, n ->
 //     when n is
 //         0 -> Nil
@@ -577,7 +565,7 @@ fn trmc_candidates_help(
 // But there is a trick: TRMC. Using TRMC and join points, we are able to convert this function into a loop, which uses only one stack frame for the whole process.
 //
 // ```pseudo-roc
-// repeat : a, Nat -> LinkedList a
+// repeat : a, U64 -> LinkedList a
 // repeat = \initialElement, initialN ->
 //     joinpoint trmc = \element, n, hole, head ->
 //         when n is
@@ -907,13 +895,14 @@ impl<'a> TrmcEnv<'a> {
                                 reuse: None,
                             };
 
-                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+                            let indices = arena
+                                .alloc([cons_info.tag_id as u64, recursive_field_index as u64]);
 
-                            let get_reference_expr = Expr::UnionFieldPtrAtIndex {
+                            let let_tag = |next| Stmt::Let(*symbol, tag_expr, *layout, next);
+                            let get_reference_expr = Expr::GetElementPointer {
                                 structure: *symbol,
-                                tag_id: cons_info.tag_id,
                                 union_layout: cons_info.tag_layout,
-                                index: recursive_field_index as _,
+                                indices,
                             };
 
                             let new_hole_symbol = env.named_unique_symbol("newHole");
@@ -1005,24 +994,15 @@ impl<'a> TrmcEnv<'a> {
                 variables,
                 remainder: arena.alloc(self.walk_stmt(env, remainder)),
             },
-            Stmt::ExpectFx {
-                condition,
-                region,
-                lookups,
-                variables,
-                remainder,
-            } => Stmt::Expect {
-                condition: *condition,
-                region: *region,
-                lookups,
-                variables,
-                remainder: arena.alloc(self.walk_stmt(env, remainder)),
-            },
             Stmt::Dbg {
+                source_location,
+                source,
                 symbol,
                 variable,
                 remainder,
             } => Stmt::Dbg {
+                source_location,
+                source,
                 symbol: *symbol,
                 variable: *variable,
                 remainder: arena.alloc(self.walk_stmt(env, remainder)),
@@ -1091,14 +1071,13 @@ fn expr_contains_symbol(expr: &Expr, needle: Symbol) -> bool {
         Expr::StructAtIndex { structure, .. }
         | Expr::GetTagId { structure, .. }
         | Expr::UnionAtIndex { structure, .. }
-        | Expr::UnionFieldPtrAtIndex { structure, .. } => needle == *structure,
+        | Expr::GetElementPointer { structure, .. } => needle == *structure,
         Expr::Array { elems, .. } => elems.iter().any(|element| match element {
             crate::ir::ListLiteralElement::Literal(_) => false,
             crate::ir::ListLiteralElement::Symbol(symbol) => needle == *symbol,
         }),
         Expr::EmptyArray => false,
         Expr::Reset { symbol, .. } | Expr::ResetRef { symbol, .. } => needle == *symbol,
-        Expr::RuntimeErrorFunction(_) => false,
         Expr::ErasedMake { value, callee } => {
             value.map(|v| v == needle).unwrap_or(false) || needle == *callee
         }
@@ -1118,9 +1097,6 @@ fn stmt_contains_symbol_nonrec(stmt: &Stmt, needle: Symbol) -> bool {
             matches!( modify, Inc(symbol, _) | Dec(symbol) | DecRef(symbol)  if needle == *symbol  )
         }
         Stmt::Expect {
-            condition, lookups, ..
-        }
-        | Stmt::ExpectFx {
             condition, lookups, ..
         } => needle == *condition || lookups.contains(&needle),
         Stmt::Dbg { symbol, .. } => needle == *symbol,

@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: Nix apple silicon cargo test
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -16,7 +12,13 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+
+      # These started to accumulate quickly since #5990, not sure why
+      - name: Clean up old nix shells
+        run: rm -rf /private/tmp/nix-shell.*
+
+      - run: zig version
 
       - name: check formatting with rustfmt
         run: nix develop -c cargo fmt --all -- --check
@@ -30,14 +32,12 @@ jobs:
       - name: test building default.nix
         run: nix-build
 
+      # for skipped tests: see issue 6274
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+        run: nix develop -c cargo test --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
 
-      - name: make a libapp.so for the next step
-        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
-
-      - name: check that the platform`s produced dylib is loadable
-        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
+      - name: roc test all builtins
+        run: nix develop -c ./ci/roc_test_builtins.sh
 
       - name: test aarch64 dev backend
         run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast

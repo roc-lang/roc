@@ -1,0 +1,133 @@
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: App(
+                AppHeader {
+                    before_provides: [
+                        Newline,
+                    ],
+                    provides: [
+                        @74-78 ExposedName(
+                            "main",
+                        ),
+                    ],
+                    before_packages: [
+                        Newline,
+                    ],
+                    packages: @6-44 Collection {
+                        items: [
+                            @30-37 SpaceBefore(
+                                PackageEntry {
+                                    shorthand: "cli",
+                                    spaces_after_shorthand: [],
+                                    platform_marker: Some(
+                                        [],
+                                    ),
+                                    package_name: @35-37 PackageName(
+                                        "",
+                                    ),
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                    old_imports: None,
+                    old_provides_to_new_package: None,
+                },
+            ),
+        },
+        defs: Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @88-204,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @88-92 Identifier {
+                        ident: "main",
+                    },
+                    @100-204 SpaceBefore(
+                        BinOps(
+                            [
+                                (
+                                    @100-114 SpaceAfter(
+                                        Str(
+                                            PlainLine(
+                                                "jq --version",
+                                            ),
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    @123-125 Pizza,
+                                ),
+                                (
+                                    @126-133 SpaceAfter(
+                                        Var {
+                                            module_name: "Cmd",
+                                            ident: "new",
+                                        },
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    @142-144 Pizza,
+                                ),
+                                (
+                                    @145-155 SpaceAfter(
+                                        Var {
+                                            module_name: "Cmd",
+                                            ident: "status",
+                                        },
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    @164-166 Pizza,
+                                ),
+                            ],
+                            @167-204 Apply(
+                                @167-180 TrySuffix(
+                                    Var {
+                                        module_name: "Result",
+                                        ident: "mapErr",
+                                    },
+                                ),
+                                [
+                                    @182-204 Tag(
+                                        "UnableToCheckJQVersion",
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+        },
+    },
+)

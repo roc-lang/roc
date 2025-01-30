@@ -1,0 +1,33 @@
+@0-16 SpaceAfter(
+    DbgStmt {
+        first: @4-16 Tuple(
+            [
+                @5-6 Num(
+                    "5",
+                ),
+                @12-15 SpaceBefore(
+                    Num(
+                        "666",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+        ),
+        extra_args: [],
+        continuation: @18-19 SpaceBefore(
+            Num(
+                "4",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+        pnc_style: false,
+    },
+    [
+        Newline,
+    ],
+)

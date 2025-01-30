@@ -1,6 +1,10 @@
 use bumpalo::Bump;
 use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use roc_parse::{module, module::module_defs, parser::Parser, state::State};
+use roc_parse::{
+    ast::Defs,
+    header::{self, parse_module_defs},
+    state::State,
+};
 use std::path::PathBuf;
 
 pub fn parse_benchmark(c: &mut Criterion) {
@@ -9,20 +13,16 @@ pub fn parse_benchmark(c: &mut Criterion) {
         path.push("examples");
         path.push("cli");
         path.push("false-interpreter");
-        path.push("False.roc");
+        path.push("main.roc");
         let src = std::fs::read_to_string(&path).unwrap();
 
         b.iter(|| {
             let arena = Bump::new();
 
             let (_actual, state) =
-                module::parse_header(&arena, State::new(src.as_bytes())).unwrap();
+                header::parse_header(&arena, State::new(src.as_bytes())).unwrap();
 
-            let min_indent = 0;
-            let res = module_defs()
-                .parse(&arena, state, min_indent)
-                .map(|tuple| tuple.1)
-                .unwrap();
+            let res = parse_module_defs(&arena, state, Defs::default()).unwrap();
 
             black_box(res.len());
         })
@@ -41,13 +41,9 @@ pub fn parse_benchmark(c: &mut Criterion) {
             let arena = Bump::new();
 
             let (_actual, state) =
-                module::parse_header(&arena, State::new(src.as_bytes())).unwrap();
+                header::parse_header(&arena, State::new(src.as_bytes())).unwrap();
 
-            let min_indent = 0;
-            let res = module_defs()
-                .parse(&arena, state, min_indent)
-                .map(|tuple| tuple.1)
-                .unwrap();
+            let res = parse_module_defs(&arena, state, Defs::default()).unwrap();
 
             black_box(res.len());
         })

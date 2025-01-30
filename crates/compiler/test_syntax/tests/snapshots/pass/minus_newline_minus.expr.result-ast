@@ -1,0 +1,27 @@
+@0-7 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-1 Var {
+                    module_name: "",
+                    ident: "s",
+                },
+                @1-2 Minus,
+            ),
+        ],
+        @4-7 SpaceBefore(
+            UnaryOp(
+                @5-7 Record(
+                    [],
+                ),
+                @4-5 Negate,
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

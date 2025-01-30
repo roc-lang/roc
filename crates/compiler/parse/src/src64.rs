@@ -82,7 +82,7 @@ impl<'a> Src64<'a> {
         }
 
         // Safety: we got capacity by rounding up to the nearest 64B
-        let dest = unsafe { allocate_chunks(arena, capacity)? }.as_ptr() as *mut u8;
+        let dest = unsafe { allocate_chunks(arena, capacity)? }.as_ptr();
 
         // Safety: `dest` has a length of `capacity`, which has been rounded up to a multiple of 64.
         unsafe {
@@ -228,6 +228,7 @@ impl<'a> Src64<'a> {
                 // chunk(s) won't be a cache miss anymore because they'll already be in cache.
                 //
                 // We can do further prefetches in the actual tokenization loop.
+                #[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
                 {
                     // We know capacity >= 64, so this will never wrap.
                     let last_chunk_offset = capacity - 64;
@@ -264,8 +265,7 @@ impl<'a> Src64<'a> {
 
                 // Safety: bytes_ptr came from an allocation of `capacity` bytes, it's had
                 // newlines filled at the end, and `file_size` bytes written over the rest.
-                let bytes =
-                    unsafe { core::slice::from_raw_parts_mut(buf.as_ptr() as *mut u8, capacity) };
+                let bytes = unsafe { core::slice::from_raw_parts_mut(buf.as_ptr(), capacity) };
 
                 Ok(Self { bytes })
             }
@@ -367,6 +367,7 @@ unsafe fn write_newlines(dest: *mut u8, len: usize) {
     }
 }
 
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[inline(always)]
 fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
     // Use inline asm until this is stabilized:
@@ -387,8 +388,6 @@ fn prefetch_read<T>(non_null_ptr: NonNull<T>, offset: usize) {
             in(reg) non_null_ptr.as_ptr().add(offset)
         );
     }
-
-    // If we're not on x64 or aarch64, just do nothing!
 }
 
 #[cfg(test)]

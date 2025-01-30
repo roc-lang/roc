@@ -1,26 +1,32 @@
-BinOps(
-    [
-        (
-            @0-1 Num(
-                "1",
-            ),
-            @2-3 Star,
-        ),
-    ],
-    @4-30 If(
+@0-30 SpaceAfter(
+    BinOps(
         [
             (
-                @7-16 Var {
-                    module_name: "Bool",
-                    ident: "true",
-                },
-                @22-23 Num(
+                @0-1 Num(
                     "1",
                 ),
+                @2-3 Star,
             ),
         ],
-        @29-30 Num(
-            "1",
-        ),
+        @4-30 If {
+            if_thens: [
+                (
+                    @7-16 Var {
+                        module_name: "Bool",
+                        ident: "true",
+                    },
+                    @22-23 Num(
+                        "1",
+                    ),
+                ),
+            ],
+            final_else: @29-30 Num(
+                "1",
+            ),
+            indented_else: false,
+        },
     ),
+    [
+        Newline,
+    ],
 )

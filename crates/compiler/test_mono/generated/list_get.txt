@@ -1,33 +1,32 @@
-procedure List.2 (List.102, List.103):
-    let List.551 : U64 = CallByName List.6 List.102;
-    let List.547 : Int1 = CallByName Num.22 List.103 List.551;
-    if List.547 then
-        let List.549 : I64 = CallByName List.66 List.102 List.103;
-        dec List.102;
-        let List.548 : [C {}, C I64] = TagId(1) List.549;
-        ret List.548;
+procedure List.2 (List.120, List.121):
+    let List.681 : U64 = CallByName List.6 List.120;
+    let List.677 : Int1 = CallByName Num.22 List.121 List.681;
+    if List.677 then
+        let List.679 : I64 = CallByName List.66 List.120 List.121;
+        let List.678 : [C {}, C I64] = TagId(1) List.679;
+        ret List.678;
     else
-        dec List.102;
-        let List.546 : {} = Struct {};
-        let List.545 : [C {}, C I64] = TagId(0) List.546;
-        ret List.545;
+        let List.676 : {} = Struct {};
+        let List.675 : [C {}, C I64] = TagId(0) List.676;
+        ret List.675;
 
 procedure List.6 (#Attr.2):
-    let List.552 : U64 = lowlevel ListLen #Attr.2;
-    ret List.552;
+    let List.682 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.682;
 
 procedure List.66 (#Attr.2, #Attr.3):
-    let List.550 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
-    ret List.550;
+    let List.680 : I64 = lowlevel ListGetUnsafe #Attr.2 #Attr.3;
+    ret List.680;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Test.1 (Test.2):
     let Test.6 : List I64 = Array [1i64, 2i64, 3i64];
     let Test.7 : U64 = 0i64;
     let Test.5 : [C {}, C I64] = CallByName List.2 Test.6 Test.7;
+    dec Test.6;
     ret Test.5;
 
 procedure Test.0 ():

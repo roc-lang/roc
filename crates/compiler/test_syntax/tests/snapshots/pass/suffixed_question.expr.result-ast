@@ -1,0 +1,10 @@
+@0-14 TrySuffix(
+    TrySuffix(
+        TrySuffix(
+            Var {
+                module_name: "Stdout",
+                ident: "line",
+            },
+        ),
+    ),
+)

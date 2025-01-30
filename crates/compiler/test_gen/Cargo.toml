@@ -12,43 +12,48 @@ name = "test_gen"
 path = "src/tests.rs"
 
 [build-dependencies]
-roc_bitcode = { path = "../builtins/bitcode" }
-roc_command_utils = { path = "../../utils/command" }
-wasi_libc_sys = { path = "../../wasi-libc-sys" }
+roc_bitcode.workspace = true
+roc_command_utils.workspace = true
+wasi_libc_sys.workspace = true
 
 tempfile.workspace = true
 
 [dependencies]
-roc_gen_llvm = { path = "../gen_llvm", optional = true }
+roc_gen_llvm = { workspace = true, optional = true }
 inkwell = { workspace = true, optional = true }
 
 [dev-dependencies]
-roc_gen_dev = { path = "../gen_dev" }
-roc_gen_wasm = { path = "../gen_wasm" }
-roc_bitcode = { path = "../builtins/bitcode" }
-roc_build = { path = "../build", features = ["target-aarch64", "target-x86_64", "target-wasm32"] }
-roc_builtins = { path = "../builtins" }
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_command_utils = { path = "../../utils/command" }
-roc_constrain = { path = "../constrain" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_error_macros = { path = "../../error_macros" }
-roc_load = { path = "../load" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_packaging = { path = "../../packaging" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_reporting = { path = "../../reporting" }
-roc_solve = { path = "../solve" }
-roc_std = { path = "../../roc_std" }
-roc_target = { path = "../roc_target" }
-roc_types = { path = "../types" }
-roc_unify = { path = "../unify" }
-roc_wasm_interp = { path = "../../wasm_interp" }
-roc_wasm_module = { path = "../../wasm_module" }
+roc_gen_dev.workspace = true
+roc_gen_wasm.workspace = true
+roc_bitcode.workspace = true
+roc_build = { workspace = true, features = [
+    "target-aarch64",
+    "target-x86_64",
+    "target-wasm32",
+] }
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_command_utils.workspace = true
+roc_constrain.workspace = true
+roc_debug_flags.workspace = true
+roc_error_macros.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_packaging.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve.workspace = true
+roc_std.workspace = true
+roc_target.workspace = true
+roc_test_utils.workspace = true
+roc_types.workspace = true
+roc_unify.workspace = true
+roc_wasm_interp.workspace = true
+roc_wasm_module.workspace = true
 
 bumpalo.workspace = true
 criterion.workspace = true

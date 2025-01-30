@@ -1,0 +1,137 @@
+Defs {
+    tags: [
+        EitherIndex(0),
+        EitherIndex(1),
+        EitherIndex(2),
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+        EitherIndex(2147483650),
+    ],
+    regions: [
+        @0-60,
+        @61-105,
+        @106-160,
+        @162-200,
+        @201-233,
+        @234-266,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 2 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 1 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 5, length: 1 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 4, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 5, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+        Newline,
+    ],
+    type_defs: [
+        Alias {
+            header: TypeHeader {
+                name: @0-3 "App",
+                vars: [
+                    @4-9 Identifier(
+                        "state",
+                    ),
+                    @10-18 Identifier(
+                        "initData",
+                    ),
+                ],
+            },
+            ann: @21-60 Apply(
+                "Html.Internal.Shared",
+                "App",
+                [
+                    @46-51 BoundVariable(
+                        "state",
+                    ),
+                    @52-60 BoundVariable(
+                        "initData",
+                    ),
+                ],
+            ),
+        },
+        Alias {
+            header: TypeHeader {
+                name: @61-65 "Html",
+                vars: [
+                    @66-71 Identifier(
+                        "state",
+                    ),
+                ],
+            },
+            ann: @74-105 Apply(
+                "Html.Internal.Shared",
+                "Html",
+                [
+                    @100-105 BoundVariable(
+                        "state",
+                    ),
+                ],
+            ),
+        },
+        Alias {
+            header: TypeHeader {
+                name: @106-115 "Attribute",
+                vars: [
+                    @116-121 Identifier(
+                        "state",
+                    ),
+                ],
+            },
+            ann: @124-160 Apply(
+                "Html.Internal.Shared",
+                "Attribute",
+                [
+                    @155-160 BoundVariable(
+                        "state",
+                    ),
+                ],
+            ),
+        },
+    ],
+    value_defs: [
+        Body(
+            @162-169 Identifier {
+                ident: "element",
+            },
+            @172-200 Var {
+                module_name: "Html.Internal.Shared",
+                ident: "element",
+            },
+        ),
+        Body(
+            @201-205 Identifier {
+                ident: "text",
+            },
+            @208-233 Var {
+                module_name: "Html.Internal.Shared",
+                ident: "text",
+            },
+        ),
+        Body(
+            @234-238 Identifier {
+                ident: "none",
+            },
+            @241-266 Var {
+                module_name: "Html.Internal.Shared",
+                ident: "none",
+            },
+        ),
+    ],
+}

@@ -4,8 +4,7 @@ Ayaz Hafiz
 
 ## Summary
 
-This document describes how polymorphic lambda sets are specialized and resolved
-in the compiler's type solver. It's derived from the original document at <https://rwx.notion.site/Ambient-Lambda-Set-Specialization-50e0208a39844ad096626f4143a6394e>.
+This document describes how polymorphic lambda sets are specialized and resolved in the compiler's type solver.
 
 TL;DR: lambda sets are resolved by unifying their ambient arrow types in a “bottom-up” fashion.
 

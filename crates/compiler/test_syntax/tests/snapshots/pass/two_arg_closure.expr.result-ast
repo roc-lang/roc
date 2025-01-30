@@ -1,11 +1,11 @@
-Closure(
+@0-11 Closure(
     [
-        @1-2 Identifier(
-            "a",
-        ),
-        @4-5 Identifier(
-            "b",
-        ),
+        @1-2 Identifier {
+            ident: "a",
+        },
+        @4-5 Identifier {
+            ident: "b",
+        },
     ],
     @9-11 Num(
         "42",

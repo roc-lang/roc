@@ -1,0 +1,82 @@
+@0-23 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-21,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-1 Identifier {
+                        ident: "j",
+                    },
+                    @2-21 BinOps(
+                        [
+                            (
+                                @2-3 Var {
+                                    module_name: "",
+                                    ident: "m",
+                                },
+                                @3-4 Percent,
+                            ),
+                        ],
+                        @4-21 When(
+                            @9-10 SpaceAfter(
+                                Var {
+                                    module_name: "",
+                                    ident: "f",
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            [
+                                WhenBranch {
+                                    patterns: [
+                                        @14-15 Identifier {
+                                            ident: "e",
+                                        },
+                                    ],
+                                    value: @17-21 ParensAround(
+                                        SpaceAfter(
+                                            Var {
+                                                module_name: "",
+                                                ident: "i",
+                                            },
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ),
+                                    guard: None,
+                                },
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        },
+        @22-23 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "h",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

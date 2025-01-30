@@ -1,0 +1,47 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_dev_out.normalize_stdout_and_stderr()
+snapshot_kind: text
+---
+
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
+
+Something is off with the body of the
+fn_annotated_as_value definition:
+
+3│   fn_annotated_as_value : Str
+4│>  fn_annotated_as_value = \post_id, comment_id ->
+5│>      "/posts/${post_id}/comments/${Num.to_str(comment_id)}"
+
+The body is an anonymous function of type:
+
+    Str, Num * -> Str
+
+But the type annotation on fn_annotated_as_value says it should be:
+
+    Str
+
+
+── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
+
+Something is off with the body of the missing_arg definition:
+
+7│   missing_arg : Str -> Str
+8│>  missing_arg = \post_id, _ ->
+9│>      "/posts/${post_id}/comments"
+
+The body is an anonymous function of type:
+
+    (Str, ? -> Str)
+
+But the type annotation on missing_arg says it should be:
+
+    (Str -> Str)
+
+Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
+
+────────────────────────────────────────────────────────────────────────────────
+
+2 errors and 1 warning found in <ignored for test> ms.
+
+You can run <ignored for tests>

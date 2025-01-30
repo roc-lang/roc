@@ -1,110 +1,117 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-            Index(1),
-        ],
-        regions: [
-            @0-51,
-            @53-104,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-            Slice(start = 0, length = 2),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-            Slice(start = 2, length = 0),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-        ],
-        type_defs: [
-            Ability {
-                header: TypeHeader {
-                    name: @0-3 "Ab1",
-                    vars: [],
-                },
-                loc_implements: @4-14 Implements,
-                members: [
-                    AbilityMember {
-                        name: @15-18 "ab1",
-                        typ: @21-51 Where(
-                            @21-28 Function(
-                                [
-                                    @21-22 BoundVariable(
-                                        "a",
-                                    ),
-                                ],
-                                @26-28 Record {
-                                    fields: [],
-                                    ext: None,
-                                },
-                            ),
-                            [
-                                @35-51 ImplementsClause {
-                                    var: @35-36 "a",
-                                    abilities: [
-                                        @48-51 Apply(
-                                            "",
-                                            "Ab1",
-                                            [],
+@0-107 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+                EitherIndex(1),
+            ],
+            regions: [
+                @0-51,
+                @53-104,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+            ],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-3 "Ab1",
+                        vars: [],
+                    },
+                    loc_implements: @4-14 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @15-18 "ab1",
+                            typ: @21-51 Where(
+                                @21-28 Function(
+                                    [
+                                        @21-22 BoundVariable(
+                                            "a",
                                         ),
                                     ],
-                                },
-                            ],
-                        ),
-                    },
-                ],
-            },
-            Ability {
-                header: TypeHeader {
-                    name: @53-56 "Ab2",
-                    vars: [],
-                },
-                loc_implements: @57-67 Implements,
-                members: [
-                    AbilityMember {
-                        name: @68-71 "ab2",
-                        typ: @74-104 Where(
-                            @74-81 Function(
+                                    Pure,
+                                    @26-28 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                ),
                                 [
-                                    @74-75 BoundVariable(
-                                        "a",
-                                    ),
+                                    @35-51 ImplementsClause {
+                                        var: @35-36 "a",
+                                        abilities: [
+                                            @48-51 Apply(
+                                                "",
+                                                "Ab1",
+                                                [],
+                                            ),
+                                        ],
+                                    },
                                 ],
-                                @79-81 Record {
-                                    fields: [],
-                                    ext: None,
-                                },
                             ),
-                            [
-                                @88-104 ImplementsClause {
-                                    var: @88-89 "a",
-                                    abilities: [
-                                        @101-104 Apply(
-                                            "",
-                                            "Ab2",
-                                            [],
+                        },
+                    ],
+                },
+                Ability {
+                    header: TypeHeader {
+                        name: @53-56 "Ab2",
+                        vars: [],
+                    },
+                    loc_implements: @57-67 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @68-71 "ab2",
+                            typ: @74-104 Where(
+                                @74-81 Function(
+                                    [
+                                        @74-75 BoundVariable(
+                                            "a",
                                         ),
                                     ],
-                                },
-                            ],
-                        ),
-                    },
-                ],
-            },
-        ],
-        value_defs: [],
-    },
-    @106-107 SpaceBefore(
-        Num(
-            "1",
+                                    Pure,
+                                    @79-81 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                ),
+                                [
+                                    @88-104 ImplementsClause {
+                                        var: @88-89 "a",
+                                        abilities: [
+                                            @101-104 Apply(
+                                                "",
+                                                "Ab2",
+                                                [],
+                                            ),
+                                        ],
+                                    },
+                                ],
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @106-107 SpaceBefore(
+            Num(
+                "1",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

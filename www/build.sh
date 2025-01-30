@@ -18,6 +18,20 @@ cd $SCRIPT_RELATIVE_DIR
 rm -rf build/
 cp -r public/ build/
 
+rm -rf content/examples/
+# download the latest code for the examples
+echo 'Downloading latest examples...'
+curl -fL -o examples-main.zip https://github.com/roc-lang/examples/archive/refs/heads/main.zip
+rm -rf examples-main/
+unzip -o -q examples-main.zip
+cp -R examples-main/examples/ content/examples/
+
+# replace links in content/examples/index.md to work on the WIP site
+perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
+
+# clean up examples artifacts
+rm -rf examples-main examples-main.zip
+
 # download fonts just-in-time so we don't have to bloat the repo with them.
 DESIGN_ASSETS_COMMIT="4d949642ebc56ca455cf270b288382788bce5873"
 DESIGN_ASSETS_TARFILE="roc-lang-design-assets-4d94964.tar.gz"
@@ -35,6 +49,7 @@ curl -fLJO https://github.com/roc-lang/roc/archive/www.tar.gz
 # Download the latest pre-built Web REPL as a zip file. (Build takes longer than Netlify's timeout.)
 REPL_TARFILE="roc_repl_wasm.tar.gz"
 curl -fLJO https://github.com/roc-lang/roc/releases/download/nightly/$REPL_TARFILE
+mkdir repl
 tar -xzf $REPL_TARFILE -C repl
 rm $REPL_TARFILE
 ls -lh repl
@@ -42,7 +57,6 @@ ls -lh repl
 popd
 
 pushd ..
-echo 'Generating builtin docs...'
 cargo --version
 
 # We set ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
@@ -63,9 +77,6 @@ rm -rf roc_nightly roc_releases.json
 
 # we use `! [ -v GITHUB_TOKEN_READ_ONLY ];` to check if we're on a netlify server
 if ! [ -v GITHUB_TOKEN_READ_ONLY ]; then
-  echo 'Building tutorial.html from tutorial.md...'
-  mkdir www/build/tutorial
-
   cargo build --release --bin roc
 
   roc=target/release/roc
@@ -73,7 +84,14 @@ else
   echo 'Fetching latest roc nightly...'
 
   # get roc release archive
-  curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+  # check if testing archive is available
+  TESTING_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz"
+  LATEST_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz"
+  if curl --output /dev/null --silent --head --fail "$TESTING_URL"; then 
+    curl -fOL "$TESTING_URL"
+  else
+    curl -fOL "$LATEST_URL"
+  fi
   # extract archive
   ls | grep "roc_nightly" | xargs tar -xzvf
   # delete archive
@@ -82,63 +100,17 @@ else
   mv roc_nightly* roc_nightly
 
   roc='./roc_nightly/roc'
-
-  echo 'Building tutorial.html from tutorial.md...'
-  mkdir www/build/tutorial
 fi
 
 $roc version
-$roc run www/generate_tutorial/src/tutorial.roc -- www/generate_tutorial/src/input/ www/build/tutorial/
-mv www/build/tutorial/tutorial.html www/build/tutorial/index.html
 
-# for new wip site
-mkdir www/build/wip
-$roc run www/wip_new_website/main.roc -- www/wip_new_website/content/ www/build/wip
-cp -r www/wip_new_website/static/site.css www/build/wip
-cp -r www/build/fonts www/build/wip/fonts
+echo 'Generating site markdown content'
+$roc build --linker legacy www/main.roc
+./www/main www/content/ www/build/
+
+echo "Adding github link to examples' html..."
+source www/scripts/add-github-link-to-examples.sh
+add_github_link_to_examples www/build/examples
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
-
-echo 'Generating CLI example platform docs...'
-# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/packages/basic-cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/packages/basic-cli
-
-rm -rf ./downloaded-basic-cli
-
-git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
-
-cargo run --bin roc-docs downloaded-basic-cli/src/main.roc
-
-rm -rf ./downloaded-basic-cli
-
-BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
-mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
-
-# set up docs for older basic-cli versions
-# we need a github token
-if [ -v GITHUB_TOKEN_READ_ONLY ]; then
-
-  curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
-
-  DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
-
-  rm basic_cli_releases.json
-
-  VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')
-
-  while read -r VERSION_NR; do
-      echo $VERSION_NR
-      BASIC_CLI_DIR=$BASIC_CLI_PACKAGE_DIR/$VERSION_NR
-      mkdir -p $BASIC_CLI_DIR
-      curl -fL --output $BASIC_CLI_DIR/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/$VERSION_NR/docs.tar.gz
-      tar -xf $BASIC_CLI_DIR/docs.tar.gz -C $BASIC_CLI_DIR/
-      rm $BASIC_CLI_DIR/docs.tar.gz
-      mv $BASIC_CLI_DIR/generated-docs/* $BASIC_CLI_DIR
-      rm -rf $BASIC_CLI_DIR/generated-docs
-  done <<< "$VERSION_NUMBERS"
-fi
-
-popd

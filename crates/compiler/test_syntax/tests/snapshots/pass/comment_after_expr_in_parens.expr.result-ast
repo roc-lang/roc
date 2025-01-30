@@ -1,4 +1,4 @@
-ParensAround(
+@0-8 ParensAround(
     SpaceAfter(
         Var {
             module_name: "",

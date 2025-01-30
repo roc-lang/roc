@@ -1,73 +1,78 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
+@0-69 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @14-15 SpaceBefore(
+                        Underscore(
+                            "",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @27-28 SpaceBefore(
+                    Num(
+                        "1",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @34-35 SpaceBefore(
+                        Underscore(
+                            "",
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @47-48 SpaceBefore(
+                    Num(
+                        "2",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @54-56 SpaceBefore(
+                        Tag(
+                            "Ok",
+                        ),
+                        [
+                            Newline,
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @68-69 SpaceBefore(
+                    Num(
+                        "3",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                guard: None,
+            },
+        ],
+    ),
     [
-        WhenBranch {
-            patterns: [
-                @14-15 SpaceBefore(
-                    Underscore(
-                        "",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @27-28 SpaceBefore(
-                Num(
-                    "1",
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @34-35 SpaceBefore(
-                    Underscore(
-                        "",
-                    ),
-                    [
-                        Newline,
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @47-48 SpaceBefore(
-                Num(
-                    "2",
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @54-56 SpaceBefore(
-                    Tag(
-                        "Ok",
-                    ),
-                    [
-                        Newline,
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @68-69 SpaceBefore(
-                Num(
-                    "3",
-                ),
-                [
-                    Newline,
-                ],
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

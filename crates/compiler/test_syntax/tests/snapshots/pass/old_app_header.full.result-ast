@@ -1,0 +1,119 @@
+Full(
+    FullAst {
+        header: SpacesBefore {
+            before: [],
+            item: App(
+                AppHeader {
+                    before_provides: [
+                        Newline,
+                    ],
+                    provides: [
+                        @143-147 ExposedName(
+                            "main",
+                        ),
+                    ],
+                    before_packages: [
+                        Newline,
+                    ],
+                    packages: @20-88 Collection {
+                        items: [
+                            @44-81 SpaceBefore(
+                                PackageEntry {
+                                    shorthand: "cli",
+                                    spaces_after_shorthand: [],
+                                    platform_marker: Some(
+                                        [],
+                                    ),
+                                    package_name: @49-81 PackageName(
+                                        "../basic-cli/platform/main.roc",
+                                    ),
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        final_comments: [
+                            Newline,
+                        ],
+                    },
+                    old_imports: None,
+                    old_provides_to_new_package: None,
+                },
+            ),
+        },
+        defs: Defs {
+            tags: [
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+            ],
+            regions: [
+                @111-121,
+                @157-187,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 3 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 6, length: 2 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 3 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 8, length: 2 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                ModuleImport(
+                    ModuleImport {
+                        before_name: [],
+                        name: @111-121 ImportedModuleName {
+                            package: Some(
+                                "cli",
+                            ),
+                            name: ModuleName(
+                                "Stdout",
+                            ),
+                        },
+                        params: None,
+                        alias: None,
+                        exposed: None,
+                    },
+                ),
+                Body(
+                    @157-161 Identifier {
+                        ident: "main",
+                    },
+                    @168-187 SpaceBefore(
+                        Apply(
+                            @168-179 Var {
+                                module_name: "Stdout",
+                                ident: "line",
+                            },
+                            [
+                                @180-187 Str(
+                                    PlainLine(
+                                        "hello",
+                                    ),
+                                ),
+                            ],
+                            Space,
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+        },
+    },
+)

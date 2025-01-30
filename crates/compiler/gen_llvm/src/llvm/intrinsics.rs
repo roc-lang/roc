@@ -75,14 +75,9 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
     //
     // https://releases.llvm.org/10.0.0/docs/LangRef.html#standard-c-library-intrinsics
     let i1_type = ctx.bool_type();
-    let i8_type = ctx.i8_type();
-    let i8_ptr_type = i8_type.ptr_type(AddressSpace::default());
+    let i8_ptr_type = ctx.ptr_type(AddressSpace::default());
     let i32_type = ctx.i32_type();
     let void_type = ctx.void_type();
-
-    if let Some(func) = module.get_function("__muloti4") {
-        func.set_linkage(Linkage::WeakAny);
-    }
 
     add_intrinsic(
         ctx,
@@ -142,8 +137,8 @@ pub(crate) fn add_intrinsics<'ctx>(ctx: &'ctx Context, module: &Module<'ctx>) {
 pub static LLVM_MEMSET_I64: &str = "llvm.memset.p0i8.i64";
 pub static LLVM_MEMSET_I32: &str = "llvm.memset.p0i8.i32";
 
-pub static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0i8";
-pub static LLVM_STACK_SAVE: &str = "llvm.stacksave";
+pub static LLVM_FRAME_ADDRESS: &str = "llvm.frameaddress.p0";
+pub static LLVM_STACK_SAVE: &str = "llvm.stacksave.p0";
 
 pub static LLVM_SETJMP: &str = "llvm.eh.sjlj.setjmp";
 pub static LLVM_LONGJMP: &str = "llvm.eh.sjlj.longjmp";

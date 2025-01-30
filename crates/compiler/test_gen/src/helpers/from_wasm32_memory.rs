@@ -1,7 +1,7 @@
 use roc_error_macros::internal_error;
 use roc_gen_wasm::wasm32_sized::Wasm32Sized;
 use roc_mono::layout::Builtin;
-use roc_std::{RocBox, RocDec, RocList, RocOrder, RocResult, RocStr, I128, U128};
+use roc_std::{RocBox, RocDec, RocList, RocOrder, RocRefcounted, RocResult, RocStr, I128, U128};
 use roc_wasm_module::round_up_to_alignment;
 use std::convert::TryInto;
 
@@ -84,22 +84,21 @@ impl FromWasm32Memory for RocStr {
     }
 }
 
-impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T>
+where
+    T: RocRefcounted,
+{
     fn decode(memory: &[u8], offset: u32) -> Self {
         let elements = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
         let length = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_LEN);
         let capacity =
             <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_CAPACITY);
 
-        let mut items = Vec::with_capacity(length as usize);
+        let step = <T as Wasm32Sized>::SIZE_OF_WASM;
 
-        for i in 0..length {
-            let item = <T as FromWasm32Memory>::decode(
-                memory,
-                elements + i * <T as Wasm32Sized>::SIZE_OF_WASM as u32,
-            );
-            items.push(item);
-        }
+        let items: Vec<_> = (0..length)
+            .map(|i| <T as FromWasm32Memory>::decode(memory, elements + i * step as u32))
+            .collect();
 
         let mut list = RocList::with_capacity(capacity as usize);
         list.extend_from_slice(&items);
@@ -107,7 +106,10 @@ impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocList<T> {
     }
 }
 
-impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T> {
+impl<T: FromWasm32Memory + Clone> FromWasm32Memory for RocBox<T>
+where
+    T: RocRefcounted,
+{
     fn decode(memory: &[u8], offset: u32) -> Self {
         let ptr = <u32 as FromWasm32Memory>::decode(memory, offset + 4 * Builtin::WRAPPER_PTR);
         debug_assert_ne!(ptr, 0);

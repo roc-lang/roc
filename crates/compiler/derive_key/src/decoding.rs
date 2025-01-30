@@ -66,9 +66,7 @@ impl FlatDecodable {
                 FlatType::Tuple(elems, ext) => {
                     let (elems_iter, ext) = elems.sorted_iterator_and_ext(subs, ext);
 
-                    check_derivable_ext_var(subs, ext, |ext| {
-                        matches!(ext, Content::Structure(FlatType::EmptyTuple))
-                    })?;
+                    check_derivable_ext_var(subs, ext, |_| false)?;
 
                     Ok(Key(FlatDecodableKey::Tuple(elems_iter.count() as _)))
                 }
@@ -79,12 +77,11 @@ impl FlatDecodable {
                     Err(Underivable) // yet
                 }
                 FlatType::EmptyRecord => Ok(Key(FlatDecodableKey::Record(vec![]))),
-                FlatType::EmptyTuple => todo!(),
                 FlatType::EmptyTagUnion => {
                     Err(Underivable) // yet
                 }
                 //
-                FlatType::Func(..) => Err(Underivable),
+                FlatType::Func(..) | FlatType::EffectfulFunc => Err(Underivable),
             },
             Content::Alias(sym, _, real_var, _) => match from_builtin_symbol(sym) {
                 Some(lambda) => lambda,
@@ -104,6 +101,7 @@ impl FlatDecodable {
             | Content::FlexAbleVar(_, _)
             | Content::RigidAbleVar(_, _) => Err(UnboundVar),
             Content::LambdaSet(_) | Content::ErasedLambda => Err(Underivable),
+            Content::Pure | Content::Effectful => Err(Underivable),
         }
     }
 
@@ -129,7 +127,6 @@ const fn from_builtin_symbol(symbol: Symbol) -> Option<Result<FlatDecodable, Der
         Symbol::NUM_DEC | Symbol::NUM_DECIMAL => Some(Ok(Immediate(Symbol::DECODE_DEC))),
         Symbol::NUM_F32 | Symbol::NUM_BINARY32 => Some(Ok(Immediate(Symbol::DECODE_F32))),
         Symbol::NUM_F64 | Symbol::NUM_BINARY64 => Some(Ok(Immediate(Symbol::DECODE_F64))),
-        Symbol::NUM_NAT | Symbol::NUM_NATURAL => Some(Err(DeriveError::Underivable)),
         _ => None,
     }
 }

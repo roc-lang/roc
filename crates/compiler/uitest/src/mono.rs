@@ -43,7 +43,7 @@ pub(crate) fn write_compiled_ir<'a>(
     let file_path = dir.path().join(filename);
 
     let load_config = LoadConfig {
-        target_info: roc_target::TargetInfo::default_x86_64(),
+        target: roc_target::Target::LinuxX64,
         function_kind: compiler_settings.function_kind,
         threading: Threading::Single,
         render: roc_reporting::report::RenderTarget::Generic,
@@ -55,6 +55,7 @@ pub(crate) fn write_compiled_ir<'a>(
         file_path,
         test_module,
         dir.path().to_path_buf(),
+        None,
         RocCacheDir::Disallowed,
         load_config,
     );
@@ -63,6 +64,7 @@ pub(crate) fn write_compiled_ir<'a>(
         Ok(x) => x,
         Err(LoadMonomorphizedError::LoadingProblem(roc_load::LoadingProblem::FormattedReport(
             report,
+            _,
         ))) => {
             println!("{report}");
             panic!();

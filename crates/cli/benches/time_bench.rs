@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use cli_utils::bench_utils::{
+use cli_test_utils::bench_utils::{
     bench_cfold, bench_deriv, bench_nqueens, bench_quicksort, bench_rbtree_ck,
 };
 use criterion::{measurement::WallTime, BenchmarkGroup, Criterion, SamplingMode};

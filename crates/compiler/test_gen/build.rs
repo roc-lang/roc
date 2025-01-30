@@ -121,12 +121,12 @@ fn build_wasm_test_host() {
 
 fn build_wasm_platform(out_dir: &str, source_path: &str) -> PathBuf {
     let mut outfile = PathBuf::from(out_dir).join(PLATFORM_FILENAME);
-    outfile.set_extension("o");
+    outfile.set_extension("wasm");
 
     run_zig(&[
         "build-lib",
         "-target",
-        "wasm32-wasi",
+        "wasm32-wasi-musl",
         "-lc",
         source_path,
         &format!("-femit-bin={}", outfile.to_str().unwrap()),

@@ -1,0 +1,42 @@
+@0-29 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "t",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @14-25 SpaceBefore(
+                        Apply(
+                            @14-16 Tag(
+                                "Ok",
+                            ),
+                            [
+                                @18-25 As(
+                                    @18-20 RecordDestructure(
+                                        [],
+                                    ),
+                                    PatternAs {
+                                        spaces_before: [],
+                                        identifier: @24-25 "d",
+                                    },
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @28-29 Tag(
+                    "S",
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

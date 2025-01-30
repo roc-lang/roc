@@ -1,3 +1,8 @@
-OpaqueRef(
-    "@Age",
+@0-4 SpaceAfter(
+    OpaqueRef(
+        "@Age",
+    ),
+    [
+        Newline,
+    ],
 )

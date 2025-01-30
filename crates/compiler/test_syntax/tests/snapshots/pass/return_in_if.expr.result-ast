@@ -1,0 +1,167 @@
+@0-149 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-128,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-16 Identifier {
+                        ident: "maybeEarlyReturn",
+                    },
+                    @19-128 Closure(
+                        [
+                            @20-21 Identifier {
+                                ident: "x",
+                            },
+                        ],
+                        @29-128 SpaceBefore(
+                            Defs(
+                                Defs {
+                                    tags: [
+                                        EitherIndex(2147483648),
+                                    ],
+                                    regions: [
+                                        @29-110,
+                                    ],
+                                    space_before: [
+                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    ],
+                                    space_after: [
+                                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                    ],
+                                    spaces: [],
+                                    type_defs: [],
+                                    value_defs: [
+                                        Body(
+                                            @29-30 Identifier {
+                                                ident: "y",
+                                            },
+                                            @41-110 SpaceBefore(
+                                                If {
+                                                    if_thens: [
+                                                        (
+                                                            @44-49 BinOps(
+                                                                [
+                                                                    (
+                                                                        @44-45 Var {
+                                                                            module_name: "",
+                                                                            ident: "x",
+                                                                        },
+                                                                        @46-47 GreaterThan,
+                                                                    ),
+                                                                ],
+                                                                @48-49 Num(
+                                                                    "5",
+                                                                ),
+                                                            ),
+                                                            @67-79 SpaceBefore(
+                                                                SpaceAfter(
+                                                                    Return(
+                                                                        @67-79 Str(
+                                                                            PlainLine(
+                                                                                "abc",
+                                                                            ),
+                                                                        ),
+                                                                        None,
+                                                                    ),
+                                                                    [
+                                                                        Newline,
+                                                                    ],
+                                                                ),
+                                                                [
+                                                                    Newline,
+                                                                ],
+                                                            ),
+                                                        ),
+                                                    ],
+                                                    final_else: @105-110 SpaceBefore(
+                                                        BinOps(
+                                                            [
+                                                                (
+                                                                    @105-106 Var {
+                                                                        module_name: "",
+                                                                        ident: "x",
+                                                                    },
+                                                                    @107-108 Plus,
+                                                                ),
+                                                            ],
+                                                            @109-110 Num(
+                                                                "2",
+                                                            ),
+                                                        ),
+                                                        [
+                                                            Newline,
+                                                        ],
+                                                    ),
+                                                    indented_else: false,
+                                                },
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ),
+                                    ],
+                                },
+                                @116-128 SpaceBefore(
+                                    Apply(
+                                        @116-126 Var {
+                                            module_name: "Num",
+                                            ident: "to_str",
+                                        },
+                                        [
+                                            @127-128 Var {
+                                                module_name: "",
+                                                ident: "y",
+                                            },
+                                        ],
+                                        Space,
+                                    ),
+                                    [
+                                        Newline,
+                                        Newline,
+                                    ],
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        },
+        @130-149 SpaceBefore(
+            Apply(
+                @130-146 Var {
+                    module_name: "",
+                    ident: "maybeEarlyReturn",
+                },
+                [
+                    @147-149 Num(
+                        "10",
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

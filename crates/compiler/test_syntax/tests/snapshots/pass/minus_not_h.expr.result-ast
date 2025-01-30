@@ -1,0 +1,15 @@
+@0-3 SpaceAfter(
+    UnaryOp(
+        @1-3 UnaryOp(
+            @2-3 Var {
+                module_name: "",
+                ident: "h",
+            },
+            @1-2 Not,
+        ),
+        @0-1 Negate,
+    ),
+    [
+        Newline,
+    ],
+)

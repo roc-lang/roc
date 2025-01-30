@@ -1,0 +1,61 @@
+@0-43 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-27,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                IngestedFileImport(
+                    IngestedFileImport {
+                        before_path: [],
+                        path: @7-19 PlainLine(
+                            "users.json",
+                        ),
+                        name: KeywordItem {
+                            keyword: Spaces {
+                                before: [],
+                                item: ImportAsKeyword,
+                                after: [],
+                            },
+                            item: @23-27 "data",
+                        },
+                        annotation: None,
+                    },
+                ),
+            ],
+        },
+        @29-43 SpaceBefore(
+            Apply(
+                @29-38 Var {
+                    module_name: "",
+                    ident: "parseJson",
+                },
+                [
+                    @39-43 Var {
+                        module_name: "",
+                        ident: "data",
+                    },
+                ],
+                Space,
+            ),
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

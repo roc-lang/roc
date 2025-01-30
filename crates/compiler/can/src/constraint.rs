@@ -5,17 +5,20 @@ use std::sync::Arc;
 use crate::abilities::SpecializationId;
 use crate::exhaustive::{ExhaustiveContext, SketchedRows};
 use crate::expected::{Expected, PExpected};
-use roc_collections::soa::{EitherIndex, Index, Slice};
-use roc_module::ident::TagName;
+use crate::expr::TryKind;
+use roc_collections::soa::{index_push_new, slice_extend_new};
+use roc_module::ident::{IdentSuffix, TagName};
 use roc_module::symbol::{ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, Variable};
 use roc_types::types::{Category, PatternCategory, TypeTag, Types};
+use soa::{EitherIndex, Index, Slice};
 
 pub struct Constraints {
     pub constraints: Vec<Constraint>,
     pub type_slices: Vec<TypeOrVar>,
     pub variables: Vec<Variable>,
+    loc_variables: Vec<Loc<Variable>>,
     pub loc_symbols: Vec<(Symbol, Region)>,
     pub let_constraints: Vec<LetConstraint>,
     pub categories: Vec<Category>,
@@ -28,6 +31,9 @@ pub struct Constraints {
     pub eq: Vec<Eq>,
     pub pattern_eq: Vec<PatternEq>,
     pub cycles: Vec<Cycle>,
+    pub fx_call_constraints: Vec<FxCallConstraint>,
+    pub fx_suffix_constraints: Vec<FxSuffixConstraint>,
+    pub try_target_constraints: Vec<TryTargetConstraint>,
 }
 
 impl std::fmt::Debug for Constraints {
@@ -37,6 +43,7 @@ impl std::fmt::Debug for Constraints {
             .field("types", &"<types>")
             .field("type_slices", &self.type_slices)
             .field("variables", &self.variables)
+            .field("loc_variables", &self.loc_variables)
             .field("loc_symbols", &self.loc_symbols)
             .field("let_constraints", &self.let_constraints)
             .field("categories", &self.categories)
@@ -49,6 +56,8 @@ impl std::fmt::Debug for Constraints {
             .field("eq", &self.eq)
             .field("pattern_eq", &self.pattern_eq)
             .field("cycles", &self.cycles)
+            .field("fx_call_constraints", &self.fx_call_constraints)
+            .field("fx_suffix_constraints", &self.fx_suffix_constraints)
             .finish()
     }
 }
@@ -68,6 +77,7 @@ impl Constraints {
         let constraints = Vec::new();
         let type_slices = Vec::with_capacity(16);
         let variables = Vec::new();
+        let loc_variables = Vec::new();
         let loc_symbols = Vec::new();
         let let_constraints = Vec::new();
         let mut categories = Vec::with_capacity(16);
@@ -80,6 +90,9 @@ impl Constraints {
         let eq = Vec::new();
         let pattern_eq = Vec::new();
         let cycles = Vec::new();
+        let fx_call_constraints = Vec::with_capacity(16);
+        let fx_suffix_constraints = Vec::new();
+        let result_type_constraints = Vec::new();
 
         categories.extend([
             Category::Record,
@@ -116,6 +129,7 @@ impl Constraints {
             constraints,
             type_slices,
             variables,
+            loc_variables,
             loc_symbols,
             let_constraints,
             categories,
@@ -128,6 +142,9 @@ impl Constraints {
             eq,
             pattern_eq,
             cycles,
+            fx_call_constraints,
+            fx_suffix_constraints,
+            try_target_constraints: result_type_constraints,
         }
     }
 
@@ -149,6 +166,7 @@ impl Constraints {
     pub const CATEGORY_LIST: Index<Category> = Index::new(11);
     pub const CATEGORY_STR: Index<Category> = Index::new(12);
     pub const CATEGORY_CHARACTER: Index<Category> = Index::new(13);
+    pub const CATEGORY_RETURN: Index<Category> = Index::new(14);
 
     pub const PCATEGORY_RECORD: Index<PatternCategory> = Index::new(0);
     pub const PCATEGORY_EMPTYRECORD: Index<PatternCategory> = Index::new(1);
@@ -205,11 +223,11 @@ impl Constraints {
     }
 
     pub fn push_expected_type(&mut self, expected: Expected<TypeOrVar>) -> ExpectedTypeIndex {
-        Index::push_new(&mut self.expectations, expected)
+        index_push_new(&mut self.expectations, expected)
     }
 
     pub fn push_pat_expected_type(&mut self, expected: PExpected<TypeOrVar>) -> PExpectedTypeIndex {
-        Index::push_new(&mut self.pattern_expectations, expected)
+        index_push_new(&mut self.pattern_expectations, expected)
     }
 
     #[inline(always)]
@@ -229,7 +247,7 @@ impl Constraints {
             Category::List => Self::CATEGORY_LIST,
             Category::Str => Self::CATEGORY_STR,
             Category::Character => Self::CATEGORY_CHARACTER,
-            other => Index::push_new(&mut self.categories, other),
+            other => index_push_new(&mut self.categories, other),
         }
     }
 
@@ -247,7 +265,7 @@ impl Constraints {
             PatternCategory::Int => Self::PCATEGORY_INT,
             PatternCategory::Float => Self::PCATEGORY_FLOAT,
             PatternCategory::Character => Self::PCATEGORY_CHARACTER,
-            other => Index::push_new(&mut self.pattern_categories, other),
+            other => index_push_new(&mut self.pattern_categories, other),
         }
     }
 
@@ -320,7 +338,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let category_index = index_push_new(&mut self.pattern_categories, category);
 
         Constraint::PatternPresence(type_index, expected_index, category_index, region)
     }
@@ -337,7 +355,7 @@ impl Constraints {
         category: PatternCategory,
         region: Region,
     ) -> Constraint {
-        let category_index = Index::push_new(&mut self.pattern_categories, category);
+        let category_index = index_push_new(&mut self.pattern_categories, category);
 
         let includes_tag = IncludesTag {
             type_index,
@@ -347,7 +365,7 @@ impl Constraints {
             region,
         };
 
-        let includes_tag_index = Index::push_new(&mut self.includes_tags, includes_tag);
+        let includes_tag_index = index_push_new(&mut self.includes_tags, includes_tag);
 
         Constraint::IncludesTag(includes_tag_index)
     }
@@ -359,6 +377,17 @@ impl Constraints {
         let start = self.variables.len();
         self.variables.extend(it);
         let length = self.variables.len() - start;
+
+        Slice::new(start as _, length as _)
+    }
+
+    pub fn loc_variable_slice<I>(&mut self, it: I) -> Slice<Loc<Variable>>
+    where
+        I: IntoIterator<Item = Loc<Variable>>,
+    {
+        let start = self.loc_variables.len();
+        self.loc_variables.extend(it);
+        let length = self.loc_variables.len() - start;
 
         Slice::new(start as _, length as _)
     }
@@ -459,8 +488,8 @@ impl Constraints {
         generalizable: Generalizable,
     ) -> Constraint
     where
-        I1: IntoIterator<Item = Variable>,
-        I2: IntoIterator<Item = Variable>,
+        I1: IntoIterator<Item = Loc<Variable>>,
+        I2: IntoIterator<Item = Loc<Variable>>,
         I3: IntoIterator<Item = (Symbol, Loc<TypeOrVar>)>,
         I3::IntoIter: ExactSizeIterator,
     {
@@ -471,8 +500,8 @@ impl Constraints {
         self.constraints.push(ret_constraint);
 
         let let_constraint = LetConstraint {
-            rigid_vars: self.variable_slice(rigid_vars),
-            flex_vars: self.variable_slice(flex_vars),
+            rigid_vars: self.loc_variable_slice(rigid_vars),
+            flex_vars: self.variable_slice(flex_vars.into_iter().map(|v| v.value)),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
             generalizable,
@@ -520,7 +549,7 @@ impl Constraints {
         self.constraints.push(module_constraint);
 
         let let_contraint = LetConstraint {
-            rigid_vars: self.variable_slice(rigid_vars),
+            rigid_vars: self.loc_variable_slice(rigid_vars.into_iter().map(Loc::at_zero)),
             flex_vars: self.variable_slice(flex_vars),
             def_types: self.def_types_slice(def_types),
             defs_and_ret_constraint,
@@ -571,6 +600,63 @@ impl Constraints {
         Constraint::Lookup(symbol, expected_index, region)
     }
 
+    pub fn fx_call(
+        &mut self,
+        call_fx_var: Variable,
+        call_kind: FxCallKind,
+        call_region: Region,
+        expectation: Option<FxExpectation>,
+    ) -> Constraint {
+        let constraint = FxCallConstraint {
+            call_fx_var,
+            call_kind,
+            call_region,
+            expectation,
+        };
+
+        let constraint_index = index_push_new(&mut self.fx_call_constraints, constraint);
+
+        Constraint::FxCall(constraint_index)
+    }
+
+    pub fn fx_record_field_unsuffixed(&mut self, variable: Variable, region: Region) -> Constraint {
+        let type_index = Self::push_type_variable(variable);
+        let constraint = FxSuffixConstraint {
+            kind: FxSuffixKind::UnsuffixedRecordField,
+            type_index,
+            region,
+        };
+
+        let constraint_index = index_push_new(&mut self.fx_suffix_constraints, constraint);
+
+        Constraint::FxSuffix(constraint_index)
+    }
+
+    pub fn flex_to_pure(&mut self, fx_var: Variable) -> Constraint {
+        Constraint::FlexToPure(fx_var)
+    }
+
+    pub fn try_target(
+        &mut self,
+        result_type_index: TypeOrVar,
+        ok_payload_var: Variable,
+        err_payload_var: Variable,
+        region: Region,
+        kind: TryKind,
+    ) -> Constraint {
+        let constraint = TryTargetConstraint {
+            target_type_index: result_type_index,
+            ok_payload_var,
+            err_payload_var,
+            region,
+            kind,
+        };
+
+        let constraint_index = index_push_new(&mut self.try_target_constraints, constraint);
+
+        Constraint::TryTarget(constraint_index)
+    }
+
     pub fn contains_save_the_environment(&self, constraint: &Constraint) -> bool {
         match constraint {
             Constraint::SaveTheEnvironment => true,
@@ -595,6 +681,11 @@ impl Constraints {
             | Constraint::Store(..)
             | Constraint::Lookup(..)
             | Constraint::Pattern(..)
+            | Constraint::ExpectEffectful(..)
+            | Constraint::TryTarget(_)
+            | Constraint::FxCall(_)
+            | Constraint::FxSuffix(_)
+            | Constraint::FlexToPure(_)
             | Constraint::True
             | Constraint::IsOpenType(_)
             | Constraint::IncludesTag(_)
@@ -602,7 +693,8 @@ impl Constraints {
             | Constraint::Exhaustive { .. }
             | Constraint::Resolve(..)
             | Constraint::IngestedFile(..)
-            | Constraint::CheckCycle(..) => false,
+            | Constraint::CheckCycle(..)
+            | Constraint::ImportParams(..) => false,
         }
     }
 
@@ -613,7 +705,7 @@ impl Constraints {
         filename: &'static str,
         line_number: u32,
     ) -> Constraint {
-        let string_index = Index::push_new(&mut self.strings, filename);
+        let string_index = index_push_new(&mut self.strings, filename);
 
         Constraint::Store(type_index, variable, string_index, line_number)
     }
@@ -631,19 +723,19 @@ impl Constraints {
         exhaustive: ExhaustiveMark,
     ) -> Constraint {
         let real_var = Self::push_type_variable(real_var);
-        let sketched_rows = Index::push_new(&mut self.sketched_rows, sketched_rows);
+        let sketched_rows = index_push_new(&mut self.sketched_rows, sketched_rows);
 
         let equality = match category_and_expectation {
             Ok((category, expected)) => {
-                let category = Index::push_new(&mut self.categories, category);
+                let category = index_push_new(&mut self.categories, category);
                 let equality = Eq(real_var, expected, category, real_region);
-                let equality = Index::push_new(&mut self.eq, equality);
+                let equality = index_push_new(&mut self.eq, equality);
                 Ok(equality)
             }
             Err((category, expected)) => {
-                let category = Index::push_new(&mut self.pattern_categories, category);
+                let category = index_push_new(&mut self.pattern_categories, category);
                 let equality = PatternEq(real_var, expected, category, real_region);
-                let equality = Index::push_new(&mut self.pattern_eq, equality);
+                let equality = index_push_new(&mut self.pattern_eq, equality);
                 Err(equality)
             }
         };
@@ -661,18 +753,18 @@ impl Constraints {
         I: IntoIterator<Item = (Symbol, Region)>,
         I1: IntoIterator<Item = Region>,
     {
-        let def_names = Slice::extend_new(&mut self.loc_symbols, loc_symbols);
+        let def_names = slice_extend_new(&mut self.loc_symbols, loc_symbols);
 
         // we add a dummy symbol to these regions, so we can store the data in the loc_symbols vec
         let it = expr_regions.into_iter().map(|r| (Symbol::ATTR_ATTR, r));
-        let expr_regions = Slice::extend_new(&mut self.loc_symbols, it);
+        let expr_regions = slice_extend_new(&mut self.loc_symbols, it);
         let expr_regions = Slice::new(expr_regions.start() as _, expr_regions.len() as _);
 
         let cycle = Cycle {
             def_names,
             expr_regions,
         };
-        let cycle_index = Index::push_new(&mut self.cycles, cycle);
+        let cycle_index = index_push_new(&mut self.cycles, cycle);
 
         Constraint::CheckCycle(cycle_index, cycle_mark)
     }
@@ -684,6 +776,15 @@ impl Constraints {
         bytes: Arc<Vec<u8>>,
     ) -> Constraint {
         Constraint::IngestedFile(type_index, file_path, bytes)
+    }
+
+    pub fn import_params(
+        &mut self,
+        opt_type_index: Option<TypeOrVar>,
+        module_id: ModuleId,
+        region: Region,
+    ) -> Constraint {
+        Constraint::ImportParams(opt_type_index, module_id, region)
     }
 }
 
@@ -703,6 +804,14 @@ impl std::ops::Index<PExpectedTypeIndex> for Constraints {
 
     fn index(&self, index: PExpectedTypeIndex) -> &Self::Output {
         &self.pattern_expectations[index.index()]
+    }
+}
+
+impl std::ops::Index<Slice<Loc<Variable>>> for Constraints {
+    type Output = [Loc<Variable>];
+
+    fn index(&self, slice: Slice<Loc<Variable>>) -> &Self::Output {
+        &self.loc_variables[slice.indices()]
     }
 }
 
@@ -757,6 +866,16 @@ pub enum Constraint {
         Index<PatternCategory>,
         Region,
     ),
+    /// Check call fx against enclosing function fx
+    FxCall(Index<FxCallConstraint>),
+    /// Require idents to be accurately suffixed
+    FxSuffix(Index<FxSuffixConstraint>),
+    /// Set an fx var as pure if flex (no effectful functions were called)
+    FlexToPure(Variable),
+    /// Expect statement or ignored def to be effectful
+    ExpectEffectful(Variable, ExpectEffectfulReason, Region),
+    /// Expect value to be some kind of Result
+    TryTarget(Index<TryTargetConstraint>),
     /// Used for things that always unify, e.g. blanks and runtime errors
     True,
     SaveTheEnvironment,
@@ -787,6 +906,7 @@ pub enum Constraint {
     CheckCycle(Index<Cycle>, IllegalCycleMark),
 
     IngestedFile(TypeOrVar, Box<PathBuf>, Arc<Vec<u8>>),
+    ImportParams(Option<TypeOrVar>, ModuleId, Region),
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -795,12 +915,12 @@ pub struct DefTypes {
     pub loc_symbols: Slice<(Symbol, Region)>,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Generalizable(pub bool);
 
 #[derive(Debug, Clone)]
 pub struct LetConstraint {
-    pub rigid_vars: Slice<Variable>,
+    pub rigid_vars: Slice<Loc<Variable>>,
     pub flex_vars: Slice<Variable>,
     pub def_types: DefTypes,
     pub defs_and_ret_constraint: Index<(Constraint, Constraint)>,
@@ -822,10 +942,76 @@ pub struct IncludesTag {
     pub region: Region,
 }
 
+#[derive(Debug, Clone)]
+pub struct TryTargetConstraint {
+    pub target_type_index: TypeOrVar,
+    pub ok_payload_var: Variable,
+    pub err_payload_var: Variable,
+    pub region: Region,
+    pub kind: TryKind,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct Cycle {
     pub def_names: Slice<(Symbol, Region)>,
     pub expr_regions: Slice<Region>,
+}
+
+#[derive(Debug)]
+pub struct FxCallConstraint {
+    pub call_fx_var: Variable,
+    pub call_kind: FxCallKind,
+    pub call_region: Region,
+    pub expectation: Option<FxExpectation>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FxExpectation {
+    pub fx_var: Variable,
+    pub ann_region: Option<Region>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FxCallKind {
+    Call(Option<Symbol>),
+    Stmt,
+    Ignored,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct FxSuffixConstraint {
+    pub type_index: TypeOrVar,
+    pub kind: FxSuffixKind,
+    pub region: Region,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum FxSuffixKind {
+    Let(Symbol),
+    Pattern(Symbol),
+    UnsuffixedRecordField,
+}
+
+impl FxSuffixKind {
+    pub fn suffix(&self) -> IdentSuffix {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => symbol.suffix(),
+            Self::UnsuffixedRecordField => IdentSuffix::None,
+        }
+    }
+
+    pub fn symbol(&self) -> Option<&Symbol> {
+        match self {
+            Self::Let(symbol) | Self::Pattern(symbol) => Some(symbol),
+            Self::UnsuffixedRecordField => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExpectEffectfulReason {
+    Stmt,
+    Ignored,
 }
 
 /// Custom impl to limit vertical space used by the debug output
@@ -843,6 +1029,21 @@ impl std::fmt::Debug for Constraint {
             }
             Self::Pattern(arg0, arg1, arg2, arg3) => {
                 write!(f, "Pattern({arg0:?}, {arg1:?}, {arg2:?}, {arg3:?})")
+            }
+            Self::FxCall(arg0) => {
+                write!(f, "FxCall({arg0:?})")
+            }
+            Self::FxSuffix(arg0) => {
+                write!(f, "FxSuffix({arg0:?})")
+            }
+            Self::ExpectEffectful(arg0, arg1, arg2) => {
+                write!(f, "EffectfulStmt({arg0:?}, {arg1:?}, {arg2:?})")
+            }
+            Self::FlexToPure(arg0) => {
+                write!(f, "FlexToPure({arg0:?})")
+            }
+            Self::TryTarget(arg0) => {
+                write!(f, "ExpectResultType({arg0:?})")
             }
             Self::True => write!(f, "True"),
             Self::SaveTheEnvironment => write!(f, "SaveTheEnvironment"),
@@ -864,6 +1065,9 @@ impl std::fmt::Debug for Constraint {
             }
             Self::IngestedFile(arg0, arg1, arg2) => {
                 write!(f, "IngestedFile({arg0:?}, {arg1:?}, {arg2:?})")
+            }
+            Self::ImportParams(arg0, arg1, arg2) => {
+                write!(f, "ImportParams({arg0:?}, {arg1:?}, {arg2:?})")
             }
         }
     }

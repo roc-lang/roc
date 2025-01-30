@@ -4,8 +4,8 @@ use bumpalo::collections::Vec;
 use object::write::{self, SectionId, SymbolId};
 use object::write::{Object, StandardSection, StandardSegment, Symbol, SymbolSection};
 use object::{
-    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationKind, SectionKind,
-    SymbolFlags, SymbolKind, SymbolScope,
+    Architecture, BinaryFormat, Endianness, RelocationEncoding, RelocationFlags, RelocationKind,
+    SectionKind, SymbolFlags, SymbolKind, SymbolScope,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
@@ -14,8 +14,7 @@ use roc_module::symbol::Interns;
 use roc_mono::ir::{Call, CallSpecId, Expr, UpdateModeId};
 use roc_mono::ir::{Proc, ProcLayout, Stmt};
 use roc_mono::layout::{LambdaName, Layout, LayoutIds, LayoutInterner, STLayoutInterner};
-use roc_target::TargetInfo;
-use target_lexicon::{Architecture as TargetArch, BinaryFormat as TargetBF, Triple};
+use roc_target::Target;
 
 // This is used by some code below which is currently commented out.
 // See that code for more details!
@@ -27,21 +26,39 @@ pub fn build_module<'a, 'r>(
     env: &'r Env<'a>,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
-    target: &Triple,
+    target: Target,
+    procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
+) -> Object<'a> {
+    let module_object = build_module_help(env, interns, layout_interner, target, procedures);
+
+    if std::env::var("ROC_DEV_WRITE_OBJ").is_ok() {
+        let module_out = module_object
+            .write()
+            .expect("failed to build output object");
+
+        let file_path = std::env::temp_dir().join("app.o");
+        println!("gen-test object file written to {}", file_path.display());
+        std::fs::write(&file_path, module_out).expect("failed to write object to file");
+    }
+
+    module_object
+}
+
+fn build_module_help<'a, 'r>(
+    env: &'r Env<'a>,
+    interns: &'r mut Interns,
+    layout_interner: &'r mut STLayoutInterner<'a>,
+    target: Target,
     procedures: MutMap<(symbol::Symbol, ProcLayout<'a>), Proc<'a>>,
 ) -> Object<'a> {
     match target {
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Elf,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::LinuxX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             // Newer version of `ld` require `.note.GNU-stack` for security reasons.
             // It specifies that we will not execute code stored on the stack.
             let mut object =
@@ -53,17 +70,13 @@ pub fn build_module<'a, 'r>(
             );
             build_object(procedures, backend, object)
         }
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Macho,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::MacX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64SystemV,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -74,53 +87,39 @@ pub fn build_module<'a, 'r>(
                 ),
             )
         }
-        Triple {
-            architecture: TargetArch::X86_64,
-            binary_format: TargetBF::Coff,
-            ..
-        } if cfg!(feature = "target-x86_64") => {
+        Target::WinX64 if cfg!(feature = "target-x86_64") => {
             let backend = new_backend_64bit::<
                 x86_64::X86_64GeneralReg,
                 x86_64::X86_64FloatReg,
                 x86_64::X86_64Assembler,
                 x86_64::X86_64WindowsFastcall,
-            >(env, TargetInfo::default_x86_64(), interns, layout_interner);
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Coff, Architecture::X86_64, Endianness::Little),
             )
         }
-        Triple {
-            architecture: TargetArch::Aarch64(_),
-            binary_format: TargetBF::Elf,
-            ..
-        } if cfg!(feature = "target-aarch64") => {
-            let backend =
-                new_backend_64bit::<
-                    aarch64::AArch64GeneralReg,
-                    aarch64::AArch64FloatReg,
-                    aarch64::AArch64Assembler,
-                    aarch64::AArch64Call,
-                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
+        Target::LinuxArm64 if cfg!(feature = "target-aarch64") => {
+            let backend = new_backend_64bit::<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
                 Object::new(BinaryFormat::Elf, Architecture::Aarch64, Endianness::Little),
             )
         }
-        Triple {
-            architecture: TargetArch::Aarch64(_),
-            binary_format: TargetBF::Macho,
-            ..
-        } if cfg!(feature = "target-aarch64") => {
-            let backend =
-                new_backend_64bit::<
-                    aarch64::AArch64GeneralReg,
-                    aarch64::AArch64FloatReg,
-                    aarch64::AArch64Assembler,
-                    aarch64::AArch64Call,
-                >(env, TargetInfo::default_aarch64(), interns, layout_interner);
+        Target::MacArm64 if cfg!(feature = "target-aarch64") => {
+            let backend = new_backend_64bit::<
+                aarch64::AArch64GeneralReg,
+                aarch64::AArch64FloatReg,
+                aarch64::AArch64Assembler,
+                aarch64::AArch64Call,
+            >(env, target, interns, layout_interner);
             build_object(
                 procedures,
                 backend,
@@ -144,6 +143,30 @@ fn define_setlongjmp_buffer(output: &mut Object) -> SymbolId {
 
     let symbol = Symbol {
         name: b"setlongjmp_buffer".to_vec(),
+        value: 0,
+        size: SIZE as u64,
+        kind: SymbolKind::Data,
+        scope: SymbolScope::Linkage,
+        weak: false,
+        section: SymbolSection::Section(bss_section),
+        flags: SymbolFlags::None,
+    };
+
+    let symbol_id = output.add_symbol(symbol);
+    output.add_symbol_data(symbol_id, bss_section, &[0x00; SIZE], 8);
+
+    symbol_id
+}
+
+// needed to implement Crash when setjmp/longjmp is used
+fn define_panic_msg(output: &mut Object) -> SymbolId {
+    let bss_section = output.section_id(StandardSection::Data);
+
+    //  3 words for a RocStr
+    const SIZE: usize = 3 * core::mem::size_of::<u64>();
+
+    let symbol = Symbol {
+        name: b"panic_msg".to_vec(),
         value: 0,
         size: SIZE as u64,
         kind: SymbolKind::Data,
@@ -222,11 +245,11 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
                         let relocation = write::Relocation {
                             offset: offset + proc_offset,
-                            size: 21,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                            },
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -235,25 +258,24 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
                         write::Relocation {
                             offset: offset + proc_offset + 4,
-                            size: 12,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                            },
                         }
                     } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
                         //     4dc: 90000001        adrp    x1, 0x0 <ltmp0>
                         //      00000000000004dc:  ARM64_RELOC_PAGE21   ___unnamed_6
                         let relocation = write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGE21,
-                                relative: true,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGE21,
+                                r_pcrel: true,
+                                r_length: 2,
+                            },
                         };
 
                         output.add_relocation(text_section, relocation).unwrap();
@@ -262,23 +284,24 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
                         //      00000000000004e0:  ARM64_RELOC_PAGEOFF12    ___unnamed_6
                         write::Relocation {
                             offset: offset + proc_offset + 4,
-                            size: 32,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: false,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: write::RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                                r_pcrel: false,
+                                r_length: 2,
+                            },
                         }
                     } else {
                         write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::GotRelative,
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: write::RelocationFlags::Generic {
+                                kind: RelocationKind::GotRelative,
+                                encoding: RelocationEncoding::Generic,
+                                size: 32,
+                            },
                         }
                     }
                 } else {
@@ -294,6 +317,23 @@ fn generate_roc_panic<'a, B: Backend<'a>>(backend: &mut B, output: &mut Object) 
 
         output.add_relocation(text_section, relocation).unwrap();
     }
+}
+
+fn generate_roc_dbg<'a, B: Backend<'a>>(_backend: &mut B, output: &mut Object) {
+    let text_section = output.section_id(StandardSection::Text);
+    let proc_symbol = Symbol {
+        name: "roc_dbg".as_bytes().to_vec(),
+        value: 0,
+        size: 0,
+        kind: SymbolKind::Text,
+        scope: SymbolScope::Dynamic,
+        weak: false,
+        section: SymbolSection::Section(text_section),
+        flags: SymbolFlags::None,
+    };
+    let _proc_id = output.add_symbol(proc_symbol);
+    // TODO: Actually generate an impl instead of just an empty symbol.
+    // At a minimum, it should just be a ret.
 }
 
 fn generate_wrapper<'a, B: Backend<'a>>(
@@ -317,7 +357,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     let (proc_data, offset) = backend.build_wrapped_jmp();
     let proc_offset = output.add_symbol_data(proc_id, text_section, proc_data, 16);
 
-    let name = wraps.as_str().as_bytes();
+    let name = wraps.as_bytes();
     // If the symbol is an undefined zig builtin, we need to add it here.
     let symbol = Symbol {
         name: name.to_vec(),
@@ -331,7 +371,7 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     };
     output.add_symbol(symbol);
     if let Some(sym_id) = output.symbol_id(name) {
-        let reloc = create_relocation(backend.target_info(), sym_id, offset + proc_offset);
+        let reloc = create_relocation(backend.target(), sym_id, offset + proc_offset);
 
         match output.add_relocation(text_section, reloc) {
             Ok(obj) => obj,
@@ -342,46 +382,47 @@ fn generate_wrapper<'a, B: Backend<'a>>(
     }
 }
 
-fn create_relocation(target_info: TargetInfo, symbol: SymbolId, offset: u64) -> write::Relocation {
-    let (encoding, size, addend, kind) = match target_info.architecture {
+fn create_relocation(target: Target, symbol: SymbolId, offset: u64) -> write::Relocation {
+    let (flags, addend) = match target.architecture() {
         roc_target::Architecture::Aarch32 => todo!(),
         roc_target::Architecture::Aarch64 => {
             if cfg!(target_os = "macos") {
                 (
-                    RelocationEncoding::Generic,
-                    26,
-                    0,
-                    RelocationKind::MachO {
-                        value: 2,
-                        relative: true,
+                    RelocationFlags::MachO {
+                        r_type: object::macho::ARM64_RELOC_BRANCH26,
+                        r_pcrel: true,
+                        r_length: 2,
                     },
+                    0,
                 )
             } else {
                 (
-                    RelocationEncoding::AArch64Call,
-                    26,
+                    RelocationFlags::Generic {
+                        kind: RelocationKind::PltRelative,
+                        encoding: RelocationEncoding::AArch64Call,
+                        size: 26,
+                    },
                     0,
-                    RelocationKind::PltRelative,
                 )
             }
         }
         roc_target::Architecture::Wasm32 => todo!(),
         roc_target::Architecture::X86_32 => todo!(),
         roc_target::Architecture::X86_64 => (
-            RelocationEncoding::X86Branch,
-            32,
+            RelocationFlags::Generic {
+                kind: RelocationKind::PltRelative,
+                encoding: RelocationEncoding::X86Branch,
+                size: 32,
+            },
             -4,
-            RelocationKind::PltRelative,
         ),
     };
 
     write::Relocation {
         offset,
-        size,
-        kind,
-        encoding,
         symbol,
         addend,
+        flags,
     }
 }
 
@@ -405,11 +446,16 @@ fn build_object<'a, B: Backend<'a>>(
     */
 
     if backend.env().mode.generate_roc_panic() {
+        define_panic_msg(&mut output);
         define_setlongjmp_buffer(&mut output);
 
         generate_roc_panic(&mut backend, &mut output);
         generate_setjmp(&mut backend, &mut output);
         generate_longjmp(&mut backend, &mut output);
+    }
+
+    if backend.env().mode.generate_roc_dbg() {
+        generate_roc_dbg(&mut backend, &mut output);
     }
 
     if backend.env().mode.generate_allocators() {
@@ -889,7 +935,7 @@ fn build_proc<'a, B: Backend<'a>>(
     proc: Proc<'a>,
 ) {
     let mut local_data_index = 0;
-    let target_info = backend.target_info();
+    let target = backend.target();
     let (proc_data, relocs, rc_proc_names) = backend.build_proc(proc, layout_ids);
     let proc_offset = output.add_symbol_data(proc_id, section_id, &proc_data, 16);
     for reloc in relocs.iter() {
@@ -912,11 +958,13 @@ fn build_proc<'a, B: Backend<'a>>(
                 output.add_symbol_data(data_id, data_section, data, 4);
                 write::Relocation {
                     offset: offset + proc_offset,
-                    size: 32,
-                    kind: RelocationKind::Relative,
-                    encoding: RelocationEncoding::Generic,
                     symbol: data_id,
                     addend: -4,
+                    flags: RelocationFlags::Generic {
+                        kind: RelocationKind::Relative,
+                        encoding: RelocationEncoding::Generic,
+                        size: 32,
+                    },
                 }
             }
             Relocation::LinkedData { offset, name } => {
@@ -928,11 +976,11 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000000700:  R_AARCH64_ADR_PREL_PG_HI21   .rodata+0x650
                         let r = write::Relocation {
                             offset: proc_offset + offset,
-                            size: 21,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADR_PREL_PG_HI21),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADR_PREL_PG_HI21,
+                            },
                         };
 
                         relocations.push((section_id, r));
@@ -941,25 +989,24 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000000704:  R_AARCH64_ADD_ABS_LO12_NC    .rodata+0x650
                         write::Relocation {
                             offset: proc_offset + offset + 4,
-                            size: 12,
-                            kind: RelocationKind::Elf(object::elf::R_AARCH64_ADD_ABS_LO12_NC),
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::Elf {
+                                r_type: object::elf::R_AARCH64_ADD_ABS_LO12_NC,
+                            },
                         }
                     } else if cfg!(all(target_arch = "aarch64", target_os = "macos")) {
                         //    4ed0: 90000000        adrp    x0, 0x4000 <_std.unicode.utf8Decode4+0x16c>
                         //      0000000000004ed0:  ARM64_RELOC_PAGE21   ___unnamed_11
                         let r = write::Relocation {
                             offset: proc_offset + offset,
-                            size: 21,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGE21,
-                                relative: true,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGE21,
+                                r_pcrel: true,
+                                r_length: 2,
+                            },
                         };
 
                         relocations.push((section_id, r));
@@ -968,23 +1015,24 @@ fn build_proc<'a, B: Backend<'a>>(
                         //      0000000000004ed4:  ARM64_RELOC_PAGEOFF12    ___unnamed_11
                         write::Relocation {
                             offset: proc_offset + offset + 4,
-                            size: 12,
-                            kind: RelocationKind::MachO {
-                                value: object::macho::ARM64_RELOC_PAGEOFF12,
-                                relative: false,
-                            },
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: 0,
+                            flags: RelocationFlags::MachO {
+                                r_type: object::macho::ARM64_RELOC_PAGEOFF12,
+                                r_pcrel: false,
+                                r_length: 2,
+                            },
                         }
                     } else {
                         write::Relocation {
                             offset: offset + proc_offset,
-                            size: 32,
-                            kind: RelocationKind::GotRelative,
-                            encoding: RelocationEncoding::Generic,
                             symbol: sym_id,
                             addend: -4,
+                            flags: RelocationFlags::Generic {
+                                kind: RelocationKind::GotRelative,
+                                encoding: RelocationEncoding::Generic,
+                                size: 32,
+                            },
                         }
                     }
                 } else {
@@ -1010,7 +1058,7 @@ fn build_proc<'a, B: Backend<'a>>(
                 add_undefined_rc_proc(output, name, &rc_proc_names);
 
                 if let Some(sym_id) = output.symbol_id(name.as_bytes()) {
-                    create_relocation(target_info, sym_id, offset + proc_offset)
+                    create_relocation(target, sym_id, offset + proc_offset)
                 } else {
                     internal_error!("failed to find fn symbol for {:?}", name);
                 }

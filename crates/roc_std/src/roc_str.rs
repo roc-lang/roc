@@ -19,8 +19,9 @@ use core::{
 
 #[cfg(feature = "std")]
 use std::ffi::{CStr, CString};
+use std::{ops::Range, ptr::NonNull};
 
-use crate::RocList;
+use crate::{roc_realloc, RocList, RocRefcounted, ROC_REFCOUNT_CONSTANT};
 
 #[repr(transparent)]
 pub struct RocStr(RocStrInner);
@@ -73,8 +74,34 @@ impl RocStr {
             Self(RocStrInner { small_string })
         } else {
             let heap_allocated = RocList::from_slice(slice);
+            let big_string = unsafe { std::mem::transmute(heap_allocated) };
             Self(RocStrInner {
-                heap_allocated: ManuallyDrop::new(heap_allocated),
+                heap_allocated: ManuallyDrop::new(big_string),
+            })
+        }
+    }
+
+    /// # Safety
+    ///
+    /// - `bytes` must be allocated for `cap` bytes
+    /// - `bytes` must be initialized for `len` bytes
+    /// - `bytes` must be preceded by a correctly-aligned refcount (usize)
+    /// - `bytes` must represent valid UTF-8
+    /// - `cap` >= `len`
+    pub unsafe fn from_raw_parts(bytes: *mut u8, len: usize, cap: usize) -> Self {
+        if len <= SmallString::CAPACITY {
+            unsafe {
+                let slice = std::slice::from_raw_parts(bytes, len);
+                let small_string = SmallString::try_from_utf8_bytes(slice).unwrap_unchecked();
+                Self(RocStrInner { small_string })
+            }
+        } else {
+            Self(RocStrInner {
+                heap_allocated: ManuallyDrop::new(BigString {
+                    elements: unsafe { NonNull::new_unchecked(bytes) },
+                    length: len,
+                    capacity_or_alloc_ptr: cap,
+                }),
             })
         }
     }
@@ -93,7 +120,7 @@ impl RocStr {
 
     pub fn capacity(&self) -> usize {
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.capacity(),
+            RocStrInnerRef::HeapAllocated(big_string) => big_string.capacity(),
             RocStrInnerRef::SmallString(_) => SmallString::CAPACITY,
         }
     }
@@ -137,10 +164,12 @@ impl RocStr {
     /// There is no way to tell how many references it has and if it is safe to free.
     /// As such, only values that should have a static lifetime for the entire application run
     /// should be considered for marking read-only.
-    pub unsafe fn set_readonly(&self) {
-        match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(roc_list) => unsafe { roc_list.set_readonly() },
-            RocStrInnerRef::SmallString(_) => {}
+    pub unsafe fn set_readonly(&mut self) {
+        if self.is_small_str() {
+            /* do nothing */
+        } else {
+            let big = unsafe { &mut self.0.heap_allocated };
+            big.set_readonly()
         }
     }
 
@@ -167,7 +196,7 @@ impl RocStr {
         } else {
             // The requested capacity won't fit in a small string; we need to go big.
             RocStr(RocStrInner {
-                heap_allocated: ManuallyDrop::new(RocList::with_capacity(bytes)),
+                heap_allocated: ManuallyDrop::new(BigString::with_capacity(bytes)),
             })
         }
     }
@@ -182,21 +211,33 @@ impl RocStr {
 
             if target_cap > SmallString::CAPACITY {
                 // The requested capacity won't fit in a small string; we need to go big.
-                let mut roc_list = RocList::with_capacity(target_cap);
+                let mut big_string = BigString::with_capacity(target_cap);
 
-                roc_list.extend_from_slice(small_str.as_bytes());
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.as_bytes().as_ptr(),
+                        big_string.ptr_to_first_elem(),
+                        self.len(),
+                    )
+                };
 
-                *self = RocStr(RocStrInner {
-                    heap_allocated: ManuallyDrop::new(roc_list),
+                big_string.length = self.len();
+                big_string.capacity_or_alloc_ptr = target_cap;
+
+                let mut updated = RocStr(RocStrInner {
+                    heap_allocated: ManuallyDrop::new(big_string),
                 });
+
+                mem::swap(self, &mut updated);
+                mem::forget(updated);
             }
         } else {
-            let mut roc_list = unsafe { ManuallyDrop::take(&mut self.0.heap_allocated) };
+            let mut big_string = unsafe { ManuallyDrop::take(&mut self.0.heap_allocated) };
 
-            roc_list.reserve(bytes);
+            big_string.reserve(bytes);
 
             let mut updated = RocStr(RocStrInner {
-                heap_allocated: ManuallyDrop::new(roc_list),
+                heap_allocated: ManuallyDrop::new(big_string),
             });
 
             mem::swap(self, &mut updated);
@@ -204,12 +245,57 @@ impl RocStr {
         }
     }
 
+    #[track_caller]
+    pub fn slice_range(&self, range: Range<usize>) -> Self {
+        match self.try_slice_range(range) {
+            Some(x) => x,
+            None => panic!("slice index out of range"),
+        }
+    }
+
+    pub fn try_slice_range(&self, range: Range<usize>) -> Option<Self> {
+        if self.as_str().get(range.start..range.end).is_none() {
+            None
+        } else if range.end - range.start <= SmallString::CAPACITY && self.is_small_str() {
+            let slice = &self.as_bytes()[range];
+            let small_string =
+                unsafe { SmallString::try_from_utf8_bytes(slice).unwrap_unchecked() };
+
+            // NOTE decrements `self`
+            Some(RocStr(RocStrInner { small_string }))
+        } else {
+            // increment the refcount
+            std::mem::forget(self.clone());
+
+            let big = unsafe { &self.0.heap_allocated };
+            let ptr = unsafe { (self.as_bytes().as_ptr() as *mut u8).add(range.start) };
+
+            let heap_allocated = ManuallyDrop::new(BigString {
+                elements: unsafe { NonNull::new_unchecked(ptr) },
+                length: (isize::MIN as usize) | (range.end - range.start),
+                capacity_or_alloc_ptr: (big.ptr_to_first_elem() as usize) >> 1,
+            });
+
+            Some(RocStr(RocStrInner { heap_allocated }))
+        }
+    }
+
+    pub fn split_once(&self, delimiter: &str) -> Option<(Self, Self)> {
+        let (a, b) = self.as_str().split_once(delimiter)?;
+
+        let x = self.slice_range(0..a.len());
+        let y = self.slice_range(self.len() - b.len()..self.len());
+
+        Some((x, y))
+    }
+
+    pub fn split_whitespace(&self) -> SplitWhitespace<'_> {
+        SplitWhitespace(self.as_str().char_indices().peekable(), self)
+    }
+
     /// Returns the index of the first interior \0 byte in the string, or None if there are none.
     fn first_nul_byte(&self) -> Option<usize> {
-        match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(roc_list) => roc_list.iter().position(|byte| *byte == 0),
-            RocStrInnerRef::SmallString(small_string) => small_string.first_nul_byte(),
-        }
+        self.as_bytes().iter().position(|byte| *byte == 0)
     }
 
     // If the string is under this many bytes, the with_terminator family
@@ -267,60 +353,48 @@ impl RocStr {
         };
 
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(roc_list) => {
+            RocStrInnerRef::HeapAllocated(big_string) => {
                 unsafe {
-                    match roc_list.storage() {
-                        Some(storage) if storage.is_unique() => {
-                            // The backing RocList was unique, so we can mutate it in-place.
-                            let len = roc_list.len();
-                            let ptr = if len < roc_list.capacity() {
-                                // We happen to have excess capacity already, so we will be able
-                                // to write the terminator into the first byte of excess capacity.
-                                roc_list.ptr_to_first_elem() as *mut u8
-                            } else {
-                                // We always have an allocation that's even bigger than necessary,
-                                // because the refcount bytes take up more than the 1B needed for
-                                // the terminator. We just need to shift the bytes over on top
-                                // of the refcount.
-                                let alloc_ptr = roc_list.ptr_to_allocation() as *mut u8;
+                    if big_string.is_unique() {
+                        // The backing RocList was unique, so we can mutate it in-place.
+                        let len = big_string.len();
+                        let ptr = if len < big_string.capacity() {
+                            // We happen to have excess capacity already, so we will be able
+                            // to write the terminator into the first byte of excess capacity.
+                            big_string.ptr_to_first_elem()
+                        } else {
+                            // We always have an allocation that's even bigger than necessary,
+                            // because the refcount bytes take up more than the 1B needed for
+                            // the terminator. We just need to shift the bytes over on top
+                            // of the refcount.
+                            let alloc_ptr = big_string.ptr_to_allocation() as *mut u8;
 
-                                // First, copy the bytes over the original allocation - effectively
-                                // shifting everything over by one `usize`. Now we no longer have a
-                                // refcount (but the terminated won't use that anyway), but we do
-                                // have a free `usize` at the end.
-                                //
-                                // IMPORTANT: Must use ptr::copy instead of ptr::copy_nonoverlapping
-                                // because the regions definitely overlap!
-                                ptr::copy(roc_list.ptr_to_first_elem() as *mut u8, alloc_ptr, len);
-
-                                alloc_ptr
-                            };
-
-                            terminate(ptr, len)
-                        }
-                        Some(_) => {
-                            let len = roc_list.len();
-
-                            // The backing list was not unique, so we can't mutate it in-place.
-                            // ask for `len + 1` to store the original string and the terminator
-                            with_stack_bytes(len + 1, |alloc_ptr: *mut u8| {
-                                let alloc_ptr = alloc_ptr as *mut u8;
-                                let elem_ptr = roc_list.ptr_to_first_elem() as *mut u8;
-
-                                // memcpy the bytes into the stack allocation
-                                ptr::copy_nonoverlapping(elem_ptr, alloc_ptr, len);
-
-                                terminate(alloc_ptr, len)
-                            })
-                        }
-                        None => {
-                            // The backing list was empty.
+                            // First, copy the bytes over the original allocation - effectively
+                            // shifting everything over by one `usize`. Now we no longer have a
+                            // refcount (but the terminated won't use that anyway), but we do
+                            // have a free `usize` at the end.
                             //
-                            // No need to do a heap allocation for an empty string - we
-                            // can just do a stack allocation that will live for the
-                            // duration of the function.
-                            func([terminator].as_mut_ptr(), 0)
-                        }
+                            // IMPORTANT: Must use ptr::copy instead of ptr::copy_nonoverlapping
+                            // because the regions definitely overlap!
+                            ptr::copy(big_string.ptr_to_first_elem(), alloc_ptr, len);
+
+                            alloc_ptr
+                        };
+
+                        terminate(ptr, len)
+                    } else {
+                        let len = big_string.len();
+
+                        // The backing list was not unique, so we can't mutate it in-place.
+                        // ask for `len + 1` to store the original string and the terminator
+                        with_stack_bytes(len + 1, |alloc_ptr: *mut u8| {
+                            let elem_ptr = big_string.ptr_to_first_elem();
+
+                            // memcpy the bytes into the stack allocation
+                            std::ptr::copy_nonoverlapping(elem_ptr, alloc_ptr, len);
+
+                            terminate(alloc_ptr, len)
+                        })
                     }
                 }
             }
@@ -331,7 +405,7 @@ impl RocStr {
 
                 // Even if the small string is at capacity, there will be room to write
                 // a terminator in the byte that's used to store the length.
-                terminate(bytes.as_mut_ptr() as *mut u8, small_str.len())
+                terminate(bytes.as_mut_ptr(), small_str.len())
             }
         }
     }
@@ -485,57 +559,46 @@ impl RocStr {
         };
 
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(roc_list) => {
-                let len = roc_list.len();
+            RocStrInnerRef::HeapAllocated(big_string) => {
+                let len = big_string.len();
 
                 unsafe {
-                    match roc_list.storage() {
-                        Some(storage) if storage.is_unique() => {
-                            // The backing RocList was unique, so we can mutate it in-place.
+                    if big_string.is_unique() {
+                        // The backing RocList was unique, so we can mutate it in-place.
 
-                            // We need 1 extra elem for the terminator. It must be an elem,
-                            // not a byte, because we'll be providing a pointer to elems.
-                            let needed_bytes = (len + 1) * size_of::<E>();
+                        // We need 1 extra elem for the terminator. It must be an elem,
+                        // not a byte, because we'll be providing a pointer to elems.
+                        let needed_bytes = (len + 1) * size_of::<E>();
 
-                            // We can use not only the capacity on the heap, but also
-                            // the bytes originally used for the refcount.
-                            let available_bytes = roc_list.capacity() + size_of::<Storage>();
+                        // We can use not only the capacity on the heap, but also
+                        // the bytes originally used for the refcount.
+                        let available_bytes = big_string.capacity() + size_of::<Storage>();
 
-                            if needed_bytes < available_bytes {
-                                debug_assert!(align_of::<Storage>() >= align_of::<E>());
+                        if needed_bytes < available_bytes {
+                            debug_assert!(align_of::<Storage>() >= align_of::<E>());
 
-                                // We happen to have sufficient excess capacity already,
-                                // so we will be able to write the new elements as well as
-                                // the terminator into the existing allocation.
-                                let ptr = roc_list.ptr_to_allocation() as *mut E;
-                                let answer = terminate(ptr, self.as_str());
+                            // We happen to have sufficient excess capacity already,
+                            // so we will be able to write the new elements as well as
+                            // the terminator into the existing allocation.
+                            let ptr = big_string.ptr_to_allocation() as *mut E;
+                            let answer = terminate(ptr, self.as_str());
 
-                                // We cannot rely on the RocStr::drop implementation, because
-                                // it tries to use the refcount - which we just overwrote
-                                // with string bytes.
-                                mem::forget(self);
-                                crate::roc_dealloc(ptr.cast(), mem::align_of::<E>() as u32);
+                            // We cannot rely on the RocStr::drop implementation, because
+                            // it tries to use the refcount - which we just overwrote
+                            // with string bytes.
+                            mem::forget(self);
+                            crate::roc_dealloc(ptr.cast(), mem::align_of::<E>() as u32);
 
-                                answer
-                            } else {
-                                // We didn't have sufficient excess capacity already,
-                                // so we need to do either a new stack allocation or a new
-                                // heap allocation.
-                                fallback(self.as_str())
-                            }
-                        }
-                        Some(_) => {
-                            // The backing list was not unique, so we can't mutate it in-place.
+                            answer
+                        } else {
+                            // We didn't have sufficient excess capacity already,
+                            // so we need to do either a new stack allocation or a new
+                            // heap allocation.
                             fallback(self.as_str())
                         }
-                        None => {
-                            // The backing list was empty.
-                            //
-                            // No need to do a heap allocation for an empty string - we
-                            // can just do a stack allocation that will live for the
-                            // duration of the function.
-                            func([terminator].as_mut_ptr() as *mut E, "")
-                        }
+                    } else {
+                        // The backing list was not unique, so we can't mutate it in-place.
+                        fallback(self.as_str())
                     }
                 }
             }
@@ -558,12 +621,44 @@ impl RocStr {
     }
 }
 
+pub struct SplitWhitespace<'a>(std::iter::Peekable<std::str::CharIndices<'a>>, &'a RocStr);
+
+impl Iterator for SplitWhitespace<'_> {
+    type Item = RocStr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let start = 'blk: {
+            while let Some((pos, c)) = self.0.peek() {
+                if c.is_whitespace() {
+                    self.0.next();
+                } else {
+                    break 'blk *pos;
+                }
+            }
+
+            return None;
+        };
+
+        let end = 'blk: {
+            for (pos, c) in self.0.by_ref() {
+                if c.is_whitespace() {
+                    break 'blk pos;
+                }
+            }
+
+            break 'blk self.1.len();
+        };
+
+        self.1.try_slice_range(start..end)
+    }
+}
+
 impl Deref for RocStr {
     type Target = str;
 
     fn deref(&self) -> &Self::Target {
         match self.as_enum_ref() {
-            RocStrInnerRef::HeapAllocated(h) => unsafe { core::str::from_utf8_unchecked(h) },
+            RocStrInnerRef::HeapAllocated(h) => h.as_str(),
             RocStrInnerRef::SmallString(s) => s,
         }
     }
@@ -620,7 +715,7 @@ impl Eq for RocStr {}
 
 impl PartialOrd for RocStr {
     fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
-        self.as_str().partial_cmp(other.as_str())
+        Some(self.cmp(other))
     }
 }
 
@@ -669,9 +764,23 @@ pub struct SendSafeRocStr(RocStr);
 
 unsafe impl Send for SendSafeRocStr {}
 
+impl RocRefcounted for SendSafeRocStr {
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 impl Clone for SendSafeRocStr {
     fn clone(&self) -> Self {
-        if self.0.is_readonly() {
+        if self.0.is_readonly() || self.0.is_small_str() {
             SendSafeRocStr(self.0.clone())
         } else {
             // To keep self send safe, this must copy.
@@ -697,6 +806,269 @@ impl From<SendSafeRocStr> for RocStr {
     }
 }
 
+impl RocRefcounted for RocStr {
+    fn inc(&mut self) {
+        if !self.is_small_str() {
+            unsafe { self.0.heap_allocated.deref_mut().inc() }
+        }
+    }
+
+    fn dec(&mut self) {
+        if !self.is_small_str() {
+            unsafe { self.0.heap_allocated.deref_mut().dec() }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+#[repr(transparent)]
+pub struct ReadOnlyRocStr(RocStr);
+
+unsafe impl Send for ReadOnlyRocStr {}
+unsafe impl Sync for ReadOnlyRocStr {}
+
+impl RocRefcounted for ReadOnlyRocStr {
+    fn inc(&mut self) {}
+
+    fn dec(&mut self) {}
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl Clone for ReadOnlyRocStr {
+    fn clone(&self) -> Self {
+        ReadOnlyRocStr(self.0.clone())
+    }
+}
+
+impl From<RocStr> for ReadOnlyRocStr {
+    fn from(mut s: RocStr) -> Self {
+        if s.is_unique() {
+            unsafe { s.set_readonly() };
+        }
+        if s.is_readonly() || s.is_small_str() {
+            ReadOnlyRocStr(s)
+        } else {
+            // This is not readonly or unique, do a deep copy.
+            ReadOnlyRocStr::from(RocStr::from(s.as_str()))
+        }
+    }
+}
+
+impl From<ReadOnlyRocStr> for RocStr {
+    fn from(s: ReadOnlyRocStr) -> Self {
+        s.0
+    }
+}
+
+#[repr(C)]
+struct BigString {
+    elements: NonNull<u8>,
+    length: usize,
+    capacity_or_alloc_ptr: usize,
+}
+
+const SEAMLESS_SLICE_BIT: usize = isize::MIN as usize;
+
+impl BigString {
+    fn len(&self) -> usize {
+        self.length & !SEAMLESS_SLICE_BIT
+    }
+
+    fn capacity(&self) -> usize {
+        if self.is_seamless_slice() {
+            self.len()
+        } else {
+            self.capacity_or_alloc_ptr
+        }
+    }
+
+    fn is_seamless_slice(&self) -> bool {
+        (self.length as isize) < 0
+    }
+
+    fn ptr_to_first_elem(&self) -> *mut u8 {
+        unsafe { core::mem::transmute(self.elements) }
+    }
+
+    fn ptr_to_allocation(&self) -> *mut usize {
+        // these are the same because the alignment of u8 is just 1
+        self.ptr_to_refcount()
+    }
+
+    fn ptr_to_refcount(&self) -> *mut usize {
+        if self.is_seamless_slice() {
+            unsafe { ((self.capacity_or_alloc_ptr << 1) as *mut usize).sub(1) }
+        } else {
+            unsafe { self.ptr_to_first_elem().cast::<usize>().sub(1) }
+        }
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr_to_first_elem(), self.len()) }
+    }
+
+    fn as_str(&self) -> &str {
+        unsafe { std::str::from_utf8_unchecked(self.as_bytes()) }
+    }
+
+    fn is_unique(&self) -> bool {
+        if self.capacity() == 0 {
+            return false;
+        }
+
+        let ptr = self.ptr_to_refcount();
+        let rc = unsafe { std::ptr::read(ptr) as isize };
+
+        rc == 1
+    }
+
+    fn is_readonly(&self) -> bool {
+        if self.capacity() == 0 {
+            return true;
+        }
+
+        let ptr = self.ptr_to_refcount();
+        let rc = unsafe { std::ptr::read(ptr) as isize };
+
+        rc == 0
+    }
+
+    fn set_readonly(&mut self) {
+        assert_ne!(self.capacity(), 0);
+
+        let ptr = self.ptr_to_refcount();
+        // Only safe to write to the pointer if it is not constant (0)
+        if unsafe { std::ptr::read(ptr) } != ROC_REFCOUNT_CONSTANT {
+            unsafe { std::ptr::write(ptr, ROC_REFCOUNT_CONSTANT) }
+        }
+    }
+
+    fn inc(&mut self) {
+        let ptr = self.ptr_to_refcount();
+        unsafe {
+            let value = std::ptr::read(ptr);
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != ROC_REFCOUNT_CONSTANT {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        if self.capacity() == 0 {
+            // no valid allocation, elements pointer is dangling
+            return;
+        }
+
+        let ptr = self.ptr_to_refcount();
+        unsafe {
+            let value = std::ptr::read(ptr) as isize;
+            match value {
+                0 => {
+                    // static lifetime, do nothing
+                }
+                1 => {
+                    // refcount becomes zero; free allocation
+                    crate::roc_dealloc(self.ptr_to_allocation().cast(), 1);
+                }
+                _ => {
+                    std::ptr::write(ptr, (value - 1) as usize);
+                }
+            }
+        }
+    }
+
+    fn with_capacity(cap: usize) -> Self {
+        let mut this = Self {
+            elements: NonNull::dangling(),
+            length: 0,
+            capacity_or_alloc_ptr: 0,
+        };
+
+        this.reserve(cap);
+
+        this
+    }
+
+    /// Increase a BigString's capacity by at least the requested number of elements (possibly more).
+    ///
+    /// May return a new BigString, if the provided one was not unique.
+    fn reserve(&mut self, n: usize) {
+        let align = std::mem::size_of::<usize>();
+        let desired_cap = self.len() + n;
+        let desired_alloc = align + desired_cap;
+
+        if self.is_unique() && !self.is_seamless_slice() {
+            if self.capacity() >= desired_cap {
+                return;
+            }
+
+            let new_alloc = unsafe {
+                roc_realloc(
+                    self.ptr_to_allocation().cast(),
+                    desired_alloc as _,
+                    align + self.capacity(),
+                    align as _,
+                )
+            };
+
+            let elements = unsafe { NonNull::new_unchecked(new_alloc.cast::<u8>().add(align)) };
+
+            let mut this = Self {
+                elements,
+                length: self.len(),
+                capacity_or_alloc_ptr: desired_cap,
+            };
+
+            std::mem::swap(&mut this, self);
+            std::mem::forget(this);
+        } else {
+            let ptr = unsafe { crate::roc_alloc(desired_alloc, align as _) } as *mut u8;
+            let elements = unsafe { NonNull::new_unchecked(ptr.cast::<u8>().add(align)) };
+
+            unsafe {
+                // Copy the old elements to the new allocation.
+                std::ptr::copy_nonoverlapping(self.ptr_to_first_elem(), ptr.add(align), self.len());
+            }
+
+            let mut this = Self {
+                elements,
+                length: self.len(),
+                capacity_or_alloc_ptr: desired_cap,
+            };
+
+            std::mem::swap(&mut this, self);
+            std::mem::drop(this);
+        }
+    }
+}
+
+impl Clone for BigString {
+    fn clone(&self) -> Self {
+        let mut this = Self {
+            elements: self.elements,
+            length: self.length,
+            capacity_or_alloc_ptr: self.capacity_or_alloc_ptr,
+        };
+
+        this.inc();
+
+        this
+    }
+}
+
+impl Drop for BigString {
+    fn drop(&mut self) {
+        self.dec()
+    }
+}
+
 #[repr(C)]
 union RocStrInner {
     // TODO: this really should be separated from the List type.
@@ -704,12 +1076,12 @@ union RocStrInner {
     // Currently, there are work arounds in RocList to handle both via removing the highest bit of length in many cases.
     // With glue changes, we should probably rewrite these cleanly to match what is in the zig bitcode.
     // It is definitely a bit stale now and I think the storage mechanism can be quite confusing with our extra pieces of state.
-    heap_allocated: ManuallyDrop<RocList<u8>>,
+    heap_allocated: ManuallyDrop<BigString>,
     small_string: SmallString,
 }
 
 enum RocStrInnerRef<'a> {
-    HeapAllocated(&'a RocList<u8>),
+    HeapAllocated(&'a BigString),
     SmallString(&'a SmallString),
 }
 
@@ -755,17 +1127,6 @@ impl SmallString {
 
     fn len(&self) -> usize {
         usize::from(self.len & !RocStr::MASK)
-    }
-
-    /// Returns the index of the first interior \0 byte in the string, or None if there are none.
-    fn first_nul_byte(&self) -> Option<usize> {
-        for (index, byte) in self.bytes[0..self.len()].iter().enumerate() {
-            if *byte == 0 {
-                return Some(index);
-            }
-        }
-
-        None
     }
 }
 

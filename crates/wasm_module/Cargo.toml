@@ -8,7 +8,6 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_error_macros = { path = "../error_macros" }
-
+roc_error_macros.workspace = true
 bitvec.workspace = true
 bumpalo.workspace = true

@@ -1,0 +1,17 @@
+on:
+    workflow_dispatch:
+    schedule:
+      - cron:  '0 5 * * *'
+  
+name: Clean up nix on mac mini m1
+    
+jobs:
+    clean-mac-mini-arm64:
+        runs-on: [self-hosted, macOS, ARM64]
+        timeout-minutes: 120
+        steps:
+            - name: Clean up nix store
+              run: nix-store --gc
+
+            - name: Clean up old nix shells
+              run: rm -rf /private/tmp/nix-shell.*

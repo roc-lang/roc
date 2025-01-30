@@ -2,8 +2,11 @@ use std::path::PathBuf;
 
 use roc_collections::MutMap;
 use roc_module::symbol::{Interns, ModuleId};
+use roc_problem::can::Problem;
 use roc_region::all::LineInfo;
 use roc_solve_problem::TypeError;
+
+use crate::report::ANSI_STYLE_CODES;
 
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
 pub struct Problems {
@@ -17,22 +20,27 @@ impl Problems {
         // 0 means no problems, 1 means errors, 2 means warnings
         if self.errors > 0 {
             1
+        } else if self.warnings > 0 {
+            2
         } else {
-            self.warnings.min(1) as i32
+            0
         }
     }
 
-    pub fn print_to_stdout(&self, total_time: std::time::Duration) {
-        const GREEN: usize = 32;
-        const YELLOW: usize = 33;
+    // prints e.g. `1 error and 0 warnings found in 63 ms.`
+    pub fn print_error_warning_count(&self, total_time: std::time::Duration) {
+        const GREEN: &str = ANSI_STYLE_CODES.green;
+        const YELLOW: &str = ANSI_STYLE_CODES.yellow;
+        const RESET: &str = ANSI_STYLE_CODES.reset;
 
         print!(
-            "\x1B[{}m{}\x1B[39m {} and \x1B[{}m{}\x1B[39m {} found in {} ms",
+            "{}{}{} {} and {}{}{} {} found in {} ms",
             match self.errors {
                 0 => GREEN,
                 _ => YELLOW,
             },
             self.errors,
+            RESET,
             match self.errors {
                 1 => "error",
                 _ => "errors",
@@ -42,6 +50,7 @@ impl Problems {
                 _ => YELLOW,
             },
             self.warnings,
+            RESET,
             match self.warnings {
                 1 => "warning",
                 _ => "warnings",
@@ -87,29 +96,6 @@ pub fn report_problems(
         // Report parsing and canonicalization problems
         let alloc = RocDocAllocator::new(&src_lines, *home, interns);
 
-        let problems = can_problems.remove(home).unwrap_or_default();
-
-        for problem in problems.into_iter() {
-            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
-            let severity = report.severity;
-            let mut buf = String::new();
-
-            report.render_color_terminal(&mut buf, &alloc, &palette);
-
-            match severity {
-                Warning => {
-                    warnings.push(buf);
-                }
-                RuntimeError => {
-                    errors.push(buf);
-                }
-                Fatal => {
-                    fatally_errored = true;
-                    errors.push(buf);
-                }
-            }
-        }
-
         let problems = type_problems.remove(home).unwrap_or_default();
 
         for problem in problems {
@@ -130,6 +116,43 @@ pub fn report_problems(
                         fatally_errored = true;
                         errors.push(buf);
                     }
+                }
+            }
+        }
+
+        // Shadowing errors often cause cryptic type errors. To make it easy to spot the root cause,
+        // we print the shadowing errors last.
+        let problems = can_problems.remove(home).unwrap_or_default();
+        let (shadowing_errs, mut ordered): (Vec<Problem>, Vec<Problem>) =
+            problems.into_iter().partition(|p| {
+                matches!(
+                    p,
+                    Problem::Shadowing {
+                        original_region: _,
+                        shadow: _,
+                        kind: _,
+                    }
+                )
+            });
+        ordered.extend(shadowing_errs);
+
+        for problem in ordered.into_iter() {
+            let report = can_problem(&alloc, &lines, module_path.clone(), problem);
+            let severity = report.severity;
+            let mut buf = String::new();
+
+            report.render_color_terminal(&mut buf, &alloc, &palette);
+
+            match severity {
+                Warning => {
+                    warnings.push(buf);
+                }
+                RuntimeError => {
+                    errors.push(buf);
+                }
+                Fatal => {
+                    fatally_errored = true;
+                    errors.push(buf);
                 }
             }
         }

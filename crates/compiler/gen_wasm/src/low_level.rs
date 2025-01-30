@@ -10,7 +10,7 @@ use roc_mono::layout::{Builtin, InLayout, Layout, LayoutInterner, LayoutRepr, Un
 use roc_mono::low_level::HigherOrder;
 
 use crate::backend::{ProcLookupData, ProcSource, WasmBackend};
-use crate::layout::{CallConv, StackMemoryFormat, WasmLayout};
+use crate::layout::{StackMemoryFormat, WasmLayout};
 use crate::storage::{AddressValue, StackMemoryLocation, StoredValue};
 use crate::PTR_TYPE;
 use roc_wasm_module::{Align, LocalId, ValueType};
@@ -103,7 +103,6 @@ impl From<&StoredValue> for CodeGenNumType {
     fn from(stored: &StoredValue) -> CodeGenNumType {
         use StoredValue::*;
         match stored {
-            VirtualMachineStack { value_type, .. } => CodeGenNumType::from(*value_type),
             Local { value_type, .. } => CodeGenNumType::from(*value_type),
             StackMemory { format, .. } => CodeGenNumType::from(*format),
         }
@@ -135,41 +134,18 @@ impl<'a> LowLevelCall<'a> {
     /// For numerical ops, this just pushes the arguments to the Wasm VM's value stack
     /// It implements the calling convention used by Zig for both numbers and structs
     /// Result is the type signature of the call
-    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) -> (usize, bool, bool) {
+    fn load_args(&self, backend: &mut WasmBackend<'a, '_>) {
         backend.storage.load_symbols_for_call(
-            backend.env.arena,
             &mut backend.code_builder,
             self.arguments,
             self.ret_symbol,
             &WasmLayout::new(backend.layout_interner, self.ret_layout),
-            CallConv::Zig,
-        )
+        );
     }
 
     fn load_args_and_call_zig(&self, backend: &mut WasmBackend<'a, '_>, name: &'a str) {
-        let (num_wasm_args, has_return_val, ret_zig_packed_struct) = self.load_args(backend);
-        backend.call_host_fn_after_loading_args(name, num_wasm_args, has_return_val);
-
-        if ret_zig_packed_struct {
-            match self.ret_storage {
-                StoredValue::StackMemory {
-                    size,
-                    alignment_bytes,
-                    ..
-                } => {
-                    // The address of the return value was already loaded before the call
-                    let align = Align::from(alignment_bytes);
-                    if size > 4 {
-                        backend.code_builder.i64_store(align, 0);
-                    } else {
-                        backend.code_builder.i32_store(align, 0);
-                    }
-                }
-                _ => {
-                    internal_error!("Zig packed struct should always be stored to StackMemory")
-                }
-            }
-        }
+        self.load_args(backend);
+        backend.call_host_fn_after_loading_args(name);
     }
 
     /// Wrap an integer that should have less than 32 bits, but is represented in Wasm as i32.
@@ -209,7 +185,6 @@ impl<'a> LowLevelCall<'a> {
         match self.lowlevel {
             // Str
             StrConcat => self.load_args_and_call_zig(backend, bitcode::STR_CONCAT),
-            StrToScalars => self.load_args_and_call_zig(backend, bitcode::STR_TO_SCALARS),
             StrGetUnsafe => self.load_args_and_call_zig(backend, bitcode::STR_GET_UNSAFE),
             StrJoinWith => self.load_args_and_call_zig(backend, bitcode::STR_JOIN_WITH),
             StrIsEmpty => match backend.storage.get(&self.arguments[0]) {
@@ -224,18 +199,11 @@ impl<'a> LowLevelCall<'a> {
                 _ => internal_error!("invalid storage for Str"),
             },
             StrStartsWith => self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH),
-            StrStartsWithScalar => {
-                self.load_args_and_call_zig(backend, bitcode::STR_STARTS_WITH_SCALAR)
-            }
             StrEndsWith => self.load_args_and_call_zig(backend, bitcode::STR_ENDS_WITH),
-            StrSplit => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT),
-            StrCountGraphemes => {
-                self.load_args_and_call_zig(backend, bitcode::STR_COUNT_GRAPEHEME_CLUSTERS)
-            }
+            StrSplitOn => self.load_args_and_call_zig(backend, bitcode::STR_SPLIT_ON),
             StrCountUtf8Bytes => {
                 self.load_args_and_call_zig(backend, bitcode::STR_COUNT_UTF8_BYTES)
             }
-            StrGetCapacity => self.load_args_and_call_zig(backend, bitcode::STR_CAPACITY),
             StrToNum => {
                 let number_layout = match backend.layout_interner.get_repr(self.ret_layout) {
                     LayoutRepr::Struct(field_layouts) => field_layouts[0],
@@ -257,30 +225,27 @@ impl<'a> LowLevelCall<'a> {
             }
             StrFromInt => self.num_to_str(backend),
             StrFromFloat => self.num_to_str(backend),
-            StrFromUtf8Range => {
+            StrFromUtf8 => {
                 /*
                 Low-level op returns a struct with all the data for both Ok and Err.
                 Roc AST wrapper converts this to a tag union, with app-dependent tag IDs.
 
                     output: *FromUtf8Result   i32
-                    arg: RocList              i64, i32
-                    start                     i32
-                    count                     i32
+                    arg: RocList              i32
                     update_mode: UpdateMode   i32
                 */
 
                 // loads arg, start, count
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
-                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8_RANGE, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8);
             }
+            StrFromUtf8Lossy => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_LOSSY),
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
@@ -289,43 +254,140 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_RELEASE_EXCESS_CAPACITY)
             }
             StrRepeat => self.load_args_and_call_zig(backend, bitcode::STR_REPEAT),
-            StrAppendScalar => self.load_args_and_call_zig(backend, bitcode::STR_APPEND_SCALAR),
             StrTrim => self.load_args_and_call_zig(backend, bitcode::STR_TRIM),
-            StrGetScalarUnsafe => {
-                self.load_args_and_call_zig(backend, bitcode::STR_GET_SCALAR_UNSAFE)
-            }
             StrSubstringUnsafe => {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
-            StrGraphemes => self.load_args_and_call_zig(backend, bitcode::STR_GRAPHEMES),
+            StrWithAsciiLowercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_LOWERCASED)
+            }
+            StrWithAsciiUppercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_UPPERCASED)
+            }
+            StrCaselessAsciiEquals => {
+                self.load_args_and_call_zig(backend, bitcode::STR_CASELESS_ASCII_EQUALS)
+            }
 
             // List
-            ListLen => match backend.storage.get(&self.arguments[0]) {
-                StoredValue::StackMemory { location, .. } => {
-                    let (local_id, offset) =
-                        location.local_and_offset(backend.storage.stack_frame_pointer);
-                    backend.code_builder.get_local(local_id);
-                    // List is stored as (pointer, length, capacity),
-                    // with each of those fields being 4 bytes on wasm.
-                    // So the length is 4 bytes after the start of the struct.
-                    //
-                    // WRAPPER_LEN represents the index of the length field
-                    // (which is 1 as of the writing of this comment). If the field order
-                    // ever changes, WRAPPER_LEN should be updated and this logic should
-                    // continue to work even though this comment may become inaccurate.
-                    backend
-                        .code_builder
-                        .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
-                }
-                _ => internal_error!("invalid storage for List"),
-            },
+            ListLenU64 => {
+                self.load_list_len_usize(backend);
+
+                // Length is stored as 32 bits in memory on wasm32,
+                // but List.len always returns U64
+                backend.code_builder.i64_extend_u_i32();
+            }
+            ListLenUsize => self.load_list_len_usize(backend),
 
             ListGetCapacity => self.load_args_and_call_zig(backend, bitcode::LIST_CAPACITY),
 
             ListIsUnique => self.load_args_and_call_zig(backend, bitcode::LIST_IS_UNIQUE),
 
-            ListMap | ListMap2 | ListMap3 | ListMap4 | ListSortWith => {
+            ListClone => {
+                let input_list: Symbol = self.arguments[0];
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+
+                // Zig arguments              Wasm types
+                //  (return pointer)           i32
+                //  input_list: &RocList       i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[self.ret_symbol, input_list]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CLONE);
+            }
+
+            ListIncref => {
+                let input_list: Symbol = self.arguments[0];
+                let list_layout = backend
+                    .layout_interner
+                    .get_repr(backend.storage.symbol_layouts[&input_list]);
+                let elem_in_layout = unwrap_list_elem_layout(list_layout);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+
+                // Zig arguments              Wasm types
+                //  input_list: &RocList       i32
+                //  amount: isize              i32
+                //  element_refcounted: bool   i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[input_list]);
+                if self.arguments.len() == 2 {
+                    // amount explicitly specified.
+                    let amount = self.arguments[1];
+                    backend
+                        .storage
+                        .load_symbols(&mut backend.code_builder, &[amount]);
+                } else {
+                    // implicit 1 amount
+                    backend.code_builder.i32_const(1);
+                }
+                backend.code_builder.i32_const(elem_refcounted as i32);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_INCREF);
+            }
+
+            ListDecref => {
+                let input_list: Symbol = self.arguments[0];
+                let dec_fn_sym = self.arguments[1];
+
+                let list_layout = backend
+                    .layout_interner
+                    .get_repr(backend.storage.symbol_layouts[&input_list]);
+                let elem_in_layout = unwrap_list_elem_layout(list_layout);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
+                let (elem_width, elem_align) =
+                    elem_layout.stack_size_and_alignment(backend.layout_interner);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let dec_fn = backend.get_existing_helper_fn_index(
+                    dec_fn_sym,
+                    elem_in_layout,
+                    HelperOp::IndirectDec,
+                );
+                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+
+                // Zig arguments              Wasm types
+                //  input_list: &RocList       i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  dec: Dec                   i32
+
+                backend
+                    .storage
+                    .load_symbols(&mut backend.code_builder, &[input_list]);
+                backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(dec_fn_ptr);
+
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DECREF);
+            }
+
+            ListSortWith => {
                 internal_error!("HigherOrder lowlevels should not be handled here")
             }
 
@@ -337,6 +399,7 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index]);
+                backend.code_builder.i32_wrap_i64(); // listGetUnsafe takes a U64, but we do 32-bit indexing on wasm.
                 let elem_size = backend.layout_interner.stack_size(self.ret_layout);
                 backend.code_builder.i32_const(elem_size as i32);
                 backend.code_builder.i32_mul(); // index*size
@@ -363,17 +426,9 @@ impl<'a> LowLevelCall<'a> {
                     AddressValue::NotLoaded(elem_local),
                     0,
                 );
-
-                // Increment refcount
-                if self.ret_layout_raw.is_refcounted(backend.layout_interner) {
-                    let inc_fn = backend.get_refcount_fn_index(self.ret_layout, HelperOp::Inc);
-                    backend.code_builder.get_local(elem_local);
-                    backend.code_builder.i32_const(1);
-                    backend.code_builder.call(inc_fn, 2, false);
-                }
             }
             ListReplaceUnsafe => {
-                // List.replace_unsafe : List elem, Nat, elem -> { list: List elem, value: elem }
+                // List.replace_unsafe : List elem, U64, elem -> { list: List elem, value: elem }
 
                 let list: Symbol = self.arguments[0];
                 let index: Symbol = self.arguments[1];
@@ -388,7 +443,7 @@ impl<'a> LowLevelCall<'a> {
                 };
 
                 // Byte offsets of each field in the return struct
-                let (ret_list_offset, ret_elem_offset, elem_layout) = match self.ret_layout_raw {
+                let (ret_list_offset, ret_elem_offset, elem_in_layout) = match self.ret_layout_raw {
                     LayoutRepr::Struct(&[f1, f2]) => {
                         let l1 = backend.layout_interner.get_repr(f1);
                         let l2 = backend.layout_interner.get_repr(f2);
@@ -416,20 +471,35 @@ impl<'a> LowLevelCall<'a> {
 
                 let (elem_width, elem_alignment) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
 
                 // Ensure the new element is stored in memory so we can pass a pointer to Zig
-                let (new_elem_local, new_elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, new_elem, elem_layout, backend.env.arena);
+                let (new_elem_local, new_elem_offset, _) = ensure_symbol_is_in_memory(
+                    backend,
+                    new_elem,
+                    elem_in_layout,
+                    backend.env.arena,
+                );
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+                let copy_fn_ptr = build_copy_element_fn(backend, elem_in_layout);
 
                 // Load all the arguments for Zig
-                //    (List return pointer)  i32
-                //    list: RocList,         i64, i32
-                //    alignment: u32,        i32
-                //    index: usize,          i32
-                //    element: Opaque,       i32
-                //    element_width: usize,  i32
-                //    out_element: ?[*]u8,   i32
+                //    (List return pointer)      i32
+                //    list: RocList,             i32
+                //    alignment: u32,            i32
+                //    index: usize,              i32
+                //    element: Opaque,           i32
+                //    element_width: usize,      i32
+                //    element_refcounted: bool   i32
+                //    inc: Inc                   i32
+                //    dec: Dec                   i32
+                //    out_element: ?[*]u8,       i32
+                //    copy: CopyFn,              i32
 
                 let code_builder = &mut backend.code_builder;
 
@@ -439,9 +509,9 @@ impl<'a> LowLevelCall<'a> {
                     code_builder.i32_add();
                 }
 
-                backend.storage.load_symbol_zig(code_builder, list);
+                backend.storage.load_symbols(code_builder, &[list]);
                 code_builder.i32_const(elem_alignment as i32);
-                backend.storage.load_symbol_zig(code_builder, index);
+                backend.storage.load_symbols(code_builder, &[index]);
 
                 code_builder.get_local(new_elem_local);
                 if new_elem_offset > 0 {
@@ -450,96 +520,122 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 code_builder.i32_const(elem_width as i32);
+                code_builder.i32_const(elem_refcounted as i32);
+                code_builder.i32_const(inc_fn_ptr);
+                code_builder.i32_const(dec_fn_ptr);
 
                 code_builder.get_local(ret_local);
                 if (ret_offset + ret_elem_offset) > 0 {
                     code_builder.i32_const((ret_offset + ret_elem_offset) as i32);
                     code_builder.i32_add();
                 }
+                code_builder.i32_const(copy_fn_ptr);
 
                 // There is an in-place version of this but we don't use it for dev backends. No morphic_lib analysis.
-                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_REPLACE);
             }
             ListWithCapacity => {
-                // List.withCapacity : Nat -> List elem
+                // List.withCapacity : U64 -> List elem
 
                 let capacity: Symbol = self.arguments[0];
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  capacity: usize            i32
+                //  capacity: u64              i64
                 //  alignment: u32             i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
 
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[self.ret_symbol, capacity]);
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr as i32);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_WITH_CAPACITY);
             }
             ListConcat => {
                 // List.concat : List elem, List elem -> List elem
-                // Zig arguments          Wasm types
-                //  (return pointer)       i32
-                //  list_a: RocList        i64, i32
-                //  list_b: RocList        i64, i32
-                //  alignment: u32         i32
-                //  element_width: usize   i32
 
                 // Load the arguments that have symbols
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     self.arguments,
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 // Load monomorphization constants
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+
+                // Zig arguments          Wasm types
+                //  (return pointer)           i32
+                //  list_a: RocList            i32
+                //  list_b: RocList            i32
+                //  alignment: u32             i32
+                //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
+
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_CONCAT);
             }
+            ListConcatUtf8 => self.load_args_and_call_zig(backend, bitcode::LIST_CONCAT_UTF8),
 
             ListReserve => {
-                // List.reserve : List elem, Nat -> List elem
+                // List.reserve : List elem, U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let spare: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
-                //  spare: usize               i32
+                //  spare: u64                 i64
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
                 //  update_mode: UpdateMode    i32
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -549,10 +645,11 @@ impl<'a> LowLevelCall<'a> {
                     .load_symbols(&mut backend.code_builder, &[spare]);
 
                 backend.code_builder.i32_const(elem_width as i32);
-
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE, 7, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RESERVE);
             }
 
             ListReleaseExcessCapacity => {
@@ -560,39 +657,43 @@ impl<'a> LowLevelCall<'a> {
 
                 let list: Symbol = self.arguments[0];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_layout = backend.layout_interner.get_repr(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
                 let (elem_width, elem_align) =
                     elem_layout.stack_size_and_alignment(backend.layout_interner);
 
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
                 //  update_mode: UpdateMode    i32
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
-
                 backend.code_builder.i32_const(elem_width as i32);
-
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
 
-                backend.call_host_fn_after_loading_args(
-                    bitcode::LIST_RELEASE_EXCESS_CAPACITY,
-                    6,
-                    false,
-                );
+                backend.call_host_fn_after_loading_args(bitcode::LIST_RELEASE_EXCESS_CAPACITY);
             }
 
             ListAppendUnsafe => {
@@ -601,25 +702,25 @@ impl<'a> LowLevelCall<'a> {
                 let list: Symbol = self.arguments[0];
                 let elem: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
-                let elem_width = backend.layout_interner.stack_size(elem_layout);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_width = backend.layout_interner.stack_size(elem_in_layout);
                 let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, elem_layout, backend.env.arena);
+                    ensure_symbol_is_in_memory(backend, elem, elem_in_layout, backend.env.arena);
+                let copy_fn_ptr = build_copy_element_fn(backend, elem_in_layout);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
+                //  copy: CopyFn,              i32
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.get_local(elem_local);
@@ -629,8 +730,9 @@ impl<'a> LowLevelCall<'a> {
                 }
 
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(copy_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE, 4, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_APPEND_UNSAFE);
             }
             ListPrepend => {
                 // List.prepend : List elem, elem -> List elem
@@ -638,28 +740,34 @@ impl<'a> LowLevelCall<'a> {
                 let list: Symbol = self.arguments[0];
                 let elem: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
                 let (elem_local, elem_offset, _) =
-                    ensure_symbol_is_in_memory(backend, elem, elem_layout, backend.env.arena);
+                    ensure_symbol_is_in_memory(backend, elem, elem_in_layout, backend.env.arena);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let copy_fn_ptr = build_copy_element_fn(backend, elem_in_layout);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList              i64, i32
+                //  list: RocList              i32
                 //  alignment: u32             i32
                 //  element: Opaque            i32
                 //  element_width: usize       i32
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  copy: CopyFn,              i32
 
                 // return pointer and list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -670,136 +778,138 @@ impl<'a> LowLevelCall<'a> {
                     backend.code_builder.i32_add();
                 }
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(copy_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_PREPEND);
             }
             ListSublist => {
                 // As a low-level, record is destructured
-                //  List.sublist : List elem, start : Nat, len : Nat -> List elem
+                //  List.sublist : List elem, start : U64, len : U64 -> List elem
 
                 let list: Symbol = self.arguments[0];
                 let start: Symbol = self.arguments[1];
                 let len: Symbol = self.arguments[2];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
 
-                // The refcount function receives a pointer to an element in the list
-                // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Struct(
-                            backend.env.arena.alloc([elem_layout]),
-                        ));
-                let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
-                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  start: usize,              i32
-                //  len: usize,                i32
+                //  element_recounted: bool,   i32
+                //  start: u64,                i64
+                //  len: u64,                  i64
                 //  dec: Dec,                  i32
 
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
                 backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[start, len]);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SUBLIST);
             }
             ListDropAt => {
-                // List.dropAt : List elem, Nat -> List elem
+                // List.dropAt : List elem, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let drop_index: Symbol = self.arguments[1];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
 
-                // The refcount function receives a pointer to an element in the list
-                // This is the same as a Struct containing the element
-                let in_memory_layout =
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Struct(
-                            backend.env.arena.alloc([elem_layout]),
-                        ));
-                let dec_fn = backend.get_refcount_fn_index(in_memory_layout, HelperOp::Dec);
-                let dec_fn_ptr = backend.get_fn_ptr(dec_fn);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
-                //  element_width: usize,      i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
-                //  drop_index: usize,         i32
+                //  element_width: usize,      i32
+                //  elements_refcounted: bool, i32
+                //  drop_index: u64,           i64
+                //  inc: Inc,                  i32
                 //  dec: Dec,                  i32
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
-                backend.code_builder.i32_const(elem_width as i32);
                 backend.code_builder.i32_const(elem_align as i32);
+                backend.code_builder.i32_const(elem_width as i32);
+                backend.code_builder.i32_const(elem_refcounted as i32);
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[drop_index]);
+                backend.code_builder.i32_const(inc_fn_ptr);
                 backend.code_builder.i32_const(dec_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT, 6, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_DROP_AT);
             }
             ListSwap => {
-                // List.swap : List elem, Nat, Nat -> List elem
+                // List.swap : List elem, U64, U64 -> List elem
                 let list: Symbol = self.arguments[0];
                 let index_1: Symbol = self.arguments[1];
                 let index_2: Symbol = self.arguments[2];
 
-                let elem_layout = unwrap_list_elem_layout(self.ret_layout_raw);
+                let elem_in_layout = unwrap_list_elem_layout(self.ret_layout_raw);
                 let (elem_width, elem_align) = backend
                     .layout_interner
-                    .stack_size_and_alignment(elem_layout);
+                    .stack_size_and_alignment(elem_in_layout);
+
+                let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+                let inc_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+                let dec_fn_ptr =
+                    build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+                let copy_fn_ptr = build_copy_element_fn(backend, elem_in_layout);
 
                 // Zig arguments              Wasm types
                 //  (return pointer)           i32
-                //  list: RocList,             i64, i32
+                //  list: RocList,             i32
                 //  alignment: u32,            i32
                 //  element_width: usize,      i32
-                //  index_1: usize,            i32
-                //  index_2: usize,            i32
+                //  index_1: u64,              i64
+                //  index_2: u64,              i64
+                //  element_refcounted: bool   i32
+                //  inc: Inc                   i32
+                //  dec: Dec                   i32
                 //  update_mode: UpdateMode,   i32
+                //  copy: CopyFn,              i32
 
                 // Load the return pointer and the list
                 backend.storage.load_symbols_for_call(
-                    backend.env.arena,
                     &mut backend.code_builder,
                     &[list],
                     self.ret_symbol,
                     &WasmLayout::new(backend.layout_interner, self.ret_layout),
-                    CallConv::Zig,
                 );
 
                 backend.code_builder.i32_const(elem_align as i32);
@@ -807,9 +917,13 @@ impl<'a> LowLevelCall<'a> {
                 backend
                     .storage
                     .load_symbols(&mut backend.code_builder, &[index_1, index_2]);
+                backend.code_builder.i32_const(elem_refcounted as i32);
+                backend.code_builder.i32_const(inc_fn_ptr);
+                backend.code_builder.i32_const(dec_fn_ptr);
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
+                backend.code_builder.i32_const(copy_fn_ptr);
 
-                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP, 8, false);
+                backend.call_host_fn_after_loading_args(bitcode::LIST_SWAP);
             }
 
             // Num
@@ -836,8 +950,7 @@ impl<'a> LowLevelCall<'a> {
             NumAddWrap => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // TODO: don't panic
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_OR_PANIC_INT[width])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_ADD_WRAP_INT[width])
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         self.load_args(backend);
@@ -927,8 +1040,7 @@ impl<'a> LowLevelCall<'a> {
             NumSubWrap => match self.ret_layout_raw {
                 LayoutRepr::Builtin(Builtin::Int(width)) => match width {
                     IntWidth::I128 | IntWidth::U128 => {
-                        // TODO: don't panic
-                        self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_OR_PANIC_INT[width])
+                        self.load_args_and_call_zig(backend, &bitcode::NUM_SUB_WRAP_INT[width])
                     }
                     IntWidth::I64 | IntWidth::U64 => {
                         self.load_args(backend);
@@ -1100,7 +1212,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_gt(),
                     F64 => backend.code_builder.f64_gt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN[IntWidth::I128]
                         } else {
@@ -1138,7 +1249,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_ge(),
                     F64 => backend.code_builder.f64_ge(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_GREATER_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
@@ -1176,7 +1286,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_lt(),
                     F64 => backend.code_builder.f64_lt(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN[IntWidth::I128]
                         } else {
@@ -1215,7 +1324,6 @@ impl<'a> LowLevelCall<'a> {
                     F32 => backend.code_builder.f32_le(),
                     F64 => backend.code_builder.f64_le(),
                     I128 => {
-                        self.load_args(backend);
                         let intrinsic = if symbol_is_signed_int(backend, self.arguments[0]) {
                             &bitcode::NUM_LESS_THAN_OR_EQUAL[IntWidth::I128]
                         } else {
@@ -1432,7 +1540,7 @@ impl<'a> LowLevelCall<'a> {
             }
             NumAbs => {
                 const PANIC_MSG: &str =
-                    "integer absolute overflowed because its argument is the minimum value";
+                    "Integer absolute overflowed because its argument is the minimum value";
 
                 self.load_args(backend);
 
@@ -1496,7 +1604,7 @@ impl<'a> LowLevelCall<'a> {
             }
             NumNeg => {
                 const PANIC_MSG: &str =
-                    "integer negation overflowed because its argument is the minimum value";
+                    "Integer negation overflowed because its argument is the minimum value";
 
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
@@ -1524,6 +1632,7 @@ impl<'a> LowLevelCall<'a> {
                     }
                     F32 => backend.code_builder.f32_neg(),
                     F64 => backend.code_builder.f64_neg(),
+                    Decimal => self.load_args_and_call_zig(backend, bitcode::DEC_NEGATE),
                     _ => todo!("{:?} for {:?}", self.lowlevel, self.ret_layout),
                 }
             }
@@ -1625,6 +1734,10 @@ impl<'a> LowLevelCall<'a> {
                 LayoutRepr::Builtin(Builtin::Float(width)) => {
                     self.load_args_and_call_zig(backend, &bitcode::NUM_POW[width]);
                 }
+                LayoutRepr::Builtin(Builtin::Decimal) => {
+                    self.load_args_and_call_zig(backend, bitcode::DEC_POW);
+                }
+
                 _ => panic_ret_type(),
             },
 
@@ -1676,6 +1789,7 @@ impl<'a> LowLevelCall<'a> {
                 match arg_type {
                     F32 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F32[width]),
                     F64 => self.load_args_and_call_zig(backend, &bitcode::NUM_ROUND_F64[width]),
+                    Decimal => self.load_args_and_call_zig(backend, &bitcode::DEC_ROUND[width]),
                     _ => internal_error!("Invalid argument type for round: {:?}", arg_type),
                 }
             }
@@ -1683,6 +1797,14 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args(backend);
                 let arg_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
                 let ret_type = CodeGenNumType::from(self.ret_layout);
+
+                let width = match ret_type {
+                    CodeGenNumType::I32 => IntWidth::I32,
+                    CodeGenNumType::I64 => IntWidth::I64,
+                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
+                    _ => internal_error!("Invalid return type for round: {:?}", ret_type),
+                };
+
                 match (arg_type, self.lowlevel) {
                     (F32, NumCeiling) => {
                         backend.code_builder.f32_ceil();
@@ -1690,14 +1812,21 @@ impl<'a> LowLevelCall<'a> {
                     (F64, NumCeiling) => {
                         backend.code_builder.f64_ceil();
                     }
+                    (Decimal, NumCeiling) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_CEILING[width]);
+                    }
                     (F32, NumFloor) => {
                         backend.code_builder.f32_floor();
                     }
                     (F64, NumFloor) => {
                         backend.code_builder.f64_floor();
                     }
+                    (Decimal, NumFloor) => {
+                        return self.load_args_and_call_zig(backend, &bitcode::DEC_FLOOR[width]);
+                    }
                     _ => internal_error!("Invalid argument type for ceiling: {:?}", arg_type),
                 }
+
                 match (ret_type, arg_type) {
                     // TODO: unsigned truncation
                     (I32, F32) => backend.code_builder.i32_trunc_s_f32(),
@@ -1708,24 +1837,12 @@ impl<'a> LowLevelCall<'a> {
                     _ => panic_ret_type(),
                 }
             }
-            NumPowInt => {
-                self.load_args(backend);
-                let base_type = CodeGenNumType::for_symbol(backend, self.arguments[0]);
-                let exponent_type = CodeGenNumType::for_symbol(backend, self.arguments[1]);
-                let ret_type = CodeGenNumType::from(self.ret_layout);
-
-                debug_assert!(base_type == exponent_type);
-                debug_assert!(exponent_type == ret_type);
-
-                let width = match ret_type {
-                    CodeGenNumType::I32 => IntWidth::I32,
-                    CodeGenNumType::I64 => IntWidth::I64,
-                    CodeGenNumType::I128 => todo!("{:?} for I128", self.lowlevel),
-                    _ => internal_error!("Invalid return type for pow: {:?}", ret_type),
-                };
-
-                self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
-            }
+            NumPowInt => match self.ret_layout_raw {
+                LayoutRepr::Builtin(Builtin::Int(width)) => {
+                    self.load_args_and_call_zig(backend, &bitcode::NUM_POW_INT[width])
+                }
+                _ => panic_ret_type(),
+            },
 
             NumIsNan => num_is_nan(backend, self.arguments[0]),
             NumIsInfinite => num_is_infinite(backend, self.arguments[0]),
@@ -1758,10 +1875,6 @@ impl<'a> LowLevelCall<'a> {
                 }
                 _ => panic_ret_type(),
             },
-            NumBytesToU16 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U16),
-            NumBytesToU32 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U32),
-            NumBytesToU64 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U64),
-            NumBytesToU128 => self.load_args_and_call_zig(backend, bitcode::NUM_BYTES_TO_U128),
             NumBitwiseAnd => {
                 self.load_args(backend);
                 match CodeGenNumType::from(self.ret_layout) {
@@ -2054,15 +2167,12 @@ impl<'a> LowLevelCall<'a> {
             NumToFloatChecked => {
                 todo!("implement toF32Checked and toF64Checked");
             }
-            I128OfDec => self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128),
-            And => {
-                self.load_args(backend);
-                backend.code_builder.i32_and();
-            }
-            Or => {
-                self.load_args(backend);
-                backend.code_builder.i32_or();
-            }
+            NumWithoutDecimalPoint => self.load_args_and_call_zig(backend, bitcode::DEC_TO_I128),
+            NumWithDecimalPoint => self.load_args_and_call_zig(backend, bitcode::DEC_FROM_I128),
+            NumF32ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_TO_PARTS),
+            NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
+            NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
+            NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
             Not => {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();
@@ -2124,8 +2234,7 @@ impl<'a> LowLevelCall<'a> {
             }
 
             Unreachable => match self.ret_storage {
-                StoredValue::VirtualMachineStack { value_type, .. }
-                | StoredValue::Local { value_type, .. } => match value_type {
+                StoredValue::Local { value_type, .. } => match value_type {
                     ValueType::I32 => backend.code_builder.i32_const(0),
                     ValueType::I64 => backend.code_builder.i64_const(0),
                     ValueType::F32 => backend.code_builder.f32_const(0.0),
@@ -2138,6 +2247,28 @@ impl<'a> LowLevelCall<'a> {
             SetJmp | LongJmp | SetLongJmpBuffer => {
                 unreachable!("only inserted in dev backend codegen")
             }
+        }
+    }
+
+    fn load_list_len_usize(&self, backend: &mut WasmBackend<'_, '_>) {
+        match backend.storage.get(&self.arguments[0]) {
+            StoredValue::StackMemory { location, .. } => {
+                let (local_id, offset) =
+                    location.local_and_offset(backend.storage.stack_frame_pointer);
+                backend.code_builder.get_local(local_id);
+                // List is stored as (pointer, length, capacity),
+                // with each of those fields being 4 bytes on wasm.
+                // So the length is 4 bytes after the start of the struct.
+                //
+                // WRAPPER_LEN represents the index of the length field
+                // (which is 1 as of the writing of this comment). If the field order
+                // ever changes, WRAPPER_LEN should be updated and this logic should
+                // continue to work even though this comment may become inaccurate.
+                backend
+                    .code_builder
+                    .i32_load(Align::Bytes4, offset + (4 * Builtin::WRAPPER_LEN));
+            }
+            _ => internal_error!("invalid storage for List"),
         }
     }
 
@@ -2172,13 +2303,13 @@ impl<'a> LowLevelCall<'a> {
 
             // Empty record is always equal to empty record.
             // There are no runtime arguments to check, so just emit true or false.
-            LayoutRepr::Struct(field_layouts) if field_layouts.is_empty() => {
+            LayoutRepr::Struct([]) => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
             // Void is always equal to void. This is the type for the contents of the empty list in `[] == []`
             // This instruction will never execute, but we need an i32 for module validation
-            LayoutRepr::Union(UnionLayout::NonRecursive(tags)) if tags.is_empty() => {
+            LayoutRepr::Union(UnionLayout::NonRecursive([])) => {
                 backend.code_builder.i32_const(!invert_result as i32);
             }
 
@@ -2220,7 +2351,7 @@ impl<'a> LowLevelCall<'a> {
         use StoredValue::*;
 
         match backend.storage.get(&self.arguments[0]).to_owned() {
-            VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+            Local { value_type, .. } => {
                 self.load_args(backend);
                 match self.lowlevel {
                     LowLevel::Eq => match value_type {
@@ -2303,7 +2434,7 @@ impl<'a> LowLevelCall<'a> {
 
     fn num_to_str(&self, backend: &mut WasmBackend<'a, '_>) {
         let arg_layout = backend.storage.symbol_layouts[&self.arguments[0]];
-        match backend.layout_interner.get_repr(arg_layout) {
+        match backend.layout_interner.runtime_representation(arg_layout) {
             LayoutRepr::Builtin(Builtin::Int(width)) => {
                 self.load_args_and_call_zig(backend, &bitcode::STR_FROM_INT[width])
             }
@@ -2330,7 +2461,7 @@ fn num_is_nan(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2393,7 +2524,7 @@ fn num_is_infinite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2436,7 +2567,7 @@ fn num_is_finite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
     use StoredValue::*;
     let stored = backend.storage.get(&argument).to_owned();
     match stored {
-        VirtualMachineStack { value_type, .. } | Local { value_type, .. } => {
+        Local { value_type, .. } => {
             backend
                 .storage
                 .load_symbols(&mut backend.code_builder, &[argument]);
@@ -2477,7 +2608,7 @@ fn num_is_finite(backend: &mut WasmBackend<'_, '_>, argument: Symbol) {
 pub fn call_higher_order_lowlevel<'a>(
     backend: &mut WasmBackend<'a, '_>,
     return_sym: Symbol,
-    return_layout: &InLayout<'a>,
+    _return_layout: &InLayout<'a>,
     higher_order: &'a HigherOrderLowLevel<'a>,
 ) {
     use HigherOrder::*;
@@ -2589,9 +2720,6 @@ pub fn call_higher_order_lowlevel<'a>(
             .unwrap();
         match op {
             ListSortWith { .. } => ProcSource::HigherOrderCompare(passed_proc_index),
-            ListMap { .. } | ListMap2 { .. } | ListMap3 { .. } | ListMap4 { .. } => {
-                ProcSource::HigherOrderMapper(passed_proc_index)
-            }
         }
     };
     let wrapper_sym = backend.create_symbol(&format!("#wrap#{fn_name:?}"));
@@ -2616,19 +2744,6 @@ pub fn call_higher_order_lowlevel<'a>(
         wrapper_arg_layouts.extend(boxed_closure_arg_layouts);
 
         match helper_proc_source {
-            ProcSource::HigherOrderMapper(_) => {
-                // Our convention for mappers is that they write to the heap via the last argument
-                wrapper_arg_layouts.push(
-                    backend
-                        .layout_interner
-                        .insert_direct_no_semantic(LayoutRepr::Ptr(*result_layout)),
-                );
-                ProcLayout {
-                    arguments: wrapper_arg_layouts.into_bump_slice(),
-                    result: Layout::UNIT,
-                    niche: fn_name.niche(),
-                }
-            }
             ProcSource::HigherOrderCompare(_) => ProcLayout {
                 arguments: wrapper_arg_layouts.into_bump_slice(),
                 result: *result_layout,
@@ -2643,93 +2758,51 @@ pub fn call_higher_order_lowlevel<'a>(
     let wrapper_fn_idx =
         backend.register_helper_proc(wrapper_sym, wrapper_layout, helper_proc_source);
     let wrapper_fn_ptr = backend.get_fn_ptr(wrapper_fn_idx);
-    let inc_fn_ptr = if !closure_data_exists {
+    let inc_n_fn_ptr = if !closure_data_exists {
         // Our code gen would ignore the Unit arg, but the Zig builtin passes a pointer for it!
         // That results in an exception (type signature mismatch in indirect call).
         // The workaround is to use I32 layout, treating the (ignored) pointer as an integer.
-        let inc_fn = backend.get_refcount_fn_index(Layout::I32, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(Layout::I32, HelperOp::IncN);
         backend.get_fn_ptr(inc_fn)
     } else {
-        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::Inc);
+        let inc_fn = backend.get_refcount_fn_index(wrapped_captures_layout, HelperOp::IncN);
         backend.get_fn_ptr(inc_fn)
     };
 
     match op {
-        ListMap { xs } => list_map_n(
-            bitcode::LIST_MAP,
-            backend,
-            &[*xs],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap2 { xs, ys } => list_map_n(
-            bitcode::LIST_MAP2,
-            backend,
-            &[*xs, *ys],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap3 { xs, ys, zs } => list_map_n(
-            bitcode::LIST_MAP3,
-            backend,
-            &[*xs, *ys, *zs],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
-        ListMap4 { xs, ys, zs, ws } => list_map_n(
-            bitcode::LIST_MAP4,
-            backend,
-            &[*xs, *ys, *zs, *ws],
-            return_sym,
-            *return_layout,
-            wrapper_fn_ptr,
-            inc_fn_ptr,
-            closure_data_exists,
-            wrapped_captured_environment,
-            *owns_captured_environment,
-        ),
-
         ListSortWith { xs } => {
-            let elem_layout = unwrap_list_elem_layout(
+            let elem_in_layout = unwrap_list_elem_layout(
                 backend
                     .layout_interner
                     .get_repr(backend.storage.symbol_layouts[xs]),
             );
-            let elem_layout = backend.layout_interner.get_repr(elem_layout);
+            let elem_layout = backend.layout_interner.get_repr(elem_in_layout);
             let (element_width, alignment) =
                 elem_layout.stack_size_and_alignment(backend.layout_interner);
 
+            let elem_refcounted = backend.layout_interner.contains_refcounted(elem_in_layout);
+            let inc_fn_ptr =
+                build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectInc);
+            let dec_fn_ptr =
+                build_refcount_element_fn(backend, elem_in_layout, HelperOp::IndirectDec);
+            let copy_fn_ptr = build_copy_element_fn(backend, elem_in_layout);
+
             let cb = &mut backend.code_builder;
 
-            // (return pointer)      i32
-            // input: RocList,       i64, i32
-            // caller: CompareFn,    i32
-            // data: Opaque,         i32
-            // inc_n_data: IncN,     i32
-            // data_is_owned: bool,  i32
-            // alignment: u32,       i32
-            // element_width: usize, i32
+            // (return pointer)           i32
+            // input: RocList,            i32
+            // caller: CompareFn,         i32
+            // data: Opaque,              i32
+            // inc_n_data: IncN,          i32
+            // data_is_owned: bool,       i32
+            // alignment: u32,            i32
+            // element_width: usize,      i32
+            // element_refcounted: bool   i32
+            // inc: Inc                   i32
+            // dec: Dec                   i32
+            // copy: CopyFn               i32
 
-            backend.storage.load_symbols(cb, &[return_sym]);
-            backend.storage.load_symbol_zig(cb, *xs);
+            backend.storage.load_symbols(cb, &[return_sym, *xs]);
             cb.i32_const(wrapper_fn_ptr);
             if closure_data_exists {
                 backend
@@ -2740,12 +2813,16 @@ pub fn call_higher_order_lowlevel<'a>(
                 // but that's a specialization that our Zig code doesn't have! Pass a null pointer.
                 cb.i32_const(0);
             }
-            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(inc_n_fn_ptr);
             cb.i32_const(*owns_captured_environment as i32);
             cb.i32_const(alignment as i32);
             cb.i32_const(element_width as i32);
+            cb.i32_const(elem_refcounted as i32);
+            cb.i32_const(inc_fn_ptr);
+            cb.i32_const(dec_fn_ptr);
+            cb.i32_const(copy_fn_ptr);
 
-            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH, 9, false);
+            backend.call_host_fn_after_loading_args(bitcode::LIST_SORT_WITH);
         }
     }
 }
@@ -2755,79 +2832,6 @@ fn unwrap_list_elem_layout(list_layout: LayoutRepr) -> InLayout {
         LayoutRepr::Builtin(Builtin::List(x)) => x,
         e => internal_error!("expected List layout, got {:?}", e),
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn list_map_n<'a>(
-    zig_fn_name: &'static str,
-    backend: &mut WasmBackend<'a, '_>,
-    arg_symbols: &[Symbol],
-    return_sym: Symbol,
-    return_layout: InLayout<'a>,
-    wrapper_fn_ptr: i32,
-    inc_fn_ptr: i32,
-    closure_data_exists: bool,
-    captured_environment: Symbol,
-    owns_captured_environment: bool,
-) {
-    let arg_elem_layouts = Vec::from_iter_in(
-        arg_symbols.iter().map(|sym| {
-            unwrap_list_elem_layout(
-                backend
-                    .layout_interner
-                    .get_repr(backend.storage.symbol_layouts[sym]),
-            )
-        }),
-        backend.env.arena,
-    );
-
-    let elem_ret = unwrap_list_elem_layout(backend.layout_interner.get_repr(return_layout));
-    let elem_ret = backend.layout_interner.get_repr(elem_ret);
-    let (elem_ret_size, elem_ret_align) =
-        elem_ret.stack_size_and_alignment(backend.layout_interner);
-
-    let cb = &mut backend.code_builder;
-
-    backend.storage.load_symbols(cb, &[return_sym]);
-
-    for s in arg_symbols {
-        backend.storage.load_symbol_zig(cb, *s);
-    }
-    cb.i32_const(wrapper_fn_ptr);
-    if closure_data_exists {
-        backend.storage.load_symbols(cb, &[captured_environment]);
-    } else {
-        // load_symbols assumes that a zero-size arg should be eliminated in code gen,
-        // but that's a specialization that our Zig code doesn't have! Pass a null pointer.
-        cb.i32_const(0);
-    }
-    cb.i32_const(inc_fn_ptr);
-    cb.i32_const(owns_captured_environment as i32);
-    cb.i32_const(elem_ret_align as i32);
-    for el in arg_elem_layouts.iter() {
-        cb.i32_const(backend.layout_interner.stack_size(*el) as i32);
-    }
-    cb.i32_const(elem_ret_size as i32);
-
-    // If we have lists of different lengths, we may need to decrement
-    let num_wasm_args = if arg_elem_layouts.len() > 1 {
-        for el in arg_elem_layouts.iter() {
-            // The dec function will be passed a pointer to the element within the list, not the element itself!
-            // Here we wrap the layout in a Struct to ensure we get the right code gen
-            let el_ptr = backend
-                .layout_interner
-                .insert_direct_no_semantic(LayoutRepr::Struct(backend.env.arena.alloc([*el])));
-            let idx = backend.get_refcount_fn_index(el_ptr, HelperOp::Dec);
-            let ptr = backend.get_fn_ptr(idx);
-            backend.code_builder.i32_const(ptr);
-        }
-        7 + arg_elem_layouts.len() * 4
-    } else {
-        7 + arg_elem_layouts.len() * 3
-    };
-
-    let has_return_val = false;
-    backend.call_host_fn_after_loading_args(zig_fn_name, num_wasm_args, has_return_val);
 }
 
 fn ensure_symbol_is_in_memory<'a>(
@@ -2859,4 +2863,18 @@ fn ensure_symbol_is_in_memory<'a>(
             (frame_ptr, offset, in_memory_layout)
         }
     }
+}
+
+fn build_refcount_element_fn<'a>(
+    backend: &mut WasmBackend<'a, '_>,
+    elem_layout: InLayout<'a>,
+    rc_op: HelperOp,
+) -> i32 {
+    let rc_fn = backend.get_refcount_fn_index(elem_layout, rc_op);
+    backend.get_fn_ptr(rc_fn)
+}
+
+fn build_copy_element_fn<'a>(backend: &mut WasmBackend<'a, '_>, elem_layout: InLayout<'a>) -> i32 {
+    let copy_fn = backend.get_copy_fn_index(elem_layout);
+    backend.get_fn_ptr(copy_fn)
 }

@@ -1,0 +1,63 @@
+procedure Bool.1 ():
+    let Bool.22 : Int1 = false;
+    ret Bool.22;
+
+procedure Test.1 (Test.4):
+    let Test.9 : I64 = 0i64;
+    ret Test.9;
+
+procedure Test.0 ():
+    joinpoint Test.7 Test.2:
+        ret Test.2;
+    in
+    let Test.6 : List [] = Array [];
+    joinpoint Test.14:
+        let Test.11 : I64 = 2i64;
+        jump Test.7 Test.11;
+    in
+    joinpoint Test.13 Test.12:
+        let Test.8 : I64 = CallByName Test.1 Test.12;
+        dec Test.12;
+        jump Test.7 Test.8;
+    in
+    let Test.32 : U64 = lowlevel ListLenUsize Test.6;
+    let Test.33 : U64 = 0i64;
+    let Test.34 : Int1 = lowlevel Eq Test.32 Test.33;
+    if Test.34 then
+        let Test.18 : U64 = 0i64;
+        let Test.19 : U64 = lowlevel ListLenU64 Test.6;
+        let Test.20 : U64 = lowlevel NumSub Test.19 Test.18;
+        let Test.21 : U64 = 0i64;
+        let Test.3 : List [] = lowlevel ListSublist Test.6 Test.21 Test.20;
+        joinpoint Test.16 Test.15:
+            if Test.15 then
+                jump Test.13 Test.3;
+            else
+                dec Test.3;
+                let Test.10 : I64 = 1i64;
+                jump Test.7 Test.10;
+        in
+        let Test.17 : Int1 = CallByName Bool.1;
+        jump Test.16 Test.17;
+    else
+        let Test.29 : U64 = lowlevel ListLenUsize Test.6;
+        let Test.30 : U64 = 0i64;
+        let Test.31 : Int1 = lowlevel NumGte Test.29 Test.30;
+        if Test.31 then
+            let Test.25 : U64 = 0i64;
+            let Test.26 : U64 = lowlevel ListLenU64 Test.6;
+            let Test.27 : U64 = lowlevel NumSub Test.26 Test.25;
+            let Test.28 : U64 = 0i64;
+            let Test.3 : List [] = lowlevel ListSublist Test.6 Test.28 Test.27;
+            joinpoint Test.23 Test.22:
+                if Test.22 then
+                    jump Test.13 Test.3;
+                else
+                    dec Test.3;
+                    jump Test.14;
+            in
+            let Test.24 : Int1 = CallByName Bool.1;
+            jump Test.23 Test.24;
+        else
+            dec Test.6;
+            jump Test.14;

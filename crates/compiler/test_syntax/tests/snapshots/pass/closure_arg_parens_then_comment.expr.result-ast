@@ -1,0 +1,17 @@
+@0-7 SpaceAfter(
+    Closure(
+        [
+            @2-3 NumLiteral(
+                "8",
+            ),
+        ],
+        @6-7 Tag(
+            "T",
+        ),
+    ),
+    [
+        LineComment(
+            "",
+        ),
+    ],
+)

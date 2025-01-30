@@ -1,58 +1,63 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-25,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-6 Identifier(
-                    "myList",
-                ),
-                @9-25 List(
-                    [
-                        @15-16 SpaceBefore(
-                            Num(
-                                "0",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @22-23 SpaceBefore(
-                            SpaceAfter(
+@0-28 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-25,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-6 Identifier {
+                        ident: "myList",
+                    },
+                    @9-25 List(
+                        [
+                            @15-16 SpaceBefore(
                                 Num(
-                                    "1",
+                                    "0",
                                 ),
                                 [
                                     Newline,
                                 ],
                             ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
+                            @22-23 SpaceBefore(
+                                SpaceAfter(
+                                    Num(
+                                        "1",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    ),
                 ),
+            ],
+        },
+        @26-28 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @26-28 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+            ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

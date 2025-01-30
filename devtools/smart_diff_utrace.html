@@ -1,0 +1,240 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Function Trace Diff Tool</title>
+    <style>
+        body {
+            font-family: monospace;
+            padding: 20px;
+            background-color: #f5f5f5;
+            max-width: 2000px;
+            margin: 0 auto;
+        }
+        
+        h1 {
+            text-align: center;
+            color: #333;
+        }
+
+        #input-area {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 20px;
+        }
+
+        #input-area textarea {
+            flex: 1;
+            height: 150px;
+            margin-bottom: 10px;
+            font-family: monospace;
+            padding: 10px;
+        }
+
+        button {
+            display: block;
+            width: 200px;
+            margin: 0 auto 20px;
+            padding: 8px 16px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+
+        button:hover {
+            background-color: #45a049;
+        }
+
+        #result-area {
+            display: flex;
+            gap: 20px;
+        }
+
+        #result1, #result2 {
+            flex: 1;
+            background-color: white;
+            padding: 5px;
+            padding-left: 15px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            white-space: pre;
+            overflow-x: auto;
+            position: relative;
+        }
+
+        .line-numbers {
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: 30px;
+            background-color: #f0f0f0;
+            border-right: 1px solid #ddd;
+            text-align: right;
+            padding: 5px 5px 5px 0;
+            color: #666;
+            user-select: none;
+        }
+
+        .content-area {
+            margin-left: 35px;
+        }
+
+        .function-block {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            margin-left: 0 !important;
+        }
+
+        .function-header {
+            display: flex;
+            align-items: flex-start;
+            cursor: pointer;
+        }
+
+        .function-header:hover {
+            background-color: #f0f0f0;
+        }
+
+        .toggle-btn {
+            position: absolute;
+            left: -10px;
+            width: 10px;
+            cursor: pointer;
+            color: #666;
+            user-select: none;
+        }
+
+        .function-name {
+            flex-grow: 1;
+        }
+
+        .function-content {
+            margin-left: 20px;
+        }
+
+        .line {
+            margin-left: 0px;
+        }
+
+        .function-end {
+            margin-left: 0;
+            color: #666;
+        }
+
+        .collapsed .function-content {
+            display: none;
+        }
+
+        .collapsed .function-end {
+            display: none;
+        }
+
+        .collapsed .function-header::after {
+            content: " ... }";
+            color: #666;
+        }
+
+        .highlight {
+            background-color: #fff3b0;
+        }
+    </style>
+</head>
+<body>
+    <h1>Text Comparison Tool</h1>
+
+    <div id="input-area">
+        <textarea id="input1" placeholder="Enter first trace..."></textarea>
+        <textarea id="input2" placeholder="Enter second trace..."></textarea>
+    </div>
+    <button onclick="compareTraces()">Compare</button>
+
+    <div id="result-area">
+        <div id="result1"></div>
+        <div id="result2"></div>
+    </div>
+
+    <script>
+        function processTrace(trace, otherTrace, resultId) {
+            const lines = trace.trim().split('\n');
+            const otherLines = otherTrace.trim().split('\n');
+            let contentHtml = '';
+            let lineNumbersHtml = '';
+            let indentLevel = 0;
+            let blockStartLine = -1;
+            
+            // Generate line numbers
+            for (let i = 1; i <= lines.length; i++) {
+                lineNumbersHtml += `${i}\n`;
+            }
+            
+            for (let i = 0; i < lines.length; i++) {
+                const line = lines[i].trim();
+                const shouldHighlight = !otherLines.some(otherLine => otherLine.trim() === line);
+                const highlightClass = shouldHighlight ? 'highlight' : '';
+
+                const isBlockStart = line.endsWith('{') && i < lines.length - 1;
+                
+                if (isBlockStart) {
+                    blockStartLine = i;
+                    const functionName = line;
+                    contentHtml += `<div class="function-block" style="margin-left: ${indentLevel * 20}px">
+                        <div class="function-header ${highlightClass}">
+                            <span class="toggle-btn">▼</span>
+                            <span class="function-name">${functionName}</span>
+                        </div>
+                        <div class="function-content">`;
+                    indentLevel++;
+                } else if (line.includes('}')) {
+                    if (indentLevel > 0) {
+                        indentLevel--;
+                        contentHtml += `</div><span class="function-end ${highlightClass}">${line}</span></div>`;
+                    } else {
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
+                    }
+                } else {
+                    const isLastLineBlock = line.endsWith('{') && i === lines.length - 1;
+                    if (isLastLineBlock) {
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
+                    } else {
+                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
+                    }
+                }
+            }
+            
+            return `<div class="line-numbers">${lineNumbersHtml}</div><div class="content-area">${contentHtml}</div>`;
+        }
+
+        function initializeCollapsible(containerId) {
+            const container = document.getElementById(containerId);
+            const functionBlocks = container.querySelectorAll('.function-block');
+            
+            functionBlocks.forEach(block => {
+                const header = block.querySelector('.function-header');
+                const toggleBtn = block.querySelector('.toggle-btn');
+                
+                header.addEventListener('click', (e) => {
+                    block.classList.toggle('collapsed');
+                    toggleBtn.textContent = block.classList.contains('collapsed') ? '▶' : '▼';
+                });
+            });
+        }
+
+        function compareTraces() {
+            const trace1 = document.getElementById('input1').value;
+            const trace2 = document.getElementById('input2').value;
+
+            document.getElementById('result1').innerHTML = processTrace(trace1, trace2, 'result1');
+            document.getElementById('result2').innerHTML = processTrace(trace2, trace1, 'result2');
+
+            initializeCollapsible('result1');
+            initializeCollapsible('result2');
+        }
+
+        compareTraces();
+    </script>
+</body>
+</html>

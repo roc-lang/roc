@@ -19,11 +19,11 @@ use roc_std::{RocList, RocResult, RocStr};
 fn def_closure_in_parens() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             id = (\x -> x)
 
             id 42u32
-            "#
+            "
         ),
         42,
         u32
@@ -35,11 +35,11 @@ fn def_closure_in_parens() {
 fn def_closure_in_multiple_parens() {
     assert_evals_to!(
         indoc!(
-            r#"
+            r"
             id = (((\x -> x)))
 
             id 42u32
-            "#
+            "
         ),
         42,
         u32

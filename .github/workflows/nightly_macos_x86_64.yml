@@ -1,9 +1,13 @@
 on:
+  #pull_request:
   workflow_dispatch:
   schedule:
-    - cron:  '0 9 * * *' # 9=9am utc+0
+    - cron: "0 9 * * *" # 9=9am utc+0
 
 name: Nightly Release macOS x86_64
+
+env:
+  LLVM_SYS_180_PREFIX: /usr/local/opt/llvm@18
 
 jobs:
   test-build-upload:
@@ -11,43 +15,46 @@ jobs:
     runs-on: [self-hosted, macOS, X64]
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v3
-          
+      - uses: actions/checkout@v4
+
+      - name: Update PATH to use zig 13
+        run: |
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
+
+      - run: zig version
+
       - name: write version to file
         run: ./ci/write_version.sh
-          
+
       - name: execute rust tests
-        run: cargo test --release --locked -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip platform_switching_swift --skip swift_ui --skip gen_str::str_append_scalar --skip gen_tags::phantom_polymorphic_record
-        # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos-11 x86_64 CI machine
-        # this issue may be caused by using older versions of XCode
+        run: cargo test --release --locked -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip gen_tags::phantom_polymorphic_record
 
       - name: build release
-        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc
+        run: RUSTFLAGS="-C target-cpu=x86-64" cargo build --profile=release-with-lto --locked --bin roc --bin roc_language_server
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's.
-          
+
       - name: get commit SHA
-        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
-        
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
-        
+
       - name: build file name
         env:
-            DATE: ${{ env.DATE }}
-            SHA: ${{ env.SHA }}
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_x86_64-$DATE-$SHA" >> $GITHUB_ENV
 
       # this makes the roc binary a lot smaller
       - name: strip debug info
         run: strip ./target/release-with-lto/roc
-        
+
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
-        
-      - name: Upload artifact. Actually uploading to github releases has to be done manually.
-        uses: actions/upload-artifact@v3
-        with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           retention-days: 4
 
+      - name: Upload artifact. Actually uploading to github releases has to be done manually.
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

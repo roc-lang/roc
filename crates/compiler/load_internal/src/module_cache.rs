@@ -1,15 +1,19 @@
 use crate::docs::ModuleDocumentation;
 use crate::module::{
-    ConstrainedModule, FoundSpecializationsModule, LateSpecializationsModule, ModuleHeader,
-    ParsedModule, TypeCheckedModule,
+    CheckedModule, ConstrainedModule, FoundSpecializationsModule, LateSpecializationsModule,
+    ModuleHeader, ParsedModule, TypeCheckedModule,
 };
 use roc_can::abilities::PendingAbilitiesStore;
+use roc_can::module::ModuleParams;
+use roc_can_solo::module::SoloCanOutput;
 use roc_collections::{MutMap, MutSet, VecMap};
 use roc_module::ident::ModuleName;
 use roc_module::symbol::{ModuleId, PQModuleName, Symbol};
 use roc_mono::ir::ExternalSpecializations;
 use roc_problem::Severity;
+use roc_region::all::Region;
 use roc_solve_problem::TypeError;
+use roc_types::subs::Variable;
 use roc_types::types::Alias;
 use std::path::PathBuf;
 
@@ -23,8 +27,11 @@ pub(crate) struct ModuleCache<'a> {
     pub(crate) parsed: MutMap<ModuleId, ParsedModule<'a>>,
     pub(crate) aliases: MutMap<ModuleId, MutMap<Symbol, (bool, Alias)>>,
     pub(crate) pending_abilities: MutMap<ModuleId, PendingAbilitiesStore>,
+    pub(crate) solo_canonicalized: MutMap<ModuleId, SoloCanOutput<'a>>,
     pub(crate) constrained: MutMap<ModuleId, ConstrainedModule>,
+    pub(crate) module_params: MutMap<ModuleId, ModuleParams>,
     pub(crate) typechecked: MutMap<ModuleId, TypeCheckedModule<'a>>,
+    pub(crate) checked: MutMap<ModuleId, CheckedModule>,
     pub(crate) found_specializations: MutMap<ModuleId, FoundSpecializationsModule<'a>>,
     pub(crate) late_specializations: MutMap<ModuleId, LateSpecializationsModule<'a>>,
     pub(crate) external_specializations_requested:
@@ -32,12 +39,16 @@ pub(crate) struct ModuleCache<'a> {
 
     /// Various information
     pub(crate) imports: MutMap<ModuleId, MutSet<ModuleId>>,
+    pub(crate) exposes: MutMap<ModuleId, Vec<(Symbol, Variable)>>,
+    pub(crate) exposed_imports: MutMap<ModuleId, MutMap<Symbol, Region>>,
     pub(crate) top_level_thunks: MutMap<ModuleId, MutSet<Symbol>>,
     pub(crate) documentation: VecMap<ModuleId, ModuleDocumentation>,
     pub(crate) can_problems: MutMap<ModuleId, Vec<roc_problem::can::Problem>>,
     pub(crate) type_problems: MutMap<ModuleId, Vec<TypeError>>,
 
     pub(crate) sources: MutMap<ModuleId, (PathBuf, &'a str)>,
+    #[allow(dead_code)]
+    pub(crate) content_hashes: MutMap<ModuleId, String>,
 }
 
 impl<'a> ModuleCache<'a> {
@@ -57,6 +68,19 @@ impl<'a> ModuleCache<'a> {
 
     pub fn has_errors(&self) -> bool {
         self.has_can_errors() || self.has_type_errors()
+    }
+
+    #[allow(dead_code)]
+    pub fn add_module_content_hash(&mut self, module_id: ModuleId, contents: &str) -> String {
+        let hash = Self::hash_contents(contents);
+        self.content_hashes.insert(module_id, hash.clone());
+
+        hash
+    }
+
+    #[allow(dead_code)]
+    pub fn hash_contents(contents: &str) -> String {
+        base64_url::encode(blake3::hash(contents.as_bytes()).as_bytes())
     }
 }
 
@@ -86,7 +110,6 @@ impl Default for ModuleCache<'_> {
             DECODE,
             HASH,
             INSPECT,
-            JSON,
         }
 
         Self {
@@ -95,17 +118,23 @@ impl Default for ModuleCache<'_> {
             parsed: Default::default(),
             aliases: Default::default(),
             pending_abilities: Default::default(),
+            solo_canonicalized: Default::default(),
             constrained: Default::default(),
+            module_params: Default::default(),
             typechecked: Default::default(),
+            checked: Default::default(),
             found_specializations: Default::default(),
             late_specializations: Default::default(),
             external_specializations_requested: Default::default(),
             imports: Default::default(),
+            exposed_imports: Default::default(),
+            exposes: Default::default(),
             top_level_thunks: Default::default(),
             documentation: Default::default(),
             can_problems: Default::default(),
             type_problems: Default::default(),
             sources: Default::default(),
+            content_hashes: Default::default(),
         }
     }
 }

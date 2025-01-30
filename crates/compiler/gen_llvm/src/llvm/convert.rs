@@ -1,7 +1,7 @@
-use crate::llvm::build::{BuilderExt, Env, FunctionSpec, RocReturn};
+use crate::llvm::build::{BuilderExt, Env};
 use crate::llvm::erased;
 use crate::llvm::memcpy::build_memcpy;
-use bumpalo::collections::{CollectIn, Vec as AVec};
+use bumpalo::collections::Vec as AVec;
 use inkwell::context::Context;
 use inkwell::types::{BasicType, BasicTypeEnum, FloatType, IntType, StructType};
 use inkwell::values::PointerValue;
@@ -11,7 +11,7 @@ use roc_mono::layout::{
     round_up_to_alignment, Builtin, FunctionPointer, InLayout, Layout, LayoutInterner, LayoutRepr,
     STLayoutInterner, UnionLayout,
 };
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 use super::struct_::RocStruct;
 
@@ -32,37 +32,18 @@ pub fn basic_type_from_layout<'a, 'ctx>(
             layout_interner.get_repr(lambda_set.runtime_representation()),
         ),
 
-        Ptr(inner_layout) => {
-            let inner_type = basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(inner_layout),
-            );
-
-            inner_type.ptr_type(AddressSpace::default()).into()
-        }
+        Ptr(..) => env.context.ptr_type(AddressSpace::default()).into(),
         Union(union_layout) => basic_type_from_union_layout(env, layout_interner, &union_layout),
 
         RecursivePointer(_) => env
             .context
-            .i64_type()
             .ptr_type(AddressSpace::default())
             .as_basic_type_enum(),
 
-        FunctionPointer(self::FunctionPointer { args, ret }) => {
-            let args = args.iter().map(|arg| {
-                basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*arg))
-            });
-
-            let ret_repr = layout_interner.get_repr(ret);
-            let ret = basic_type_from_layout(env, layout_interner, ret_repr);
-
-            let roc_return = RocReturn::from_layout(layout_interner, ret_repr);
-
-            let fn_spec = FunctionSpec::fastcc(env, roc_return, ret, args.collect_in(env.arena));
-
-            fn_spec.typ.ptr_type(AddressSpace::default()).into()
+        FunctionPointer(self::FunctionPointer { .. }) => {
+            env.context.ptr_type(AddressSpace::default()).into()
         }
+
         Erased(_) => erased::basic_type(env).into(),
 
         Builtin(builtin) => basic_type_from_builtin(env, &builtin),
@@ -106,7 +87,7 @@ pub fn struct_type_from_union_layout<'a, 'ctx>(
         | NullableWrapped {
             other_tags: tags, ..
         } => {
-            if union_layout.stores_tag_id_as_data(env.target_info) {
+            if union_layout.stores_tag_id_as_data(env.target) {
                 RocUnion::tagged_from_slices(layout_interner, env.context, tags).struct_type()
             } else {
                 RocUnion::untagged_from_slices(layout_interner, env.context, tags).struct_type()
@@ -136,7 +117,7 @@ fn basic_type_from_union_layout<'a, 'ctx>(
         Recursive(_)
         | NonNullableUnwrapped(_)
         | NullableWrapped { .. }
-        | NullableUnwrapped { .. } => struct_type.ptr_type(AddressSpace::default()).into(),
+        | NullableUnwrapped { .. } => env.context.ptr_type(AddressSpace::default()).into(),
     }
 }
 
@@ -188,7 +169,7 @@ pub fn argument_type_from_layout<'a, 'ctx>(
             let base = basic_type_from_layout(env, layout_interner, layout);
 
             if layout.is_passed_by_reference(layout_interner) {
-                base.ptr_type(AddressSpace::default()).into()
+                env.context.ptr_type(AddressSpace::default()).into()
             } else {
                 base
             }
@@ -208,7 +189,7 @@ fn argument_type_from_struct_layout<'a, 'ctx>(
     let stack_type = basic_type_from_layout(env, layout_interner, struct_layout);
 
     if struct_layout.is_passed_by_reference(layout_interner) {
-        stack_type.ptr_type(AddressSpace::default()).into()
+        env.context.ptr_type(AddressSpace::default()).into()
     } else {
         stack_type
     }
@@ -223,7 +204,7 @@ pub fn argument_type_from_union_layout<'a, 'ctx>(
     let heap_type = basic_type_from_union_layout(env, layout_interner, union_layout);
 
     if let UnionLayout::NonRecursive(_) = union_layout {
-        heap_type.ptr_type(AddressSpace::default()).into()
+        env.context.ptr_type(AddressSpace::default()).into()
     } else {
         heap_type
     }
@@ -263,7 +244,7 @@ fn alignment_type(context: &Context, alignment: u32) -> BasicTypeEnum {
         2 => context.i16_type().into(),
         4 => context.i32_type().into(),
         8 => context.i64_type().into(),
-        16 => context.i128_type().into(),
+        16 => context.f128_type().into(),
         _ => unimplemented!("weird alignment: {alignment}"),
     }
 }
@@ -282,16 +263,9 @@ pub(crate) struct RocUnion<'ctx> {
     tag_type: Option<TagType>,
 }
 
-fn is_multiple_of(big: u32, small: u32) -> bool {
-    match small {
-        0 => true, // 0 is a multiple of all n, because n * 0 = 0
-        n => big % n == 0,
-    }
-}
-
 impl<'ctx> RocUnion<'ctx> {
-    pub const TAG_ID_INDEX: u32 = 2;
-    pub const TAG_DATA_INDEX: u32 = 1;
+    pub const TAG_ID_INDEX: u32 = 1;
+    pub const TAG_DATA_INDEX: u32 = 0;
 
     fn new(
         context: &'ctx Context,
@@ -301,45 +275,24 @@ impl<'ctx> RocUnion<'ctx> {
     ) -> Self {
         let bytes = round_up_to_alignment(data_width, data_align);
 
-        let byte_array_type = if is_multiple_of(bytes, 8) && is_multiple_of(data_align, 8) {
-            context
-                .i64_type()
-                .array_type(bytes / 8)
-                .as_basic_type_enum()
-        } else {
-            context.i8_type().array_type(bytes).as_basic_type_enum()
-        };
-
-        let alignment_array_type = alignment_type(context, data_align)
-            .array_type(0)
+        let align_type = alignment_type(context, data_align);
+        let byte_array_type = align_type
+            .array_type(bytes / data_align)
             .as_basic_type_enum();
 
         let struct_type = if let Some(tag_type) = tag_type {
-            let tag_width = match tag_type {
-                TagType::I8 => 1,
-                TagType::I16 => 2,
-            };
-
-            let tag_padding = round_up_to_alignment(tag_width, data_align) - tag_width;
-            let tag_padding_type = context
-                .i8_type()
-                .array_type(tag_padding)
-                .as_basic_type_enum();
-
             context.struct_type(
                 &[
-                    alignment_array_type,
                     byte_array_type,
                     match tag_type {
                         TagType::I8 => context.i8_type().into(),
                         TagType::I16 => context.i16_type().into(),
                     },
-                    tag_padding_type,
                 ],
                 false,
             )
         } else {
-            context.struct_type(&[alignment_array_type, byte_array_type], false)
+            context.struct_type(&[byte_array_type], false)
         };
 
         Self {
@@ -404,7 +357,8 @@ impl<'ctx> RocUnion<'ctx> {
         let mut width = self.data_width;
 
         // add padding between data and the tag id
-        width = round_up_to_alignment(width, tag_id_width);
+        let tag_id_alignment = tag_id_width.max(1);
+        width = round_up_to_alignment(width, tag_id_alignment);
 
         // add tag id
         width += tag_id_width;
@@ -428,30 +382,27 @@ impl<'ctx> RocUnion<'ctx> {
     ) {
         debug_assert_eq!(tag_id.is_some(), self.tag_type.is_some());
 
-        let data_buffer = env
-            .builder
-            .new_build_struct_gep(
-                self.struct_type(),
-                tag_alloca,
-                Self::TAG_DATA_INDEX,
-                "data_buffer",
-            )
-            .unwrap();
+        let data_buffer = env.builder.new_build_struct_gep(
+            self.struct_type(),
+            tag_alloca,
+            Self::TAG_DATA_INDEX,
+            "data_buffer",
+        );
 
         match data {
             // NOTE: the data may be smaller than the buffer, so there might be uninitialized
             // bytes in the buffer. We should never touch those, but e.g. valgrind might not
             // realize that. If that comes up, the solution is to just fill it with zeros
             RocStruct::ByValue(value) => {
-                let cast_pointer = env.builder.build_pointer_cast(
+                let cast_pointer = env.builder.new_build_pointer_cast(
                     data_buffer,
-                    value.get_type().ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "to_data_ptr",
                 );
-                env.builder.build_store(cast_pointer, value);
+                env.builder.new_build_store(cast_pointer, value);
             }
             RocStruct::ByReference(payload_data_ptr) => {
-                let cast_tag_pointer = env.builder.build_pointer_cast(
+                let cast_tag_pointer = env.builder.new_build_pointer_cast(
                     data_buffer,
                     payload_data_ptr.get_type(),
                     "to_data_ptr",
@@ -477,26 +428,23 @@ impl<'ctx> RocUnion<'ctx> {
                 TagType::I16 => env.context.i16_type(),
             };
 
-            let tag_id_ptr = env
-                .builder
-                .new_build_struct_gep(
-                    self.struct_type(),
-                    tag_alloca,
-                    Self::TAG_ID_INDEX,
-                    "tag_id_ptr",
-                )
-                .unwrap();
+            let tag_id_ptr = env.builder.new_build_struct_gep(
+                self.struct_type(),
+                tag_alloca,
+                Self::TAG_ID_INDEX,
+                "tag_id_ptr",
+            );
 
             let tag_id = tag_id_type.const_int(tag_id as u64, false);
 
-            env.builder.build_store(tag_id_ptr, tag_id);
+            env.builder.new_build_store(tag_id_ptr, tag_id);
         }
     }
 }
 
 /// The int type that the C ABI turns our RocList/RocStr into
-pub fn str_list_int(ctx: &Context, target_info: TargetInfo) -> IntType<'_> {
-    match target_info.ptr_width() {
+pub fn str_list_int(ctx: &Context, target: Target) -> IntType<'_> {
+    match target.ptr_width() {
         roc_target::PtrWidth::Bytes4 => ctx.i64_type(),
         roc_target::PtrWidth::Bytes8 => ctx.i128_type(),
     }
@@ -515,7 +463,7 @@ pub fn zig_dec_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
 }
 
 pub fn zig_has_tag_id_type<'ctx>(env: &Env<'_, 'ctx, '_>) -> StructType<'ctx> {
-    let u8_ptr_t = env.context.i8_type().ptr_type(AddressSpace::default());
+    let u8_ptr_t = env.context.ptr_type(AddressSpace::default());
 
     env.context
         .struct_type(&[env.context.bool_type().into(), u8_ptr_t.into()], false)

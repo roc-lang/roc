@@ -1,42 +1,47 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-9,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-1 Identifier(
-                    "x",
-                ),
-                @8-9 SpaceBefore(
-                    Num(
-                        "5",
+@0-13 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-9,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-1 Identifier {
+                        ident: "x",
+                    },
+                    @8-9 SpaceBefore(
+                        Num(
+                            "5",
+                        ),
+                        [
+                            Newline,
+                        ],
                     ),
-                    [
-                        Newline,
-                    ],
                 ),
+            ],
+        },
+        @11-13 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @11-13 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

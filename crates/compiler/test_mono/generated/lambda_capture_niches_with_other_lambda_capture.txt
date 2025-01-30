@@ -1,12 +1,17 @@
+procedure Str.3 (#Attr.2, #Attr.3):
+    let Str.385 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.385;
+
 procedure Test.1 (Test.5):
     let Test.16 : [C {}, C U64, C Str] = TagId(0) Test.5;
     ret Test.16;
 
 procedure Test.1 (Test.5):
-    let Test.30 : [C {}, C U64, C Str] = TagId(1) Test.5;
-    ret Test.30;
+    let Test.31 : [C {}, C U64, C Str] = TagId(1) Test.5;
+    ret Test.31;
 
 procedure Test.2 (Test.7):
+    inc Test.7;
     let Test.23 : [C {}, C U64, C Str] = TagId(2) Test.7;
     ret Test.23;
 
@@ -16,13 +21,16 @@ procedure Test.6 (Test.17, #Attr.12):
     ret Test.19;
 
 procedure Test.6 (Test.17, #Attr.12):
-    let Test.34 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
-    let Test.33 : Str = "";
-    ret Test.33;
+    let Test.35 : U64 = UnionAtIndex (Id 1) (Index 0) #Attr.12;
+    let Test.34 : Str = "";
+    ret Test.34;
 
 procedure Test.8 (Test.24, #Attr.12):
-    let Test.27 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
-    ret Test.27;
+    let Test.28 : Str = UnionAtIndex (Id 2) (Index 0) #Attr.12;
+    let Test.27 : Str = "";
+    let Test.26 : Str = CallByName Str.3 Test.27 Test.28;
+    dec Test.28;
+    ret Test.26;
 
 procedure Test.0 ():
     let Test.3 : U8 = 0u8;
@@ -52,10 +60,11 @@ procedure Test.0 ():
         case 1:
             let Test.22 : Str = "foo";
             let Test.21 : [C {}, C U64, C Str] = CallByName Test.2 Test.22;
+            dec Test.22;
             jump Test.13 Test.21;
     
         default:
-            let Test.29 : U64 = 1i64;
-            let Test.28 : [C {}, C U64, C Str] = CallByName Test.1 Test.29;
-            jump Test.13 Test.28;
+            let Test.30 : U64 = 1i64;
+            let Test.29 : [C {}, C U64, C Str] = CallByName Test.1 Test.30;
+            jump Test.13 Test.29;
     

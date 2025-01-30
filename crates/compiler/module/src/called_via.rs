@@ -3,7 +3,7 @@ use self::BinOp::*;
 use std::cmp::Ordering;
 use std::fmt;
 
-const PRECEDENCES: [(BinOp, u8); 20] = [
+const PRECEDENCES: [(BinOp, u8); 18] = [
     (Caret, 8),
     (Star, 7),
     (Slash, 7),
@@ -11,6 +11,8 @@ const PRECEDENCES: [(BinOp, u8); 20] = [
     (Percent, 6),
     (Plus, 5),
     (Minus, 5),
+    (DoubleQuestion, 5),
+    (SingleQuestion, 5),
     (Pizza, 4),
     (Equals, 3),
     (NotEquals, 3),
@@ -20,14 +22,9 @@ const PRECEDENCES: [(BinOp, u8); 20] = [
     (GreaterThanOrEq, 2),
     (And, 1),
     (Or, 0),
-    // These should never come up
-    (Assignment, 255),
-    (IsAliasType, 255),
-    (IsOpaqueType, 255),
-    (Backpassing, 255),
 ];
 
-const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
+const ASSOCIATIVITIES: [(BinOp, Associativity); 18] = [
     (Caret, RightAssociative),
     (Star, LeftAssociative),
     (Slash, LeftAssociative),
@@ -35,6 +32,8 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
     (Percent, LeftAssociative),
     (Plus, LeftAssociative),
     (Minus, LeftAssociative),
+    (DoubleQuestion, LeftAssociative),
+    (SingleQuestion, LeftAssociative),
     (Pizza, LeftAssociative),
     (Equals, NonAssociative),
     (NotEquals, NonAssociative),
@@ -44,14 +43,9 @@ const ASSOCIATIVITIES: [(BinOp, Associativity); 20] = [
     (GreaterThanOrEq, NonAssociative),
     (And, RightAssociative),
     (Or, RightAssociative),
-    // These should never come up
-    (Assignment, LeftAssociative),
-    (IsAliasType, LeftAssociative),
-    (IsOpaqueType, LeftAssociative),
-    (Backpassing, LeftAssociative),
 ];
 
-const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
+const DISPLAY_STRINGS: [(BinOp, &str); 18] = [
     (Caret, "^"),
     (Star, "*"),
     (Slash, "/"),
@@ -59,6 +53,8 @@ const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
     (Percent, "%"),
     (Plus, "+"),
     (Minus, "-"),
+    (DoubleQuestion, "??"),
+    (SingleQuestion, "?"),
     (Pizza, "|>"),
     (Equals, "=="),
     (NotEquals, "!="),
@@ -66,12 +62,8 @@ const DISPLAY_STRINGS: [(BinOp, &str); 20] = [
     (GreaterThan, ">"),
     (LessThanOrEq, "<="),
     (GreaterThanOrEq, ">="),
-    (And, "&&"),
-    (Or, "||"),
-    (Assignment, "="),
-    (IsAliasType, ":"),
-    (IsOpaqueType, ":="),
-    (Backpassing, "<-"),
+    (And, "and"),
+    (Or, "or"),
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -86,12 +78,38 @@ pub enum CalledVia {
     UnaryOp(UnaryOp),
 
     /// This call is the result of desugaring string interpolation,
-    /// e.g. "\(first) \(last)" is transformed into Str.concat (Str.concat first " ") last.
+    /// e.g. "${first} ${last}" is transformed into `Str.concat(Str.concat(first, " "))` last.
     StringInterpolation,
 
-    /// This call is the result of desugaring a Record Builder field.
-    /// e.g. succeed { a <- get "a" } is transformed into (get "a") (succeed \a -> { a })
+    /// This call is the result of desugaring a map2-based Record Builder field. e.g.
+    /// ```roc
+    /// { Result.parallel <-
+    ///     foo: get("a"),
+    ///     bar: get("b"),
+    /// }
+    /// ```
+    /// is transformed into
+    /// ```roc
+    /// Result.parallel(get("a"), get("b"), (\foo, bar -> { foo, bar }))
+    /// ```
     RecordBuilder,
+
+    /// This call is the result of desugaring a Result.try from `?` syntax
+    /// e.g. Dict.get? items "key" becomes Result.try (Dict.get items "key") \item -> ...
+    QuestionSuffix,
+
+    /// This call is a result of lowering a reference to a module-params-extended def
+    NakedParamsVar,
+
+    /// This call is the result of desugaring a `try` expression into an early return on Err
+    /// e.g. `try parseDate input` becomes:
+    ///
+    /// ```roc
+    /// when parseDate input is
+    ///     Err err -> return Err err
+    ///     Ok value -> value
+    /// ```
+    Try,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -100,6 +118,32 @@ pub enum UnaryOp {
     Negate,
     /// (!), e.g. (!x)
     Not,
+}
+
+impl std::fmt::Display for UnaryOp {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            UnaryOp::Negate => write!(f, "-"),
+            UnaryOp::Not => write!(f, "!"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Suffix {
+    /// (!), e.g. (Stdin.line!)
+    Bang,
+    /// (?), e.g. (parseData? data)
+    Question,
+}
+
+impl std::fmt::Display for Suffix {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Suffix::Bang => write!(f, "!"),
+            Suffix::Question => write!(f, "?"),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -112,6 +156,8 @@ pub enum BinOp {
     Percent,
     Plus,
     Minus,
+    DoubleQuestion,
+    SingleQuestion,
     Pizza,
     Equals,
     NotEquals,
@@ -121,10 +167,6 @@ pub enum BinOp {
     GreaterThanOrEq,
     And,
     Or,
-    Assignment,
-    IsAliasType,
-    IsOpaqueType,
-    Backpassing,
     // lowest precedence
 }
 
@@ -132,10 +174,10 @@ impl BinOp {
     /// how wide this operator is when typed out
     pub fn width(self) -> u16 {
         match self {
-            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan => 1,
+            Caret | Star | Slash | Percent | Plus | Minus | LessThan | GreaterThan
+            | SingleQuestion => 1,
             DoubleSlash | Equals | NotEquals | LessThanOrEq | GreaterThanOrEq | And | Or
-            | Pizza => 2,
-            Assignment | IsAliasType | IsOpaqueType | Backpassing => unreachable!(),
+            | Pizza | DoubleQuestion => 2,
         }
     }
 }
@@ -157,7 +199,7 @@ pub enum Associativity {
     /// right-associative operators:
     ///
     /// exponentiation: ^
-    /// boolean: && ||
+    /// boolean: and or
     /// application: <|
     RightAssociative,
 
@@ -169,25 +211,13 @@ pub enum Associativity {
 
 impl BinOp {
     pub fn associativity(self) -> Associativity {
-        // The compiler should never pass any of these to this function!
-        debug_assert_ne!(self, Assignment);
-        debug_assert_ne!(self, IsAliasType);
-        debug_assert_ne!(self, IsOpaqueType);
-        debug_assert_ne!(self, Backpassing);
-
-        const ASSOCIATIVITY_TABLE: [Associativity; 20] = generate_associativity_table();
+        const ASSOCIATIVITY_TABLE: [Associativity; 18] = generate_associativity_table();
 
         ASSOCIATIVITY_TABLE[self as usize]
     }
 
     fn precedence(self) -> u8 {
-        // The compiler should never pass any of these to this function!
-        debug_assert_ne!(self, Assignment);
-        debug_assert_ne!(self, IsAliasType);
-        debug_assert_ne!(self, IsOpaqueType);
-        debug_assert_ne!(self, Backpassing);
-
-        const PRECEDENCE_TABLE: [u8; 20] = generate_precedence_table();
+        const PRECEDENCE_TABLE: [u8; 18] = generate_precedence_table();
 
         PRECEDENCE_TABLE[self as usize]
     }
@@ -207,19 +237,14 @@ impl Ord for BinOp {
 
 impl std::fmt::Display for BinOp {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        debug_assert_ne!(*self, Assignment);
-        debug_assert_ne!(*self, IsAliasType);
-        debug_assert_ne!(*self, IsOpaqueType);
-        debug_assert_ne!(*self, Backpassing);
-
-        const DISPLAY_TABLE: [&str; 20] = generate_display_table();
+        const DISPLAY_TABLE: [&str; 18] = generate_display_table();
 
         write!(f, "{}", DISPLAY_TABLE[*self as usize])
     }
 }
 
-const fn generate_precedence_table() -> [u8; 20] {
-    let mut table = [0u8; 20];
+const fn generate_precedence_table() -> [u8; 18] {
+    let mut table = [0u8; 18];
     let mut i = 0;
 
     while i < PRECEDENCES.len() {
@@ -230,8 +255,8 @@ const fn generate_precedence_table() -> [u8; 20] {
     table
 }
 
-const fn generate_associativity_table() -> [Associativity; 20] {
-    let mut table = [NonAssociative; 20];
+const fn generate_associativity_table() -> [Associativity; 18] {
+    let mut table = [NonAssociative; 18];
     let mut i = 0;
 
     while i < ASSOCIATIVITIES.len() {
@@ -242,8 +267,8 @@ const fn generate_associativity_table() -> [Associativity; 20] {
     table
 }
 
-const fn generate_display_table() -> [&'static str; 20] {
-    let mut table = [""; 20];
+const fn generate_display_table() -> [&'static str; 18] {
+    let mut table = [""; 18];
     let mut i = 0;
 
     while i < DISPLAY_STRINGS.len() {

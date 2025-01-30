@@ -3,7 +3,6 @@ use data_encoding::HEXUPPER;
 use is_executable::IsExecutable;
 use regex::Regex;
 use ring::digest::{Context, Digest, SHA256};
-use std::fs::File;
 use std::io::Read;
 use std::{
     collections::{HashMap, HashSet, VecDeque},
@@ -22,7 +21,7 @@ fn main() {
         delete_old_bench_results();
 
         if optional_args.check_executables_changed {
-            println!("Doing a test run to verify benchmarks are working correctly and generate executables.");
+            println!("\nDoing a test run to verify benchmarks are working correctly and generate executables.\n");
 
             std::env::set_var("BENCH_DRY_RUN", "1");
 
@@ -79,6 +78,7 @@ fn finish(all_regressed_benches: HashSet<String>, nr_repeat_benchmarks: usize) {
 // returns all benchmarks that have regressed
 fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
     delete_old_bench_results();
+
     do_benchmark("main");
     let mut all_regressed_benches = do_benchmark("branch");
 
@@ -87,10 +87,14 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
         return HashSet::new();
     }
 
-    println!("\n\nDoing benchmarks {:?} times to reduce flukes.\n\n", nr_repeat_benchmarks);
+    println!(
+        "\n\nDoing benchmarks {:?} times to reduce flukes.\n\n",
+        nr_repeat_benchmarks
+    );
 
     for _ in 1..nr_repeat_benchmarks {
         delete_old_bench_results();
+
         do_benchmark("main");
         let regressed_benches = do_benchmark("branch");
 
@@ -110,17 +114,22 @@ fn do_all_benches(nr_repeat_benchmarks: usize) -> HashSet<String> {
 
 // returns Vec with names of regressed benchmarks
 fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
-    let mut cmd_child = Command::new(format!(
+    let mut bench_cmd = Command::new(format!(
         "./bench-folder-{}/target/release/deps/time_bench",
         branch_name
-    ))
-    .args(&["--bench", "--noplot"])
-    .stdout(Stdio::piped())
-    .stderr(Stdio::inherit())
-    .spawn()
-    .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
+    ));
 
-    let stdout = cmd_child.stdout.as_mut().unwrap();
+    let bench_cmd_w_args = bench_cmd.args(&["--bench", "--noplot"]);
+
+    let bench_cmd_as_str = format!("{bench_cmd_w_args:?}");
+
+    let mut bench_cmd_child = bench_cmd_w_args
+        .stdout(Stdio::piped())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .unwrap_or_else(|_| panic!("Failed to benchmark {}.", branch_name));
+
+    let stdout = bench_cmd_child.stdout.as_mut().unwrap();
     let stdout_reader = BufReader::new(stdout);
     let stdout_lines = stdout_reader.lines();
 
@@ -145,6 +154,17 @@ fn do_benchmark(branch_name: &'static str) -> HashSet<String> {
         last_three_lines_queue.push_front(line_str.clone());
 
         println!(">>bench {:?}: {:?}", branch_name, line_str);
+    }
+
+    let exit_status = bench_cmd_child.wait().expect("Failed to wait on cmd_child");
+
+    if !exit_status.success() {
+        panic!(
+            "Error: time-bench execution failed with exit code {}.\n\
+            See output above for error info.\n\
+            Command was:\n\t{}",
+            exit_status, bench_cmd_as_str
+        );
     }
 
     regressed_benches
@@ -190,20 +210,21 @@ fn sha256_digest<R: Read>(mut reader: R) -> Result<Digest, io::Error> {
 }
 
 fn sha_file(file_path: &Path) -> Result<String, io::Error> {
-    // Debug info is dependent on the dir in which executable was created,
-    // so we need to strip that to be able to compare binaries.
-    let no_debug_info_file_path = file_path.to_str().unwrap().to_string() + ("_no_debug_info");
-    std::fs::copy(file_path, &no_debug_info_file_path)?;
+    // only checking disassembly because of #6386
+    let disassembly_output = Command::new("objdump")
+        .args(["-d", file_path.to_str().unwrap()])
+        .output()
+        .expect("failed to execute objdump");
 
-    let strip_output = Command::new("strip")
-            .args(["--strip-debug", &no_debug_info_file_path])
-            .output()
-            .expect("failed to execute process");
+    assert!(disassembly_output.status.success());
 
-    assert!(strip_output.status.success());
+    let mut reader = BufReader::new(disassembly_output.stdout.as_slice());
 
-    let no_debug_info_file = File::open(no_debug_info_file_path)?;
-    let reader = BufReader::new(no_debug_info_file);
+    // the first line contains the path, we want to skip it
+    let mut _discard_lines = String::new();
+    reader.read_line(&mut _discard_lines)?;
+    reader.read_line(&mut _discard_lines)?;
+
     let digest = sha256_digest(reader)?;
 
     Ok(HEXUPPER.encode(digest.as_ref()))
@@ -243,13 +264,14 @@ fn calc_hashes_for_folder(benches_path_str: &str) -> HashMap<String, String> {
 }
 
 fn check_if_bench_executables_changed() -> bool {
-    let bench_folder_str = "/crates/cli_testing_examples/benchmarks/";
+    let bench_folder_str = "/crates/cli/tests/benchmarks/";
 
     let main_benches_path_str = [BENCH_FOLDER_MAIN, bench_folder_str].join("");
 
     let main_bench_hashes = calc_hashes_for_folder(&main_benches_path_str);
 
     let branch_benches_path_str = [BENCH_FOLDER_BRANCH, bench_folder_str].join("");
+
     let branch_bench_hashes = calc_hashes_for_folder(&branch_benches_path_str);
 
     if main_bench_hashes.keys().len() == branch_bench_hashes.keys().len() {

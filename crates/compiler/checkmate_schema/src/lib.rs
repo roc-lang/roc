@@ -3,10 +3,6 @@ use std::collections::HashMap;
 use schemars::{schema::RootSchema, schema_for, JsonSchema};
 use serde::Serialize;
 
-#[derive(Serialize, JsonSchema, Debug)]
-#[serde(tag = "type")]
-pub enum Constraint {}
-
 #[derive(Serialize, JsonSchema, Debug, PartialEq)]
 pub struct Variable(pub u32);
 
@@ -73,6 +69,7 @@ impl_content! {
         arguments: Vec<Variable>,
         lambda_type: Variable,
         ret: Variable,
+        fx: Variable,
     },
     Record {
         fields: HashMap<String, RecordField>,
@@ -97,11 +94,13 @@ impl_content! {
         extension: TagUnionExtension,
     },
     EmptyRecord {},
-    EmptyTuple {},
     EmptyTagUnion {},
+    EffectfulFunc {},
     RangedNumber {
         range: NumericRange,
     },
+    Pure {},
+    Effectful {},
     Error {},
 }
 
@@ -169,12 +168,6 @@ pub enum NumericRangeKind {
 
 #[derive(Serialize, JsonSchema, Debug)]
 pub struct Rank(pub u32);
-
-#[derive(Serialize, JsonSchema, Debug)]
-pub struct Descriptor {
-    pub content: Content,
-    pub rank: Rank,
-}
 
 #[derive(Serialize, JsonSchema, Debug)]
 pub struct Symbol(

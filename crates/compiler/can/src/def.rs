@@ -10,6 +10,7 @@ use crate::annotation::IntroducedVariables;
 use crate::annotation::OwnedNamedOrAble;
 use crate::derive;
 use crate::env::Env;
+use crate::expr::canonicalize_record;
 use crate::expr::get_lookup_symbols;
 use crate::expr::AnnotatedMark;
 use crate::expr::ClosureData;
@@ -18,8 +19,10 @@ use crate::expr::Expr::{self, *};
 use crate::expr::StructAccessorData;
 use crate::expr::{canonicalize_expr, Output, Recursive};
 use crate::pattern::{canonicalize_def_header_pattern, BindingsFromPattern, Pattern};
+use crate::procedure::QualifiedReference;
 use crate::procedure::References;
 use crate::scope::create_alias;
+use crate::scope::SymbolLookup;
 use crate::scope::{PendingAbilitiesInScope, Scope};
 use roc_collections::ReferenceMatrix;
 use roc_collections::VecMap;
@@ -28,6 +31,8 @@ use roc_collections::{ImSet, MutMap, SendMap};
 use roc_error_macros::internal_error;
 use roc_module::ident::Ident;
 use roc_module::ident::Lowercase;
+use roc_module::ident::ModuleName;
+use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::IdentId;
 use roc_module::symbol::ModuleId;
 use roc_module::symbol::Symbol;
@@ -52,14 +57,19 @@ use roc_types::types::MemberImpl;
 use roc_types::types::OptAbleType;
 use roc_types::types::{Alias, Type};
 use std::fmt::Debug;
+use std::fs;
+use std::io::Read;
+use std::path::PathBuf;
+use std::sync::Arc;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Def {
     pub loc_pattern: Loc<Pattern>,
     pub loc_expr: Loc<Expr>,
     pub expr_var: Variable,
     pub pattern_vars: SendMap<Symbol, Variable>,
     pub annotation: Option<Annotation>,
+    pub kind: DefKind,
 }
 
 impl Def {
@@ -80,7 +90,39 @@ impl Def {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DefKind {
+    /// A def that introduces identifiers
+    Let,
+    /// A standalone statement with an fx variable
+    Stmt(Variable),
+    /// Ignored result, must be effectful
+    Ignored(Variable),
+}
+
+impl DefKind {
+    pub fn map_var<F: Fn(Variable) -> Variable>(self, f: F) -> Self {
+        match self {
+            DefKind::Let => DefKind::Let,
+            DefKind::Stmt(v) => DefKind::Stmt(f(v)),
+            DefKind::Ignored(v) => DefKind::Ignored(f(v)),
+        }
+    }
+
+    pub fn from_pattern(var_store: &mut VarStore, pattern: &Loc<Pattern>) -> Self {
+        if BindingsFromPattern::new(pattern)
+            .peekable()
+            .peek()
+            .is_none()
+        {
+            DefKind::Ignored(var_store.fresh())
+        } else {
+            DefKind::Let
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Annotation {
     pub signature: Type,
     pub introduced_variables: IntroducedVariables,
@@ -103,6 +145,24 @@ impl Annotation {
 
         self
     }
+
+    pub fn convert_to_fn(&mut self, argument_count: usize, var_store: &mut VarStore) {
+        let mut arg_types = Vec::with_capacity(argument_count);
+
+        for _ in 0..argument_count {
+            let var = var_store.fresh();
+            self.introduced_variables.insert_inferred(Loc::at_zero(var));
+
+            arg_types.push(Type::Variable(var));
+        }
+
+        self.signature = Type::Function(
+            arg_types,
+            Box::new(Type::Variable(var_store.fresh())),
+            Box::new(self.signature.clone()),
+            Box::new(Type::Variable(var_store.fresh())),
+        );
+    }
 }
 
 #[derive(Debug)]
@@ -110,7 +170,6 @@ pub(crate) struct CanDefs {
     defs: Vec<Option<Def>>,
     dbgs: ExpectsOrDbgs,
     expects: ExpectsOrDbgs,
-    expects_fx: ExpectsOrDbgs,
     def_ordering: DefOrdering,
     aliases: VecMap<Symbol, Alias>,
 }
@@ -144,11 +203,7 @@ impl ExpectsOrDbgs {
 #[derive(Debug, Clone)]
 enum PendingValueDef<'a> {
     /// A standalone annotation with no body
-    AnnotationOnly(
-        &'a Loc<ast::Pattern<'a>>,
-        Loc<Pattern>,
-        &'a Loc<ast::TypeAnnotation<'a>>,
-    ),
+    AnnotationOnly(Loc<Pattern>, &'a Loc<ast::TypeAnnotation<'a>>),
     /// A body with no type annotation
     Body(Loc<Pattern>, &'a Loc<ast::Expr<'a>>),
     /// A body with a type annotation
@@ -158,14 +213,39 @@ enum PendingValueDef<'a> {
         &'a Loc<ast::TypeAnnotation<'a>>,
         &'a Loc<ast::Expr<'a>>,
     ),
+    /// Module params from an import
+    ImportParams {
+        symbol: Symbol,
+        variable: Variable,
+        loc_pattern: Loc<Pattern>,
+        module_id: ModuleId,
+        opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
+    },
+    /// Ingested file
+    IngestedFile(
+        Loc<Pattern>,
+        Option<Loc<ast::TypeAnnotation<'a>>>,
+        Loc<ast::StrLiteral<'a>>,
+    ),
+    /// A standalone statement
+    Stmt(&'a Loc<ast::Expr<'a>>),
 }
 
 impl PendingValueDef<'_> {
-    fn loc_pattern(&self) -> &Loc<Pattern> {
+    fn loc_pattern(&self) -> Option<&Loc<Pattern>> {
         match self {
-            PendingValueDef::AnnotationOnly(_, loc_pattern, _) => loc_pattern,
-            PendingValueDef::Body(loc_pattern, _) => loc_pattern,
-            PendingValueDef::TypedBody(_, loc_pattern, _, _) => loc_pattern,
+            PendingValueDef::AnnotationOnly(loc_pattern, _) => Some(loc_pattern),
+            PendingValueDef::Body(loc_pattern, _) => Some(loc_pattern),
+            PendingValueDef::TypedBody(_, loc_pattern, _, _) => Some(loc_pattern),
+            PendingValueDef::ImportParams {
+                loc_pattern,
+                symbol: _,
+                variable: _,
+                module_id: _,
+                opt_provided: _,
+            } => Some(loc_pattern),
+            PendingValueDef::IngestedFile(loc_pattern, _, _) => Some(loc_pattern),
+            PendingValueDef::Stmt(_) => None,
         }
     }
 }
@@ -191,7 +271,7 @@ enum PendingTypeDef<'a> {
         name: Loc<Symbol>,
         vars: Vec<Loc<Lowercase>>,
         ann: &'a Loc<ast::TypeAnnotation<'a>>,
-        derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+        derived: Option<&'a ast::ImplementsAbilities<'a>>,
     },
 
     Ability {
@@ -238,7 +318,7 @@ impl PendingTypeDef<'_> {
                 ann,
                 derived,
             } => {
-                let end = derived.map(|d| d.region).unwrap_or(ann.region);
+                let end = derived.map(|d| d.item.region).unwrap_or(ann.region);
                 let region = Region::span_across(&name.region, &end);
 
                 Some((name.value, region))
@@ -259,45 +339,10 @@ impl PendingTypeDef<'_> {
 pub enum Declaration {
     Declare(Def),
     DeclareRec(Vec<Def>, IllegalCycleMark),
-    Builtin(Def),
     Expects(ExpectsOrDbgs),
-    ExpectsFx(ExpectsOrDbgs),
     /// If we know a cycle is illegal during canonicalization.
     /// Otherwise we will try to detect this during solving; see [`IllegalCycleMark`].
     InvalidCycle(Vec<CycleEntry>),
-}
-
-impl Declaration {
-    pub fn def_count(&self) -> usize {
-        use Declaration::*;
-        match self {
-            Declare(_) => 1,
-            DeclareRec(defs, _) => defs.len(),
-            InvalidCycle { .. } => 0,
-            Builtin(_) => 0,
-            Expects(_) => 0,
-            ExpectsFx(_) => 0,
-        }
-    }
-
-    pub fn region(&self) -> Region {
-        match self {
-            Declaration::Declare(def) => def.region(),
-            Declaration::DeclareRec(defs, _) => Region::span_across(
-                &defs.first().unwrap().region(),
-                &defs.last().unwrap().region(),
-            ),
-            Declaration::Builtin(def) => def.region(),
-            Declaration::InvalidCycle(cycles) => Region::span_across(
-                &cycles.first().unwrap().expr_region,
-                &cycles.last().unwrap().expr_region,
-            ),
-            Declaration::Expects(expects) | Declaration::ExpectsFx(expects) => Region::span_across(
-                expects.regions.first().unwrap(),
-                expects.regions.last().unwrap(),
-            ),
-        }
-    }
 }
 
 /// Returns a topologically sorted sequence of alias/opaque names
@@ -357,9 +402,7 @@ fn canonicalize_alias<'a>(
     );
 
     // Record all the annotation's references in output.references.lookups
-    for symbol in can_ann.references {
-        output.references.insert_type_lookup(symbol);
-    }
+    output.references.union_mut(&can_ann.references);
 
     let mut can_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(vars.len());
     let mut is_phantom = false;
@@ -428,36 +471,64 @@ fn canonicalize_alias<'a>(
         return Err(());
     }
 
-    let num_unbound = named.len() + wildcards.len() + inferred.len();
-    if num_unbound > 0 {
-        let one_occurrence = named
-            .iter()
-            .map(|nv| Loc::at(nv.first_seen(), nv.variable()))
-            .chain(wildcards)
-            .chain(inferred)
-            .next()
-            .unwrap()
-            .region;
+    // Report errors for wildcards (*), underscores (_), and named vars that weren't declared.
+    let mut no_problems = true;
 
-        env.problems.push(Problem::UnboundTypeVariable {
+    if let Some(loc_var) = wildcards.first() {
+        env.problems.push(Problem::WildcardNotAllowed {
             typ: symbol,
-            num_unbound,
-            one_occurrence,
+            num_wildcards: wildcards.len(),
+            one_occurrence: loc_var.region,
             kind,
         });
 
-        // Bail out
-        return Err(());
+        no_problems = false;
     }
 
-    Ok(create_alias(
-        symbol,
-        name.region,
-        can_vars.clone(),
-        infer_ext_in_output,
-        can_ann.typ,
-        kind,
-    ))
+    if let Some(loc_var) = inferred.first() {
+        env.problems.push(Problem::UnderscoreNotAllowed {
+            typ: symbol,
+            num_underscores: inferred.len(),
+            one_occurrence: loc_var.region,
+            kind,
+        });
+
+        no_problems = false;
+    }
+
+    if let Some(nv) = named.first() {
+        env.problems.push(Problem::UndeclaredTypeVar {
+            typ: symbol,
+            num_unbound: named.len(),
+            one_occurrence: nv.first_seen(),
+            kind,
+        });
+
+        no_problems = false;
+    }
+
+    if no_problems {
+        Ok(create_alias(
+            symbol,
+            name.region,
+            can_vars.clone(),
+            infer_ext_in_output,
+            can_ann.typ,
+            kind,
+        ))
+    } else {
+        Err(())
+    }
+}
+
+#[macro_export]
+macro_rules! params_in_abilities_unimplemented {
+    ($lookup:expr) => {
+        match $lookup.module_params {
+            None => $lookup.symbol,
+            Some(_) => unimplemented!("params in abilities"),
+        }
+    };
 }
 
 /// Canonicalizes a claimed ability implementation like `{ eq }` or `{ eq: myEq }`.
@@ -478,7 +549,7 @@ fn canonicalize_claimed_ability_impl<'a>(
 
             let member_symbol =
                 match env.qualified_lookup_with_module_id(scope, ability_home, label_str, region) {
-                    Ok(symbol) => symbol,
+                    Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                     Err(_) => {
                         env.problem(Problem::NotAnAbilityMember {
                             ability,
@@ -495,7 +566,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             // OPTION-1: The implementation identifier is the only identifier of that name in the
             //           scope. For example,
             //
-            //               interface F imports [] exposes []
+            //               module []
             //
             //               Hello := {} implements [Encoding.{ toEncoder }]
             //
@@ -507,7 +578,9 @@ fn canonicalize_claimed_ability_impl<'a>(
             // OPTION-2: The implementation identifier is a unique shadow of the ability member,
             //           which has also been explicitly imported. For example,
             //
-            //               interface F imports [Encoding.{ toEncoder }] exposes []
+            //               module []
+            //
+            //               import Encoding exposing [toEncoder]
             //
             //               Hello := {} implements [Encoding.{ toEncoder }]
             //
@@ -519,8 +592,13 @@ fn canonicalize_claimed_ability_impl<'a>(
             // To handle both cases, try checking for a shadow first, then check for a direct
             // reference. We want to check for a direct reference second so that if there is a
             // shadow, we won't accidentally grab the imported symbol.
-            let opt_impl_symbol = (scope.lookup_ability_member_shadow(member_symbol))
-                .or_else(|| scope.lookup_str(label_str, region).ok());
+            let opt_impl_symbol =
+                (scope.lookup_ability_member_shadow(member_symbol)).or_else(|| {
+                    scope
+                        .lookup_str(label_str, region)
+                        .map(|s| params_in_abilities_unimplemented!(s))
+                        .ok()
+                });
 
             match opt_impl_symbol {
                 // It's possible that even if we find a symbol it is still only the member
@@ -572,7 +650,7 @@ fn canonicalize_claimed_ability_impl<'a>(
                 label.value,
                 label.region,
             ) {
-                Ok(symbol) => symbol,
+                Ok(lookup) => params_in_abilities_unimplemented!(lookup),
                 Err(_) => {
                     env.problem(Problem::NotAnAbilityMember {
                         ability,
@@ -584,7 +662,7 @@ fn canonicalize_claimed_ability_impl<'a>(
             };
 
             let impl_symbol = match scope.lookup(&impl_ident.into(), impl_region) {
-                Ok(symbol) => symbol,
+                Ok(symbol) => params_in_abilities_unimplemented!(symbol),
                 Err(err) => {
                     env.problem(Problem::RuntimeError(err));
                     return Err(());
@@ -600,11 +678,9 @@ fn canonicalize_claimed_ability_impl<'a>(
             });
             Err(())
         }
-        AssignedField::Malformed(_) => {
-            // An error will already have been reported
-            Err(())
-        }
-        AssignedField::SpaceBefore(_, _) | AssignedField::SpaceAfter(_, _) => {
+        AssignedField::SpaceBefore(_, _)
+        | AssignedField::SpaceAfter(_, _)
+        | AssignedField::IgnoredValue(_, _, _) => {
             internal_error!("unreachable")
         }
     }
@@ -684,12 +760,11 @@ fn canonicalize_opaque<'a>(
     var_store: &mut VarStore,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-
     name: Loc<Symbol>,
     name_str: &'a str,
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
     vars: &[Loc<Lowercase>],
-    has_abilities: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+    has_abilities: Option<&'a ast::ImplementsAbilities<'a>>,
 ) -> Result<CanonicalizedOpaque<'a>, ()> {
     let alias = canonicalize_alias(
         env,
@@ -703,13 +778,15 @@ fn canonicalize_opaque<'a>(
         AliasKind::Opaque,
     )?;
 
+    let mut references = References::new();
+
     let mut derived_defs = Vec::new();
     if let Some(has_abilities) = has_abilities {
-        let has_abilities = has_abilities.value.collection();
+        let has_abilities = has_abilities.item;
 
         let mut derived_abilities = vec![];
 
-        for has_ability in has_abilities.items {
+        for has_ability in has_abilities.value.items {
             let region = has_ability.region;
             let (ability, opt_impls) = match has_ability.value.extract_spaces().item {
                 ast::ImplementsAbility::ImplementsAbility { ability, impls } => (ability, impls),
@@ -718,9 +795,11 @@ fn canonicalize_opaque<'a>(
 
             let ability_region = ability.region;
 
+            // Op := {} has [Eq]
             let (ability, members) = match ability.value {
                 ast::TypeAnnotation::Apply(module_name, ident, []) => {
-                    match make_apply_symbol(env, region, scope, module_name, ident) {
+                    match make_apply_symbol(env, region, scope, module_name, ident, &mut references)
+                    {
                         Ok(ability) => {
                             let opt_members = scope
                                 .abilities_store
@@ -766,8 +845,8 @@ fn canonicalize_opaque<'a>(
                     // Did the user claim this implementation for a specialization of a different
                     // type? e.g.
                     //
-                    //   A implements [Hash {hash: myHash}]
-                    //   B implements [Hash {hash: myHash}]
+                    //   A implements [Hash {hash: my_hash}]
+                    //   B implements [Hash {hash: my_hash}]
                     //
                     // If so, that's an error and we drop the impl for this opaque type.
                     let member_impl = match scope.abilities_store.impl_key(impl_symbol) {
@@ -913,6 +992,8 @@ fn canonicalize_opaque<'a>(
         }
     }
 
+    output.references.union_mut(&references);
+
     Ok(CanonicalizedOpaque {
         opaque_def: alias,
         derived_defs,
@@ -927,7 +1008,12 @@ pub(crate) fn canonicalize_defs<'a>(
     scope: &mut Scope,
     loc_defs: &'a mut roc_parse::ast::Defs<'a>,
     pattern_type: PatternType,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (
+    CanDefs,
+    Output,
+    MutMap<Symbol, Region>,
+    Vec<IntroducedImport>,
+) {
     // Canonicalizing defs while detecting shadowing involves a multi-step process:
     //
     // 1. Go through each of the patterns.
@@ -954,7 +1040,7 @@ pub(crate) fn canonicalize_defs<'a>(
     // there are opaques that implement an ability using a value symbol). But, value symbols might
     // shadow symbols defined in a local ability def.
 
-    for (_, either_index) in loc_defs.tags.iter().enumerate() {
+    for either_index in loc_defs.tags.iter() {
         if let Ok(type_index) = either_index.split() {
             let type_def = &loc_defs.type_defs[type_index.index()];
             let pending_type_def = to_pending_type_def(env, type_def, scope, pattern_type);
@@ -977,6 +1063,7 @@ pub(crate) fn canonicalize_defs<'a>(
                 env,
                 var_store,
                 value_def,
+                region,
                 scope,
                 &pending_abilities_in_scope,
                 &mut output,
@@ -1033,14 +1120,20 @@ fn canonicalize_value_defs<'a>(
     pattern_type: PatternType,
     mut aliases: VecMap<Symbol, Alias>,
     mut symbols_introduced: MutMap<Symbol, Region>,
-) -> (CanDefs, Output, MutMap<Symbol, Region>) {
+) -> (
+    CanDefs,
+    Output,
+    MutMap<Symbol, Region>,
+    Vec<IntroducedImport>,
+) {
     // Canonicalize all the patterns, record shadowing problems, and store
     // the ast::Expr values in pending_exprs for further canonicalization
     // once we've finished assembling the entire scope.
     let mut pending_value_defs = Vec::with_capacity(value_defs.len());
     let mut pending_dbgs = Vec::with_capacity(value_defs.len());
     let mut pending_expects = Vec::with_capacity(value_defs.len());
-    let mut pending_expect_fx = Vec::with_capacity(value_defs.len());
+
+    let mut imports_introduced = Vec::with_capacity(value_defs.len());
 
     for loc_pending_def in value_defs {
         match loc_pending_def.value {
@@ -1058,22 +1151,40 @@ fn canonicalize_value_defs<'a>(
             PendingValue::Expect(pending_expect) => {
                 pending_expects.push(pending_expect);
             }
-            PendingValue::ExpectFx(pending_expect) => {
-                pending_expect_fx.push(pending_expect);
+            PendingValue::ModuleImport(PendingModuleImport {
+                module_id,
+                region,
+                exposed_symbols,
+                params,
+            }) => {
+                imports_introduced.push(IntroducedImport {
+                    module_id,
+                    region,
+                    exposed_symbols,
+                });
+
+                pending_value_defs.push(PendingValueDef::ImportParams {
+                    symbol: params.symbol,
+                    variable: params.variable,
+                    loc_pattern: params.loc_pattern,
+                    opt_provided: params.opt_provided,
+                    module_id,
+                });
             }
+            PendingValue::InvalidIngestedFile => { /* skip */ }
+            PendingValue::ImportNameConflict => { /* skip */ }
+            PendingValue::StmtAfterExpr => { /* skip */ }
         }
     }
 
     let mut symbol_to_index: Vec<(IdentId, u32)> = Vec::with_capacity(pending_value_defs.len());
 
     for (def_index, pending_def) in pending_value_defs.iter().enumerate() {
-        let mut new_bindings = BindingsFromPattern::new(pending_def.loc_pattern()).peekable();
+        let Some(loc_pattern) = pending_def.loc_pattern() else {
+            continue;
+        };
 
-        if new_bindings.peek().is_none() {
-            env.problem(Problem::NoIdentifiersIntroduced(
-                pending_def.loc_pattern().region,
-            ));
-        }
+        let new_bindings = BindingsFromPattern::new(loc_pattern).peekable();
 
         for (s, r) in new_bindings {
             // store the top-level defs, used to ensure that closures won't capture them
@@ -1110,6 +1221,14 @@ fn canonicalize_value_defs<'a>(
 
         output = temp_output.output;
 
+        if let (PatternType::TopLevelDef, DefKind::Ignored(_)) =
+            (pattern_type, temp_output.def.kind)
+        {
+            env.problems.push(Problem::NoIdentifiersIntroduced(
+                temp_output.def.loc_pattern.region,
+            ))
+        }
+
         defs.push(Some(temp_output.def));
 
         def_ordering.insert_symbol_references(def_id as u32, &temp_output.references)
@@ -1117,7 +1236,6 @@ fn canonicalize_value_defs<'a>(
 
     let mut dbgs = ExpectsOrDbgs::with_capacity(pending_dbgs.len());
     let mut expects = ExpectsOrDbgs::with_capacity(pending_expects.len());
-    let mut expects_fx = ExpectsOrDbgs::with_capacity(pending_expects.len());
 
     for pending in pending_dbgs {
         let (loc_can_condition, can_output) = canonicalize_expr(
@@ -1147,30 +1265,15 @@ fn canonicalize_value_defs<'a>(
         output.union(can_output);
     }
 
-    for pending in pending_expect_fx {
-        let (loc_can_condition, can_output) = canonicalize_expr(
-            env,
-            var_store,
-            scope,
-            pending.condition.region,
-            &pending.condition.value,
-        );
-
-        expects_fx.push(loc_can_condition, pending.preceding_comment);
-
-        output.union(can_output);
-    }
-
     let can_defs = CanDefs {
         defs,
         dbgs,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     };
 
-    (can_defs, output, symbols_introduced)
+    (can_defs, output, symbols_introduced, imports_introduced)
 }
 
 struct CanonicalizedTypeDefs<'a> {
@@ -1198,7 +1301,7 @@ fn canonicalize_type_defs<'a>(
             Loc<Symbol>,
             Vec<Loc<Lowercase>>,
             &'a Loc<ast::TypeAnnotation<'a>>,
-            Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+            Option<&'a ast::ImplementsAbilities<'a>>,
         ),
         Ability(Loc<Symbol>, Vec<PendingAbilityMember<'a>>),
     }
@@ -1384,9 +1487,7 @@ fn resolve_abilities(
             );
 
             // Record all the annotation's references in output.references.lookups
-            for symbol in member_annot.references {
-                output.references.insert_type_lookup(symbol);
-            }
+            output.references.union_mut(&member_annot.references);
 
             // What variables in the annotation are bound to the parent ability, and what variables
             // are bound to some other ability?
@@ -1507,7 +1608,7 @@ impl DefOrdering {
     fn insert_symbol_references(&mut self, def_id: u32, def_references: &DefReferences) {
         match def_references {
             DefReferences::Value(references) => {
-                let it = references.value_lookups().chain(references.calls());
+                let it = references.value_lookups();
 
                 for referenced in it {
                     if let Some(ref_id) = self.get_id(*referenced) {
@@ -1563,7 +1664,7 @@ impl DefOrdering {
 }
 
 #[inline(always)]
-pub(crate) fn sort_can_defs_new(
+pub(crate) fn sort_top_level_can_defs(
     env: &mut Env<'_>,
     scope: &mut Scope,
     var_store: &mut VarStore,
@@ -1575,7 +1676,6 @@ pub(crate) fn sort_can_defs_new(
         defs,
         dbgs: _,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -1604,19 +1704,6 @@ pub(crate) fn sort_can_defs_new(
         let name = scope.gen_unique_symbol();
 
         declarations.push_expect(preceding_comment, name, Loc::at(region, condition));
-    }
-
-    let it = expects_fx
-        .conditions
-        .into_iter()
-        .zip(expects_fx.regions)
-        .zip(expects_fx.preceding_comment);
-
-    for ((condition, region), preceding_comment) in it {
-        // an `expect` does not have a user-defined name, but we'll need a name to call the expectation
-        let name = scope.gen_unique_symbol();
-
-        declarations.push_expect_fx(preceding_comment, name, Loc::at(region, condition));
     }
 
     for (symbol, alias) in aliases.into_iter() {
@@ -1856,7 +1943,6 @@ pub(crate) fn sort_can_defs(
         mut defs,
         dbgs,
         expects,
-        expects_fx,
         def_ordering,
         aliases,
     } = defs;
@@ -1990,10 +2076,6 @@ pub(crate) fn sort_can_defs(
         declarations.push(Declaration::Expects(expects));
     }
 
-    if !expects_fx.conditions.is_empty() {
-        declarations.push(Declaration::ExpectsFx(expects_fx));
-    }
-
     (declarations, output)
 }
 
@@ -2097,6 +2179,7 @@ fn single_can_def(
     expr_var: Variable,
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
     pattern_vars: SendMap<Symbol, Variable>,
+    kind: DefKind,
 ) -> Def {
     let def_annotation = opt_loc_annotation.map(|loc_annotation| Annotation {
         signature: loc_annotation.value.typ,
@@ -2114,6 +2197,7 @@ fn single_can_def(
         },
         pattern_vars,
         annotation: def_annotation,
+        kind,
     }
 }
 
@@ -2155,7 +2239,7 @@ fn canonicalize_pending_value_def<'a>(
     let pending_abilities_in_scope = &Default::default();
 
     let output = match pending_def {
-        AnnotationOnly(_, loc_can_pattern, loc_ann) => {
+        AnnotationOnly(loc_can_pattern, loc_ann) => {
             // Make types for the body expr, even if we won't end up having a body.
             let expr_var = var_store.fresh();
             let mut vars_by_symbol = SendMap::default();
@@ -2236,6 +2320,8 @@ fn canonicalize_pending_value_def<'a>(
                         function_type: var_store.fresh(),
                         closure_type: var_store.fresh(),
                         return_type: var_store.fresh(),
+                        fx_type: var_store.fresh(),
+                        early_returns: scope.early_returns.clone(),
                         name: symbol,
                         captured_symbols: Vec::new(),
                         recursive: Recursive::NotRecursive,
@@ -2252,6 +2338,7 @@ fn canonicalize_pending_value_def<'a>(
                 expr_var,
                 Some(Loc::at(loc_ann.region, type_annotation)),
                 vars_by_symbol.clone(),
+                DefKind::Let,
             );
 
             DefOutput {
@@ -2287,10 +2374,13 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 Some(Loc::at(loc_ann.region, type_annotation)),
+                DefKind::Let,
             )
         }
         Body(loc_can_pattern, loc_expr) => {
             //
+            let def_kind = DefKind::from_pattern(var_store, &loc_can_pattern);
+
             canonicalize_pending_body(
                 env,
                 output,
@@ -2299,7 +2389,133 @@ fn canonicalize_pending_value_def<'a>(
                 loc_can_pattern,
                 loc_expr,
                 None,
+                def_kind,
             )
+        }
+        Stmt(loc_expr) => {
+            let fx_var = var_store.fresh();
+            canonicalize_pending_body(
+                env,
+                output,
+                scope,
+                var_store,
+                Loc::at(loc_expr.region, Pattern::Underscore),
+                loc_expr,
+                None,
+                DefKind::Stmt(fx_var),
+            )
+        }
+        ImportParams {
+            symbol,
+            variable,
+            loc_pattern,
+            module_id,
+            opt_provided,
+        } => {
+            // Insert a reference to the record so that we don't report it as unused
+            // If the whole module is unused, we'll report that separately
+            output.references.insert_value_lookup(
+                SymbolLookup::no_params(symbol),
+                QualifiedReference::Unqualified,
+            );
+
+            let (opt_var_record, references) = match opt_provided {
+                Some(params) => {
+                    let (record, can_output) =
+                        canonicalize_record(env, var_store, scope, loc_pattern.region, params);
+
+                    let references = can_output.references.clone();
+                    output.union(can_output);
+
+                    (Some((variable, Box::new(record))), references)
+                }
+                None => (None, References::new()),
+            };
+
+            let loc_expr = Loc::at(
+                loc_pattern.region,
+                Expr::ImportParams(module_id, loc_pattern.region, opt_var_record),
+            );
+
+            let def = single_can_def(
+                loc_pattern,
+                loc_expr,
+                var_store.fresh(),
+                None,
+                SendMap::default(),
+                DefKind::Let,
+            );
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(references),
+                def,
+            }
+        }
+        IngestedFile(loc_pattern, opt_loc_ann, path_literal) => {
+            let expr = if let Some(relative_path) = extract_str_literal(env, path_literal) {
+                let mut file_path: PathBuf = env.module_path.into();
+                // Remove the header file name and push the new path.
+                file_path.pop();
+                file_path.push(relative_path);
+
+                let mut bytes = vec![];
+
+                match fs::File::open(&file_path).and_then(|mut file| file.read_to_end(&mut bytes)) {
+                    Ok(_) => {
+                        Expr::IngestedFile(file_path.into(), Arc::new(bytes), var_store.fresh())
+                    }
+                    Err(e) => {
+                        env.problems.push(Problem::FileProblem {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                        });
+
+                        Expr::RuntimeError(RuntimeError::ReadIngestedFileError {
+                            filename: file_path.to_path_buf(),
+                            error: e.kind(),
+                            region: path_literal.region,
+                        })
+                    }
+                }
+            } else {
+                Expr::RuntimeError(RuntimeError::IngestedFilePathError(path_literal.region))
+            };
+
+            let loc_expr = Loc::at(path_literal.region, expr);
+
+            let opt_loc_can_ann = if let Some(loc_ann) = opt_loc_ann {
+                let can_ann = canonicalize_annotation(
+                    env,
+                    scope,
+                    &loc_ann.value,
+                    loc_ann.region,
+                    var_store,
+                    pending_abilities_in_scope,
+                    AnnotationFor::Value,
+                );
+
+                output.references.union_mut(&can_ann.references);
+
+                Some(Loc::at(loc_ann.region, can_ann))
+            } else {
+                None
+            };
+
+            let def = single_can_def(
+                loc_pattern,
+                loc_expr,
+                var_store.fresh(),
+                opt_loc_can_ann,
+                SendMap::default(),
+                DefKind::Let,
+            );
+
+            DefOutput {
+                output,
+                references: DefReferences::Value(References::new()),
+                def,
+            }
         }
     };
 
@@ -2318,6 +2534,68 @@ fn canonicalize_pending_value_def<'a>(
     output
 }
 
+fn extract_str_literal<'a>(
+    env: &mut Env<'a>,
+    literal: Loc<ast::StrLiteral<'a>>,
+) -> Option<&'a str> {
+    let relative_path = match literal.value {
+        ast::StrLiteral::PlainLine(ingested_path) => ingested_path,
+        ast::StrLiteral::Line(text) => {
+            let mut result_text = bumpalo::collections::String::new_in(env.arena);
+            if !extract_str_segments(env, text, &mut result_text) {
+                return None;
+            }
+            result_text.into_bump_str()
+        }
+        ast::StrLiteral::Block(lines) => {
+            let mut result_text = bumpalo::collections::String::new_in(env.arena);
+            for text in lines {
+                if !extract_str_segments(env, text, &mut result_text) {
+                    return None;
+                }
+            }
+            result_text.into_bump_str()
+        }
+    };
+    Some(relative_path)
+}
+
+fn extract_str_segments<'a>(
+    env: &mut Env<'a>,
+    segments: &[ast::StrSegment<'a>],
+    result_text: &mut bumpalo::collections::String<'a>,
+) -> bool {
+    for segment in segments.iter() {
+        match segment {
+            ast::StrSegment::Plaintext(t) => {
+                result_text.push_str(t);
+            }
+            ast::StrSegment::Unicode(t) => {
+                let hex_code: &str = t.value;
+                if let Some(c) = u32::from_str_radix(hex_code, 16)
+                    .ok()
+                    .and_then(char::from_u32)
+                {
+                    result_text.push(c);
+                } else {
+                    env.problem(Problem::InvalidUnicodeCodePt(t.region));
+                    return false;
+                }
+            }
+            ast::StrSegment::EscapedChar(c) => {
+                result_text.push(c.unescape());
+            }
+            ast::StrSegment::Interpolated(e) => {
+                // TODO: maybe in the future we do want to allow building up the path with local bindings?
+                // This would require an interpreter tho; so for now we just disallow it.
+                env.problem(Problem::InterpolatedStringNotAllowed(e.region));
+                return false;
+            }
+        }
+    }
+    true
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 #[allow(clippy::cognitive_complexity)]
@@ -2331,12 +2609,15 @@ fn canonicalize_pending_body<'a>(
     loc_expr: &'a Loc<ast::Expr>,
 
     opt_loc_annotation: Option<Loc<crate::annotation::Annotation>>,
+    kind: DefKind,
 ) -> DefOutput {
     let mut loc_value = &loc_expr.value;
 
     while let ast::Expr::ParensAround(value) = loc_value {
         loc_value = value;
     }
+
+    let expr_var = var_store.fresh();
 
     // We treat closure definitions `foo = \a, b -> ...` differently from other body expressions,
     // because they need more bookkeeping (for tail calls, closure captures, etc.)
@@ -2369,9 +2650,15 @@ fn canonicalize_pending_body<'a>(
                 env.tailcallable_symbol = outer_tailcallable;
 
                 // The closure is self tail recursive iff it tail calls itself (by defined name).
-                let is_recursive = match can_output.tail_call {
-                    Some(tail_symbol) if tail_symbol == *defined_symbol => Recursive::TailRecursive,
-                    _ => Recursive::NotRecursive,
+                let is_recursive = if !can_output.tail_calls.is_empty()
+                    && can_output
+                        .tail_calls
+                        .iter()
+                        .all(|tail_symbol| tail_symbol == defined_symbol)
+                {
+                    Recursive::TailRecursive
+                } else {
+                    Recursive::NotRecursive
                 };
 
                 closure_data.recursive = is_recursive;
@@ -2431,7 +2718,6 @@ fn canonicalize_pending_body<'a>(
         }
     };
 
-    let expr_var = var_store.fresh();
     let mut vars_by_symbol = SendMap::default();
 
     pattern_to_vars_by_symbol(&mut vars_by_symbol, &loc_can_pattern.value, expr_var);
@@ -2442,6 +2728,7 @@ fn canonicalize_pending_body<'a>(
         expr_var,
         opt_loc_annotation,
         vars_by_symbol,
+        kind,
     );
 
     DefOutput {
@@ -2459,7 +2746,7 @@ pub fn can_defs_with_return<'a>(
     loc_defs: &'a mut Defs<'a>,
     loc_ret: &'a Loc<ast::Expr<'a>>,
 ) -> (Expr, Output) {
-    let (unsorted, defs_output, symbols_introduced) = canonicalize_defs(
+    let (unsorted, defs_output, symbols_introduced, imports_introduced) = canonicalize_defs(
         env,
         Output::default(),
         var_store,
@@ -2493,6 +2780,8 @@ pub fn can_defs_with_return<'a>(
         }
     }
 
+    report_unused_imports(imports_introduced, &output.references, env, scope);
+
     let mut loc_expr: Loc<Expr> = ret_expr;
 
     for declaration in declarations.into_iter().rev() {
@@ -2500,6 +2789,27 @@ pub fn can_defs_with_return<'a>(
     }
 
     (loc_expr.value, output)
+}
+
+pub fn report_unused_imports(
+    imports_introduced: Vec<IntroducedImport>,
+    references: &References,
+    env: &mut Env<'_>,
+    scope: &mut Scope,
+) {
+    for import in imports_introduced {
+        if references.has_module_lookup(import.module_id) {
+            for (symbol, region) in &import.exposed_symbols {
+                if !references.has_unqualified_type_or_value_lookup(*symbol)
+                    && !scope.abilities_store.is_specialization_name(*symbol)
+                {
+                    env.problem(Problem::UnusedImport(*symbol, *region));
+                }
+            }
+        } else {
+            env.problem(Problem::UnusedModuleImport(import.module_id, import.region));
+        }
+    }
 }
 
 fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
@@ -2516,10 +2826,6 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
         }
         Declaration::InvalidCycle(entries) => {
             Loc::at_zero(Expr::RuntimeError(RuntimeError::CircularDef(entries)))
-        }
-        Declaration::Builtin(_) => {
-            // Builtins should only be added to top-level decls, not to let-exprs!
-            unreachable!()
         }
         Declaration::Expects(expects) => {
             let mut loc_ret = loc_ret;
@@ -2545,10 +2851,6 @@ fn decl_to_let(decl: Declaration, loc_ret: Loc<Expr>) -> Loc<Expr> {
 
             loc_ret
         }
-        Declaration::ExpectsFx(expects) => {
-            // Expects should only be added to top-level decls, not to let-exprs!
-            unreachable!("{:?}", &expects)
-        }
     }
 }
 
@@ -2556,9 +2858,9 @@ fn to_pending_alias_or_opaque<'a>(
     env: &mut Env<'a>,
     scope: &mut Scope,
     name: &'a Loc<&'a str>,
-    vars: &'a [Loc<ast::Pattern<'a>>],
+    vars: &'a [Loc<ast::TypeVar<'a>>],
     ann: &'a Loc<ast::TypeAnnotation<'a>>,
-    opt_derived: Option<&'a Loc<ast::ImplementsAbilities<'a>>>,
+    opt_derived: Option<&'a ast::ImplementsAbilities<'a>>,
     kind: AliasKind,
 ) -> PendingTypeDef<'a> {
     let region = Region::span_across(&name.region, &ann.region);
@@ -2568,10 +2870,9 @@ fn to_pending_alias_or_opaque<'a>(
             let mut can_rigids: Vec<Loc<Lowercase>> = Vec::with_capacity(vars.len());
 
             for loc_var in vars.iter() {
-                match loc_var.value {
-                    ast::Pattern::Identifier(name)
-                        if name.chars().next().unwrap().is_lowercase() =>
-                    {
+                match loc_var.value.extract_spaces().item {
+                    ast::TypeVar::Identifier(name) => {
+                        debug_assert!(name.chars().next().unwrap().is_lowercase());
                         let lowercase = Lowercase::from(name);
                         can_rigids.push(Loc {
                             value: lowercase,
@@ -2579,7 +2880,6 @@ fn to_pending_alias_or_opaque<'a>(
                         });
                     }
                     _ => {
-                        // any other pattern in this position is a syntax error.
                         let problem = Problem::InvalidAliasRigid {
                             alias_name: symbol,
                             region: loc_var.region,
@@ -2651,15 +2951,7 @@ fn to_pending_type_def<'a>(
             header: TypeHeader { name, vars },
             typ: ann,
             derived,
-        } => to_pending_alias_or_opaque(
-            env,
-            scope,
-            name,
-            vars,
-            ann,
-            derived.as_ref(),
-            AliasKind::Opaque,
-        ),
+        } => to_pending_alias_or_opaque(env, scope, name, vars, ann, *derived, AliasKind::Opaque),
 
         Ability {
             header, members, ..
@@ -2748,8 +3040,11 @@ enum PendingValue<'a> {
     Def(PendingValueDef<'a>),
     Dbg(PendingExpectOrDbg<'a>),
     Expect(PendingExpectOrDbg<'a>),
-    ExpectFx(PendingExpectOrDbg<'a>),
+    ModuleImport(PendingModuleImport<'a>),
     SignatureDefMismatch,
+    InvalidIngestedFile,
+    ImportNameConflict,
+    StmtAfterExpr,
 }
 
 struct PendingExpectOrDbg<'a> {
@@ -2757,10 +3052,32 @@ struct PendingExpectOrDbg<'a> {
     preceding_comment: Region,
 }
 
+struct PendingModuleImport<'a> {
+    module_id: ModuleId,
+    region: Region,
+    exposed_symbols: Vec<(Symbol, Region)>,
+    params: PendingModuleImportParams<'a>,
+}
+
+struct PendingModuleImportParams<'a> {
+    symbol: Symbol,
+    variable: Variable,
+    loc_pattern: Loc<Pattern>,
+    opt_provided: Option<ast::Collection<'a, Loc<AssignedField<'a, ast::Expr<'a>>>>>,
+}
+
+pub struct IntroducedImport {
+    module_id: ModuleId,
+    region: Region,
+    exposed_symbols: Vec<(Symbol, Region)>,
+}
+
+#[allow(clippy::too_many_arguments)]
 fn to_pending_value_def<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
     def: &'a ast::ValueDef<'a>,
+    region: Region,
     scope: &mut Scope,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
     output: &mut Output,
@@ -2782,11 +3099,7 @@ fn to_pending_value_def<'a>(
                 loc_pattern.region,
             );
 
-            PendingValue::Def(PendingValueDef::AnnotationOnly(
-                loc_pattern,
-                loc_can_pattern,
-                loc_ann,
-            ))
+            PendingValue::Def(PendingValueDef::AnnotationOnly(loc_can_pattern, loc_ann))
         }
         Body(loc_pattern, loc_expr) => {
             // This takes care of checking for shadowing and adding idents to scope.
@@ -2807,7 +3120,7 @@ fn to_pending_value_def<'a>(
         AnnotatedBody {
             ann_pattern,
             ann_type,
-            comment: _,
+            lines_between: _,
             body_pattern,
             body_expr,
         } => {
@@ -2866,13 +3179,147 @@ fn to_pending_value_def<'a>(
             preceding_comment: *preceding_comment,
         }),
 
-        ExpectFx {
-            condition,
-            preceding_comment,
-        } => PendingValue::ExpectFx(PendingExpectOrDbg {
-            condition,
-            preceding_comment: *preceding_comment,
-        }),
+        ModuleImport(module_import) => {
+            let qualified_module_name: QualifiedModuleName = module_import.name.value.into();
+            let module_name = qualified_module_name.module.clone();
+            let pq_module_name = qualified_module_name.into_pq_module_name(env.opt_shorthand);
+
+            let module_id = env
+                .qualified_module_ids
+                .get_id(&pq_module_name)
+                .expect("Module id should have been added in load");
+
+            let name_with_alias = match module_import.alias {
+                Some(alias) => ModuleName::from(alias.item.value.as_str()),
+                None => module_name.clone(),
+            };
+
+            // Generate a symbol for the module params def
+            // We do this even if params weren't provided so that solve can report if they are missing
+            let params_sym = scope.gen_unique_symbol();
+            let params_region = module_import
+                .params
+                .map(|p| p.params.region)
+                .unwrap_or(region);
+            let params_var = var_store.fresh();
+            let params = PendingModuleImportParams {
+                symbol: params_sym,
+                variable: params_var,
+                loc_pattern: Loc::at(params_region, Pattern::Identifier(params_sym)),
+                opt_provided: module_import.params.map(|p| p.params.value),
+            };
+            let provided_params = if module_import.params.is_some() {
+                // Only add params to scope if they are provided
+                Some((params_var, params_sym))
+            } else {
+                None
+            };
+
+            if let Err(existing_import) =
+                scope
+                    .modules
+                    .insert(name_with_alias.clone(), module_id, provided_params, region)
+            {
+                env.problems.push(Problem::ImportNameConflict {
+                    name: name_with_alias,
+                    is_alias: module_import.alias.is_some(),
+                    new_module_id: module_id,
+                    new_import_region: region,
+                    existing_import,
+                });
+
+                return PendingValue::ImportNameConflict;
+            };
+
+            let exposed_names = module_import
+                .exposed
+                .map(|kw| kw.item.items)
+                .unwrap_or_default();
+
+            if exposed_names.is_empty()
+                && !env.home.is_builtin()
+                && module_id.is_automatically_imported()
+            {
+                env.problems
+                    .push(Problem::ExplicitBuiltinImport(module_id, region));
+            }
+
+            let exposed_ids = env
+                .dep_idents
+                .get(&module_id)
+                .expect("Module id should have been added in load");
+
+            let mut exposed_symbols = Vec::with_capacity(exposed_names.len());
+
+            for loc_name in exposed_names {
+                let exposed_name = loc_name.value.item();
+                let name = exposed_name.as_str();
+                let ident = Ident::from(name);
+
+                match exposed_ids.get_id(name) {
+                    Some(ident_id) => {
+                        let symbol = Symbol::new(module_id, ident_id);
+                        exposed_symbols.push((symbol, loc_name.region));
+
+                        if let Err((_shadowed_symbol, existing_symbol_region)) =
+                            scope.import_symbol(ident, symbol, loc_name.region)
+                        {
+                            if symbol.is_automatically_imported() {
+                                env.problem(Problem::ExplicitBuiltinTypeImport(
+                                    symbol,
+                                    loc_name.region,
+                                ));
+                            } else {
+                                env.problem(Problem::ImportShadowsSymbol {
+                                    region: loc_name.region,
+                                    new_symbol: symbol,
+                                    existing_symbol_region,
+                                })
+                            }
+                        }
+                    }
+                    None => env.problem(Problem::RuntimeError(RuntimeError::ValueNotExposed {
+                        module_name: module_name.clone(),
+                        ident,
+                        region: loc_name.region,
+                        exposed_values: exposed_ids.exposed_values(),
+                    })),
+                }
+            }
+
+            PendingValue::ModuleImport(PendingModuleImport {
+                module_id,
+                region,
+                exposed_symbols,
+                params,
+            })
+        }
+        IngestedFileImport(ingested_file) => {
+            let loc_name = ingested_file.name.item;
+
+            let symbol = match scope.introduce(loc_name.value.into(), loc_name.region) {
+                Ok(symbol) => symbol,
+                Err((original, shadow, _)) => {
+                    env.problem(Problem::Shadowing {
+                        original_region: original.region,
+                        shadow,
+                        kind: ShadowKind::Variable,
+                    });
+
+                    return PendingValue::InvalidIngestedFile;
+                }
+            };
+
+            let loc_pattern = Loc::at(loc_name.region, Pattern::Identifier(symbol));
+
+            PendingValue::Def(PendingValueDef::IngestedFile(
+                loc_pattern,
+                ingested_file.annotation.map(|ann| ann.annotation),
+                ingested_file.path,
+            ))
+        }
+        StmtAfterExpr => PendingValue::StmtAfterExpr,
+        Stmt(expr) => PendingValue::Def(PendingValueDef::Stmt(expr)),
     }
 }
 

@@ -9,6 +9,9 @@
 // So you probably don't want to modify it by hand! Instead, modify the
 // file with the same name in the fixture-templates/ directory.
 
-extern int rust_main();
+extern void rust_main();
 
-int main() { return rust_main(); }
+int main() {
+  rust_main();
+  return 0;
+}

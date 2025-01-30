@@ -8,7 +8,7 @@
 //!   `{ b: "" }` have different derived implementations. However, it does not need to distinguish
 //!   between e.g. required and optional record fields.
 //! - `Decoding` is like encoding, but has some differences. For one, it *does* need to distinguish
-//!   between required and optional record fields.
+//!   between required and default value record fields.
 //!
 //! For these reasons the content keying is based on a strategy as well, which are the variants of
 //! [`DeriveKey`].
@@ -16,12 +16,14 @@
 pub mod decoding;
 pub mod encoding;
 pub mod hash;
+pub mod inspect;
 mod util;
 
 use decoding::{FlatDecodable, FlatDecodableKey};
 use encoding::{FlatEncodable, FlatEncodableKey};
 use hash::{FlatHash, FlatHashKey};
 
+use inspect::{FlatInspectable, FlatInspectableKey};
 use roc_module::symbol::Symbol;
 use roc_types::subs::{Subs, Variable};
 
@@ -40,14 +42,16 @@ pub enum DeriveKey {
     ToEncoder(FlatEncodableKey),
     Decoder(FlatDecodableKey),
     Hash(FlatHashKey),
+    ToInspector(FlatInspectableKey),
 }
 
 impl DeriveKey {
     pub fn debug_name(&self) -> String {
         match self {
-            DeriveKey::ToEncoder(key) => format!("toEncoder_{}", key.debug_name()),
+            DeriveKey::ToEncoder(key) => format!("to_encoder_{}", key.debug_name()),
             DeriveKey::Decoder(key) => format!("decoder_{}", key.debug_name()),
             DeriveKey::Hash(key) => format!("hash_{}", key.debug_name()),
+            DeriveKey::ToInspector(key) => format!("to_inspector_{}", key.debug_name()),
         }
     }
 }
@@ -77,6 +81,7 @@ pub enum DeriveBuiltin {
     Decoder,
     Hash,
     IsEq,
+    ToInspector,
 }
 
 impl TryFrom<Symbol> for DeriveBuiltin {
@@ -88,6 +93,7 @@ impl TryFrom<Symbol> for DeriveBuiltin {
             Symbol::DECODE_DECODER => Ok(DeriveBuiltin::Decoder),
             Symbol::HASH_HASH => Ok(DeriveBuiltin::Hash),
             Symbol::BOOL_IS_EQ => Ok(DeriveBuiltin::IsEq),
+            Symbol::INSPECT_TO_INSPECTOR => Ok(DeriveBuiltin::ToInspector),
             _ => Err(value),
         }
     }
@@ -121,6 +127,10 @@ impl Derived {
                     Symbol::BOOL_STRUCTURAL_EQ,
                 ))
             }
+            DeriveBuiltin::ToInspector => match FlatInspectable::from_var(subs, var) {
+                FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
+            },
         }
     }
 
@@ -150,6 +160,12 @@ impl Derived {
                 Ok(Derived::SingleLambdaSetImmediate(
                     Symbol::BOOL_STRUCTURAL_EQ,
                 ))
+            }
+            DeriveBuiltin::ToInspector => {
+                match inspect::FlatInspectable::from_builtin_alias(symbol).unwrap() {
+                    FlatInspectable::Immediate(imm) => Ok(Derived::Immediate(imm)),
+                    FlatInspectable::Key(repr) => Ok(Derived::Key(DeriveKey::ToInspector(repr))),
+                }
             }
         }
     }

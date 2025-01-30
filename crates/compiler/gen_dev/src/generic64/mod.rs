@@ -17,7 +17,7 @@ use roc_mono::layout::{
     TagIdIntType, UnionLayout,
 };
 use roc_mono::low_level::HigherOrder;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::marker::PhantomData;
 
 pub(crate) mod aarch64;
@@ -82,8 +82,8 @@ pub trait CallConv<GeneralReg: RegTrait, FloatReg: RegTrait, ASM: Assembler<Gene
 
     fn setup_stack(
         buf: &mut Vec<'_, u8>,
-        general_saved_regs: &[GeneralReg],
-        float_saved_regs: &[FloatReg],
+        saved_general_regs: &[GeneralReg],
+        saved_float_regs: &[FloatReg],
         requested_stack_size: i32,
         fn_call_stack_size: i32,
     ) -> i32;
@@ -164,8 +164,21 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: FloatReg,
         src: FloatReg,
     );
+    fn abs_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
 
     fn add_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
+    fn add_reg64_reg64_reg64(
+        buf: &mut Vec<'_, u8>,
+        dst: GeneralReg,
+        src1: GeneralReg,
+        src2: GeneralReg,
+    );
+
     fn add_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -177,12 +190,6 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
         dst: FloatReg,
         src1: FloatReg,
         src2: FloatReg,
-    );
-    fn add_reg64_reg64_reg64(
-        buf: &mut Vec<'_, u8>,
-        dst: GeneralReg,
-        src1: GeneralReg,
-        src2: GeneralReg,
     );
 
     fn and_reg64_reg64_reg64(
@@ -351,6 +358,7 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
 
     // base32 is similar to stack based instructions but they reference the base/frame pointer.
     fn mov_freg64_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
+    fn mov_freg32_base32(buf: &mut Vec<'_, u8>, dst: FloatReg, offset: i32);
 
     fn mov_reg_base32(
         buf: &mut Vec<'_, u8>,
@@ -549,6 +557,18 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     fn sqrt_freg32_freg32(buf: &mut Vec<'_, u8>, dst: FloatReg, src: FloatReg);
 
     fn neg_reg64_reg64(buf: &mut Vec<'_, u8>, dst: GeneralReg, src: GeneralReg);
+    fn neg_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
+    fn neg_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        relocs: &mut Vec<'_, Relocation>,
+        dst: FloatReg,
+        src: FloatReg,
+    );
     fn mul_freg32_freg32_freg32(
         buf: &mut Vec<'_, u8>,
         dst: FloatReg,
@@ -628,6 +648,19 @@ pub trait Assembler<GeneralReg: RegTrait, FloatReg: RegTrait>: Sized + Copy {
     ) where
         ASM: Assembler<GeneralReg, FloatReg>,
         CC: CallConv<GeneralReg, FloatReg, ASM>;
+
+    fn sub_freg32_freg32_freg32(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
+    fn sub_freg64_freg64_freg64(
+        buf: &mut Vec<'_, u8>,
+        dst: FloatReg,
+        src1: FloatReg,
+        src2: FloatReg,
+    );
 
     fn sub_reg64_reg64_imm32(buf: &mut Vec<'_, u8>, dst: GeneralReg, src1: GeneralReg, imm32: i32);
     fn sub_reg64_reg64_reg64(
@@ -769,7 +802,7 @@ pub fn new_backend_64bit<
     CC: CallConv<GeneralReg, FloatReg, ASM>,
 >(
     env: &'r Env<'a>,
-    target_info: TargetInfo,
+    target: Target,
     interns: &'r mut Interns,
     layout_interner: &'r mut STLayoutInterner<'a>,
 ) -> Backend64Bit<'a, 'r, GeneralReg, FloatReg, ASM, CC> {
@@ -779,7 +812,7 @@ pub fn new_backend_64bit<
         env,
         interns,
         layout_interner,
-        helper_proc_gen: CodeGenHelp::new(env.arena, target_info, env.module_id),
+        helper_proc_gen: CodeGenHelp::new(env.arena, target, env.module_id),
         helper_proc_symbols: bumpalo::vec![in env.arena],
         caller_procs: bumpalo::vec![in env.arena],
         proc_name: None,
@@ -791,7 +824,7 @@ pub fn new_backend_64bit<
         free_map: MutMap::default(),
         literal_map: MutMap::default(),
         join_map: MutMap::default(),
-        storage_manager: storage::new_storage_manager(env, target_info),
+        storage_manager: storage::new_storage_manager(env, target),
     }
 }
 
@@ -832,8 +865,8 @@ impl<
     fn relocations_mut(&mut self) -> &mut Vec<'a, Relocation> {
         &mut self.relocs
     }
-    fn target_info(&self) -> TargetInfo {
-        self.storage_manager.target_info
+    fn target(&self) -> Target {
+        self.storage_manager.target
     }
     fn module_interns_helpers_mut(
         &mut self,
@@ -900,8 +933,11 @@ impl<
         let mut out = bumpalo::vec![in self.env.arena];
 
         // Setup stack.
-        let used_general_regs = self.storage_manager.general_used_callee_saved_regs();
-        let used_float_regs = self.storage_manager.float_used_callee_saved_regs();
+        let (used_general_regs, used_float_regs) = self
+            .storage_manager
+            .used_callee_saved_regs
+            .as_vecs(self.env.arena);
+
         let aligned_stack_size = CC::setup_stack(
             &mut out,
             &used_general_regs,
@@ -1058,6 +1094,8 @@ impl<
         arg_layouts: &[InLayout<'a>],
         ret_layout: &InLayout<'a>,
     ) {
+        debug_assert_eq!(args.len(), arg_layouts.len());
+
         // Save used caller saved regs.
         self.storage_manager
             .push_used_caller_saved_regs_to_stack(&mut self.buf);
@@ -1199,6 +1237,12 @@ impl<
             max_branch_stack_size =
                 std::cmp::max(max_branch_stack_size, self.storage_manager.stack_size());
             base_storage.update_fn_call_stack_size(self.storage_manager.fn_call_stack_size());
+
+            // make sure that used callee-saved registers get saved/restored even if used in only
+            // one of the branches of the switch
+            base_storage
+                .used_callee_saved_regs
+                .extend(&self.storage_manager.used_callee_saved_regs);
         }
         self.storage_manager = base_storage;
         self.literal_map = base_literal_map;
@@ -1293,22 +1337,25 @@ impl<
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::abs_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
             }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::abs_freg32_freg32(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
             x => todo!("NumAbs: layout, {:?}", x),
         }
     }
 
     fn build_num_add(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
-            LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
-                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-                let src1_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src1);
-                let src2_reg = self
-                    .storage_manager
-                    .load_to_general_reg(&mut self.buf, src2);
-                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_ADD_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
                 let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
@@ -1321,16 +1368,45 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            LayoutRepr::Builtin(Builtin::Decimal) => {
-                self.build_fn_call(
-                    dst,
-                    bitcode::DEC_ADD_OR_PANIC.to_string(),
-                    &[*src1, *src2],
-                    &[Layout::DEC, Layout::DEC],
-                    &Layout::DEC,
-                );
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_ADD_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumAdd for layout {other:?}"),
+        }
+    }
+
+    fn build_num_add_wrap(
+        &mut self,
+        dst: &Symbol,
+        src1: &Symbol,
+        src2: &Symbol,
+        layout: &InLayout<'a>,
+    ) {
+        let int_width = match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+            other => internal_error!("NumAddWrap is not defined for {other:?}"),
+        };
+        match int_width {
+            quadword_and_smaller!() => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src1_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src1);
+                let src2_reg = self
+                    .storage_manager
+                    .load_to_general_reg(&mut self.buf, src2);
+                ASM::add_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => todo!("NumAdd: layout, {:?}", x),
+            IntWidth::I128 | IntWidth::U128 => {
+                let intrinsic = bitcode::NUM_ADD_WRAP_INT[int_width].to_string();
+                self.build_fn_call(dst, intrinsic, &[*src1, *src2], &[*layout, *layout], layout);
+            }
         }
     }
 
@@ -1341,28 +1417,20 @@ impl<
         src2: Symbol,
         layout: InLayout<'a>,
     ) {
-        match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
-                let intrinsic = bitcode::NUM_ADD_SATURATED_INT[width].to_string();
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_ADD_SATURATED_INT[int_width].to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::add_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::add_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated add is just normal add
+                self.build_num_add(&dst, &src1, &src2, &layout)
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
                 let intrinsic = bitcode::DEC_ADD_SATURATED.to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            x => todo!("NumAddSaturated: layout, {:?}", x),
+            other => internal_error!("NumAddSaturated is not defined for {other:?}"),
         }
     }
 
@@ -1390,6 +1458,30 @@ impl<
         )
     }
 
+    fn build_num_sub_saturated(
+        &mut self,
+        dst: Symbol,
+        src1: Symbol,
+        src2: Symbol,
+        layout: InLayout<'a>,
+    ) {
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_SUB_SATURATED_INT[int_width].to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated sub is just normal sub
+                self.build_num_sub(&dst, &src1, &src2, &layout)
+            }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                let intrinsic = bitcode::DEC_SUB_SATURATED.to_string();
+                self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
+            }
+            other => internal_error!("NumSubSaturated is not defined for {other:?}"),
+        }
+    }
+
     fn build_num_sub_checked(
         &mut self,
         dst: &Symbol,
@@ -1415,9 +1507,38 @@ impl<
     }
 
     fn build_num_mul(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        // for the time being, `num_mul` is implemented as wrapping multiplication. In roc, the normal
-        // `mul` should panic on overflow, but we just don't do that yet
-        self.build_num_mul_wrap(dst, src1, src2, layout)
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_MUL_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_MUL_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumMul for layout {other:?}"),
+        }
     }
 
     fn build_num_mul_wrap(
@@ -1427,12 +1548,12 @@ impl<
         src2: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        use Builtin::Int;
-
-        match self.layout_interner.get_repr(*layout) {
-            LayoutRepr::Builtin(Int(
-                IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8,
-            )) => {
+        let int_width = match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+            other => internal_error!("NumMulWrap is not defined for {other:?}"),
+        };
+        match int_width {
+            IntWidth::I64 | IntWidth::I32 | IntWidth::I16 | IntWidth::I8 => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1442,9 +1563,7 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::imul_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            LayoutRepr::Builtin(Int(
-                IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8,
-            )) => {
+            IntWidth::U64 | IntWidth::U32 | IntWidth::U16 | IntWidth::U8 => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1461,34 +1580,10 @@ impl<
                     src2_reg,
                 );
             }
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::I128 | IntWidth::U128)) => {
-                let int_width = match *layout {
-                    Layout::I128 => IntWidth::I128,
-                    Layout::U128 => IntWidth::U128,
-                    _ => unreachable!(),
-                };
-
-                self.build_fn_call(
-                    dst,
-                    bitcode::NUM_MUL_WRAP_INT[int_width].to_string(),
-                    &[*src1, *src2],
-                    &[*layout, *layout],
-                    layout,
-                );
+            IntWidth::I128 | IntWidth::U128 => {
+                let intrinsic = bitcode::NUM_MUL_WRAP_INT[int_width].to_string();
+                self.build_fn_call(dst, intrinsic, &[*src1, *src2], &[*layout, *layout], layout);
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
-                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            x => todo!("NumMulWrap: layout, {:?}", x),
         }
     }
 
@@ -1499,28 +1594,20 @@ impl<
         src2: Symbol,
         layout: InLayout<'a>,
     ) {
-        match self.layout_interner.get_repr(layout) {
-            LayoutRepr::Builtin(Builtin::Int(width @ quadword_and_smaller!())) => {
-                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[width].to_string();
+        match self.interner().get_repr(layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => {
+                let intrinsic = bitcode::NUM_MUL_SATURATED_INT[int_width].to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::mul_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
-            }
-            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
-                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, &dst);
-                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src1);
-                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, &src2);
-                ASM::mul_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            LayoutRepr::Builtin(Builtin::Float(_)) => {
+                // saturated mul is just normal mul
+                self.build_num_mul(&dst, &src1, &src2, &layout)
             }
             LayoutRepr::Builtin(Builtin::Decimal) => {
                 let intrinsic = bitcode::DEC_MUL_SATURATED.to_string();
                 self.build_fn_call(&dst, intrinsic, &[src1, src2], &[layout, layout], &layout);
             }
-            x => todo!("NumMulSaturated: layout, {:?}", x),
+            other => internal_error!("NumMulSaturated is not defined for {other:?}"),
         }
     }
 
@@ -1600,6 +1687,15 @@ impl<
                 let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
                 ASM::div_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
+            LayoutRepr::Builtin(Builtin::Decimal) => {
+                self.build_fn_call(
+                    dst,
+                    bitcode::DEC_DIV.to_string(),
+                    &[*src1, *src2],
+                    &[*layout, *layout],
+                    layout,
+                );
+            }
             x => todo!("NumDiv: layout, {:?}", x),
         }
     }
@@ -1669,19 +1765,65 @@ impl<
 
     fn build_num_neg(&mut self, dst: &Symbol, src: &Symbol, layout: &InLayout<'a>) {
         match self.layout_interner.get_repr(*layout) {
-            LayoutRepr::Builtin(Builtin::Int(IntWidth::I64 | IntWidth::U64)) => {
+            LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
                 ASM::neg_reg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
-            x => todo!("NumNeg: layout, {:?}", x),
+            LayoutRepr::F32 => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::neg_freg32_freg32(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
+            LayoutRepr::F64 => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::neg_freg64_freg64(&mut self.buf, &mut self.relocs, dst_reg, src_reg);
+            }
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_NEGATE.to_string(),
+                &[*src],
+                &[Layout::DEC],
+                &Layout::DEC,
+            ),
+            other => internal_error!("unreachable: NumNeg for layout, {:?}", other),
         }
     }
 
     fn build_num_sub(&mut self, dst: &Symbol, src1: &Symbol, src2: &Symbol, layout: &InLayout<'a>) {
-        // for the time being, `num_sub` is implemented as wrapping subtraction. In roc, the normal
-        // `sub` should panic on overflow, but we just don't do that yet
-        self.build_num_sub_wrap(dst, src1, src2, layout)
+        match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => self.build_fn_call(
+                dst,
+                bitcode::NUM_SUB_OR_PANIC_INT[int_width].to_string(),
+                &[*src1, *src2],
+                &[*layout, *layout],
+                layout,
+            ),
+
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::sub_freg64_freg64_freg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
+                let src1_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src1);
+                let src2_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src2);
+                ASM::sub_freg32_freg32_freg32(&mut self.buf, dst_reg, src1_reg, src2_reg);
+            }
+
+            LayoutRepr::DEC => self.build_fn_call(
+                dst,
+                bitcode::DEC_SUB_OR_PANIC.to_string(),
+                &[*src1, *src2],
+                &[Layout::DEC, Layout::DEC],
+                &Layout::DEC,
+            ),
+
+            other => unreachable!("NumMul for layout {other:?}"),
+        }
     }
 
     fn build_num_sub_wrap(
@@ -1691,8 +1833,12 @@ impl<
         src2: &Symbol,
         layout: &InLayout<'a>,
     ) {
-        match self.layout_interner.get_repr(*layout) {
-            LayoutRepr::Builtin(Builtin::Int(quadword_and_smaller!())) => {
+        let int_width = match self.layout_interner.get_repr(*layout) {
+            LayoutRepr::Builtin(Builtin::Int(int_width)) => int_width,
+            other => internal_error!("NumSubWrap is not defined for {other:?}"),
+        };
+        match int_width {
+            quadword_and_smaller!() => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
                 let src1_reg = self
                     .storage_manager
@@ -1702,7 +1848,10 @@ impl<
                     .load_to_general_reg(&mut self.buf, src2);
                 ASM::sub_reg64_reg64_reg64(&mut self.buf, dst_reg, src1_reg, src2_reg);
             }
-            x => todo!("NumSubWrap: layout, {:?}", x),
+            IntWidth::I128 | IntWidth::U128 => {
+                let intrinsic = bitcode::NUM_SUB_WRAP_INT[int_width].to_string();
+                self.build_fn_call(dst, intrinsic, &[*src1, *src2], &[*layout, *layout], layout);
+            }
         }
     }
 
@@ -1941,27 +2090,34 @@ impl<
     }
 
     fn build_num_is_nan(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let float_width = match *arg_layout {
-            Layout::F32 => FloatWidth::F32,
-            Layout::F64 => FloatWidth::F64,
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, FloatWidth::F32);
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, FloatWidth::F64);
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "false"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 0);
+            }
             _ => unreachable!(),
         };
-
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        ASM::is_nan_freg_reg64(&mut self.buf, dst_reg, src_reg, float_width);
     }
 
     fn build_num_is_infinite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, mask_reg| {
-                match *arg_layout {
-                    Layout::F32 => {
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7fff_ffff);
                         ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg); // zero out dst reg
                         ASM::mov_reg32_freg32(buf, dst_reg, src_reg);
@@ -1969,44 +2125,91 @@ impl<
 
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7f80_0000);
                         ASM::eq_reg_reg_reg(buf, RegisterWidth::W32, dst_reg, dst_reg, mask_reg);
-                    }
-                    Layout::F64 => {
+                    },
+                )
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7fff_ffff_ffff_ffff);
                         ASM::mov_reg64_freg64(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
 
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7ff0_0000_0000_0000);
                         ASM::eq_reg_reg_reg(buf, RegisterWidth::W64, dst_reg, dst_reg, mask_reg);
-                    }
-                    _ => unreachable!(),
-                }
-            },
-        );
+                    },
+                )
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "false"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 0);
+            }
+            _ => unreachable!(),
+        }
     }
 
     fn build_num_is_finite(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
-        let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
-
-        self.storage_manager.with_tmp_general_reg(
-            &mut self.buf,
-            |_storage_manager, buf, mask_reg| {
-                match *arg_layout {
-                    Layout::F32 => {
+        match *arg_layout {
+            Layout::F32 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7f80_0000);
                         ASM::xor_reg64_reg64_reg64(buf, dst_reg, dst_reg, dst_reg); // zero out dst reg
                         ASM::mov_reg32_freg32(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
                         ASM::neq_reg_reg_reg(buf, RegisterWidth::W32, dst_reg, dst_reg, mask_reg);
-                    }
-                    Layout::F64 => {
+                    },
+                )
+            }
+            Layout::F64 => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
+                self.storage_manager.with_tmp_general_reg(
+                    &mut self.buf,
+                    |_storage_manager, buf, mask_reg| {
                         ASM::mov_reg64_imm64(buf, mask_reg, 0x7ff0_0000_0000_0000);
                         ASM::mov_reg64_freg64(buf, dst_reg, src_reg);
                         ASM::and_reg64_reg64_reg64(buf, dst_reg, dst_reg, mask_reg);
                         ASM::neq_reg_reg_reg(buf, RegisterWidth::W64, dst_reg, dst_reg, mask_reg);
-                    }
-                    _ => unreachable!(),
-                }
+                    },
+                )
+            }
+            Layout::DEC => {
+                let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, dst);
+                // boolean "true"
+                ASM::mov_reg64_imm64(&mut self.buf, dst_reg, 1);
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    fn build_int_to_float_cast(
+        &mut self,
+        dst: &Symbol,
+        src: &Symbol,
+        int_width: IntWidth,
+        float_width: FloatWidth,
+    ) {
+        use roc_builtins::bitcode::{INT_TO_FLOAT_CAST_F32, INT_TO_FLOAT_CAST_F64};
+
+        self.build_fn_call(
+            dst,
+            match float_width {
+                FloatWidth::F32 => INT_TO_FLOAT_CAST_F32[int_width].to_string(),
+                FloatWidth::F64 => INT_TO_FLOAT_CAST_F64[int_width].to_string(),
+            },
+            &[*src],
+            &[Layout::from_int_width(int_width)],
+            match float_width {
+                FloatWidth::F32 => &Layout::F32,
+                FloatWidth::F64 => &Layout::F64,
             },
         );
     }
@@ -2110,6 +2313,25 @@ impl<
         refcount_proc_name
     }
 
+    fn build_indirect_inc_n(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) = self.helper_proc_gen.gen_refcount_proc(
+            ident_ids,
+            self.layout_interner,
+            layout,
+            HelperOp::IndirectIncN,
+        );
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_indirect_dec(&mut self, layout: InLayout<'a>) -> Symbol {
         let ident_ids = self
             .interns
@@ -2129,6 +2351,22 @@ impl<
         refcount_proc_name
     }
 
+    fn build_indirect_copy(&mut self, layout: InLayout<'a>) -> Symbol {
+        let ident_ids = self
+            .interns
+            .all_ident_ids
+            .get_mut(&self.env.module_id)
+            .unwrap();
+
+        let (refcount_proc_name, linker_data) =
+            self.helper_proc_gen
+                .gen_copy_proc(ident_ids, self.layout_interner, layout);
+
+        self.helper_proc_symbols_mut().extend(linker_data);
+
+        refcount_proc_name
+    }
+
     fn build_higher_order_lowlevel(
         &mut self,
         dst: &Symbol,
@@ -2142,17 +2380,6 @@ impl<
             .unwrap();
 
         let caller_proc = match higher_order.op {
-            HigherOrder::ListMap { .. }
-            | HigherOrder::ListMap2 { .. }
-            | HigherOrder::ListMap3 { .. }
-            | HigherOrder::ListMap4 { .. } => CallerProc::new_list_map(
-                self.env.arena,
-                self.env.module_id,
-                ident_ids,
-                self.layout_interner,
-                &higher_order.passed_function,
-                higher_order.closure_env_layout,
-            ),
             HigherOrder::ListSortWith { .. } => CallerProc::new_compare(
                 self.env.arena,
                 self.env.module_id,
@@ -2180,7 +2407,7 @@ impl<
 
         // function pointer to a function that takes a pointer, and increments
         let inc_n_data = if let Some(closure_env_layout) = higher_order.closure_env_layout {
-            self.increment_fn_pointer(closure_env_layout)
+            self.increment_n_fn_pointer(closure_env_layout)
         } else {
             // null pointer
             self.load_literal_i64(&Symbol::DEV_TMP, 0);
@@ -2206,394 +2433,6 @@ impl<
         let usize_ = Layout::U64;
 
         match higher_order.op {
-            HigherOrder::ListMap { xs } => {
-                let old_element_layout = argument_layouts[0];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout = LayoutRepr::Builtin(Builtin::List(old_element_layout));
-                let input_list_in_layout = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width = self.debug_symbol("old_element_width");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout, old_element_width);
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width,
-                    new_element_width,
-                ];
-
-                let layouts = [
-                    input_list_in_layout,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_,
-                    usize_,
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap2 { xs, ys } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list1: RocList,
-                //    list2: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width1: usize,
-                //    old_element_width2: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    ys,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_,
-                    usize_,
-                    usize_,
-                    ptr, // dec1
-                    ptr, // dec2
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP2.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap3 { xs, ys, zs } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let old_element_layout3 = argument_layouts[2];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
-                let input_list_in_layout3 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout3);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let old_element_width3 = self.debug_symbol("old_element_width3");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-                self.load_layout_stack_size(old_element_layout3, old_element_width3);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                //    list1: RocList,
-                //    list2: RocList,
-                //    caller: Caller1,
-                //    data: Opaque,
-                //    inc_n_data: IncN,
-                //    data_is_owned: bool,
-                //    alignment: u32,
-                //    old_element_width1: usize,
-                //    old_element_width2: usize,
-                //    new_element_width: usize,
-
-                let arguments = [
-                    xs,
-                    ys,
-                    zs,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    old_element_width3,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    input_list_in_layout3,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP3.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
-            HigherOrder::ListMap4 { xs, ys, zs, ws } => {
-                let old_element_layout1 = argument_layouts[0];
-                let old_element_layout2 = argument_layouts[1];
-                let old_element_layout3 = argument_layouts[2];
-                let old_element_layout4 = argument_layouts[3];
-                let new_element_layout = higher_order.passed_function.return_layout;
-
-                let input_list_layout1 = LayoutRepr::Builtin(Builtin::List(old_element_layout1));
-                let input_list_in_layout1 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout1);
-
-                let input_list_layout2 = LayoutRepr::Builtin(Builtin::List(old_element_layout2));
-                let input_list_in_layout2 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout2);
-
-                let input_list_layout3 = LayoutRepr::Builtin(Builtin::List(old_element_layout3));
-                let input_list_in_layout3 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout3);
-
-                let input_list_layout4 = LayoutRepr::Builtin(Builtin::List(old_element_layout4));
-                let input_list_in_layout4 = self
-                    .layout_interner
-                    .insert_direct_no_semantic(input_list_layout4);
-
-                let alignment = self.debug_symbol("alignment");
-                let old_element_width1 = self.debug_symbol("old_element_width1");
-                let old_element_width2 = self.debug_symbol("old_element_width2");
-                let old_element_width3 = self.debug_symbol("old_element_width3");
-                let old_element_width4 = self.debug_symbol("old_element_width4");
-                let new_element_width = self.debug_symbol("new_element_width");
-
-                self.load_layout_alignment(new_element_layout, alignment);
-
-                self.load_layout_stack_size(old_element_layout1, old_element_width1);
-                self.load_layout_stack_size(old_element_layout2, old_element_width2);
-                self.load_layout_stack_size(old_element_layout3, old_element_width3);
-                self.load_layout_stack_size(old_element_layout4, old_element_width4);
-
-                self.load_layout_stack_size(new_element_layout, new_element_width);
-
-                let dec1 = self.decrement_fn_pointer(old_element_layout1);
-                let dec2 = self.decrement_fn_pointer(old_element_layout2);
-                let dec3 = self.decrement_fn_pointer(old_element_layout3);
-                let dec4 = self.decrement_fn_pointer(old_element_layout4);
-
-                self.build_fn_pointer(&caller, caller_string);
-
-                // we pass a null pointer when the data is not owned. the zig code must not call this!
-                let data_is_owned = higher_order.closure_env_layout.is_some()
-                    && higher_order.passed_function.owns_captured_environment;
-
-                self.load_literal(
-                    &Symbol::DEV_TMP2,
-                    &Layout::BOOL,
-                    &Literal::Bool(data_is_owned),
-                );
-
-                let arguments = [
-                    xs,
-                    ys,
-                    zs,
-                    ws,
-                    caller,
-                    data,
-                    inc_n_data,
-                    Symbol::DEV_TMP2,
-                    alignment,
-                    old_element_width1,
-                    old_element_width2,
-                    old_element_width3,
-                    old_element_width4,
-                    new_element_width,
-                    dec1,
-                    dec2,
-                    dec3,
-                    dec4,
-                ];
-
-                let layouts = [
-                    input_list_in_layout1,
-                    input_list_in_layout2,
-                    input_list_in_layout3,
-                    input_list_in_layout4,
-                    ptr,
-                    ptr,
-                    ptr,
-                    Layout::BOOL,
-                    Layout::U32,
-                    usize_, // old_element_width_1
-                    usize_, // old_element_width_2
-                    usize_, // old_element_width_3
-                    usize_, // old_element_width_4
-                    usize_, // new_element_width
-                    ptr,    // dec1
-                    ptr,    // dec2
-                    ptr,    // dec3
-                    ptr,    // dec4
-                ];
-
-                self.build_fn_call_stack_return(
-                    bitcode::LIST_MAP4.to_string(),
-                    &arguments,
-                    &layouts,
-                    ret_layout,
-                    *dst,
-                );
-
-                self.free_symbol(&Symbol::DEV_TMP);
-                self.free_symbol(&Symbol::DEV_TMP2);
-            }
             HigherOrder::ListSortWith { xs } => {
                 let element_layout = argument_layouts[0];
 
@@ -2620,6 +2459,13 @@ impl<
                     &Literal::Bool(data_is_owned),
                 );
 
+                // Load element_refcounted argument (bool).
+                self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+                let inc_fn_ptr = self.increment_fn_pointer(element_layout);
+                let dec_fn_ptr = self.decrement_fn_pointer(element_layout);
+                let copy_fn_ptr = self.copy_fn_pointer(element_layout);
+
                 //    input: RocList,
                 //    caller: CompareFn,
                 //    data: Opaque,
@@ -2627,6 +2473,10 @@ impl<
                 //    data_is_owned: bool,
                 //    alignment: u32,
                 //    element_width: usize,
+                //    element_refcounted: bool,
+                //    inc: Inc,
+                //    dec: Dec,
+                //    copy: CopyFn,
 
                 let arguments = [
                     xs,
@@ -2636,6 +2486,10 @@ impl<
                     Symbol::DEV_TMP2,
                     alignment,
                     element_width,
+                    Symbol::DEV_TMP3,
+                    inc_fn_ptr,
+                    dec_fn_ptr,
+                    copy_fn_ptr,
                 ];
 
                 let layouts = [
@@ -2645,6 +2499,10 @@ impl<
                     ptr,
                     Layout::BOOL,
                     Layout::U32,
+                    usize_,
+                    Layout::BOOL,
+                    usize_,
+                    usize_,
                     usize_,
                 ];
 
@@ -2658,12 +2516,88 @@ impl<
 
                 self.free_symbol(&Symbol::DEV_TMP);
                 self.free_symbol(&Symbol::DEV_TMP2);
+                self.free_symbol(&Symbol::DEV_TMP3);
             }
         }
     }
 
-    fn build_list_len(&mut self, dst: &Symbol, list: &Symbol) {
-        self.storage_manager.list_len(&mut self.buf, dst, list);
+    fn build_list_len_usize(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager
+            .list_len_usize(&mut self.buf, dst, list);
+    }
+
+    fn build_list_len_u64(&mut self, dst: &Symbol, list: &Symbol) {
+        self.storage_manager.list_len_u64(&mut self.buf, dst, list);
+    }
+
+    fn build_list_clone(
+        &mut self,
+        dst: Symbol,
+        input_list: Symbol,
+        elem_layout: InLayout<'a>,
+        ret_layout: InLayout<'a>,
+    ) {
+        // List alignment argument (u32).
+        self.load_layout_alignment(ret_layout, Symbol::DEV_TMP);
+
+        // Load element_width argument (usize).
+        self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
+
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
+
+        // Setup the return location.
+        let base_offset =
+            self.storage_manager
+                .claim_stack_area_layout(self.layout_interner, dst, ret_layout);
+
+        let lowlevel_args = [
+            input_list,
+            // alignment
+            Symbol::DEV_TMP,
+            // element_width
+            Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // inc
+            inc_fn_ptr,
+            // dec
+            dec_fn_ptr,
+        ];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            ret_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+            usize_layout,
+        ];
+
+        self.build_fn_call(
+            &Symbol::DEV_TMP4,
+            bitcode::LIST_CLONE.to_string(),
+            &lowlevel_args,
+            &lowlevel_arg_layouts,
+            &ret_layout,
+        );
+        self.free_symbol(&Symbol::DEV_TMP);
+        self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
+
+        // Copy from list to the output record.
+        self.storage_manager.copy_symbol_to_stack_offset(
+            self.layout_interner,
+            &mut self.buf,
+            base_offset,
+            &Symbol::DEV_TMP4,
+            &ret_layout,
+        );
+
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_with_capacity(
@@ -2680,6 +2614,11 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2691,11 +2630,22 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            // Inc element fn
+            inc_fn_ptr,
         ];
-        let lowlevel_arg_layouts = [capacity_layout, Layout::U32, Layout::U64];
+        let layout_usize = Layout::U64;
+        let lowlevel_arg_layouts = [
+            capacity_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            layout_usize,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_WITH_CAPACITY.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2703,17 +2653,18 @@ impl<
         );
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_reserve(
@@ -2732,13 +2683,20 @@ impl<
         self.load_layout_alignment(list_layout, Symbol::DEV_TMP);
 
         // Load element_width argument (usize).
-        self.load_layout_stack_size(*ret_layout, Symbol::DEV_TMP2);
+        let element_layout = match self.interner().get_repr(*ret_layout) {
+            LayoutRepr::Builtin(Builtin::List(e)) => e,
+            _ => unreachable!(),
+        };
+        self.load_layout_stack_size(element_layout, Symbol::DEV_TMP2);
+        self.load_layout_refcounted(element_layout, Symbol::DEV_TMP3);
+
+        let inc_fn_ptr = self.increment_fn_pointer(element_layout);
 
         // Load UpdateMode.Immutable argument (0u8)
         let u8_layout = Layout::U8;
         let update_mode = 0u8;
         self.load_literal(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             &u8_layout,
             &Literal::Int((update_mode as i128).to_ne_bytes()),
         );
@@ -2756,20 +2714,26 @@ impl<
             spare,
             // element_width
             Symbol::DEV_TMP2,
-            // update_mode
+            // element_refcounted
             Symbol::DEV_TMP3,
-
+            // Inc element fn
+            inc_fn_ptr,
+            // update_mode
+            Symbol::DEV_TMP4,
          ];
+        let usize_layout = Layout::U64;
         let lowlevel_arg_layouts = [
             list_layout,
             Layout::U32,
             spare_layout,
             Layout::U64,
+            Layout::BOOL,
+            usize_layout,
             u8_layout,
         ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_RESERVE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2778,17 +2742,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_list_append_unsafe(
@@ -2821,6 +2786,7 @@ impl<
         let base_offset =
             self.storage_manager
                 .claim_stack_area_layout(self.layout_interner, *dst, *ret_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
 
         let lowlevel_args = [
             list,
@@ -2828,8 +2794,11 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // copy
+            copy_fn_ptr,
         ];
-        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [list_layout, Layout::U64, Layout::U64, usize_layout];
 
         self.build_fn_call(
             &Symbol::DEV_TMP3,
@@ -2929,6 +2898,13 @@ impl<
         // Load the elements size.
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -2962,7 +2938,7 @@ impl<
         // Load address of output element into register.
         let reg = self
             .storage_manager
-            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP4);
+            .claim_general_reg(&mut self.buf, &Symbol::DEV_TMP5);
         ASM::add_reg64_reg64_imm32(&mut self.buf, reg, CC::BASE_PTR_REG, out_elem_offset);
 
         let lowlevel_args = bumpalo::vec![
@@ -2973,6 +2949,10 @@ impl<
             Symbol::DEV_TMP2,
             Symbol::DEV_TMP3,
             Symbol::DEV_TMP4,
+            inc_fn_ptr,
+            dec_fn_ptr,
+            Symbol::DEV_TMP5,
+            copy_fn_ptr,
          ];
         let lowlevel_arg_layouts = [
             list_layout,
@@ -2980,11 +2960,16 @@ impl<
             index_layout,
             u64_layout,
             u64_layout,
+            Layout::BOOL,
+            u64_layout,
+            u64_layout,
+            u64_layout,
             u64_layout,
         ];
 
+        let out = self.debug_symbol("out");
         self.build_fn_call(
-            &Symbol::DEV_TMP5,
+            &out,
             bitcode::LIST_REPLACE.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -2994,17 +2979,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
         self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
 
         // Copy from list to the output record.
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             out_list_offset,
-            &Symbol::DEV_TMP5,
+            &out,
             &list_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP5);
+        self.free_symbol(&out);
     }
 
     fn build_list_concat(
@@ -3026,6 +3012,12 @@ impl<
         // Load element_width argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP2);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP3);
+
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let dec_fn_ptr = self.decrement_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3039,11 +3031,23 @@ impl<
             Symbol::DEV_TMP,
             // element_width
             Symbol::DEV_TMP2,
+            // element_refcounted
+            Symbol::DEV_TMP3,
+            inc_fn_ptr,
+            dec_fn_ptr,
          ];
-        let lowlevel_arg_layouts = [list_a_layout, list_b_layout, Layout::U32, Layout::U64];
+        let lowlevel_arg_layouts = [
+            list_a_layout,
+            list_b_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::BOOL,
+            Layout::U64,
+            Layout::U64,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             bitcode::LIST_CONCAT.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3052,17 +3056,18 @@ impl<
 
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
+        self.free_symbol(&Symbol::DEV_TMP3);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP3,
+            &Symbol::DEV_TMP4,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
     }
 
     fn build_list_prepend(
@@ -3078,7 +3083,7 @@ impl<
         let elem_layout = arg_layouts[1];
 
         // List alignment argument (u32).
-        self.load_layout_alignment(*ret_layout, Symbol::DEV_TMP);
+        self.load_layout_alignment(elem_layout, Symbol::DEV_TMP);
 
         // Have to pass the input element by pointer, so put it on the stack and load it's address.
         self.storage_manager
@@ -3094,6 +3099,12 @@ impl<
         // Load element_witdh argument (usize).
         self.load_layout_stack_size(elem_layout, Symbol::DEV_TMP3);
 
+        // Load element_refcounted argument (bool).
+        self.load_layout_refcounted(elem_layout, Symbol::DEV_TMP4);
+
+        let inc_fn_ptr = self.increment_fn_pointer(elem_layout);
+        let copy_fn_ptr = self.copy_fn_pointer(elem_layout);
+
         // Setup the return location.
         let base_offset =
             self.storage_manager
@@ -3107,11 +3118,26 @@ impl<
             Symbol::DEV_TMP2,
             // element_width
             Symbol::DEV_TMP3,
+            // element_refcounted
+            Symbol::DEV_TMP4,
+            // inc
+            inc_fn_ptr,
+            // copy
+            copy_fn_ptr,
         ];
-        let lowlevel_arg_layouts = [list_layout, Layout::U32, Layout::U64, Layout::U64];
+        let usize_layout = Layout::U64;
+        let lowlevel_arg_layouts = [
+            list_layout,
+            Layout::U32,
+            Layout::U64,
+            Layout::U64,
+            Layout::BOOL,
+            usize_layout,
+            usize_layout,
+        ];
 
         self.build_fn_call(
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             bitcode::LIST_PREPEND.to_string(),
             &lowlevel_args,
             &lowlevel_arg_layouts,
@@ -3120,17 +3146,18 @@ impl<
         self.free_symbol(&Symbol::DEV_TMP);
         self.free_symbol(&Symbol::DEV_TMP2);
         self.free_symbol(&Symbol::DEV_TMP3);
+        self.free_symbol(&Symbol::DEV_TMP4);
 
         // Return list value from fn call
         self.storage_manager.copy_symbol_to_stack_offset(
             self.layout_interner,
             &mut self.buf,
             base_offset,
-            &Symbol::DEV_TMP4,
+            &Symbol::DEV_TMP5,
             ret_layout,
         );
 
-        self.free_symbol(&Symbol::DEV_TMP4);
+        self.free_symbol(&Symbol::DEV_TMP5);
     }
 
     fn build_ptr_cast(&mut self, dst: &Symbol, src: &Symbol) {
@@ -3177,15 +3204,20 @@ impl<
         let element_alignment_symbol = self.debug_symbol("element_alignment");
         self.load_layout_alignment(*element_in_layout, element_alignment_symbol);
 
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_layout_refcounted(*element_in_layout, element_refcounted);
+
         let allocation_symbol = self.debug_symbol("list_allocation");
         self.allocate_with_refcount(
             allocation_symbol,
             data_bytes_symbol,
             element_alignment_symbol,
+            element_refcounted,
         );
 
         self.free_symbol(&data_bytes_symbol);
         self.free_symbol(&element_alignment_symbol);
+        self.free_symbol(&element_refcounted);
 
         enum Origin {
             S(Symbol),
@@ -3401,7 +3433,7 @@ impl<
 
                 // mask out the tag id bits
                 let (unmasked_symbol, unmasked_reg) =
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         (None, ptr_reg)
                     } else {
                         let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
@@ -3502,7 +3534,7 @@ impl<
 
                 // mask out the tag id bits
                 let (unmasked_symbol, unmasked_reg) =
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         (None, ptr_reg)
                     } else {
                         let (mask_symbol, mask_reg) = self.clear_tag_id(ptr_reg);
@@ -3636,11 +3668,18 @@ impl<
 
         match reuse {
             None => {
+                // element_refcounted only applies to lists.
+                let element_refcounted = self.debug_symbol("element_refcounted");
+                self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
+
                 self.allocate_with_refcount(
                     allocation,
                     element_width_symbol,
                     element_alignment_symbol,
+                    element_refcounted,
                 );
+
+                self.free_symbol(&element_refcounted);
             }
             Some(reuse) => {
                 self.allocate_with_refcount_if_null(allocation, reuse, element_layout);
@@ -3781,8 +3820,8 @@ impl<
             UnionLayout::Recursive(_) => {
                 let dst_reg = self.storage_manager.claim_general_reg(&mut self.buf, sym);
 
-                let target_info = self.storage_manager.target_info;
-                if union_layout.stores_tag_id_as_data(target_info) {
+                let target = self.storage_manager.target;
+                if union_layout.stores_tag_id_as_data(target) {
                     let offset = union_layout.tag_id_offset(self.interner()).unwrap() as i32;
 
                     let ptr_reg = self
@@ -3947,7 +3986,7 @@ impl<
                         .unwrap();
 
                     let largest_variant =
-                        if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                        if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                             self.layout_interner
                                 .insert_direct_no_semantic(LayoutRepr::Struct(
                                     self.env.arena.alloc([largest_variant_fields, Layout::U8]),
@@ -3988,7 +4027,7 @@ impl<
                     };
 
                     // finally, we need to tag the pointer
-                    if union_layout.stores_tag_id_as_data(self.storage_manager.target_info) {
+                    if union_layout.stores_tag_id_as_data(self.storage_manager.target) {
                         // allocate space on the stack for the whole tag payload
                         let scratch_space = self.debug_symbol("scratch_space");
                         let (data_size, data_alignment) =
@@ -4064,7 +4103,7 @@ impl<
                 let other_fields = tags[tag_id as usize];
 
                 let stores_tag_id_as_data =
-                    union_layout.stores_tag_id_as_data(self.storage_manager.target_info);
+                    union_layout.stores_tag_id_as_data(self.storage_manager.target);
 
                 let (largest_variant_fields, _largest_variant_size) = tags
                     .iter()
@@ -4522,46 +4561,27 @@ impl<
                 // be for our particular integer width
                 let sign_extend_shift_amount = 64 - (int_width.stack_size() as i64 * 8);
 
-                if sign_extend_shift_amount > 0 {
-                    self.storage_manager.with_tmp_general_reg(
-                        buf,
-                        |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
-                            ASM::shl_reg64_reg64_reg64(
-                                buf,
-                                storage_manager,
-                                src1_reg,
-                                src1_reg,
-                                tmp_reg,
-                            );
-                        },
-                    )
-                }
-
-                ASM::sar_reg64_reg64_reg64(
-                    buf,
-                    &mut self.storage_manager,
-                    dst_reg,
-                    src1_reg,
-                    src2_reg,
-                );
-
-                if sign_extend_shift_amount > 0 {
-                    // shift back if needed
-                    self.storage_manager.with_tmp_general_reg(
-                        &mut self.buf,
-                        |storage_manager, buf, tmp_reg| {
-                            ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
-                            ASM::shr_reg64_reg64_reg64(
-                                buf,
-                                storage_manager,
-                                dst_reg,
-                                dst_reg,
-                                tmp_reg,
-                            );
-                        },
-                    )
-                }
+                // PERF: could just be one shr for unsigned ints cases
+                // PERF: the shl/shr can be skipped when sign_extend_shift_amount is 0
+                self.storage_manager
+                    .with_tmp_general_reg(buf, |storage_manager, buf, tmp_reg| {
+                        ASM::mov_reg64_imm64(buf, tmp_reg, sign_extend_shift_amount);
+                        ASM::shl_reg64_reg64_reg64(
+                            buf,
+                            storage_manager,
+                            dst_reg,
+                            src1_reg,
+                            tmp_reg,
+                        );
+                        ASM::sar_reg64_reg64_reg64(
+                            buf,
+                            storage_manager,
+                            dst_reg,
+                            dst_reg,
+                            src2_reg,
+                        );
+                        ASM::shr_reg64_reg64_reg64(buf, storage_manager, dst_reg, dst_reg, tmp_reg);
+                    });
             }
         }
     }
@@ -4654,11 +4674,25 @@ impl<
 
                 // move a zero into the lower 8 bytes
                 ASM::mov_reg64_imm64(buf, tmp_reg, 0x0);
-                ASM::mov_base32_reg64(buf, base_offset, tmp_reg);
+                ASM::mov_base32_reg64(buf, base_offset + 8, tmp_reg);
 
-                ASM::mov_base32_reg64(buf, base_offset + 8, src_reg);
+                ASM::mov_base32_reg64(buf, base_offset, src_reg);
 
                 self.free_symbol(&tmp);
+
+                return;
+            }
+            (U128, I128) | (I128, U128) => {
+                let to_offset = self.storage_manager.claim_stack_area_layout(
+                    self.layout_interner,
+                    *dst,
+                    Layout::from_int_width(target),
+                );
+
+                let (from_offset, size) = self.storage_manager.stack_offset_and_size(src);
+
+                self.storage_manager
+                    .copy_to_stack_offset(buf, size, from_offset, to_offset);
 
                 return;
             }
@@ -4785,38 +4819,50 @@ impl<
     }
 
     fn num_to_f32(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
         match self.layout_interner.get_repr(*arg_layout) {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
                 ASM::to_float_freg32_reg64(&mut self.buf, dst_reg, src_reg);
             }
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::to_float_freg32_freg64(&mut self.buf, dst_reg, src_reg);
             }
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Int(_)) => {
+                let int_width = arg_layout.to_int_width();
+                self.build_int_to_float_cast(dst, src, int_width, FloatWidth::F32);
             }
             arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F32),
         }
     }
 
     fn num_to_f64(&mut self, dst: &Symbol, src: &Symbol, arg_layout: &InLayout<'a>) {
-        let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
         match self.layout_interner.get_repr(*arg_layout) {
             LayoutRepr::Builtin(Builtin::Int(IntWidth::I32 | IntWidth::I64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_general_reg(&mut self.buf, src);
                 ASM::to_float_freg64_reg64(&mut self.buf, dst_reg, src_reg);
             }
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F32)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::to_float_freg64_freg32(&mut self.buf, dst_reg, src_reg);
             }
             LayoutRepr::Builtin(Builtin::Float(FloatWidth::F64)) => {
+                let dst_reg = self.storage_manager.claim_float_reg(&mut self.buf, dst);
                 let src_reg = self.storage_manager.load_to_float_reg(&mut self.buf, src);
                 ASM::mov_freg64_freg64(&mut self.buf, dst_reg, src_reg);
+            }
+            LayoutRepr::Builtin(Builtin::Int(_)) => {
+                let int_width = arg_layout.to_int_width();
+                self.build_int_to_float_cast(dst, src, int_width, FloatWidth::F64);
             }
             arg => todo!("NumToFrac: layout, arg {arg:?}, ret {:?}", Layout::F64),
         }
@@ -4928,12 +4974,13 @@ impl<
         dst: Symbol,
         data_bytes: Symbol,
         element_alignment: Symbol,
+        element_refcounted: Symbol,
     ) {
         self.build_fn_call(
             &dst,
             bitcode::UTILS_ALLOCATE_WITH_REFCOUNT.to_string(),
-            &[data_bytes, element_alignment],
-            &[Layout::U64, Layout::U32],
+            &[data_bytes, element_alignment, element_refcounted],
+            &[Layout::U64, Layout::U32, Layout::BOOL],
             &Layout::U64,
         );
     }
@@ -4965,10 +5012,15 @@ impl<
         let element_alignment = self.debug_symbol("element_alignment");
         self.load_layout_alignment(layout, element_alignment);
 
-        self.allocate_with_refcount(dst, data_bytes, element_alignment);
+        // element_refcounted only applies to lists.
+        let element_refcounted = self.debug_symbol("element_refcounted");
+        self.load_literal(&element_refcounted, &Layout::BOOL, &Literal::Bool(false));
+
+        self.allocate_with_refcount(dst, data_bytes, element_alignment, element_refcounted);
 
         self.free_symbol(&data_bytes);
         self.free_symbol(&element_alignment);
+        self.free_symbol(&element_refcounted);
 
         let mut tmp = bumpalo::vec![in self.env.arena];
 
@@ -5355,6 +5407,15 @@ impl<
         let alignment_literal = Literal::Int((alignment as i128).to_ne_bytes());
 
         self.load_literal(&symbol, &u32_layout, &alignment_literal);
+    }
+
+    /// Loads if the layout is refcounted (recursively checking) of `layout` into the given `symbol`
+    fn load_layout_refcounted(&mut self, layout: InLayout<'_>, symbol: Symbol) {
+        let u64_layout = Layout::BOOL;
+        let refcounted = self.layout_interner.contains_refcounted(layout);
+        let refcounted_literal = Literal::Bool(refcounted);
+
+        self.load_literal(&symbol, &u64_layout, &refcounted_literal);
     }
 
     /// Loads the stack size of `layout` into the given `symbol`

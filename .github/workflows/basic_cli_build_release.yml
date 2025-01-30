@@ -1,106 +1,160 @@
 on:
-  #pull_request:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
-  
-# use .tar.gz for quick testing
+
 env:
+  # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
+  # Make a new basic-cli git tag and set it here before starting this workflow
+  RELEASE_TAG: 0.18.0
 
 jobs:
-  fetch-releases:
+  prepare:
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
+        with:
+          repository: roc-lang/basic-cli
 
+      - name: check if provided RELEASE_TAG is fresh
+        run: |
+          git fetch --tags
+          TAG_DATE=$(git log -1 --format=%ai ${{ env.RELEASE_TAG }})
+          CURRENT_DATE=$(date +%Y-%m-%d)
+          TAG_AGE=$(( ($(date -d $CURRENT_DATE +%s) - $(date -d "$TAG_DATE" +%s) )/(60*60*24) ))
+
+          if [ $TAG_AGE -gt 4 ]; then
+            echo "The provided RELEASE_TAG (${{ env.RELEASE_TAG }}) seems stale, it is $TAG_AGE days old. Did you set it correctly at the top of this workflow?"
+            exit 1
+          fi
+
+      # get latest nightly releases
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+      - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
+      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
 
       - name: Save roc_nightly archives
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-          path:  roc_nightly-*
+          path: roc_nightly-*
 
   build-linux-x86_64-files:
     runs-on: [ubuntu-20.04]
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: build basic-cli with surgical linker and also with legacy linker
         env:
           CARGO_BUILD_TARGET: x86_64-unknown-linux-musl
-        run: ./ci/build_basic_cli.sh linux_x86_64 "--linker legacy"
+        run: ./ci/build_basic_cli.sh linux_x86_64
 
-      - name: Save .rh, .rm and .o file 
-        uses: actions/upload-artifact@v3
+      - name: Save .rh, .rm and .a file
+        uses: actions/upload-artifact@v4
         with:
           name: linux-x86_64-files
           path: |
-            basic-cli/src/metadata_linux-x86_64.rm
-            basic-cli/src/linux-x86_64.rh
-            basic-cli/src/linux-x86_64.o
+            basic-cli/platform/metadata_linux-x64.rm
+            basic-cli/platform/linux-x64.rh
+            basic-cli/platform/linux-x64.a
 
-  build-macos-x86_64-files:
-    runs-on: [macos-11] # I expect the generated files to work on macOS 12
-    needs: [fetch-releases]
+  build-linux-arm64-files:
+    runs-on: [self-hosted, Linux, ARM64]
+    needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+
+      - name: build basic-cli
+        env:
+          CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
+          CC_aarch64_unknown_linux_musl: clang-18
+          AR_aarch64_unknown_linux_musl: llvm-ar-18
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+        run: ./ci/build_basic_cli.sh linux_arm64
+
+      - name: Save .a file
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-arm64-files
+          path: |
+            basic-cli/platform/linux-arm64.a
+
+  build-macos-x86_64-files:
+    runs-on: [macos-13] # I expect the generated files to work on macOS 13 and up
+    needs: [prepare]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the previously uploaded roc_nightly archives
+        uses: actions/download-artifact@v4
+
+      - run: brew install z3
 
       - run: ./ci/build_basic_cli.sh macos_x86_64
 
-      - name: Save .o files
-        uses: actions/upload-artifact@v3
+      - name: Save .a file
+        uses: actions/upload-artifact@v4
         with:
           name: macos-x86_64-files
           path: |
-            basic-cli/src/macos-x86_64.o
+            basic-cli/platform/macos-x64.a
 
   build-macos-apple-silicon-files:
-    name: build apple silicon .o file
+    name: build apple silicon .a file
     runs-on: [self-hosted, macOS, ARM64]
-    needs: [fetch-releases]
+    needs: [prepare]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: Download the previously uploaded roc_nightly archives
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - run: ./ci/build_basic_cli.sh macos_apple_silicon
 
-      - name: Save macos-arm64.o file
-        uses: actions/upload-artifact@v3
+      - name: Save macos-arm64.a file
+        uses: actions/upload-artifact@v4
         with:
           name: macos-apple-silicon-files
           path: |
-            basic-cli/src/macos-arm64.o
+            basic-cli/platform/macos-arm64.a
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs:
+      [
+        build-linux-x86_64-files,
+        build-linux-arm64-files,
+        build-macos-x86_64-files,
+        build-macos-apple-silicon-files,
+      ]
     name: create release archive
     runs-on: [ubuntu-20.04]
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - name: remove all folders except the ci folder
         run: ls | grep -v  ci | xargs rm -rf
 
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux_x86_64") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -111,35 +165,69 @@ jobs:
       - name: rename nightly folder
         run: mv roc_nightly* roc_nightly
 
-      - run: git clone https://github.com/roc-lang/basic-cli.git
+      - run: |
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout $RELEASE_TAG
+          cd ..
 
-      - run: cp macos-apple-silicon-files/* ./basic-cli/src
-      
-      - run: cp linux-x86_64-files/* ./basic-cli/src
+      - run: cp macos-apple-silicon-files/* ./basic-cli/platform
 
-      - run: cp macos-x86_64-files/* ./basic-cli/src
+      - run: cp linux-x86_64-files/* ./basic-cli/platform
 
-      - run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/src/main.roc
+      - run: cp linux-arm64-files/* ./basic-cli/platform
 
-      - run: echo "TAR_FILENAME=$(ls -d basic-cli/src/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
+      - run: cp macos-x86_64-files/* ./basic-cli/platform
+
+      - name: bundle basic-cli release archive
+        run: ./roc_nightly/roc build --bundle=${{ env.ARCHIVE_FORMAT }} ./basic-cli/platform/main.roc
+
+      - name: build basic-cli docs
+        env:
+          ROC_DOCS_URL_ROOT: /packages/basic-cli/${{ env.RELEASE_TAG }}
+        run: |
+          ./roc_nightly/roc docs ./basic-cli/platform/main.roc
+          tar -czvf docs.tar.gz generated-docs/
+
+      - run: echo "TAR_FILENAME=$(ls -d basic-cli/platform/* | grep ${{ env.ARCHIVE_FORMAT }})" >> $GITHUB_ENV
 
       - name: Upload platform archive
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: basic-cli-platform
           path: |
             ${{ env.TAR_FILENAME }}
 
-  test-release-ubuntu:
-    needs: [create-release-archive]
-    runs-on: [ubuntu-20.04]
-    steps:
+      - name: Upload docs archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-docs
+          path: |
+            docs.tar.gz
 
+  test-release:
+    needs: [create-release-archive]
+    strategy:
+      matrix:
+        os: [ubuntu-20.04, macos-13, macos-14]
+    runs-on: ${{ matrix.os }}
+    steps:
       - name: Download the previously uploaded files
-        uses: actions/download-artifact@v3
+        uses: actions/download-artifact@v4
+
+      - name: Set OS-specific variables
+        id: vars
+        run: |
+          if [[ "${{ matrix.os }}" =~ ^ubuntu- ]]; then
+            echo "os_pattern=linux_x86_64" >> $GITHUB_OUTPUT
+          elif [ "${{ matrix.os }}" = "macos-13" ]; then
+            echo "os_pattern=macos_x86_64" >> $GITHUB_OUTPUT
+          else
+            echo "os_pattern=macos_apple_silicon" >> $GITHUB_OUTPUT
+          fi
 
       - name: mv roc nightly and simplify name
-        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "linux") ./roc_nightly.tar.gz
+        run: mv $(ls -d artifact/* | grep "roc_nightly.*tar\.gz" | grep "${{ steps.vars.outputs.os_pattern }}") ./roc_nightly.tar.gz
 
       - name: decompress the tar
         run: tar -xzvf roc_nightly.tar.gz
@@ -159,21 +247,41 @@ jobs:
           cd basic-cli-platform && ls | grep "tar" | xargs brotli -d
           ls | grep "tar$" | xargs tar -xf
 
-      - name: prep testing http-get.roc
+      - name: Install dependencies (Ubuntu)
+        if: startsWith(matrix.os, 'ubuntu-')
+        run: |
+          if ! dpkg -l | grep -qw expect; then sudo apt install -y expect; fi
+          if ! dpkg -l | grep -qw ncat; then sudo apt install -y ncat; fi
+
+      - name: Install dependencies (macOS)
+        if: startsWith(matrix.os, 'macos-')
+        run: |
+          brew install expect
+          brew install nmap  # includes ncat
+          brew install z3
+
+      - name: prepare testing
         run: |
           mv roc_nightly basic-cli-platform/.
           cd basic-cli-platform
-          mkdir examples
-          cd examples
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/examples/http-get.roc
-          sed -i 's/pf:\ \"[^"]*/pf:\ \"\.\.\/main.roc/g' http-get.roc
-          cd ..
-          curl -fOL https://raw.githubusercontent.com/roc-lang/basic-cli/main/ci/expect_scripts/http-get.exp
+          mkdir platform
+          # move all files to platform dir
+          find . -maxdepth 1 -type f -exec mv {} platform/ \;
+          # move all dirs (except roc_nightly) to platform dir
+          find . -maxdepth 1 -type d ! -name 'platform' ! -name 'roc_nightly' -exec mv {} platform/ \;
 
-      - run: sudo apt install -y expect
+          mkdir temp-basic-cli
+          cd temp-basic-cli
+          git clone https://github.com/roc-lang/basic-cli.git
+          cd basic-cli
+          git checkout ${{ env.RELEASE_TAG }}
+          cp -r examples ../..
+          cp -r ci ../..
+          # LICENSE is necessary for command test
+          cp -r LICENSE ../..
 
-      - name: execute test
+      - name: run tests
         run: |
           cd basic-cli-platform
-          expect http-get.exp
-
+          # no need to build platform anymore
+          NO_BUILD=1 ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh

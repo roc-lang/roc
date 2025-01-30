@@ -12,9 +12,13 @@
 #![allow(clippy::missing_safety_doc)]
 #![allow(clippy::let_and_return)]
 #![allow(clippy::missing_safety_doc)]
-#![allow(clippy::redundant_static_lifetimes)]
 #![allow(clippy::needless_borrow)]
 #![allow(clippy::clone_on_copy)]
+#![allow(clippy::non_canonical_partial_ord_impl)]
+
+use std::ops::DerefMut;
+
+use roc_std::{roc_refcounted_noop_impl, RocRefcounted};
 
 #[cfg(any(
     target_arch = "arm",
@@ -28,6 +32,22 @@
 pub struct File {
     pub content: roc_std::RocStr,
     pub name: roc_std::RocStr,
+}
+
+impl RocRefcounted for File {
+    fn inc(&mut self) {
+        self.content.inc();
+        self.name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.content.dec();
+        self.name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(
@@ -45,8 +65,34 @@ pub struct Types {
     pub entrypoints: roc_std::RocList<Tuple1>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocList<Tuple1>,
+    pub types_by_name: roc_std::RocList<Tuple1>,
     pub target: Target,
+}
+
+impl RocRefcounted for Types {
+    fn inc(&mut self) {
+        self.aligns.inc();
+        self.deps.inc();
+        self.entrypoints.inc();
+        self.sizes.inc();
+        self.types.inc();
+        self.types_by_name.inc();
+        self.target.inc();
+    }
+
+    fn dec(&mut self) {
+        self.aligns.dec();
+        self.deps.dec();
+        self.entrypoints.dec();
+        self.sizes.dec();
+        self.types.dec();
+        self.types_by_name.dec();
+        self.target.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -146,6 +192,20 @@ pub struct R8 {
     pub payload: U1,
 }
 
+impl RocRefcounted for R8 {
+    fn inc(&mut self) {
+        self.name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
@@ -182,8 +242,9 @@ pub struct Tuple2 {
 #[repr(C)]
 pub struct Target {
     pub architecture: Architecture,
-    pub operatingSystem: OperatingSystem,
+    pub operating_system: OperatingSystem,
 }
+roc_refcounted_noop_impl!(Target);
 
 #[cfg(any(
     target_arch = "arm",
@@ -195,16 +256,19 @@ pub struct Target {
 #[derive(Clone, Copy, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(u8)]
 pub enum OperatingSystem {
-    Unix = 0,
-    Wasi = 1,
-    Windows = 2,
+    Freestanding = 0,
+    Linux = 1,
+    Mac = 2,
+    Windows = 3,
 }
+roc_refcounted_noop_impl!(OperatingSystem);
 
 impl core::fmt::Debug for OperatingSystem {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
-            Self::Unix => f.write_str("OperatingSystem::Unix"),
-            Self::Wasi => f.write_str("OperatingSystem::Wasi"),
+            Self::Freestanding => f.write_str("OperatingSystem::Freestanding"),
+            Self::Linux => f.write_str("OperatingSystem::Linux"),
+            Self::Mac => f.write_str("OperatingSystem::Mac"),
             Self::Windows => f.write_str("OperatingSystem::Windows"),
         }
     }
@@ -226,6 +290,7 @@ pub enum Architecture {
     X86x32 = 3,
     X86x64 = 4,
 }
+roc_refcounted_noop_impl!(Architecture);
 
 impl core::fmt::Debug for Architecture {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -299,7 +364,25 @@ pub union RocTagUnion {
 pub struct R14 {
     pub name: roc_std::RocStr,
     pub payload: RocSingleTagPayload,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
+}
+
+impl RocRefcounted for R14 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.payload.inc();
+        self.tag_name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.payload.dec();
+        self.tag_name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(
@@ -339,15 +422,43 @@ pub union RocSingleTagPayload {
     _sizer: [u8; 32],
 }
 
+impl RocRefcounted for RocSingleTagPayload {
+    fn inc(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocSingleTagPayload::HasClosure => self.HasClosure.deref_mut().inc(),
+                discriminant_RocSingleTagPayload::HasNoClosure => {
+                    self.HasNoClosure.deref_mut().inc()
+                }
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocSingleTagPayload::HasClosure => self.HasClosure.deref_mut().dec(),
+                discriminant_RocSingleTagPayload::HasNoClosure => {
+                    self.HasNoClosure.deref_mut().dec()
+                }
+            }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R10 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub indexOfNullTag: u16,
+    pub index_of_null_tag: u16,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -355,10 +466,10 @@ pub struct R10 {
 #[repr(C)]
 pub struct R9 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u32,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u32,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
 }
 
 #[cfg(any(
@@ -388,8 +499,8 @@ impl core::fmt::Debug for U2 {
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R7 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
 }
@@ -430,7 +541,7 @@ pub union U1 {
 pub struct R6 {
     pub name: roc_std::RocStr,
     pub payload: u32,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -454,6 +565,22 @@ pub struct R5 {
 pub struct R1 {
     pub fields: RocStructFields,
     pub name: roc_std::RocStr,
+}
+
+impl RocRefcounted for R1 {
+    fn inc(&mut self) {
+        self.fields.inc();
+        self.name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.fields.dec();
+        self.name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(
@@ -493,6 +620,30 @@ pub union RocStructFields {
     _sizer: [u8; 32],
 }
 
+impl RocRefcounted for RocStructFields {
+    fn inc(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocStructFields::HasClosure => self.HasClosure.deref_mut().inc(),
+                discriminant_RocStructFields::HasNoClosure => self.HasNoClosure.deref_mut().inc(),
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocStructFields::HasClosure => self.HasClosure.deref_mut().dec(),
+                discriminant_RocStructFields::HasNoClosure => self.HasNoClosure.deref_mut().dec(),
+            }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(
     target_arch = "arm",
     target_arch = "aarch64",
@@ -504,6 +655,20 @@ pub union RocStructFields {
 #[repr(transparent)]
 pub struct R3 {
     pub getter: roc_std::RocStr,
+}
+
+impl RocRefcounted for R3 {
+    fn inc(&mut self) {
+        self.getter.inc();
+    }
+
+    fn dec(&mut self) {
+        self.getter.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -538,6 +703,7 @@ pub enum RocNum {
     U64 = 11,
     U8 = 12,
 }
+roc_refcounted_noop_impl!(RocNum);
 
 impl core::fmt::Debug for RocNum {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -564,9 +730,9 @@ impl core::fmt::Debug for RocNum {
 #[repr(C)]
 pub struct RocFn {
     pub args: roc_std::RocList<u32>,
-    pub externName: roc_std::RocStr,
-    pub functionName: roc_std::RocStr,
-    pub lambdaSet: u32,
+    pub extern_name: roc_std::RocStr,
+    pub function_name: roc_std::RocStr,
+    pub lambda_set: u32,
     pub ret: u32,
     pub is_toplevel: bool,
 }
@@ -577,6 +743,20 @@ pub struct RocFn {
 pub struct Tuple1 {
     f0: roc_std::RocStr,
     f1: u64,
+}
+
+impl RocRefcounted for Tuple1 {
+    fn inc(&mut self) {
+        self.f0.inc();
+    }
+
+    fn dec(&mut self) {
+        self.f0.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -596,6 +776,58 @@ pub union RocType {
     _sizer: [u8; 104],
 }
 
+impl RocRefcounted for RocType {
+    fn inc(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocType::Bool => {}
+                discriminant_RocType::EmptyTagUnion => {}
+                discriminant_RocType::Function => self.Function.deref_mut().inc(),
+                discriminant_RocType::Num => self.Num.inc(),
+                discriminant_RocType::RecursivePointer => self.RecursivePointer.inc(),
+                discriminant_RocType::RocBox => self.RocBox.inc(),
+                discriminant_RocType::RocDict => self.RocDict.inc(),
+                discriminant_RocType::RocList => self.RocList.inc(),
+                discriminant_RocType::RocResult => self.RocResult.inc(),
+                discriminant_RocType::RocSet => self.RocSet.inc(),
+                discriminant_RocType::RocStr => {}
+                discriminant_RocType::Struct => self.Struct.deref_mut().inc(),
+                discriminant_RocType::TagUnion => self.TagUnion.deref_mut().inc(),
+                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.deref_mut().inc(),
+                discriminant_RocType::Unit => {}
+                discriminant_RocType::Unsized => {}
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocType::Bool => {}
+                discriminant_RocType::EmptyTagUnion => {}
+                discriminant_RocType::Function => self.Function.deref_mut().dec(),
+                discriminant_RocType::Num => self.Num.dec(),
+                discriminant_RocType::RecursivePointer => self.RecursivePointer.dec(),
+                discriminant_RocType::RocBox => self.RocBox.dec(),
+                discriminant_RocType::RocDict => self.RocDict.dec(),
+                discriminant_RocType::RocList => self.RocList.dec(),
+                discriminant_RocType::RocResult => self.RocResult.dec(),
+                discriminant_RocType::RocSet => self.RocSet.dec(),
+                discriminant_RocType::RocStr => {}
+                discriminant_RocType::Struct => self.Struct.deref_mut().dec(),
+                discriminant_RocType::TagUnion => self.TagUnion.deref_mut().dec(),
+                discriminant_RocType::TagUnionPayload => self.TagUnionPayload.deref_mut().dec(),
+                discriminant_RocType::Unit => {}
+                discriminant_RocType::Unsized => {}
+            }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(transparent)]
@@ -603,12 +835,28 @@ pub struct R16 {
     pub id: u64,
 }
 
+roc_std::roc_refcounted_noop_impl!(R16);
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R4 {
     pub id: u64,
     pub name: roc_std::RocStr,
+}
+
+impl RocRefcounted for R4 {
+    fn inc(&mut self) {
+        self.name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -620,12 +868,42 @@ pub struct R2 {
     pub name: roc_std::RocStr,
 }
 
+impl RocRefcounted for R2 {
+    fn inc(&mut self) {
+        self.accessors.inc();
+        self.name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.accessors.dec();
+        self.name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[repr(C)]
 #[derive(Clone, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 pub struct Tuple2 {
     f0: u64,
     f1: roc_std::RocList<u64>,
+}
+
+impl RocRefcounted for Tuple2 {
+    fn inc(&mut self) {
+        self.f1.inc();
+    }
+
+    fn dec(&mut self) {
+        self.f1.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -641,15 +919,73 @@ pub union RocTagUnion {
     _sizer: [u8; 96],
 }
 
+impl RocRefcounted for RocTagUnion {
+    fn inc(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocTagUnion::Enumeration => self.Enumeration.deref_mut().inc(),
+                discriminant_RocTagUnion::NonNullableUnwrapped => {
+                    self.NonNullableUnwrapped.deref_mut().inc()
+                }
+                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.deref_mut().inc(),
+                discriminant_RocTagUnion::NullableUnwrapped => {
+                    self.NullableUnwrapped.deref_mut().inc()
+                }
+                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped.deref_mut().inc(),
+                discriminant_RocTagUnion::Recursive => self.Recursive.deref_mut().inc(),
+                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct.deref_mut().inc(),
+            }
+        }
+    }
+
+    fn dec(&mut self) {
+        unsafe {
+            match self.discriminant() {
+                discriminant_RocTagUnion::Enumeration => self.Enumeration.deref_mut().dec(),
+                discriminant_RocTagUnion::NonNullableUnwrapped => {
+                    self.NonNullableUnwrapped.deref_mut().dec()
+                }
+                discriminant_RocTagUnion::NonRecursive => self.NonRecursive.deref_mut().dec(),
+                discriminant_RocTagUnion::NullableUnwrapped => {
+                    self.NullableUnwrapped.deref_mut().dec()
+                }
+                discriminant_RocTagUnion::NullableWrapped => self.NullableWrapped.deref_mut().dec(),
+                discriminant_RocTagUnion::Recursive => self.Recursive.deref_mut().dec(),
+                discriminant_RocTagUnion::SingleTagStruct => self.SingleTagStruct.deref_mut().dec(),
+            }
+        }
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R10 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
-    pub indexOfNullTag: u16,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
+    pub index_of_null_tag: u16,
+}
+
+impl RocRefcounted for R10 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.tags.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -657,10 +993,28 @@ pub struct R10 {
 #[repr(C)]
 pub struct R9 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u64,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u64,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
+}
+
+impl RocRefcounted for R9 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.non_null_tag.inc();
+        self.null_tag.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.non_null_tag.dec();
+        self.null_tag.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -669,8 +1023,24 @@ pub struct R9 {
 pub struct R7 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
+}
+
+impl RocRefcounted for R7 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.tags.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -686,7 +1056,23 @@ pub union U1 {
 pub struct R6 {
     pub name: roc_std::RocStr,
     pub payload: u64,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
+}
+
+impl RocRefcounted for R6 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tag_name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.tag_name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
@@ -698,6 +1084,22 @@ pub struct R5 {
     pub size: u32,
 }
 
+impl RocRefcounted for R5 {
+    fn inc(&mut self) {
+        self.name.inc();
+        self.tags.inc();
+    }
+
+    fn dec(&mut self) {
+        self.name.dec();
+        self.tags.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
@@ -705,17 +1107,36 @@ struct RocType_RocDict {
     pub f0: u64,
     pub f1: u64,
 }
+roc_refcounted_noop_impl!(RocType_RocDict);
 
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 #[derive(Clone, Debug, Default, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct RocFn {
     pub args: roc_std::RocList<u64>,
-    pub externName: roc_std::RocStr,
-    pub functionName: roc_std::RocStr,
-    pub lambdaSet: u64,
+    pub extern_name: roc_std::RocStr,
+    pub function_name: roc_std::RocStr,
+    pub lambda_set: u64,
     pub ret: u64,
-    pub isToplevel: bool,
+    pub is_toplevel: bool,
+}
+
+impl RocRefcounted for RocFn {
+    fn inc(&mut self) {
+        self.args.inc();
+        self.extern_name.inc();
+        self.function_name.inc();
+    }
+
+    fn dec(&mut self) {
+        self.args.dec();
+        self.extern_name.dec();
+        self.function_name.dec();
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
 }
 
 impl Tuple1 {
@@ -3553,20 +3974,7 @@ impl Clone for U1 {
         target_arch = "x86_64"
     ))]
     fn clone(&self) -> Self {
-        let mut answer = unsafe {
-            match self.discriminant() {
-                discriminant_U1::None => core::mem::transmute::<core::mem::MaybeUninit<U1>, U1>(
-                    core::mem::MaybeUninit::uninit(),
-                ),
-                discriminant_U1::Some => Self {
-                    Some: self.Some.clone(),
-                },
-            }
-        };
-
-        answer.set_discriminant(self.discriminant());
-
-        answer
+        *self
     }
 }
 

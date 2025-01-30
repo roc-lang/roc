@@ -1,99 +1,28 @@
-Module {
-    comments: [],
-    header: App(
+SpacesBefore {
+    before: [],
+    item: App(
         AppHeader {
-            before_name: [],
-            name: @4-15 PlainLine(
-                "quicksort",
-            ),
-            packages: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: PackagesKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @31-47 PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [],
-                            package_name: @35-47 PackageName(
-                                "./platform",
-                            ),
-                        },
-                    ],
-                },
-            ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @65-141 Package(
-                            "foo",
-                            ModuleName(
-                                "Bar",
-                            ),
-                            Collection {
-                                items: [
-                                    @83-86 SpaceBefore(
-                                        ExposedName(
-                                            "Baz",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                    @96-104 SpaceBefore(
-                                        ExposedName(
-                                            "FortyTwo",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                ],
-                                final_comments: [
-                                    Newline,
-                                    LineComment(
-                                        " I'm a happy comment",
-                                    ),
-                                ],
-                            },
-                        ),
-                    ],
-                },
-            ),
-            provides: ProvidesTo {
-                provides_keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ProvidesKeyword,
-                    after: [],
-                },
-                entries: [
-                    @159-168 ExposedName(
-                        "quicksort",
-                    ),
-                ],
-                types: None,
-                to_keyword: Spaces {
-                    before: [],
-                    item: ToKeyword,
-                    after: [],
-                },
-                to: @175-177 ExistingPackage(
-                    "pf",
+            before_provides: [],
+            provides: [
+                @6-15 ExposedName(
+                    "quicksort",
                 ),
-            },
+            ],
+            before_packages: [],
+            packages: @19-49 [
+                @21-46 PackageEntry {
+                    shorthand: "pf",
+                    spaces_after_shorthand: [],
+                    platform_marker: Some(
+                        [],
+                    ),
+                    package_name: @34-46 PackageName(
+                        "./platform",
+                    ),
+                },
+            ],
+            old_imports: None,
+            old_provides_to_new_package: None,
         },
     ),
 }

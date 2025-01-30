@@ -1,9 +1,8 @@
 use crate::llvm::build::{get_tag_id, tag_pointer_clear_tag_id, Env, FAST_CALL_CONV};
-use crate::llvm::build_list::{list_len, load_list_ptr};
+use crate::llvm::build_list::{list_len_usize, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
-use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
@@ -14,7 +13,7 @@ use roc_mono::layout::{
     Builtin, InLayout, LayoutIds, LayoutInterner, LayoutRepr, STLayoutInterner, UnionLayout,
 };
 
-use super::build::{load_roc_value, BuilderExt};
+use super::build::{create_entry_block_alloca, load_roc_value, BuilderExt};
 use super::convert::{argument_type_from_layout, argument_type_from_union_layout};
 use super::lowlevel::dec_binop_with_unchecked;
 use super::struct_;
@@ -69,7 +68,7 @@ fn build_eq_builtin<'a, 'ctx>(
     builtin: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
-        let int_val = env.builder.build_int_compare(
+        let int_val = env.builder.new_build_int_compare(
             pred,
             lhs_val.into_int_value(),
             rhs_val.into_int_value(),
@@ -80,7 +79,7 @@ fn build_eq_builtin<'a, 'ctx>(
     };
 
     let float_cmp = |pred, label| {
-        let int_val = env.builder.build_float_compare(
+        let int_val = env.builder.new_build_float_compare(
             pred,
             lhs_val.into_float_value(),
             rhs_val.into_float_value(),
@@ -197,13 +196,13 @@ fn build_eq<'a, 'ctx>(
             let bt = basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout));
 
             // cast the i64 pointer to a pointer to block of memory
-            let field1_cast = env.builder.build_pointer_cast(
+            let field1_cast = env.builder.new_build_pointer_cast(
                 lhs_val.into_pointer_value(),
                 bt.into_pointer_type(),
                 "i64_to_opaque",
             );
 
-            let field2_cast = env.builder.build_pointer_cast(
+            let field2_cast = env.builder.new_build_pointer_cast(
                 rhs_val.into_pointer_value(),
                 bt.into_pointer_type(),
                 "i64_to_opaque",
@@ -240,7 +239,7 @@ fn build_neq_builtin<'a, 'ctx>(
     builtin: &Builtin<'a>,
 ) -> BasicValueEnum<'ctx> {
     let int_cmp = |pred, label| {
-        let int_val = env.builder.build_int_compare(
+        let int_val = env.builder.new_build_int_compare(
             pred,
             lhs_val.into_int_value(),
             rhs_val.into_int_value(),
@@ -251,7 +250,7 @@ fn build_neq_builtin<'a, 'ctx>(
     };
 
     let float_cmp = |pred, label| {
-        let int_val = env.builder.build_float_compare(
+        let int_val = env.builder.new_build_float_compare(
             pred,
             lhs_val.into_float_value(),
             rhs_val.into_float_value(),
@@ -297,7 +296,7 @@ fn build_neq_builtin<'a, 'ctx>(
 
         Builtin::Str => {
             let is_equal = str_equal(env, lhs_val, rhs_val).into_int_value();
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -313,7 +312,7 @@ fn build_neq_builtin<'a, 'ctx>(
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -358,7 +357,7 @@ fn build_neq<'a, 'ctx>(
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -375,7 +374,7 @@ fn build_neq<'a, 'ctx>(
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -392,7 +391,7 @@ fn build_neq<'a, 'ctx>(
             )
             .into_int_value();
 
-            let result: IntValue = env.builder.build_not(is_equal, "negate");
+            let result: IntValue = env.builder.new_build_not(is_equal, "negate");
 
             result.into()
         }
@@ -456,7 +455,7 @@ fn build_list_eq<'a, 'ctx>(
     env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[list1.into(), list2.into()], "list_eq");
+        .new_build_call(function, &[list1.into(), list2.into()], "list_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -510,17 +509,17 @@ fn build_list_eq_help<'a, 'ctx>(
 
     // first, check whether the length is equal
 
-    let len1 = list_len(env.builder, list1);
-    let len2 = list_len(env.builder, list2);
+    let len1 = list_len_usize(env.builder, list1);
+    let len2 = list_len_usize(env.builder, list2);
 
     let length_equal: IntValue =
         env.builder
-            .build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
+            .new_build_int_compare(IntPredicate::EQ, len1, len2, "bounds_check");
 
     let then_block = ctx.append_basic_block(parent, "then");
 
     env.builder
-        .build_conditional_branch(length_equal, then_block, return_false);
+        .new_build_conditional_branch(length_equal, then_block, return_false);
 
     {
         // the length is equal; check elements pointwise
@@ -528,23 +527,23 @@ fn build_list_eq_help<'a, 'ctx>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, layout_interner, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::default());
-        let ptr1 = load_list_ptr(env.builder, list1, ptr_type);
-        let ptr2 = load_list_ptr(env.builder, list2, ptr_type);
+        let ptr_type = env.context.ptr_type(AddressSpace::default());
+        let ptr1 = load_list_ptr(env, list1, ptr_type);
+        let ptr2 = load_list_ptr(env, list2, ptr_type);
 
         // we know that len1 == len2
         let end = len1;
 
         // allocate a stack slot for the current index
-        let index_alloca = builder.build_alloca(env.ptr_int(), "index");
-        builder.build_store(index_alloca, env.ptr_int().const_zero());
+        let index_alloca = create_entry_block_alloca(env, env.ptr_int(), "index");
+        builder.new_build_store(index_alloca, env.ptr_int().const_zero());
 
         let loop_bb = ctx.append_basic_block(parent, "loop");
         let body_bb = ctx.append_basic_block(parent, "body");
         let increment_bb = ctx.append_basic_block(parent, "increment");
 
         // the "top" of the loop
-        builder.build_unconditional_branch(loop_bb);
+        builder.new_build_unconditional_branch(loop_bb);
         builder.position_at_end(loop_bb);
 
         let curr_index = builder
@@ -553,11 +552,11 @@ fn build_list_eq_help<'a, 'ctx>(
 
         // #index < end
         let loop_end_cond =
-            builder.build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
+            builder.new_build_int_compare(IntPredicate::ULT, curr_index, end, "bounds_check");
 
         // if we're at the end, and all elements were equal so far, return true
         // otherwise check the current elements for equality
-        builder.build_conditional_branch(loop_end_cond, body_bb, return_true);
+        builder.new_build_conditional_branch(loop_end_cond, body_bb, return_true);
 
         {
             // loop body
@@ -590,7 +589,7 @@ fn build_list_eq_help<'a, 'ctx>(
 
             // if the elements are equal, increment the index and check the next element
             // otherwise, return false
-            builder.build_conditional_branch(are_equal, increment_bb, return_false);
+            builder.new_build_conditional_branch(are_equal, increment_bb, return_false);
         }
 
         {
@@ -599,25 +598,25 @@ fn build_list_eq_help<'a, 'ctx>(
             // constant 1isize
             let one = env.ptr_int().const_int(1, false);
 
-            let next_index = builder.build_int_add(curr_index, one, "nextindex");
+            let next_index = builder.new_build_int_add(curr_index, one, "nextindex");
 
-            builder.build_store(index_alloca, next_index);
+            builder.new_build_store(index_alloca, next_index);
 
             // jump back to the top of the loop
-            builder.build_unconditional_branch(loop_bb);
+            builder.new_build_unconditional_branch(loop_bb);
         }
     }
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 }
 
@@ -667,7 +666,7 @@ fn build_struct_eq<'a, 'ctx>(
     env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
+        .new_build_call(function, &[struct1.into(), struct2.into()], "struct_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -717,7 +716,7 @@ fn build_struct_eq_help<'a, 'ctx>(
     let entry = ctx.append_basic_block(parent, "entry");
     let start = ctx.append_basic_block(parent, "start");
     env.builder.position_at_end(entry);
-    env.builder.build_unconditional_branch(start);
+    env.builder.new_build_unconditional_branch(start);
 
     let return_true = ctx.append_basic_block(parent, "return_true");
     let return_false = ctx.append_basic_block(parent, "return_false");
@@ -757,13 +756,13 @@ fn build_struct_eq_help<'a, 'ctx>(
             );
 
             // cast the i64 pointer to a pointer to block of memory
-            let field1_cast = env.builder.build_pointer_cast(
+            let field1_cast = env.builder.new_build_pointer_cast(
                 field1.into_pointer_value(),
                 bt.into_pointer_type(),
                 "i64_to_opaque",
             );
 
-            let field2_cast = env.builder.build_pointer_cast(
+            let field2_cast = env.builder.new_build_pointer_cast(
                 field2.into_pointer_value(),
                 bt.into_pointer_type(),
                 "i64_to_opaque",
@@ -795,22 +794,22 @@ fn build_struct_eq_help<'a, 'ctx>(
         current = ctx.append_basic_block(parent, &format!("eq_step_{index}"));
 
         env.builder
-            .build_conditional_branch(are_equal, current, return_false);
+            .new_build_conditional_branch(are_equal, current, return_false);
     }
 
     env.builder.position_at_end(current);
-    env.builder.build_unconditional_branch(return_true);
+    env.builder.new_build_unconditional_branch(return_true);
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 }
 
@@ -859,7 +858,7 @@ fn build_tag_eq<'a, 'ctx>(
     env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
+        .new_build_call(function, &[tag1.into(), tag2.into()], "tag_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -913,13 +912,13 @@ fn build_tag_eq_help<'a, 'ctx>(
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(0, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(0, false)));
     }
 
     {
         env.builder.position_at_end(return_true);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_int(1, false)));
+            .new_build_return(Some(&env.context.bool_type().const_int(1, false)));
     }
 
     env.builder.position_at_end(entry);
@@ -929,22 +928,22 @@ fn build_tag_eq_help<'a, 'ctx>(
     match union_layout {
         NonRecursive(&[]) => {
             // we're comparing empty tag unions; this code is effectively unreachable
-            env.builder.build_unreachable();
+            env.builder.new_build_unreachable();
         }
         NonRecursive(tags) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
 
             env.builder.position_at_end(compare_tag_ids);
 
@@ -959,10 +958,10 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -986,7 +985,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -995,28 +994,28 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             match cases.pop() {
                 Some((_, default)) => {
-                    env.builder.build_switch(id1, default, &cases);
+                    env.builder.new_build_switch(id1, default, &cases);
                 }
                 None => {
                     // we're comparing empty tag unions; this code is effectively unreachable
-                    env.builder.build_unreachable();
+                    env.builder.new_build_unreachable();
                 }
             }
         }
         Recursive(tags) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_tag_ids = ctx.append_basic_block(parent, "compare_tag_ids");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_tag_ids);
 
             env.builder.position_at_end(compare_tag_ids);
 
@@ -1031,10 +1030,10 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -1058,7 +1057,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -1067,15 +1066,15 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(id1, default, &cases);
+            env.builder.new_build_switch(id1, default, &cases);
         }
         NullableUnwrapped { other_fields, .. } => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
@@ -1083,7 +1082,7 @@ fn build_tag_eq_help<'a, 'ctx>(
             let compare_other = ctx.append_basic_block(parent, "compare_other");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+                .new_build_conditional_branch(ptr_equal, return_true, check_for_null);
 
             // check for NULL
 
@@ -1091,18 +1090,20 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let is_null_1 = env
                 .builder
-                .build_is_null(tag1.into_pointer_value(), "is_null");
+                .new_build_is_null(tag1.into_pointer_value(), "is_null");
 
             let is_null_2 = env
                 .builder
-                .build_is_null(tag2.into_pointer_value(), "is_null");
+                .new_build_is_null(tag2.into_pointer_value(), "is_null");
 
-            let either_null = env.builder.build_or(is_null_1, is_null_2, "either_null");
+            let either_null = env
+                .builder
+                .new_build_or(is_null_1, is_null_2, "either_null");
 
             // logic: the pointers are not the same, if one is NULL, the other one is not
             // therefore the two tags are not equal
             env.builder
-                .build_conditional_branch(either_null, return_false, compare_other);
+                .new_build_conditional_branch(either_null, return_false, compare_other);
 
             // compare the non-null case
 
@@ -1120,18 +1121,18 @@ fn build_tag_eq_help<'a, 'ctx>(
                 tag2.into_pointer_value(),
             );
 
-            env.builder.build_return(Some(&answer));
+            env.builder.new_build_return(Some(&answer));
         }
         NullableWrapped {
             other_tags,
             nullable_id,
         } => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
@@ -1139,7 +1140,7 @@ fn build_tag_eq_help<'a, 'ctx>(
             let compare_other = ctx.append_basic_block(parent, "compare_other");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, check_for_null);
+                .new_build_conditional_branch(ptr_equal, return_true, check_for_null);
 
             // check for NULL
 
@@ -1147,11 +1148,11 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let is_null_1 = env
                 .builder
-                .build_is_null(tag1.into_pointer_value(), "is_null");
+                .new_build_is_null(tag1.into_pointer_value(), "is_null");
 
             let is_null_2 = env
                 .builder
-                .build_is_null(tag2.into_pointer_value(), "is_null");
+                .new_build_is_null(tag2.into_pointer_value(), "is_null");
 
             // Logic:
             //
@@ -1162,15 +1163,15 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let i8_type = env.context.i8_type();
 
-            let sum = env.builder.build_int_add(
+            let sum = env.builder.new_build_int_add(
                 env.builder
-                    .build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
+                    .new_build_int_cast_sign_flag(is_null_1, i8_type, false, "to_u8"),
                 env.builder
-                    .build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
+                    .new_build_int_cast_sign_flag(is_null_2, i8_type, false, "to_u8"),
                 "sum_is_null",
             );
 
-            env.builder.build_switch(
+            env.builder.new_build_switch(
                 sum,
                 compare_other,
                 &[
@@ -1194,10 +1195,10 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let same_tag =
                 env.builder
-                    .build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
+                    .new_build_int_compare(IntPredicate::EQ, id1, id2, "compare_tag_id");
 
             env.builder
-                .build_conditional_branch(same_tag, compare_tag_fields, return_false);
+                .new_build_conditional_branch(same_tag, compare_tag_fields, return_false);
 
             env.builder.position_at_end(compare_tag_fields);
 
@@ -1224,7 +1225,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                     tag2,
                 );
 
-                env.builder.build_return(Some(&answer));
+                env.builder.new_build_return(Some(&answer));
 
                 cases.push((id1.get_type().const_int(tag_id as u64, false), block));
             }
@@ -1233,22 +1234,22 @@ fn build_tag_eq_help<'a, 'ctx>(
 
             let default = cases.pop().unwrap().1;
 
-            env.builder.build_switch(id1, default, &cases);
+            env.builder.new_build_switch(id1, default, &cases);
         }
         NonNullableUnwrapped(field_layouts) => {
-            let ptr_equal = env.builder.build_int_compare(
+            let ptr_equal = env.builder.new_build_int_compare(
                 IntPredicate::EQ,
                 env.builder
-                    .build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag1.into_pointer_value(), env.ptr_int(), "pti"),
                 env.builder
-                    .build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
+                    .new_build_ptr_to_int(tag2.into_pointer_value(), env.ptr_int(), "pti"),
                 "compare_pointers",
             );
 
             let compare_fields = ctx.append_basic_block(parent, "compare_fields");
 
             env.builder
-                .build_conditional_branch(ptr_equal, return_true, compare_fields);
+                .new_build_conditional_branch(ptr_equal, return_true, compare_fields);
 
             env.builder.position_at_end(compare_fields);
 
@@ -1264,7 +1265,7 @@ fn build_tag_eq_help<'a, 'ctx>(
                 tag2.into_pointer_value(),
             );
 
-            env.builder.build_return(Some(&answer));
+            env.builder.new_build_return(Some(&answer));
         }
     }
 }
@@ -1282,15 +1283,15 @@ fn eq_ptr_to_struct<'a, 'ctx>(
     debug_assert!(wrapper_type.is_struct_type());
 
     // cast the opaque pointer to a pointer of the correct shape
-    let struct1_ptr = env.builder.build_pointer_cast(
+    let struct1_ptr = env.builder.new_build_pointer_cast(
         tag1,
-        wrapper_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
-    let struct2_ptr = env.builder.build_pointer_cast(
+    let struct2_ptr = env.builder.new_build_pointer_cast(
         tag2,
-        wrapper_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
@@ -1368,7 +1369,7 @@ fn build_box_eq<'a, 'ctx>(
     env.builder.set_current_debug_location(di_location);
     let call = env
         .builder
-        .build_call(function, &[tag1.into(), tag2.into()], "box_eq");
+        .new_build_call(function, &[tag1.into(), tag2.into()], "box_eq");
 
     call.set_call_convention(FAST_CALL_CONV);
 
@@ -1420,23 +1421,23 @@ fn build_box_eq_help<'a, 'ctx>(
     let return_true = ctx.append_basic_block(parent, "return_true");
     env.builder.position_at_end(return_true);
     env.builder
-        .build_return(Some(&env.context.bool_type().const_all_ones()));
+        .new_build_return(Some(&env.context.bool_type().const_all_ones()));
 
     env.builder.position_at_end(entry);
 
-    let ptr_equal = env.builder.build_int_compare(
+    let ptr_equal = env.builder.new_build_int_compare(
         IntPredicate::EQ,
         env.builder
-            .build_ptr_to_int(box1.into_pointer_value(), env.ptr_int(), "pti"),
+            .new_build_ptr_to_int(box1.into_pointer_value(), env.ptr_int(), "pti"),
         env.builder
-            .build_ptr_to_int(box2.into_pointer_value(), env.ptr_int(), "pti"),
+            .new_build_ptr_to_int(box2.into_pointer_value(), env.ptr_int(), "pti"),
         "compare_pointers",
     );
 
     let check_null_then_compare_inner_values =
         ctx.append_basic_block(parent, "check_null_then_compare_inner_values");
 
-    env.builder.build_conditional_branch(
+    env.builder.new_build_conditional_branch(
         ptr_equal,
         return_true,
         check_null_then_compare_inner_values,
@@ -1449,27 +1450,27 @@ fn build_box_eq_help<'a, 'ctx>(
 
     let box1_is_null = env
         .builder
-        .build_is_null(box1.into_pointer_value(), "box1_is_null");
+        .new_build_is_null(box1.into_pointer_value(), "box1_is_null");
     let check_box2_is_null = ctx.append_basic_block(parent, "check_if_box2_is_null");
     let return_false = ctx.append_basic_block(parent, "return_false");
     let compare_inner_values = ctx.append_basic_block(parent, "compare_inner_values");
 
     env.builder
-        .build_conditional_branch(box1_is_null, return_false, check_box2_is_null);
+        .new_build_conditional_branch(box1_is_null, return_false, check_box2_is_null);
 
     {
         env.builder.position_at_end(check_box2_is_null);
         let box2_is_null = env
             .builder
-            .build_is_null(box2.into_pointer_value(), "box2_is_null");
+            .new_build_is_null(box2.into_pointer_value(), "box2_is_null");
         env.builder
-            .build_conditional_branch(box2_is_null, return_false, compare_inner_values);
+            .new_build_conditional_branch(box2_is_null, return_false, compare_inner_values);
     }
 
     {
         env.builder.position_at_end(return_false);
         env.builder
-            .build_return(Some(&env.context.bool_type().const_zero()));
+            .new_build_return(Some(&env.context.bool_type().const_zero()));
     }
 
     // Compare the inner values.
@@ -1504,5 +1505,5 @@ fn build_box_eq_help<'a, 'ctx>(
         layout_interner.get_repr(inner_layout),
     );
 
-    env.builder.build_return(Some(&is_equal));
+    env.builder.new_build_return(Some(&is_equal));
 }

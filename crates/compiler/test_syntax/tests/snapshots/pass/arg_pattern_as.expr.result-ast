@@ -1,0 +1,57 @@
+@0-64 SpaceAfter(
+    Closure(
+        [
+            @2-19 As(
+                @2-10 RecordDestructure(
+                    [
+                        @4-5 Identifier {
+                            ident: "x",
+                        },
+                        @7-8 Identifier {
+                            ident: "y",
+                        },
+                    ],
+                ),
+                PatternAs {
+                    spaces_before: [],
+                    identifier: @14-19 "point",
+                },
+            ),
+            @23-47 As(
+                @23-38 Apply(
+                    @23-32 OpaqueRef(
+                        "@Location",
+                    ),
+                    [
+                        @33-38 Identifier {
+                            ident: "inner",
+                        },
+                    ],
+                ),
+                PatternAs {
+                    spaces_before: [],
+                    identifier: @42-47 "outer",
+                },
+            ),
+        ],
+        @56-64 SpaceBefore(
+            Apply(
+                @56-61 Crash,
+                [
+                    @62-64 Str(
+                        PlainLine(
+                            "",
+                        ),
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -9,6 +9,5 @@ version.workspace = true
 
 [dependencies]
 html-escape = "0.2"
-roc_parse = { path = "../compiler/parse" }
-roc_region = { path = "../compiler/region" }
-
+roc_parse.workspace = true
+roc_region.workspace = true

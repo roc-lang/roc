@@ -1,6 +1,6 @@
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.293 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.285 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.285;
 
 procedure Test.1 (Test.6):
     let Test.21 : Int1 = false;

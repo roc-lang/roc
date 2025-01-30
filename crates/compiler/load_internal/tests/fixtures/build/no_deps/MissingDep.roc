@@ -1,6 +1,6 @@
-interface MissingDep
-    exposes [unit]
-    imports [ThisFileIsMissing]
+module [unit]
+
+import ThisFileIsMissing
 
 Unit : [Unit]
 

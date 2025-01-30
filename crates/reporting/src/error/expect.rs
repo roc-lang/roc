@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use bumpalo::Bump;
+use roc_fmt::MigrationFlags;
 use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_parse::ast::Expr;
 use roc_problem::Severity;
@@ -57,7 +58,13 @@ impl<'a> Renderer<'a> {
     ) -> RocDocBuilder<'a> {
         use roc_fmt::annotation::Formattable;
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        let mut buf = roc_fmt::Buf::new_in(
+            self.arena,
+            MigrationFlags {
+                snakify: false,
+                parens_and_commas: false,
+            },
+        );
         expr.format(&mut buf, 0);
 
         self.alloc.vcat([
@@ -80,6 +87,7 @@ impl<'a> Renderer<'a> {
         symbols: &[Symbol],
         variables: &[Variable],
         expressions: &[Expr<'_>],
+        severity: Severity,
     ) -> RocDocBuilder<'a> {
         use ven_pretty::DocAllocator;
 
@@ -96,7 +104,7 @@ impl<'a> Renderer<'a> {
         if it.len() > 0 {
             self.alloc.stack([
                 self.alloc.text("This expectation failed:"),
-                self.alloc.region(line_col_region),
+                self.alloc.region(line_col_region, severity),
                 self.alloc
                     .text("When it failed, these variables had these values:"),
                 self.alloc.stack(it),
@@ -105,7 +113,7 @@ impl<'a> Renderer<'a> {
         } else {
             self.alloc.stack([
                 self.alloc.text("This expectation failed:"),
-                self.alloc.region(line_col_region),
+                self.alloc.region(line_col_region, severity),
                 self.alloc.text(""), // Blank line at the end
             ])
         }
@@ -147,15 +155,23 @@ impl<'a> Renderer<'a> {
         W: std::io::Write,
     {
         use crate::report::Report;
+        let severity = Severity::RuntimeError;
 
         let line_col_region = self.to_line_col_region(expect_region, failure_region);
-        let doc = self.render_lookups(subs, line_col_region, symbols, variables, expressions);
+        let doc = self.render_lookups(
+            subs,
+            line_col_region,
+            symbols,
+            variables,
+            expressions,
+            severity,
+        );
 
         let report = Report {
             title: "EXPECT FAILED".into(),
             doc,
             filename: self.filename.clone(),
-            severity: Severity::RuntimeError,
+            severity,
         };
 
         let mut buf = String::new();
@@ -192,7 +208,13 @@ impl<'a> Renderer<'a> {
 
         let expr = expressions[0];
 
-        let mut buf = roc_fmt::Buf::new_in(self.arena);
+        let mut buf = roc_fmt::Buf::new_in(
+            self.arena,
+            MigrationFlags {
+                snakify: false,
+                parens_and_commas: false,
+            },
+        );
         {
             use roc_fmt::annotation::Formattable;
             expr.format(&mut buf, 0);
@@ -214,10 +236,11 @@ impl<'a> Renderer<'a> {
         use ven_pretty::DocAllocator;
 
         let line_col_region = self.line_info.convert_region(expect_region);
+        let severity = Severity::RuntimeError;
 
         let doc = self.alloc.stack([
             self.alloc.text("This expectation crashed while running:"),
-            self.alloc.region(line_col_region),
+            self.alloc.region(line_col_region, severity),
             self.alloc.text("The crash reported this message:"),
             self.alloc.text(message),
         ]);
@@ -226,7 +249,7 @@ impl<'a> Renderer<'a> {
             title: "EXPECT PANICKED".into(),
             doc,
             filename: self.filename.clone(),
-            severity: Severity::RuntimeError,
+            severity,
         };
 
         let mut buf = String::new();

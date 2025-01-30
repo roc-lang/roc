@@ -9,6 +9,5 @@ version.workspace = true
 
 [dependencies]
 pretty_assertions.workspace = true
-remove_dir_all.workspace = true
 
 [dev-dependencies]

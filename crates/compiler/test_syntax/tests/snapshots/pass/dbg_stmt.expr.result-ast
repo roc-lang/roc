@@ -1,0 +1,38 @@
+@1-13 SpaceBefore(
+    SpaceAfter(
+        DbgStmt {
+            first: @6-12 ParensAround(
+                BinOps(
+                    [
+                        (
+                            @6-7 Num(
+                                "1",
+                            ),
+                            @8-10 Equals,
+                        ),
+                    ],
+                    @11-12 Num(
+                        "1",
+                    ),
+                ),
+            ),
+            extra_args: [],
+            continuation: @15-16 SpaceBefore(
+                Num(
+                    "4",
+                ),
+                [
+                    Newline,
+                    Newline,
+                ],
+            ),
+            pnc_style: false,
+        },
+        [
+            Newline,
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

@@ -63,6 +63,27 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
+impl<'a> SyntaxError<'a> {
+    pub fn get_region(&self) -> Option<Region> {
+        match self {
+            SyntaxError::Unexpected(r) => Some(*r),
+            SyntaxError::Eof(r) => Some(*r),
+            SyntaxError::ReservedKeyword(r) => Some(*r),
+            SyntaxError::ArgumentsBeforeEquals(r) => Some(*r),
+            SyntaxError::Type(e_type) => Some(e_type.get_region()),
+            SyntaxError::Pattern(e_pattern) => Some(e_pattern.get_region()),
+            SyntaxError::NotEndOfFile(pos) => Some(Region::from_pos(*pos)),
+            SyntaxError::Expr(e_expr, _) => Some(e_expr.get_region()),
+            SyntaxError::Header(e_header) => Some(e_header.get_region()),
+            SyntaxError::NotYetImplemented(_) => None,
+            SyntaxError::OutdentedTooFar => None,
+            SyntaxError::Todo => None,
+            SyntaxError::InvalidPattern => None,
+            SyntaxError::BadUtf8 => None,
+            SyntaxError::Space(_bad_input) => None,
+        }
+    }
+}
 pub trait SpaceProblem: std::fmt::Debug {
     fn space_problem(e: BadInputError, pos: Position) -> Self;
 }
@@ -83,11 +104,12 @@ impl_space_problem! {
     EExpect<'a>,
     EExposes,
     EExpr<'a>,
-    EGenerates,
-    EGeneratesWith,
     EHeader<'a>,
     EIf<'a>,
+    EImport<'a>,
+    EParams<'a>,
     EImports,
+    EImportParams<'a>,
     EInParens<'a>,
     EClosure<'a>,
     EList<'a>,
@@ -96,6 +118,7 @@ impl_space_problem! {
     EPattern<'a>,
     EProvides<'a>,
     ERecord<'a>,
+    EReturn<'a>,
     ERequires<'a>,
     EString<'a>,
     EType<'a>,
@@ -114,12 +137,11 @@ impl_space_problem! {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EHeader<'a> {
     Provides(EProvides<'a>, Position),
+    Params(EParams<'a>, Position),
     Exposes(EExposes, Position),
     Imports(EImports, Position),
     Requires(ERequires<'a>, Position),
     Packages(EPackages<'a>, Position),
-    Generates(EGenerates, Position),
-    GeneratesWith(EGeneratesWith, Position),
 
     Space(BadInputError, Position),
     Start(Position),
@@ -130,6 +152,27 @@ pub enum EHeader<'a> {
     IndentStart(Position),
 
     InconsistentModuleName(Region),
+}
+
+impl<'a> EHeader<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EHeader::Provides(provides, _pos) => provides.get_region(),
+            EHeader::Params(params, _pos) => params.get_region(),
+            EHeader::Exposes(_, pos) => Region::from_pos(*pos),
+            EHeader::Imports(_, pos) => Region::from_pos(*pos),
+            EHeader::Requires(requires, _pos) => requires.get_region(),
+            EHeader::Packages(packages, _pos) => packages.get_region(),
+            EHeader::Space(_, pos) => Region::from_pos(*pos),
+            EHeader::Start(pos) => Region::from_pos(*pos),
+            EHeader::ModuleName(pos) => Region::from_pos(*pos),
+            EHeader::AppName(app_name, _pos) => app_name.get_region(),
+            EHeader::PackageName(package_name, _pos) => package_name.get_region(),
+            EHeader::PlatformName(platform_name, _pos) => platform_name.get_region(),
+            EHeader::IndentStart(pos) => Region::from_pos(*pos),
+            EHeader::InconsistentModuleName(region) => *region,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -148,6 +191,48 @@ pub enum EProvides<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> EProvides<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EProvides::Provides(p)
+            | EProvides::Open(p)
+            | EProvides::To(p)
+            | EProvides::IndentProvides(p)
+            | EProvides::IndentTo(p)
+            | EProvides::IndentListStart(p)
+            | EProvides::IndentPackage(p)
+            | EProvides::ListStart(p)
+            | EProvides::ListEnd(p)
+            | EProvides::Identifier(p)
+            | EProvides::Package(_, p)
+            | EProvides::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EParams<'a> {
+    Pattern(PRecord<'a>, Position),
+    BeforeArrow(Position),
+    Arrow(Position),
+    AfterArrow(Position),
+    Space(BadInputError, Position),
+}
+
+impl<'a> EParams<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EParams::Pattern(_, p)
+            | EParams::BeforeArrow(p)
+            | EParams::Arrow(p)
+            | EParams::AfterArrow(p)
+            | EParams::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EExposes {
     Exposes(Position),
@@ -158,6 +243,22 @@ pub enum EExposes {
     ListEnd(Position),
     Identifier(Position),
     Space(BadInputError, Position),
+}
+
+impl EExposes {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EExposes::Exposes(p)
+            | EExposes::Open(p)
+            | EExposes::IndentExposes(p)
+            | EExposes::IndentListStart(p)
+            | EExposes::ListStart(p)
+            | EExposes::ListEnd(p)
+            | EExposes::Identifier(p)
+            | EExposes::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -173,6 +274,23 @@ pub enum ERequires<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> ERequires<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ERequires::Requires(p)
+            | ERequires::Open(p)
+            | ERequires::IndentRequires(p)
+            | ERequires::IndentListStart(p)
+            | ERequires::ListStart(p)
+            | ERequires::ListEnd(p)
+            | ERequires::TypedIdent(_, p)
+            | ERequires::Rigid(p)
+            | ERequires::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypedIdent<'a> {
     Space(BadInputError, Position),
@@ -182,6 +300,21 @@ pub enum ETypedIdent<'a> {
     Type(EType<'a>, Position),
     IndentType(Position),
     Identifier(Position),
+}
+
+impl<'a> ETypedIdent<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypedIdent::Space(_, p)
+            | ETypedIdent::HasType(p)
+            | ETypedIdent::IndentHasType(p)
+            | ETypedIdent::Name(p)
+            | ETypedIdent::Type(_, p)
+            | ETypedIdent::IndentType(p)
+            | ETypedIdent::Identifier(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -197,11 +330,39 @@ pub enum EPackages<'a> {
     PackageEntry(EPackageEntry<'a>, Position),
 }
 
+impl<'a> EPackages<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackages::Open(p)
+            | EPackages::Space(_, p)
+            | EPackages::Packages(p)
+            | EPackages::IndentPackages(p)
+            | EPackages::ListStart(p)
+            | EPackages::ListEnd(p)
+            | EPackages::IndentListStart(p)
+            | EPackages::IndentListEnd(p)
+            | EPackages::PackageEntry(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackageName<'a> {
     BadPath(EString<'a>, Position),
     Escapes(Position),
     Multiline(Position),
+}
+
+impl<'a> EPackageName<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackageName::BadPath(_, p) | EPackageName::Escapes(p) | EPackageName::Multiline(p) => {
+                p
+            }
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -210,7 +371,24 @@ pub enum EPackageEntry<'a> {
     Shorthand(Position),
     Colon(Position),
     IndentPackage(Position),
+    IndentPlatform(Position),
+    Platform(Position),
     Space(BadInputError, Position),
+}
+
+impl<'a> EPackageEntry<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackageEntry::BadPackage(_, p)
+            | EPackageEntry::Shorthand(p)
+            | EPackageEntry::Colon(p)
+            | EPackageEntry::IndentPackage(p)
+            | EPackageEntry::IndentPlatform(p)
+            | EPackageEntry::Platform(p)
+            | EPackageEntry::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -236,28 +414,31 @@ pub enum EImports {
     StrLiteral(Position),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGenerates {
-    Open(Position),
-    Generates(Position),
-    IndentGenerates(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
-    IndentTypeStart(Position),
-    IndentTypeEnd(Position),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum EGeneratesWith {
-    Open(Position),
-    With(Position),
-    IndentWith(Position),
-    IndentListStart(Position),
-    IndentListEnd(Position),
-    ListStart(Position),
-    ListEnd(Position),
-    Identifier(Position),
-    Space(BadInputError, Position),
+impl EImports {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EImports::Open(p)
+            | EImports::Imports(p)
+            | EImports::IndentImports(p)
+            | EImports::IndentListStart(p)
+            | EImports::IndentListEnd(p)
+            | EImports::ListStart(p)
+            | EImports::ListEnd(p)
+            | EImports::Identifier(p)
+            | EImports::ExposingDot(p)
+            | EImports::ShorthandDot(p)
+            | EImports::Shorthand(p)
+            | EImports::ModuleName(p)
+            | EImports::Space(_, p)
+            | EImports::IndentSetStart(p)
+            | EImports::SetStart(p)
+            | EImports::SetEnd(p)
+            | EImports::TypedIdent(p)
+            | EImports::AsKeyword(p)
+            | EImports::StrLiteral(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -338,23 +519,26 @@ pub enum EExpr<'a> {
     ElmStyleFunction(Region, Position),
     MalformedPattern(Position),
     QualifiedTag(Position),
-    BackpassComma(Position),
-    BackpassArrow(Position),
+    DbgContinue(Position),
 
     When(EWhen<'a>, Position),
     If(EIf<'a>, Position),
 
     Expect(EExpect<'a>, Position),
     Dbg(EExpect<'a>, Position),
+    Import(EImport<'a>, Position),
+    Return(EReturn<'a>, Position),
 
     Closure(EClosure<'a>, Position),
     Underscore(Position),
     Crash(Position),
+    Try(Position),
 
     InParens(EInParens<'a>, Position),
     Record(ERecord<'a>, Position),
-    OptionalValueInRecordBuilder(Region),
-    RecordUpdateBuilder(Region),
+    RecordUpdateOldBuilderField(Region),
+    RecordUpdateIgnoredField(Region),
+    RecordBuilderOldBuilderField(Region),
 
     // SingleQuote errors are folded into the EString
     Str(EString<'a>, Position),
@@ -364,6 +548,69 @@ pub enum EExpr<'a> {
 
     IndentStart(Position),
     IndentEnd(Position),
+
+    UnexpectedComma(Position),
+    UnexpectedTopLevelExpr(Position),
+}
+
+impl<'a> EExpr<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EExpr::Type(e_type, _) => e_type.get_region(),
+            EExpr::Pattern(e_pattern, _) => e_pattern.get_region(),
+            EExpr::Ability(e_ability, _) => e_ability.get_region(),
+            EExpr::When(e_when, _) => e_when.get_region(),
+            EExpr::If(e_if, _) => e_if.get_region(),
+            EExpr::Expect(e_expect, _) => e_expect.get_region(),
+            EExpr::Dbg(e_expect, _) => e_expect.get_region(),
+            EExpr::Import(e_import, _) => e_import.get_region(),
+            EExpr::Return(e_return, _) => e_return.get_region(),
+            EExpr::Closure(e_closure, _) => e_closure.get_region(),
+            EExpr::InParens(e_in_parens, _) => e_in_parens.get_region(),
+            EExpr::Record(e_record, _) => e_record.get_region(),
+            EExpr::Str(e_string, _) => e_string.get_region(),
+            EExpr::List(e_list, _) => e_list.get_region(),
+
+            // Cases with direct Region values
+            EExpr::RecordUpdateOldBuilderField(r)
+            | EExpr::RecordUpdateIgnoredField(r)
+            | EExpr::RecordBuilderOldBuilderField(r) => *r,
+
+            // Cases with Position values
+            EExpr::TrailingOperator(p)
+            | EExpr::Start(p)
+            | EExpr::End(p)
+            | EExpr::BadExprEnd(p)
+            | EExpr::Space(_, p)
+            | EExpr::Dot(p)
+            | EExpr::Access(p)
+            | EExpr::UnaryNot(p)
+            | EExpr::UnaryNegate(p)
+            | EExpr::BadOperator(_, p)
+            | EExpr::DefMissingFinalExpr(p)
+            | EExpr::DefMissingFinalExpr2(_, p)
+            | EExpr::IndentDefBody(p)
+            | EExpr::IndentEquals(p)
+            | EExpr::IndentAnnotation(p)
+            | EExpr::Equals(p)
+            | EExpr::Colon(p)
+            | EExpr::DoubleColon(p)
+            | EExpr::Ident(p)
+            | EExpr::ElmStyleFunction(_, p)
+            | EExpr::MalformedPattern(p)
+            | EExpr::QualifiedTag(p)
+            | EExpr::DbgContinue(p)
+            | EExpr::Underscore(p)
+            | EExpr::Crash(p)
+            | EExpr::Try(p)
+            | EExpr::Number(_, p)
+            | EExpr::IndentStart(p)
+            | EExpr::IndentEnd(p)
+            | EExpr::UnexpectedComma(p)
+            | EExpr::UnexpectedTopLevelExpr(p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -389,6 +636,34 @@ pub enum EString<'a> {
     FormatEnd(Position),
     MultilineInsufficientIndent(Position),
     ExpectedDoubleQuoteGotSingleQuote(Position),
+    InvalidUnicodeCodepoint(Region),
+    UnicodeEscapeTooLarge(Region),
+}
+
+impl<'a> EString<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EString::Format(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EString::Open(p)
+            | EString::CodePtOpen(p)
+            | EString::CodePtEnd(p)
+            | EString::InvalidSingleQuote(_, p)
+            | EString::Space(_, p)
+            | EString::EndlessSingleLine(p)
+            | EString::EndlessMultiLine(p)
+            | EString::EndlessSingleQuote(p)
+            | EString::UnknownEscape(p)
+            | EString::FormatEnd(p)
+            | EString::MultilineInsufficientIndent(p)
+            | EString::ExpectedDoubleQuoteGotSingleQuote(p) => Region::from_pos(*p),
+            EString::InvalidUnicodeCodepoint(region) | EString::UnicodeEscapeTooLarge(region) => {
+                *region
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -403,10 +678,12 @@ pub enum ERecord<'a> {
     End(Position),
     Open(Position),
 
-    Updateable(Position),
+    Prefix(Position),
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
 
@@ -414,6 +691,28 @@ pub enum ERecord<'a> {
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> ERecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child node that has get_region()
+            ERecord::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            ERecord::End(p)
+            | ERecord::Open(p)
+            | ERecord::Prefix(p)
+            | ERecord::Field(p)
+            | ERecord::UnderscoreField(p)
+            | ERecord::Colon(p)
+            | ERecord::QuestionMark(p)
+            | ERecord::SecondQuestionMark(p)
+            | ERecord::Arrow(p)
+            | ERecord::Ampersand(p)
+            | ERecord::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -431,8 +730,24 @@ pub enum EInParens<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> EInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child node that has get_region()
+            EInParens::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EInParens::End(p)
+            | EInParens::Open(p)
+            | EInParens::Empty(p)
+            | EInParens::Space(_, p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EClosure<'a> {
+    Bar(Position),
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -446,6 +761,27 @@ pub enum EClosure<'a> {
     IndentArg(Position),
 }
 
+impl<'a> EClosure<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EClosure::Pattern(pattern, _) => pattern.get_region(),
+            EClosure::Body(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EClosure::Bar(p)
+            | EClosure::Space(_, p)
+            | EClosure::Start(p)
+            | EClosure::Arrow(p)
+            | EClosure::Comma(p)
+            | EClosure::Arg(p)
+            | EClosure::IndentArrow(p)
+            | EClosure::IndentBody(p)
+            | EClosure::IndentArg(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EList<'a> {
     Open(Position),
@@ -453,6 +789,18 @@ pub enum EList<'a> {
     Space(BadInputError, Position),
 
     Expr(&'a EExpr<'a>, Position),
+}
+
+impl<'a> EList<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EList::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EList::Open(p) | EList::End(p) | EList::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -478,6 +826,32 @@ pub enum EWhen<'a> {
     PatternAlignment(u32, Position),
 }
 
+impl<'a> EWhen<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EWhen::Pattern(pattern, _) => pattern.get_region(),
+            EWhen::IfGuard(expr, _) => expr.get_region(),
+            EWhen::Condition(expr, _) => expr.get_region(),
+            EWhen::Branch(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EWhen::Space(_, p)
+            | EWhen::When(p)
+            | EWhen::Is(p)
+            | EWhen::Arrow(p)
+            | EWhen::Bar(p)
+            | EWhen::IfToken(p)
+            | EWhen::IndentCondition(p)
+            | EWhen::IndentPattern(p)
+            | EWhen::IndentArrow(p)
+            | EWhen::IndentBranch(p)
+            | EWhen::IndentIfGuard(p)
+            | EWhen::PatternAlignment(_, p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EAbility<'a> {
     Space(BadInputError, Position),
@@ -486,6 +860,21 @@ pub enum EAbility<'a> {
     DemandAlignment(i32, Position),
     DemandName(Position),
     DemandColon(Position),
+}
+
+impl<'a> EAbility<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EAbility::Type(e_type, _) => e_type.get_region(),
+
+            // Cases with Position values
+            EAbility::Space(_, p)
+            | EAbility::DemandAlignment(_, p)
+            | EAbility::DemandName(p)
+            | EAbility::DemandColon(p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,6 +896,26 @@ pub enum EIf<'a> {
     IndentElseBranch(Position),
 }
 
+impl<'a> EIf<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EIf::Condition(expr, _) | EIf::ThenBranch(expr, _) | EIf::ElseBranch(expr, _) => {
+                expr.get_region()
+            }
+            EIf::Space(_, p)
+            | EIf::If(p)
+            | EIf::Then(p)
+            | EIf::Else(p)
+            | EIf::IndentCondition(p)
+            | EIf::IndentIf(p)
+            | EIf::IndentThenToken(p)
+            | EIf::IndentElseToken(p)
+            | EIf::IndentThenBranch(p)
+            | EIf::IndentElseBranch(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpect<'a> {
     Space(BadInputError, Position),
@@ -515,6 +924,127 @@ pub enum EExpect<'a> {
     Condition(&'a EExpr<'a>, Position),
     Continuation(&'a EExpr<'a>, Position),
     IndentCondition(Position),
+}
+
+impl<'a> EExpect<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EExpect::Condition(expr, _) | EExpect::Continuation(expr, _) => expr.get_region(),
+            EExpect::Space(_, p)
+            | EExpect::Dbg(p)
+            | EExpect::Expect(p)
+            | EExpect::IndentCondition(p) => Region::from_pos(*p),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EReturn<'a> {
+    Space(BadInputError, Position),
+    Return(Position),
+    ReturnValue(&'a EExpr<'a>, Position),
+    IndentReturnValue(Position),
+}
+impl<'a> EReturn<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EReturn::ReturnValue(expr, _) => expr.get_region(),
+            EReturn::Space(_, p) | EReturn::Return(p) | EReturn::IndentReturnValue(p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EImport<'a> {
+    Import(Position),
+    IndentStart(Position),
+    PackageShorthand(Position),
+    PackageShorthandDot(Position),
+    ModuleName(Position),
+    Params(EImportParams<'a>, Position),
+    IndentAs(Position),
+    As(Position),
+    IndentAlias(Position),
+    Alias(Position),
+    LowercaseAlias(Region),
+    IndentExposing(Position),
+    Exposing(Position),
+    ExposingListStart(Position),
+    ExposedName(Position),
+    ExposingListEnd(Position),
+    IndentIngestedPath(Position),
+    IngestedPath(Position),
+    IndentIngestedName(Position),
+    IngestedName(Position),
+    IndentColon(Position),
+    Colon(Position),
+    IndentAnnotation(Position),
+    Annotation(EType<'a>, Position),
+    Space(BadInputError, Position),
+    EndNewline(Position),
+}
+
+impl<'a> EImport<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EImport::Params(params, _) => params.get_region(),
+            EImport::Annotation(e_type, _) => e_type.get_region(),
+
+            // Case with direct Region value
+            EImport::LowercaseAlias(r) => *r,
+
+            // Cases with Position values
+            EImport::Import(p)
+            | EImport::IndentStart(p)
+            | EImport::PackageShorthand(p)
+            | EImport::PackageShorthandDot(p)
+            | EImport::ModuleName(p)
+            | EImport::IndentAs(p)
+            | EImport::As(p)
+            | EImport::IndentAlias(p)
+            | EImport::Alias(p)
+            | EImport::IndentExposing(p)
+            | EImport::Exposing(p)
+            | EImport::ExposingListStart(p)
+            | EImport::ExposedName(p)
+            | EImport::ExposingListEnd(p)
+            | EImport::IndentIngestedPath(p)
+            | EImport::IngestedPath(p)
+            | EImport::IndentIngestedName(p)
+            | EImport::IngestedName(p)
+            | EImport::IndentColon(p)
+            | EImport::Colon(p)
+            | EImport::IndentAnnotation(p)
+            | EImport::Space(_, p)
+            | EImport::EndNewline(p) => Region::from_pos(*p),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EImportParams<'a> {
+    Indent(Position),
+    Record(ERecord<'a>, Position),
+    RecordUpdateFound(Region),
+    RecordBuilderFound(Region),
+    RecordIgnoredFieldFound(Region),
+    Space(BadInputError, Position),
+}
+
+impl<'a> EImportParams<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EImportParams::Indent(p) | EImportParams::Record(_, p) | EImportParams::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+            EImportParams::RecordUpdateFound(r)
+            | EImportParams::RecordBuilderFound(r)
+            | EImportParams::RecordIgnoredFieldFound(r) => *r,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -538,6 +1068,40 @@ pub enum EPattern<'a> {
     AsIndentStart(Position),
 
     AccessorFunction(Position),
+    RecordUpdaterFunction(Position),
+    Str(EString<'a>, Position),
+
+    ParenStart(Position),
+    ParenEnd(Position),
+}
+
+impl<'a> EPattern<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EPattern::Record(expr, _) => expr.get_region(),
+            EPattern::List(expr, _) => expr.get_region(),
+            EPattern::PInParens(expr, _) => expr.get_region(),
+            EPattern::Str(e_string, _) => e_string.get_region(),
+
+            // Cases with Position values
+            EPattern::AsKeyword(position)
+            | EPattern::AsIdentifier(position)
+            | EPattern::Underscore(position)
+            | EPattern::NotAPattern(position)
+            | EPattern::Start(position)
+            | EPattern::End(position)
+            | EPattern::Space(_, position)
+            | EPattern::NumLiteral(_, position)
+            | EPattern::IndentStart(position)
+            | EPattern::IndentEnd(position)
+            | EPattern::AsIndentStart(position)
+            | EPattern::AccessorFunction(position)
+            | EPattern::RecordUpdaterFunction(position)
+            | EPattern::ParenStart(position)
+            | EPattern::ParenEnd(position) => Region::from_pos(*position),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -547,12 +1111,32 @@ pub enum PRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> PRecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            PRecord::Pattern(pattern, _) => pattern.get_region(),
+            PRecord::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            PRecord::End(p)
+            | PRecord::Open(p)
+            | PRecord::Field(p)
+            | PRecord::Colon(p)
+            | PRecord::OptionalFirst(p)
+            | PRecord::OptionalSecond(p)
+            | PRecord::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -566,6 +1150,20 @@ pub enum PList<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> PList<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            PList::Pattern(pattern, _) => pattern.get_region(),
+
+            // Cases with Position values
+            PList::End(p) | PList::Open(p) | PList::Rest(p) | PList::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PInParens<'a> {
     Empty(Position),
@@ -574,6 +1172,21 @@ pub enum PInParens<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> PInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            PInParens::Pattern(pattern, _) => pattern.get_region(),
+
+            // Cases with Position values
+            PInParens::Empty(p)
+            | PInParens::End(p)
+            | PInParens::Open(p)
+            | PInParens::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -601,6 +1214,34 @@ pub enum EType<'a> {
     TIndentEnd(Position),
     TAsIndentStart(Position),
 }
+impl<'a> EType<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EType::TRecord(expr, _) => expr.get_region(),
+            EType::TTagUnion(expr, _) => expr.get_region(),
+            EType::TInParens(expr, _) => expr.get_region(),
+            EType::TApply(eapply, _) => eapply.get_region(),
+            EType::TInlineAlias(einline, _) => einline.get_region(),
+            EType::TAbilityImpl(eability, _) => eability.get_region(),
+
+            // Cases with Position values
+            EType::Space(_, p)
+            | EType::UnderscoreSpacing(p)
+            | EType::TBadTypeVariable(p)
+            | EType::TWildcard(p)
+            | EType::TInferred(p)
+            | EType::TStart(p)
+            | EType::TEnd(p)
+            | EType::TFunctionArgument(p)
+            | EType::TWhereBar(p)
+            | EType::TImplementsClause(p)
+            | EType::TIndentStart(p)
+            | EType::TIndentEnd(p)
+            | EType::TAsIndentStart(p) => Region::from_pos(*p),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeRecord<'a> {
@@ -609,7 +1250,8 @@ pub enum ETypeRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -620,6 +1262,28 @@ pub enum ETypeRecord<'a> {
     IndentEnd(Position),
 }
 
+impl<'a> ETypeRecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeRecord::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeRecord::End(p)
+            | ETypeRecord::Open(p)
+            | ETypeRecord::Field(p)
+            | ETypeRecord::Colon(p)
+            | ETypeRecord::OptionalFirst(p)
+            | ETypeRecord::OptionalSecond(p)
+            | ETypeRecord::Space(_, p)
+            | ETypeRecord::IndentOpen(p)
+            | ETypeRecord::IndentColon(p)
+            | ETypeRecord::IndentOptional(p)
+            | ETypeRecord::IndentEnd(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeTagUnion<'a> {
     End(Position),
@@ -628,6 +1292,20 @@ pub enum ETypeTagUnion<'a> {
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> ETypeTagUnion<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeTagUnion::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeTagUnion::End(p) | ETypeTagUnion::Open(p) | ETypeTagUnion::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -647,6 +1325,23 @@ pub enum ETypeInParens<'a> {
     IndentEnd(Position),
 }
 
+impl<'a> ETypeInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            ETypeInParens::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeInParens::Empty(p)
+            | ETypeInParens::End(p)
+            | ETypeInParens::Open(p)
+            | ETypeInParens::Space(_, p)
+            | ETypeInParens::IndentOpen(p)
+            | ETypeInParens::IndentEnd(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeApply {
     ///
@@ -659,11 +1354,36 @@ pub enum ETypeApply {
     StartIsNumber(Position),
 }
 
+impl ETypeApply {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypeApply::StartNotUppercase(p)
+            | ETypeApply::End(p)
+            | ETypeApply::Space(_, p)
+            | ETypeApply::DoubleDot(p)
+            | ETypeApply::TrailingDot(p)
+            | ETypeApply::StartIsNumber(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInlineAlias {
     NotAnAlias(Position),
     Qualified(Position),
     ArgumentNotLowercase(Position),
+}
+
+impl ETypeInlineAlias {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypeInlineAlias::NotAnAlias(p)
+            | ETypeInlineAlias::Qualified(p)
+            | ETypeInlineAlias::ArgumentNotLowercase(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -672,6 +1392,7 @@ pub enum ETypeAbilityImpl<'a> {
     Open(Position),
 
     Field(Position),
+    UnderscoreField(Position),
     Colon(Position),
     Arrow(Position),
     Optional(Position),
@@ -679,12 +1400,37 @@ pub enum ETypeAbilityImpl<'a> {
 
     Space(BadInputError, Position),
 
-    Updateable(Position),
+    Prefix(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
     IndentAmpersand(Position),
+}
+impl<'a> ETypeAbilityImpl<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeAbilityImpl::Type(type_expr, _) => type_expr.get_region(),
+            ETypeAbilityImpl::Expr(expr, _) => expr.get_region(),
+            // Cases with Position values
+            ETypeAbilityImpl::End(p)
+            | ETypeAbilityImpl::Open(p)
+            | ETypeAbilityImpl::Field(p)
+            | ETypeAbilityImpl::UnderscoreField(p)
+            | ETypeAbilityImpl::Colon(p)
+            | ETypeAbilityImpl::Arrow(p)
+            | ETypeAbilityImpl::Optional(p)
+            | ETypeAbilityImpl::Space(_, p)
+            | ETypeAbilityImpl::Prefix(p)
+            | ETypeAbilityImpl::QuestionMark(p)
+            | ETypeAbilityImpl::SecondQuestionMark(p)
+            | ETypeAbilityImpl::Ampersand(p)
+            | ETypeAbilityImpl::IndentBar(p)
+            | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
+        }
+    }
 }
 
 impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
@@ -693,11 +1439,13 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::End(p) => ETypeAbilityImpl::End(p),
             ERecord::Open(p) => ETypeAbilityImpl::Open(p),
             ERecord::Field(p) => ETypeAbilityImpl::Field(p),
+            ERecord::UnderscoreField(p) => ETypeAbilityImpl::UnderscoreField(p),
             ERecord::Colon(p) => ETypeAbilityImpl::Colon(p),
             ERecord::Arrow(p) => ETypeAbilityImpl::Arrow(p),
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
-            ERecord::Updateable(p) => ETypeAbilityImpl::Updateable(p),
+            ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
+            ERecord::SecondQuestionMark(p) => ETypeAbilityImpl::SecondQuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }
@@ -786,14 +1534,14 @@ where
         }
 
         // This should be enough for anyone. Right? RIGHT?
-        let indent_text =
-            "| ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! | ; : ! ";
+        let indent_text = "| ; : ! ".repeat(100);
 
         let cur_indent = INDENT.with(|i| *i.borrow());
 
         println!(
-            "{:<5?}: {}{:<50}",
+            "{:<5?}:{:<2} {}{:<50}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message
         );
@@ -809,8 +1557,9 @@ where
         };
 
         println!(
-            "{:<5?}: {}{:<50} {:<15} {:?}",
+            "{:<5?}:{:<2} {}{:<50} {:<15} {:?}",
             state.pos(),
+            min_indent,
             &indent_text[..cur_indent * 2],
             self.message,
             format!("{:?}", progress),
@@ -821,6 +1570,36 @@ where
     }
 }
 
+/// Allocates the output of the given parser and returns a reference to it.
+/// This also happens if the given parser fails.
+///
+/// # Examples
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, allocated, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+/// let alloc_parser = allocated(parser_inner);
+///
+/// // Success case
+/// let (progress, output, state) = alloc_parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, &());
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, err) = alloc_parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 pub fn allocated<'a, P, Val, Error>(parser: P) -> impl Parser<'a, &'a Val, Error>
 where
     Error: 'a,
@@ -834,6 +1613,36 @@ where
     }
 }
 
+/// Apply transform function to turn output of given parser into another parser.
+/// Can be used to chain two parsers.
+///
+/// # Examples
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, and_then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser = and_then(parser1, move |p,b| word(", ", Problem::NotFound));
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(7));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::new(5)));
+/// ```
 pub fn and_then<'a, P1, P2, F, Before, After, Error>(
     parser: P1,
     transform: F,
@@ -853,6 +1662,37 @@ where
     }
 }
 
+/// Creates a new parser that can change its output based on a function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, then, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OddChar(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser_inner = word("hello", Problem::NotFound);
+///
+/// let parser = then(parser_inner,
+///     |arena, new_state, progress, output| {
+///         // arbitrary check
+///         if new_state.pos().offset % 2 == 0 {
+///             Ok((progress, output, new_state))
+///         } else {
+///             Err((Progress::NoProgress, Problem::OddChar(new_state.pos())))
+///         }
+///     }
+/// );
+///
+/// let actual = parser.parse(&arena, State::new("hello, world".as_bytes()), 0);
+/// assert!(actual.is_err());
+/// ```
 pub fn then<'a, P1, F, Before, After, E>(parser: P1, transform: F) -> impl Parser<'a, After, E>
 where
     P1: Parser<'a, Before, E>,
@@ -869,22 +1709,57 @@ where
     }
 }
 
-pub fn keyword_e<'a, ToError, E>(keyword: &'static str, if_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a word/string exactly, useful when finding a keyword.
+/// This only matches if the next char is whitespace, the start of a comment, or the end of a line.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, keyword};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = keyword("when", Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("when".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 4);
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("whence".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
+pub fn keyword<'a, ToError, E>(
+    keyword_str: &'static str,
+    if_error: ToError,
+) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
     move |_, mut state: State<'a>, _min_indent| {
-        let width = keyword.len();
+        let width = keyword_str.len();
 
-        if !state.bytes().starts_with(keyword.as_bytes()) {
+        if !state.bytes().starts_with(keyword_str.as_bytes()) {
             return Err((NoProgress, if_error(state.pos())));
         }
 
         // the next character should not be an identifier character
         // to prevent treating `whence` or `iffy` as keywords
         match state.bytes().get(width) {
-            Some(next) if *next == b' ' || *next == b'#' || *next == b'\n' || *next == b'\r' => {
+            Some(
+                b' ' | b'#' | b'\n' | b'\r' | b'\t' | b',' | b'(' | b')' | b'[' | b']' | b'{'
+                | b'}' | b'"' | b'\'' | b'/' | b'\\' | b'+' | b'*' | b'%' | b'^' | b'&' | b'|'
+                | b'<' | b'>' | b'=' | b'!' | b'~' | b'`' | b';' | b':' | b'?' | b'.' | b'@' | b'-',
+            ) => {
                 state = state.advance(width);
                 Ok((MadeProgress, (), state))
             }
@@ -1152,6 +2027,35 @@ where
     }
 }
 
+/// Make the given parser optional, it can complete or not consume anything,
+/// but it can't error with progress made.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, optional, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = optional(word("hello", Problem::NotFound));
+///
+/// // Parser completed case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Some(()));
+/// assert_eq!(state.pos().offset, 5);
+///
+/// // No progress case
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, None);
+/// assert_eq!(state.pos().offset, 0);
+/// ```
 pub fn optional<'a, P, T, E>(parser: P) -> impl Parser<'a, Option<T>, E>
 where
     P: Parser<'a, T, E>,
@@ -1172,128 +2076,249 @@ where
 
 // MACRO COMBINATORS
 //
-// Using some combinators together results in combinatorial type explosion
-// which makes things take forever to compile. Using macros instead avoids this!
+// Using some combinators together results in combinatorial type explosion,
+// this takes forever to compile. Using macros instead avoids this!
 
-#[macro_export]
-macro_rules! loc {
-    ($parser:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| {
-            use roc_region::all::{Loc, Region};
+/// Wraps the output of the given parser in a [`Loc`](../roc_region/all/struct.Loc.html) struct,
+/// to provide location information.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, loc};
+/// # use roc_region::all::{Loc, Position};
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = loc(word("hello", Problem::NotFound));
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Loc::new(0, 5, ()));
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn loc<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, Loc<Output>, E> {
+    move |arena, state: crate::state::State<'a>, min_indent: u32| {
+        let start = state.pos();
 
-            let start = state.pos();
+        match parser.parse(arena, state, min_indent) {
+            Ok((progress, value, state)) => {
+                let end = state.pos();
+                let region = Region::new(start, end);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((progress, value, state)) => {
-                    let end = state.pos();
-                    let region = Region::new(start, end);
-
-                    Ok((progress, Loc { region, value }, state))
-                }
-                Err(err) => Err(err),
+                Ok((progress, Loc { region, value }, state))
             }
+            Err(err) => Err(err),
         }
-    };
+    }
 }
 
 /// If the first one parses, ignore its output and move on to parse with the second one.
-#[macro_export]
-macro_rules! skip_first {
-    ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, _, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_first};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = skip_first(
+///    word("hello, ", |_| ()),
+///    lowercase_ident()
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "world");
+/// assert_eq!(state.pos().offset, 12);
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn skip_first<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, Second, E>
+where
+    P1: Parser<'a, First, E>,
+    P2: Parser<'a, Second, E>,
+    E: 'a,
+{
+    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, _, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 /// If the first one parses, parse the second one; if it also parses, use the
 /// output from the first one.
-#[macro_export]
-macro_rules! skip_second {
-    ($p1:expr, $p2:expr) => {
-        move |arena, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, skip_second};
+/// # use roc_parse::ident::lowercase_ident;
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = skip_second(
+///    lowercase_ident(),
+///    word(", world", |_| ())
+/// );
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "hello");
+/// assert_eq!(state.pos().offset, 12);
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn skip_second<'a, P1, First, P2, Second, E>(p1: P1, p2: P2) -> impl Parser<'a, First, E>
+where
+    E: 'a,
+    P1: Parser<'a, First, E>,
+    P2: Parser<'a, Second, E>,
+{
+    move |arena, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, _, state)) => Ok((p1.or(p2), out1, state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
-#[macro_export]
-macro_rules! collection_inner {
-    ($elem:expr, $delimiter:expr, $space_before:expr) => {
-        map_with_arena!(
-            and!(
-                and!(
-                    $crate::blankspace::spaces(),
-                    $crate::parser::trailing_sep_by0(
-                        $delimiter,
-                        $crate::blankspace::spaces_before_optional_after($elem,)
-                    )
+pub fn collection_inner<'a, Elem: 'a + crate::ast::Spaceable<'a> + Clone, E: 'a + SpaceProblem>(
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    map_with_arena(
+        and(
+            and(
+                crate::blankspace::spaces(),
+                trailing_sep_by0(
+                    delimiter,
+                    crate::blankspace::spaces_before_optional_after(elem),
                 ),
-                $crate::blankspace::spaces()
             ),
-            |arena: &'a bumpalo::Bump,
-             ((spaces, mut parsed_elems), mut final_comments): (
-                (
-                    &'a [$crate::ast::CommentOrNewline<'a>],
-                    bumpalo::collections::vec::Vec<'a, Loc<_>>
-                ),
-                &'a [$crate::ast::CommentOrNewline<'a>]
-            )| {
-                if !spaces.is_empty() {
-                    if let Some(first) = parsed_elems.first_mut() {
-                        first.value = $space_before(arena.alloc(first.value), spaces)
-                    } else {
-                        debug_assert!(final_comments.is_empty());
-                        final_comments = spaces;
-                    }
+            crate::blankspace::spaces(),
+        ),
+        #[allow(clippy::type_complexity)]
+        move |arena: &'a bumpalo::Bump,
+              out: (
+            (
+                &'a [crate::ast::CommentOrNewline<'a>],
+                bumpalo::collections::Vec<'a, Loc<Elem>>,
+            ),
+            &'a [crate::ast::CommentOrNewline<'a>],
+        )| {
+            let ((spaces, mut parsed_elems), mut final_comments) = out;
+
+            if !spaces.is_empty() {
+                if let Some(first) = parsed_elems.first_mut() {
+                    first.value = space_before(arena.alloc(first.value.clone()), spaces);
+                } else {
+                    debug_assert!(final_comments.is_empty());
+                    final_comments = spaces;
                 }
-
-                $crate::ast::Collection::with_items_and_comments(
-                    arena,
-                    parsed_elems.into_bump_slice(),
-                    final_comments,
-                )
             }
-        )
-    };
+
+            crate::ast::Collection::with_items_and_comments(
+                arena,
+                parsed_elems.into_bump_slice(),
+                final_comments,
+            )
+        },
+    )
 }
 
-#[macro_export]
-macro_rules! collection_trailing_sep_e {
-    ($opening_brace:expr, $elem:expr, $delimiter:expr, $closing_brace:expr, $space_before:expr) => {
-        between!(
-            $opening_brace,
-            $crate::parser::reset_min_indent($crate::collection_inner!(
-                $elem,
-                $delimiter,
-                $space_before
-            )),
-            $closing_brace
-        )
-    };
+pub fn collection_trailing_sep_e<
+    'a,
+    Elem: 'a + crate::ast::Spaceable<'a> + Clone,
+    E: 'a + SpaceProblem,
+>(
+    opening_brace: impl Parser<'a, (), E>,
+    elem: impl Parser<'a, Loc<Elem>, E> + 'a,
+    delimiter: impl Parser<'a, (), E>,
+    closing_brace: impl Parser<'a, (), E>,
+    space_before: impl Fn(&'a Elem, &'a [crate::ast::CommentOrNewline<'a>]) -> Elem,
+) -> impl Parser<'a, crate::ast::Collection<'a, Loc<Elem>>, E> {
+    between(
+        opening_brace,
+        reset_min_indent(collection_inner(elem, delimiter, space_before)),
+        closing_brace,
+    )
 }
 
-#[macro_export]
-macro_rules! succeed {
-    ($value:expr) => {
-        move |_arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            Ok((NoProgress, $value, state))
-        }
-    };
+/// Creates a parser that always succeeds with the given argument as output.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, succeed};
+/// # use bumpalo::Bump;
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = succeed("different");
+///
+/// let (progress, output, state) = Parser::<&'a str,()>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, "different");
+/// assert_eq!(state.pos().offset, 0);
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn succeed<'a, T: Clone, E: 'a>(value: T) -> impl Parser<'a, T, E> {
+    move |_arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        Ok((NoProgress, value.clone(), state))
+    }
 }
 
+/// Creates a parser that always fails.
+/// If the given parser succeeds, the error is customized with the given function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, fail_when};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     OtherProblem(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail_when(Problem::OtherProblem, word("hello", Problem::NotFound));
+///
+/// // When given parser succeeds:
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::OtherProblem(Position::new(0)));
+///
+/// // When given parser errors:
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail_when<'a, T, T2, E, F, P>(f: F, p: P) -> impl Parser<'a, T, E>
 where
     T: 'a,
@@ -1311,6 +2336,26 @@ where
     }
 }
 
+/// Creates a parser that always fails using the given error function.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, fail};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = fail(Problem::NotFound);
+///
+/// let (progress, err) = Parser::<(), Problem>::parse(&parser, &arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(0)));
+/// ```
 pub fn fail<'a, T, E, F>(f: F) -> impl Parser<'a, T, E>
 where
     T: 'a,
@@ -1322,19 +2367,65 @@ where
     }
 }
 
-#[macro_export]
-macro_rules! and {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| match $p1
-            .parse(arena, state, min_indent)
-        {
-            Ok((p1, out1, state)) => match $p2.parse(arena, state, min_indent) {
-                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                Err((p2, fail)) => Err((p1.or(p2), fail)),
-            },
-            Err((progress, fail)) => Err((progress, fail)),
-        }
-    };
+/// Creates a parser that fails if the next byte is the given byte.
+pub fn error_on_byte<'a, T, E, F>(byte_to_match: u8, to_error: F) -> impl Parser<'a, T, E>
+where
+    T: 'a,
+    E: 'a,
+    F: Fn(Position) -> E,
+{
+    debug_assert_ne!(byte_to_match, b'\n');
+
+    move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| match state.bytes().first() {
+        Some(x) if *x == byte_to_match => Err((MadeProgress, to_error(state.pos()))),
+        _ => Err((NoProgress, to_error(state.pos()))),
+    }
+}
+
+/// Runs two parsers in succession. If both parsers succeed, the output is a tuple of both outputs.
+/// Both parsers must have the same error type.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, and, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser1 = word("hello", Problem::NotFound);
+/// let parser2 = word(", ", Problem::NotFound);
+/// let parser = and(parser1, parser2);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ((),()));
+/// assert_eq!(state.pos(), Position::new(7));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hello!! world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(err, Problem::NotFound(Position::new(5)));
+/// ```
+pub fn and<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| match p1
+        .parse(arena, state, min_indent)
+    {
+        Ok((p1, out1, state)) => match p2.parse(arena, state, min_indent) {
+            Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+            Err((p2, fail)) => Err((p1.or(p2), fail)),
+        },
+        Err((progress, fail)) => Err((progress, fail)),
+    }
 }
 
 /// Take as input something that looks like a struct literal where values are parsers
@@ -1356,56 +2447,123 @@ macro_rules! record {
     };
 }
 
+/// Similar to [`skip_first`], but we modify the `min_indent` of the second
+/// parser (`parser`) to be 1 greater than the `line_indent()` at the start of
+/// the first parser (`before`).
+pub fn indented_seq_skip_first<'a, O, E: 'a>(
+    before: impl Parser<'a, (), E>,
+    parser: impl Parser<'a, O, E>,
+) -> impl Parser<'a, O, E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.line_indent();
+
+        // TODO: we should account for min_indent here, but this doesn't currently work
+        // because min_indent is sometimes larger than it really should be, which is in turn
+        // due to uses of `increment_indent`.
+        //
+        // let p1_indent = std::cmp::max(start_indent, min_indent);
+
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
+
+        match before.parse(arena, state, p1_indent) {
+            Ok((p1, (), state)) => match parser.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
+        }
+    }
+}
+
 /// Similar to `and`, but we modify the min_indent of the second parser to be
 /// 1 greater than the line_indent() at the start of the first parser.
-#[macro_export]
-macro_rules! indented_seq {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            let start_indent = state.line_indent();
+pub fn indented_seq<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.line_indent();
 
-            // TODO: we should account for min_indent here, but this doesn't currently work
-            // because min_indent is sometimes larger than it really should be, which is in turn
-            // due to uses of `increment_indent`.
-            //
-            // let p1_indent = std::cmp::max(start_indent, min_indent);
+        // TODO: we should account for min_indent here, but this doesn't currently work
+        // because min_indent is sometimes larger than it really should be, which is in turn
+        // due to uses of `increment_indent`.
+        //
+        // let p1_indent = std::cmp::max(start_indent, min_indent);
 
-            let p1_indent = start_indent;
-            let p2_indent = p1_indent + 1;
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
 
-            match $p1.parse(arena, state, p1_indent) {
-                Ok((p1, (), state)) => match $p2.parse(arena, state, p2_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), out2, state)),
-                    Err((p2, fail)) => Err((p1.or(p2), fail)),
-                },
-                Err((progress, fail)) => Err((progress, fail)),
-            }
+        match p1.parse(arena, state, p1_indent) {
+            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
-    };
+    }
 }
 
-/// Similar to `and`, but we modify the min_indent of the second parser to be
-/// 1 greater than the column() at the start of the first parser.
-#[macro_export]
-macro_rules! absolute_indented_seq {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, _min_indent: u32| {
-            let start_indent = state.column();
+/// Similar to [`and`], but we modify the `min_indent` of the second parser to be
+/// 1 greater than the `column()` at the start of the first parser.
+pub fn absolute_indented_seq<'a, Output1, Output2, E: 'a>(
+    p1: impl Parser<'a, Output1, E>,
+    p2: impl Parser<'a, Output2, E>,
+) -> impl Parser<'a, (Output1, Output2), E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, _min_indent: u32| {
+        let start_indent = state.column();
 
-            let p1_indent = start_indent;
-            let p2_indent = p1_indent + 1;
+        let p1_indent = start_indent;
+        let p2_indent = p1_indent + 1;
 
-            match $p1.parse(arena, state, p1_indent) {
-                Ok((p1, out1, state)) => match $p2.parse(arena, state, p2_indent) {
-                    Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
-                    Err((p2, fail)) => Err((p1.or(p2), fail)),
-                },
-                Err((progress, fail)) => Err((progress, fail)),
-            }
+        match p1.parse(arena, state, p1_indent) {
+            Ok((p1, out1, state)) => match p2.parse(arena, state, p2_indent) {
+                Ok((p2, out2, state)) => Ok((p1.or(p2), (out1, out2), state)),
+                Err((p2, fail)) => Err((p1.or(p2), fail)),
+            },
+            Err((progress, fail)) => Err((progress, fail)),
         }
-    };
+    }
 }
 
+/// Returns the result of the first parser that makes progress, even if it failed.
+/// If no parsers make progress, the last parser's result is returned.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte};
+/// # use roc_region::all::Position;
+/// # use roc_parse::one_of;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser1 = one_of!(
+///     word("hello", Problem::NotFound),
+///     byte(b'h', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser1.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let parser2 = one_of!(
+///     // swapped the order of the parsers
+///     byte(b'h', Problem::NotFound),
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser2.parse(&arena, State::new("hello! world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 1);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! one_of {
     ($p1:expr, $p2:expr) => {
@@ -1428,30 +2586,15 @@ macro_rules! one_of {
     };
 }
 
-#[macro_export]
-macro_rules! one_of_with_error {
-    ($toerror:expr; $p1:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-
-            match $p1.parse(arena, state, min_indent) {
-                valid @ Ok(_) => valid,
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
-                Err((NoProgress, _)) => Err((MadeProgress, $toerror(original_state.pos()))),
-            }
-        }
-    };
-
-    ($toerror:expr; $p1:expr, $($others:expr),+) => {
-        one_of_with_error!($toerror, $p1, one_of_with_error!($($others),+))
-    };
-}
-
 pub fn reset_min_indent<'a, P, T, X: 'a>(parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
 {
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
+}
+
+pub fn capture_line_indent<'a, X: 'a>() -> impl Parser<'a, u32, X> {
+    move |_arena, state: State<'a>, _min_indent| Ok((NoProgress, state.line_indent(), state))
 }
 
 pub fn set_min_indent<'a, P, T, X: 'a>(min_indent: u32, parser: P) -> impl Parser<'a, T, X>
@@ -1488,7 +2631,32 @@ where
     }
 }
 
-pub fn specialize<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+/// Transforms a possible error, like `map_err` in Rust.
+/// It has no effect if the given parser succeeds.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_err};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize_err(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
+pub fn specialize_err<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(X, Position) -> Y,
     P: Parser<'a, T, X>,
@@ -1503,7 +2671,34 @@ where
     }
 }
 
-pub fn specialize_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
+/// Transforms a possible error, like `map_err` in Rust.
+/// Similar to [`specialize_err`], but the error is arena allocated, and the
+/// mapping function receives a reference to the error.
+/// It has no effect if the inner parser succeeds.
+///
+/// # Examples
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, specialize_err_ref};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     Other(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = specialize_err_ref(
+///     |_prev_err, pos| Problem::Other(pos),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// let (progress, err) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::Other(Position::new(0)));
+/// ```
+pub fn specialize_err_ref<'a, F, P, T, X, Y>(map_error: F, parser: P) -> impl Parser<'a, T, Y>
 where
     F: Fn(&'a X, Position) -> Y,
     P: Parser<'a, T, X>,
@@ -1519,6 +2714,34 @@ where
     }
 }
 
+/// Matches an entire `str` and moves the state's position forward if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = word("hello", Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
 pub fn word<'a, ToError, E>(word: &'static str, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
@@ -1536,15 +2759,43 @@ where
     }
 }
 
-pub fn word1<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a single `u8` and moves the state's position forward if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, byte};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = byte(b'h', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
+pub fn byte<'a, ToError, E>(byte_to_match: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word, b'\n');
+    debug_assert_ne!(byte_to_match, b'\n');
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| match state.bytes().first() {
-        Some(x) if *x == word => {
+        Some(x) if *x == byte_to_match => {
             let state = state.advance(1);
             Ok((MadeProgress, (), state))
         }
@@ -1552,12 +2803,44 @@ where
     }
 }
 
-pub fn word1_indent<'a, ToError, E>(word: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches a single `u8` and moves the state's position forward if it succeeds.
+/// This parser will fail if it is a lower indentation level than it should be.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, byte, byte_indent};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// #     WrongIndentLevel(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = byte_indent(b'h', Problem::WrongIndentLevel);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(1));
+///
+/// // Error case
+/// let state = State::new(" hello, world".as_bytes());
+/// let _ = byte(b' ', Problem::NotFound).parse(&arena, state.clone(), 0).unwrap();
+/// let (progress, problem) = parser.parse(&arena, state, 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::WrongIndentLevel(Position::zero()));
+/// ```
+pub fn byte_indent<'a, ToError, E>(byte_to_match: u8, to_error: ToError) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word, b'\n');
+    debug_assert_ne!(byte_to_match, b'\n');
 
     move |_arena: &'a Bump, state: State<'a>, min_indent: u32| {
         if min_indent > state.column() {
@@ -1565,7 +2848,7 @@ where
         }
 
         match state.bytes().first() {
-            Some(x) if *x == word => {
+            Some(x) if *x == byte_to_match => {
                 let state = state.advance(1);
                 Ok((MadeProgress, (), state))
             }
@@ -1574,15 +2857,47 @@ where
     }
 }
 
-pub fn word2<'a, ToError, E>(word_1: u8, word_2: u8, to_error: ToError) -> impl Parser<'a, (), E>
+/// Matches two `u8` in a row.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, two_bytes};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = two_bytes(b'h', b'e', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(2));
+///
+/// // Error case
+/// let (progress, problem) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+/// ```
+pub fn two_bytes<'a, ToError, E>(
+    byte_1: u8,
+    byte_2: u8,
+    to_error: ToError,
+) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word_1, b'\n');
-    debug_assert_ne!(word_2, b'\n');
+    debug_assert_ne!(byte_1, b'\n');
+    debug_assert_ne!(byte_2, b'\n');
 
-    let needle = [word_1, word_2];
+    let needle = [byte_1, byte_2];
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(&needle) {
@@ -1594,21 +2909,49 @@ where
     }
 }
 
-pub fn word3<'a, ToError, E>(
-    word_1: u8,
-    word_2: u8,
-    word_3: u8,
+/// Matches three `u8` in a row.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, three_bytes};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = three_bytes(b'h', b'e', b'l', Problem::NotFound);
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos(), Position::new(3));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("hi, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
+pub fn three_bytes<'a, ToError, E>(
+    byte_1: u8,
+    byte_2: u8,
+    byte_3: u8,
     to_error: ToError,
 ) -> impl Parser<'a, (), E>
 where
     ToError: Fn(Position) -> E,
     E: 'a,
 {
-    debug_assert_ne!(word_1, b'\n');
-    debug_assert_ne!(word_2, b'\n');
-    debug_assert_ne!(word_3, b'\n');
+    debug_assert_ne!(byte_1, b'\n');
+    debug_assert_ne!(byte_2, b'\n');
+    debug_assert_ne!(byte_3, b'\n');
 
-    let needle = [word_1, word_2, word_3];
+    let needle = [byte_1, byte_2, byte_3];
 
     move |_arena: &'a Bump, state: State<'a>, _min_indent: u32| {
         if state.bytes().starts_with(&needle) {
@@ -1621,135 +2964,217 @@ where
 }
 
 #[macro_export]
-macro_rules! word1_check_indent {
-    ($word:expr, $word_problem:expr, $min_indent:expr, $indent_problem:expr) => {
-        and!(
-            word1($word, $word_problem),
-            $crate::parser::check_indent($min_indent, $indent_problem)
+macro_rules! byte_check_indent {
+    ($byte_to_match:expr, $problem:expr, $min_indent:expr, $indent_problem:expr) => {
+        $crate::parser::and(
+            byte($byte_to_match, $problem),
+            $crate::parser::check_indent($min_indent, $indent_problem),
         )
     };
 }
 
-#[macro_export]
-macro_rules! map {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| (progress, $transform(output), next_state))
-        }
-    };
+/// transform the `Ok` result of a parser
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map(
+///     word("hello", Problem::NotFound),
+///     |_output| "new output!"
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
+pub fn map<'a, Output, MappedOutput, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    transform: impl Fn(Output) -> MappedOutput,
+) -> impl Parser<'a, MappedOutput, E> {
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(output), next_state))
+    }
 }
 
-#[macro_export]
-macro_rules! map_with_arena {
-    ($parser:expr, $transform:expr) => {
-        move |arena, state, min_indent| {
-            #[allow(clippy::redundant_closure_call)]
-            $parser
-                .parse(arena, state, min_indent)
-                .map(|(progress, output, next_state)| {
-                    (progress, $transform(arena, output), next_state)
-                })
-        }
-    };
-}
+/// Applies the parser as many times as possible.
+/// This parser will only fail if the given parser makes partial progress.
+pub fn zero_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| {
+        let original_state = state.clone();
 
-#[macro_export]
-macro_rules! zero_or_more {
-    ($parser:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+        let start_bytes_len = state.bytes().len();
 
-            let original_state = state.clone();
+        match parser.parse(arena, state, min_indent) {
+            Ok((_, first_output, next_state)) => {
+                let mut state = next_state;
+                let mut buf = Vec::with_capacity_in(1, arena);
 
-            let start_bytes_len = state.bytes().len();
+                buf.push(first_output);
 
-            match $parser.parse(arena, state, min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
-
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((fail_progress, fail)) => {
-                                match fail_progress {
-                                    MadeProgress => {
-                                        // made progress on an element and then failed; that's an error
-                                        return Err((MadeProgress, fail));
-                                    }
-                                    NoProgress => {
-                                        // the next element failed with no progress
-                                        // report whether we made progress before
-                                        let progress = Progress::from_lengths(start_bytes_len, old_state.bytes().len());
-                                        return Ok((progress, buf, old_state));
-                                    }
+                loop {
+                    let old_state = state.clone();
+                    match parser.parse(arena, state, min_indent) {
+                        Ok((_, next_output, next_state)) => {
+                            state = next_state;
+                            buf.push(next_output);
+                        }
+                        Err((fail_progress, fail)) => {
+                            match fail_progress {
+                                MadeProgress => {
+                                    // made progress on an element and then failed; that's an error
+                                    return Err((MadeProgress, fail));
+                                }
+                                NoProgress => {
+                                    // the next element failed with no progress
+                                    // report whether we made progress before
+                                    let progress = Progress::from_lengths(
+                                        start_bytes_len,
+                                        old_state.bytes().len(),
+                                    );
+                                    return Ok((progress, buf, old_state));
                                 }
                             }
                         }
                     }
                 }
-                Err((fail_progress, fail)) => {
-                    match fail_progress {
-                        MadeProgress => {
-                            // made progress on an element and then failed; that's an error
-                            Err((MadeProgress, fail))
-                        }
-                        NoProgress => {
-                            // the first element failed (with no progress), but that's OK
-                            // because we only need to parse 0 elements
-                            Ok((NoProgress, Vec::new_in(arena), original_state))
-                        }
+            }
+            Err((fail_progress, fail)) => {
+                match fail_progress {
+                    MadeProgress => {
+                        // made progress on an element and then failed; that's an error
+                        Err((MadeProgress, fail))
+                    }
+                    NoProgress => {
+                        // the first element failed (with no progress), but that's OK
+                        // because we only need to parse 0 elements
+                        Ok((NoProgress, Vec::new_in(arena), original_state))
                     }
                 }
             }
         }
-    };
+    }
 }
 
-#[macro_export]
-macro_rules! one_or_more {
-    ($parser:expr, $to_error:expr) => {
-        move |arena, state: State<'a>, min_indent: u32| {
-            use bumpalo::collections::Vec;
+/// Creates a parser that matches one or more times.
+/// Will fail if the given parser fails to match or matches partially.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, one_or_more};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = one_or_more(
+///     word("hello, ", Problem::NotFound),
+///     Problem::NotFound
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, bumpalo::vec![in &arena; (),()]);
+/// assert_eq!(state.pos(), Position::new(14));
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn one_or_more<'a, Output, E: 'a>(
+    parser: impl Parser<'a, Output, E>,
+    to_error: impl Fn(Position) -> E,
+) -> impl Parser<'a, bumpalo::collections::Vec<'a, Output>, E> {
+    move |arena, state: State<'a>, min_indent: u32| match parser.parse(
+        arena,
+        state.clone(),
+        min_indent,
+    ) {
+        Ok((_, first_output, next_state)) => {
+            let mut state = next_state;
+            let mut buf = Vec::with_capacity_in(1, arena);
 
-            match $parser.parse(arena, state.clone(), min_indent) {
-                Ok((_, first_output, next_state)) => {
-                    let mut state = next_state;
-                    let mut buf = Vec::with_capacity_in(1, arena);
+            buf.push(first_output);
 
-                    buf.push(first_output);
-
-                    loop {
-                        let old_state = state.clone();
-                        match $parser.parse(arena, state, min_indent) {
-                            Ok((_, next_output, next_state)) => {
-                                state = next_state;
-                                buf.push(next_output);
-                            }
-                            Err((NoProgress, _)) => {
-                                return Ok((MadeProgress, buf, old_state));
-                            }
-                            Err((MadeProgress, fail)) => {
-                                return Err((MadeProgress, fail));
-                            }
-                        }
+            loop {
+                let old_state = state.clone();
+                match parser.parse(arena, state, min_indent) {
+                    Ok((_, next_output, next_state)) => {
+                        state = next_state;
+                        buf.push(next_output);
+                    }
+                    Err((NoProgress, _)) => {
+                        return Ok((MadeProgress, buf, old_state));
+                    }
+                    Err((MadeProgress, fail)) => {
+                        return Err((MadeProgress, fail));
                     }
                 }
-                Err((progress, _)) => Err((progress, $to_error(state.pos()))),
             }
         }
-    };
+        Err((progress, _)) => Err((progress, to_error(state.pos()))),
+    }
 }
 
+/// Creates a parser that debug prints the result of parsing.
+/// It doesn't change the given parser at all,
+/// useful for inspecting a parser during development.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word};
+/// # use roc_region::all::Position;
+/// # use roc_parse::debug;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = debug!(
+///     word("hello", Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+/// # }
+/// # foo(&arena);
+/// ```
 #[macro_export]
 macro_rules! debug {
     ($parser:expr) => {
@@ -1759,64 +3184,138 @@ macro_rules! debug {
     };
 }
 
-#[macro_export]
-macro_rules! either {
-    ($p1:expr, $p2:expr) => {
-        move |arena: &'a bumpalo::Bump, state: $crate::state::State<'a>, min_indent: u32| {
-            let original_state = state.clone();
-            match $p1.parse(arena, state, min_indent) {
-                Ok((progress, output, state)) => {
-                    Ok((progress, $crate::parser::Either::First(output), state))
-                }
-                Err((NoProgress, _)) => {
-                    match $p2.parse(arena, original_state.clone(), min_indent) {
-                        Ok((progress, output, state)) => {
-                            Ok((progress, $crate::parser::Either::Second(output), state))
-                        }
-                        Err((progress, fail)) => Err((progress, fail)),
-                    }
-                }
-                Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
+/// Matches either of the two given parsers.
+/// If the first parser succeeds, its result is used,
+/// otherwise, the second parser's result is used.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, either, Either};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = either(
+///     word("hello", Problem::NotFound),
+///     word("bye", Problem::NotFound)
+/// );
+///
+/// // Success cases
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::First(()));
+/// assert_eq!(state.pos().offset, 5);
+///
+/// let (progress, output, state) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, Either::Second(()));
+/// assert_eq!(state.pos().offset, 3);
+///
+/// // Error case
+/// let (progress, err) = parser.parse(&arena, State::new("later, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn either<'a, OutputLeft, OutputRight, E: 'a>(
+    p1: impl Parser<'a, OutputLeft, E>,
+    p2: impl Parser<'a, OutputRight, E>,
+) -> impl Parser<'a, Either<OutputLeft, OutputRight>, E> {
+    move |arena: &'a bumpalo::Bump, state: crate::state::State<'a>, min_indent: u32| {
+        let original_state = state.clone();
+        match p1.parse(arena, state, min_indent) {
+            Ok((progress, output, state)) => {
+                Ok((progress, crate::parser::Either::First(output), state))
             }
+            Err((NoProgress, _)) => match p2.parse(arena, original_state.clone(), min_indent) {
+                Ok((progress, output, state)) => {
+                    Ok((progress, crate::parser::Either::Second(output), state))
+                }
+                Err((progress, fail)) => Err((progress, fail)),
+            },
+            Err((MadeProgress, fail)) => Err((MadeProgress, fail)),
         }
-    };
+    }
 }
 
-/// Parse everything between two braces (e.g. parentheses), skipping both braces
-/// and keeping only whatever was parsed in between them.
-#[macro_export]
-macro_rules! between {
-    ($opening_brace:expr, $parser:expr, $closing_brace:expr) => {
-        skip_first!($opening_brace, skip_second!($parser, $closing_brace))
-    };
+/// Given three parsers, parse them all but ignore the output of the first and last one.
+/// Useful for parsing things between two braces (e.g. parentheses).
+///
+/// If any of the three parsers error, this will error.
+///
+/// # Example
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, byte, between};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// # fn foo<'a>(arena: &'a Bump) {
+/// let parser = between(
+///     byte(b'(', Problem::NotFound),
+///     word("hello", Problem::NotFound),
+///     byte(b')', Problem::NotFound)
+/// );
+/// let (progress, output, state) = parser.parse(&arena, State::new("(hello), world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 7);
+/// # }
+/// # foo(&arena);
+/// ```
+pub fn between<'a, Before, Inner, After, Err: 'a>(
+    opening_brace: impl Parser<'a, Before, Err>,
+    inner: impl Parser<'a, Inner, Err>,
+    closing_brace: impl Parser<'a, After, Err>,
+) -> impl Parser<'a, Inner, Err> {
+    skip_first(opening_brace, skip_second(inner, closing_brace))
 }
 
-/// For some reason, some usages won't compile unless they use this instead of the macro version
-#[inline(always)]
-pub fn and<'a, P1, P2, A, B, E>(p1: P1, p2: P2) -> impl Parser<'a, (A, B), E>
-where
-    P1: Parser<'a, A, E>,
-    P2: Parser<'a, B, E>,
-    P1: 'a,
-    P2: 'a,
-    A: 'a,
-    B: 'a,
-    E: 'a,
-{
-    and!(p1, p2)
-}
-
-/// For some reason, some usages won't compile unless they use this instead of the macro version
-#[inline(always)]
-pub fn loc<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Loc<Val>, Error>
-where
-    P: Parser<'a, Val, Error>,
-    Error: 'a,
-{
-    loc!(parser)
-}
-
-/// For some reason, some usages won't compile unless they use this instead of the macro version
+/// Maps/transforms the `Ok` result of parsing using the given function.
+/// Similar to [`map`], but the transform function also takes a bump allocator.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, map_with_arena};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = map_with_arena(
+///     word("hello", Problem::NotFound),
+///     |_arena, _output| "new output!"
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::MadeProgress);
+/// assert_eq!(output, "new output!");
+/// assert_eq!(state.pos(), Position::new(5));
+///
+/// // Error Case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 #[inline(always)]
 pub fn map_with_arena<'a, P, F, Before, After, E>(
     parser: P,
@@ -1824,16 +3323,47 @@ pub fn map_with_arena<'a, P, F, Before, After, E>(
 ) -> impl Parser<'a, After, E>
 where
     P: Parser<'a, Before, E>,
-    P: 'a,
     F: Fn(&'a Bump, Before) -> After,
-    F: 'a,
-    Before: 'a,
-    After: 'a,
     E: 'a,
 {
-    map_with_arena!(parser, transform)
+    move |arena, state, min_indent| {
+        parser
+            .parse(arena, state, min_indent)
+            .map(|(progress, output, next_state)| (progress, transform(arena, output), next_state))
+    }
 }
 
+/// Creates a new parser that does not progress but still forwards the output of
+/// the given parser if it succeeds.
+///
+/// # Example
+///
+/// ```
+/// # #![forbid(unused_imports)]
+/// # use roc_parse::state::State;
+/// # use crate::roc_parse::parser::{Parser, Progress, word, backtrackable};
+/// # use roc_region::all::Position;
+/// # use bumpalo::Bump;
+/// # #[derive(Debug, PartialEq)]
+/// # enum Problem {
+/// #     NotFound(Position),
+/// # }
+/// # let arena = Bump::new();
+/// let parser = backtrackable(
+///     word("hello", Problem::NotFound),
+/// );
+///
+/// // Success case
+/// let (progress, output, state) = parser.parse(&arena, State::new("hello, world".as_bytes()), 0).unwrap();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(output, ());
+/// assert_eq!(state.pos().offset, 5);
+///
+/// // Error Case
+/// let (progress, err) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(err, Problem::NotFound(Position::zero()));
+/// ```
 pub fn backtrackable<'a, P, Val, Error>(parser: P) -> impl Parser<'a, Val, Error>
 where
     P: Parser<'a, Val, Error>,

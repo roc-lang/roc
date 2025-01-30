@@ -102,7 +102,7 @@ e.g. you have a test `calculate_sum_test` that only uses the function `add`, whe
 - [Unisonweb](https://www.unisonweb.org), definition based [editor](https://twitter.com/shojberg/status/1364666092598288385) as opposed to file based.
 - [Utopia](https://utopia.app/) integrated design and development environment for React. Design and code update each other, in real time.
 - [Paredit](https://calva.io/paredit/) structural clojure editing, navigation and selection. [Another overview](http://danmidwood.com/content/2014/11/21/animated-paredit.html)
-- [tylr](https://tylr.fun/) projectional editor UX that helps you make it easier to do edits that are typically difficult with projectional editors but are easy with classic editors. 
+- [tylr](https://tylr.fun/) projectional editor UX that helps you make it easier to do edits that are typically difficult with projectional editors but are easy with classic editors.
 
 ### Project exploration
 

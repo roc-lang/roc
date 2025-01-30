@@ -1,81 +1,86 @@
-When(
-    @5-22 Apply(
-        @5-11 Tag(
-            "Delmin",
+@0-78 SpaceAfter(
+    When(
+        @5-22 Apply(
+            @5-11 Tag(
+                "Delmin",
+            ),
+            [
+                @13-19 ParensAround(
+                    Apply(
+                        @13-16 Tag(
+                            "Del",
+                        ),
+                        [
+                            @17-19 Var {
+                                module_name: "",
+                                ident: "rx",
+                            },
+                        ],
+                        Space,
+                    ),
+                ),
+                @21-22 Num(
+                    "0",
+                ),
+            ],
+            Space,
         ),
         [
-            @13-19 ParensAround(
-                Apply(
-                    @13-16 Tag(
-                        "Del",
+            WhenBranch {
+                patterns: [
+                    @30-48 SpaceBefore(
+                        Apply(
+                            @30-36 Tag(
+                                "Delmin",
+                            ),
+                            [
+                                @38-44 Apply(
+                                    @38-41 Tag(
+                                        "Del",
+                                    ),
+                                    [
+                                        @42-44 Identifier {
+                                            ident: "ry",
+                                        },
+                                    ],
+                                ),
+                                @47-48 Underscore(
+                                    "",
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @52-78 Apply(
+                    @52-56 Tag(
+                        "Node",
                     ),
                     [
-                        @17-19 Var {
+                        @57-62 Tag(
+                            "Black",
+                        ),
+                        @63-64 Num(
+                            "0",
+                        ),
+                        @65-75 Var {
+                            module_name: "Bool",
+                            ident: "false",
+                        },
+                        @76-78 Var {
                             module_name: "",
-                            ident: "rx",
+                            ident: "ry",
                         },
                     ],
                     Space,
                 ),
-            ),
-            @21-22 Num(
-                "0",
-            ),
+                guard: None,
+            },
         ],
-        Space,
     ),
     [
-        WhenBranch {
-            patterns: [
-                @30-48 SpaceBefore(
-                    Apply(
-                        @30-36 Tag(
-                            "Delmin",
-                        ),
-                        [
-                            @38-44 Apply(
-                                @38-41 Tag(
-                                    "Del",
-                                ),
-                                [
-                                    @42-44 Identifier(
-                                        "ry",
-                                    ),
-                                ],
-                            ),
-                            @47-48 Underscore(
-                                "",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @52-78 Apply(
-                @52-56 Tag(
-                    "Node",
-                ),
-                [
-                    @57-62 Tag(
-                        "Black",
-                    ),
-                    @63-64 Num(
-                        "0",
-                    ),
-                    @65-75 Var {
-                        module_name: "Bool",
-                        ident: "false",
-                    },
-                    @76-78 Var {
-                        module_name: "",
-                        ident: "ry",
-                    },
-                ],
-                Space,
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

@@ -8,13 +8,13 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_error_macros = { path = "../../error_macros" }
-roc_module = { path = "../module" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_types = { path = "../types" }
-
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_error_macros.workspace = true
+roc_module.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true
 arrayvec.workspace = true
+soa.workspace = true

@@ -1,0 +1,18 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
+---
+
+── UNUSED IMPORT in tests/test-projects/known_bad/UnusedImport.roc ─────────────
+
+Symbol is imported but not used.
+
+3│  import Symbol exposing [Ident]
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Since Symbol isn't used, you don't need to import it.
+
+────────────────────────────────────────────────────────────────────────────────
+
+0 errors and 1 warning found in <ignored for test> ms.

@@ -1,0 +1,31 @@
+@0-7 SpaceAfter(
+    Apply(
+        @0-6 PncApply(
+            @0-1 Var {
+                module_name: "",
+                ident: "i",
+            },
+            Collection {
+                items: [
+                    @2-3 Var {
+                        module_name: "",
+                        ident: "i",
+                    },
+                ],
+                final_comments: [
+                    Newline,
+                ],
+            },
+        ),
+        [
+            @6-7 Var {
+                module_name: "",
+                ident: "t",
+            },
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

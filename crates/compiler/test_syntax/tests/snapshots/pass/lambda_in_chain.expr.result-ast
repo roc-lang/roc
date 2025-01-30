@@ -1,4 +1,4 @@
-BinOps(
+@0-70 BinOps(
     [
         (
             @0-10 SpaceAfter(
@@ -35,9 +35,9 @@ BinOps(
                     [
                         @37-54 Closure(
                             [
-                                @38-42 Identifier(
-                                    "byte",
-                                ),
+                                @38-42 Identifier {
+                                    ident: "byte",
+                                },
                             ],
                             @46-54 BinOps(
                                 [

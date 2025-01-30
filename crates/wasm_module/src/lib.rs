@@ -144,10 +144,36 @@ impl<'a> WasmModule<'a> {
         let _data_count = OpaqueSection::parse((arena, SectionId::DataCount), bytes, &mut cursor)?;
         let code = CodeSection::parse(arena, bytes, &mut cursor)?;
         let data = DataSection::parse(arena, bytes, &mut cursor)?;
-        let linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
-        let reloc_code = RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
-        let reloc_data = RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
-        let names = NameSection::parse(arena, bytes, &mut cursor)?;
+
+        // Initialise the Custom sections that we care about. All empty.
+        let mut linking = LinkingSection::new(arena);
+        let mut reloc_code = RelocationSection::new(arena, "reloc.CODE");
+        let mut reloc_data = RelocationSection::new(arena, "reloc.DATA");
+        let mut names = NameSection::new(arena);
+
+        // Consume all remaining Custom sections
+        while let Ok((section_name, section_end)) = Self::peek_custom_section(arena, bytes, cursor)
+        {
+            match section_name {
+                "linking" => {
+                    linking = LinkingSection::parse(arena, bytes, &mut cursor)?;
+                }
+                "reloc.CODE" => {
+                    reloc_code =
+                        RelocationSection::parse((arena, "reloc.CODE"), bytes, &mut cursor)?;
+                }
+                "reloc.DATA" => {
+                    reloc_data =
+                        RelocationSection::parse((arena, "reloc.DATA"), bytes, &mut cursor)?;
+                }
+                "name" => {
+                    names = NameSection::parse(arena, bytes, &mut cursor)?;
+                }
+                _ => {
+                    cursor = section_end;
+                }
+            }
+        }
 
         let mut module_errors = String::new();
         if types.is_empty() {
@@ -205,6 +231,37 @@ impl<'a> WasmModule<'a> {
             reloc_data,
             names,
         })
+    }
+
+    fn peek_custom_section(
+        arena: &'a Bump,
+        module_bytes: &[u8],
+        immutable_cursor: usize,
+    ) -> Result<(&'a str, usize), ParseError> {
+        let mut cursor = immutable_cursor;
+
+        if cursor >= module_bytes.len() {
+            return Err(ParseError {
+                message: "EOF".into(),
+                offset: cursor,
+            });
+        }
+        if module_bytes[cursor] != SectionId::Custom as u8 {
+            return Err(ParseError {
+                message: format!(
+                    "Expected Custom section but found section ID 0x{:02x}",
+                    module_bytes[cursor]
+                ),
+                offset: cursor,
+            });
+        }
+        cursor += 1;
+
+        let section_size = u32::parse((), module_bytes, &mut cursor)?;
+        let section_end = cursor + section_size as usize;
+        let section_name = <&'a str>::parse(arena, module_bytes, &mut cursor)?;
+
+        Ok((section_name, section_end))
     }
 
     pub fn eliminate_dead_code(&mut self, arena: &'a Bump, called_fns: BitVec<usize>) {
@@ -456,7 +513,7 @@ impl<'a> WasmModule<'a> {
             })
     }
 
-    /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`
+    /// Linking steps for host-to-app functions like `roc__main_for_host_1_exposed`
     /// (See further explanation in the gen_wasm README)
     /// - Remove the target function from the ImportSection. It's not a JS import but the host declared it as one.
     /// - Update all of its call sites to the new index in the app
@@ -600,6 +657,9 @@ impl<'a> WasmModule<'a> {
                     _ => None,
                 });
 
+        // There are names available in the import section too, so let's use them!
+        // We don't know how the host was compiled, so we might as well just grab all the info we can get.
+        // If we end up with duplicate entries, that's OK. The backend will use the first matching entry.
         let import_fns = self
             .import
             .imports

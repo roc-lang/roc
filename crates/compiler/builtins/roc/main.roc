@@ -1,3 +1,14 @@
-package "builtins"
-    exposes [Str, Num, Bool, Result, List, Dict, Set, Decode, Encode, Hash, Set, Box, TotallyNotJson]
-    packages {}
+package [
+    Str,
+    Num,
+    Bool,
+    Result,
+    List,
+    Dict,
+    Set,
+    Decode,
+    Encode,
+    Hash,
+    Box,
+    Inspect,
+] {}

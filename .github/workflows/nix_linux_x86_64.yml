@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: Nix linux x86_64 cargo test
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -13,19 +9,32 @@ env:
 jobs:
   nix-linux-x86:
     name: nix-linux-x86
-    runs-on: [self-hosted, i7-6700K]
+    runs-on: [self-hosted, i5-4690K]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
-          
+      - uses: actions/checkout@v4
+
       - name: test building default.nix
-        run: nix-build 
+        run: nix-build
 
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
+        run: nix develop -c cargo test --locked --release -- --skip glue_cli_tests
 
-      - name: test wasm32 cli_run
-        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run"
+      - name: glue_cli_tests
+        # single threaded due to difficult bug when multithreading, see #7476
+        run: nix develop -c cargo test --locked --release glue_cli_tests -- --test-threads=1
+
+      - name: roc test all builtins
+        run: nix develop -c ./ci/roc_test_builtins.sh
+
+      - name: test wasm32 cli_tests
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" -- --skip glue_cli_tests
+
+      - name: wasm32 glue_cli_tests
+        # single threaded due to difficult bug when multithreading, see #7476
+        run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" glue_cli_tests -- --test-threads=1
 
       - name: test the dev backend # these tests require an explicit feature flag
         run: nix develop -c cargo nextest run --locked --release --package test_gen --no-default-features --features gen-dev --no-fail-fast

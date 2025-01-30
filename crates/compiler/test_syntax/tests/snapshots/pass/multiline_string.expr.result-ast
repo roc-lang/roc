@@ -1,61 +1,38 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-            Index(2147483649),
-            Index(2147483650),
-        ],
-        regions: [
-            @0-22,
-            @23-49,
-            @50-92,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-            Slice(start = 0, length = 1),
-            Slice(start = 1, length = 1),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-            Slice(start = 1, length = 0),
-            Slice(start = 2, length = 0),
-        ],
-        spaces: [
-            Newline,
-            Newline,
-        ],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-1 Identifier(
-                    "a",
-                ),
-                @4-22 Str(
-                    Line(
-                        [
-                            Plaintext(
-                                "Hello,",
-                            ),
-                            EscapedChar(
-                                Newline,
-                            ),
-                            EscapedChar(
-                                Newline,
-                            ),
-                            Plaintext(
-                                "World!",
-                            ),
-                        ],
-                    ),
-                ),
-            ),
-            Body(
-                @23-24 Identifier(
-                    "b",
-                ),
-                @27-49 Str(
-                    Block(
-                        [
+@0-95 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+                EitherIndex(2147483649),
+                EitherIndex(2147483650),
+            ],
+            regions: [
+                @0-22,
+                @23-49,
+                @50-92,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 0 },
+            ],
+            spaces: [
+                Newline,
+                Newline,
+            ],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-1 Identifier {
+                        ident: "a",
+                    },
+                    @4-22 Str(
+                        Line(
                             [
                                 Plaintext(
                                     "Hello,",
@@ -70,24 +47,25 @@ Defs(
                                     "World!",
                                 ),
                             ],
-                        ],
+                        ),
                     ),
                 ),
-            ),
-            Body(
-                @50-51 Identifier(
-                    "c",
-                ),
-                @58-92 SpaceBefore(
-                    Str(
+                Body(
+                    @23-24 Identifier {
+                        ident: "b",
+                    },
+                    @27-49 Str(
                         Block(
                             [
                                 [
                                     Plaintext(
-                                        "Hello,\n",
+                                        "Hello,",
                                     ),
-                                    Plaintext(
-                                        "\n",
+                                    EscapedChar(
+                                        Newline,
+                                    ),
+                                    EscapedChar(
+                                        Newline,
                                     ),
                                     Plaintext(
                                         "World!",
@@ -96,19 +74,46 @@ Defs(
                             ],
                         ),
                     ),
-                    [
-                        Newline,
-                    ],
                 ),
+                Body(
+                    @50-51 Identifier {
+                        ident: "c",
+                    },
+                    @58-92 SpaceBefore(
+                        Str(
+                            Block(
+                                [
+                                    [
+                                        Plaintext(
+                                            "Hello,\n",
+                                        ),
+                                        Plaintext(
+                                            "\n",
+                                        ),
+                                        Plaintext(
+                                            "World!",
+                                        ),
+                                    ],
+                                ],
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ],
+        },
+        @93-95 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @93-95 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+            ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

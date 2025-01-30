@@ -1,14 +1,35 @@
+use roc_can::module::ModuleParams;
 use roc_module::symbol::Symbol;
 use roc_types::subs::Variable;
 
 /// The scope of the solver, as symbols are introduced.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct Scope {
     symbols: Vec<Symbol>,
     variables: Vec<Variable>,
 }
 
 impl Scope {
+    pub fn new(opt_module_params: Option<ModuleParams>) -> Self {
+        match opt_module_params {
+            Some(module_params) => {
+                let mut symbols = Vec::with_capacity(module_params.destructs.len());
+                let mut variables = Vec::with_capacity(module_params.destructs.len());
+
+                for destruct in module_params.destructs {
+                    symbols.push(destruct.value.symbol);
+                    variables.push(destruct.value.var);
+                }
+
+                Self { symbols, variables }
+            }
+            None => Self {
+                symbols: Vec::default(),
+                variables: Vec::default(),
+            },
+        }
+    }
+
     pub fn vars_by_symbol(&self) -> impl Iterator<Item = (Symbol, Variable)> + '_ {
         let it1 = self.symbols.iter().copied();
         let it2 = self.variables.iter().copied();

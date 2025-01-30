@@ -1,11 +1,7 @@
 on:
-  pull_request:
-  
-name: test default.nix on linux arm64 
+    workflow_call:
 
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+name: test default.nix on linux arm64
 
 env:
     RUST_BACKTRACE: 1
@@ -16,7 +12,7 @@ jobs:
         runs-on: [self-hosted, Linux, ARM64]
         timeout-minutes: 150
         steps:
-            - uses: actions/checkout@v3
-               
+            - uses: actions/checkout@v4
+
             - name: test building default.nix
               run: nix-build

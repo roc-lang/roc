@@ -6,10 +6,11 @@ use crate::num::{
     ParsedNumResult,
 };
 use crate::scope::{PendingAbilitiesInScope, Scope};
+use bumpalo::collections::Vec as BumpVec;
 use roc_exhaustive::ListArity;
 use roc_module::ident::{Ident, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, StrLiteral, StrSegment};
+use roc_parse::ast::{self, ExtractSpaces, StrLiteral, StrSegment};
 use roc_parse::pattern::PatternType;
 use roc_problem::can::{MalformedPatternProblem, Problem, RuntimeError, ShadowKind};
 use roc_region::all::{Loc, Region};
@@ -19,7 +20,7 @@ use roc_types::types::{LambdaSet, OptAbleVar, PatternCategory, Type};
 
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Pattern {
     Identifier(Symbol),
     As(Box<Loc<Pattern>>, Symbol),
@@ -198,7 +199,7 @@ impl Pattern {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ListPatterns {
     pub patterns: Vec<Loc<Pattern>>,
     /// Where a rest pattern splits patterns before and after it, if it does at all.
@@ -207,7 +208,8 @@ pub struct ListPatterns {
     ///   [ .., A, B ] -> patterns = [A, B], rest = 0
     ///   [ A, .., B ] -> patterns = [A, B], rest = 1
     ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-    pub opt_rest: Option<(usize, Option<Symbol>)>,
+    /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
+    pub opt_rest: Option<(usize, Option<Loc<Symbol>>)>,
 }
 
 impl ListPatterns {
@@ -228,7 +230,7 @@ impl ListPatterns {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RecordDestruct {
     pub var: Variable,
     pub label: Lowercase,
@@ -236,14 +238,14 @@ pub struct RecordDestruct {
     pub typ: DestructType,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TupleDestruct {
     pub var: Variable,
     pub destruct_index: usize,
     pub typ: (Variable, Loc<Pattern>),
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum DestructType {
     Required,
     Optional(Variable, Loc<Expr>),
@@ -265,13 +267,21 @@ pub fn canonicalize_def_header_pattern<'a>(
 
     match pattern {
         // Identifiers that shadow ability members may appear (and may only appear) at the header of a def.
-        Identifier(name) => {
+        Identifier { ident: name } => {
             match scope.introduce_or_shadow_ability_member(
                 pending_abilities_in_scope,
                 (*name).into(),
                 region,
             ) {
                 Ok((symbol, shadowing_ability_member)) => {
+                    if name.contains("__") {
+                        env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                            MalformedPatternProblem::BadIdent(
+                                roc_parse::ident::BadIdent::TooManyUnderscores(region.start()),
+                            ),
+                            region,
+                        )));
+                    }
                     let can_pattern = match shadowing_ability_member {
                         // A fresh identifier.
                         None => {
@@ -358,6 +368,75 @@ fn canonicalize_pattern_symbol(
     }
 }
 
+pub fn canonicalize_apply_tag<'a>(
+    tag: Loc<ast::Pattern<'a>>,
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    output: &mut Output,
+    region: Region,
+    can_patterns: BumpVec<(Variable, Loc<Pattern>)>,
+) -> Pattern {
+    use ast::Pattern::*;
+    match tag.value {
+        Tag(name) => {
+            let tag_name = TagName(name.into());
+            Pattern::AppliedTag {
+                whole_var: var_store.fresh(),
+                ext_var: var_store.fresh(),
+                tag_name,
+                arguments: can_patterns.to_vec(),
+            }
+        }
+
+        OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
+            Ok((opaque, opaque_def)) => {
+                debug_assert!(!can_patterns.is_empty());
+
+                if can_patterns.len() > 1 {
+                    env.problem(Problem::RuntimeError(
+                        RuntimeError::OpaqueAppliedToMultipleArgs(region),
+                    ));
+
+                    Pattern::UnsupportedPattern(region)
+                } else {
+                    let argument = Box::new(can_patterns[0].clone());
+
+                    let (type_arguments, lambda_set_variables, specialized_def_type) =
+                        freshen_opaque_def(var_store, opaque_def);
+
+                    output.references.insert_type_lookup(
+                        opaque,
+                        crate::procedure::QualifiedReference::Unqualified,
+                    );
+
+                    Pattern::UnwrappedOpaque {
+                        whole_var: var_store.fresh(),
+                        opaque,
+                        argument,
+                        specialized_def_type: Box::new(specialized_def_type),
+                        type_arguments,
+                        lambda_set_variables,
+                    }
+                }
+            }
+            Err(runtime_error) => {
+                env.problem(Problem::RuntimeError(runtime_error));
+
+                Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
+            }
+        },
+        _ => {
+            env.problem(Problem::RuntimeError(RuntimeError::MalformedPattern(
+                MalformedPatternProblem::CantApplyPattern,
+                tag.region,
+            )));
+
+            Pattern::UnsupportedPattern(region)
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn canonicalize_pattern<'a>(
     env: &mut Env<'a>,
@@ -373,7 +452,7 @@ pub fn canonicalize_pattern<'a>(
     use PatternType::*;
 
     let can_pattern = match pattern {
-        Identifier(name) => {
+        Identifier { ident: name } => {
             match canonicalize_pattern_symbol(env, scope, output, region, permit_shadows, name) {
                 Ok(symbol) => Pattern::Identifier(symbol),
                 Err(pattern) => pattern,
@@ -402,9 +481,9 @@ pub fn canonicalize_pattern<'a>(
             )));
             Pattern::UnsupportedPattern(region)
         }
-        Apply(tag, patterns) => {
-            let mut can_patterns = Vec::with_capacity(patterns.len());
-            for loc_pattern in *patterns {
+        PncApply(tag, patterns) => {
+            let mut can_patterns = BumpVec::with_capacity_in(patterns.len(), env.arena);
+            for loc_pattern in patterns.items.iter() {
                 let can_pattern = canonicalize_pattern(
                     env,
                     var_store,
@@ -419,53 +498,25 @@ pub fn canonicalize_pattern<'a>(
                 can_patterns.push((var_store.fresh(), can_pattern));
             }
 
-            match tag.value {
-                Tag(name) => {
-                    let tag_name = TagName(name.into());
-                    Pattern::AppliedTag {
-                        whole_var: var_store.fresh(),
-                        ext_var: var_store.fresh(),
-                        tag_name,
-                        arguments: can_patterns,
-                    }
-                }
+            canonicalize_apply_tag(**tag, env, var_store, scope, output, region, can_patterns)
+        }
+        Apply(tag, patterns) => {
+            let mut can_patterns = BumpVec::with_capacity_in(patterns.len(), env.arena);
+            for loc_pattern in *patterns {
+                let can_pattern = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_pattern.value,
+                    loc_pattern.region,
+                    permit_shadows,
+                );
 
-                OpaqueRef(name) => match scope.lookup_opaque_ref(name, tag.region) {
-                    Ok((opaque, opaque_def)) => {
-                        debug_assert!(!can_patterns.is_empty());
-
-                        if can_patterns.len() > 1 {
-                            env.problem(Problem::RuntimeError(
-                                RuntimeError::OpaqueAppliedToMultipleArgs(region),
-                            ));
-
-                            Pattern::UnsupportedPattern(region)
-                        } else {
-                            let argument = Box::new(can_patterns.pop().unwrap());
-
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
-
-                            output.references.insert_type_lookup(opaque);
-
-                            Pattern::UnwrappedOpaque {
-                                whole_var: var_store.fresh(),
-                                opaque,
-                                argument,
-                                specialized_def_type: Box::new(specialized_def_type),
-                                type_arguments,
-                                lambda_set_variables,
-                            }
-                        }
-                    }
-                    Err(runtime_error) => {
-                        env.problem(Problem::RuntimeError(runtime_error));
-
-                        Pattern::OpaqueNotInScope(Loc::at(tag.region, name.into()))
-                    }
-                },
-                _ => unreachable!("Other patterns cannot be applied"),
+                can_patterns.push((var_store.fresh(), can_pattern));
             }
+            canonicalize_apply_tag(**tag, env, var_store, scope, output, region, can_patterns)
         }
 
         &FloatLiteral(str) => match pattern_type {
@@ -623,120 +674,17 @@ pub fn canonicalize_pattern<'a>(
         RecordDestructure(patterns) => {
             let ext_var = var_store.fresh();
             let whole_var = var_store.fresh();
-            let mut destructs = Vec::with_capacity(patterns.len());
-            let mut opt_erroneous = None;
 
-            for loc_pattern in patterns.iter() {
-                match loc_pattern.value {
-                    Identifier(label) => {
-                        match scope.introduce(label.into(), region) {
-                            Ok(symbol) => {
-                                output.references.insert_bound(symbol);
-
-                                destructs.push(Loc {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        typ: DestructType::Required,
-                                    },
-                                });
-                            }
-                            Err((shadowed_symbol, shadow, new_symbol)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: shadowed_symbol.region,
-                                    shadow: shadow.clone(),
-                                    kind: ShadowKind::Variable,
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(
-                                    shadowed_symbol.region,
-                                    shadow,
-                                    new_symbol,
-                                ));
-                            }
-                        };
-                    }
-
-                    RequiredField(label, loc_guard) => {
-                        // a guard does not introduce the label into scope!
-                        let symbol =
-                            scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
-                        let can_guard = canonicalize_pattern(
-                            env,
-                            var_store,
-                            scope,
-                            output,
-                            pattern_type,
-                            &loc_guard.value,
-                            loc_guard.region,
-                            permit_shadows,
-                        );
-
-                        destructs.push(Loc {
-                            region: loc_pattern.region,
-                            value: RecordDestruct {
-                                var: var_store.fresh(),
-                                label: Lowercase::from(label),
-                                symbol,
-                                typ: DestructType::Guard(var_store.fresh(), can_guard),
-                            },
-                        });
-                    }
-                    OptionalField(label, loc_default) => {
-                        // an optional DOES introduce the label into scope!
-                        match scope.introduce(label.into(), region) {
-                            Ok(symbol) => {
-                                let (can_default, expr_output) = canonicalize_expr(
-                                    env,
-                                    var_store,
-                                    scope,
-                                    loc_default.region,
-                                    &loc_default.value,
-                                );
-
-                                // an optional field binds the symbol!
-                                output.references.insert_bound(symbol);
-
-                                output.union(expr_output);
-
-                                destructs.push(Loc {
-                                    region: loc_pattern.region,
-                                    value: RecordDestruct {
-                                        var: var_store.fresh(),
-                                        label: Lowercase::from(label),
-                                        symbol,
-                                        typ: DestructType::Optional(var_store.fresh(), can_default),
-                                    },
-                                });
-                            }
-                            Err((shadowed_symbol, shadow, new_symbol)) => {
-                                env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
-                                    original_region: shadowed_symbol.region,
-                                    shadow: shadow.clone(),
-                                    kind: ShadowKind::Variable,
-                                }));
-
-                                // No matter what the other patterns
-                                // are, we're definitely shadowed and will
-                                // get a runtime exception as soon as we
-                                // encounter the first bad pattern.
-                                opt_erroneous = Some(Pattern::Shadowed(
-                                    shadowed_symbol.region,
-                                    shadow,
-                                    new_symbol,
-                                ));
-                            }
-                        };
-                    }
-                    _ => unreachable!("Any other pattern should have given a parse error"),
-                }
-            }
+            let (destructs, opt_erroneous) = canonicalize_record_destructs(
+                env,
+                var_store,
+                scope,
+                output,
+                pattern_type,
+                patterns,
+                region,
+                permit_shadows,
+            );
 
             // If we encountered an erroneous pattern (e.g. one with shadowing),
             // use the resulting RuntimeError. Otherwise, return a successful record destructure.
@@ -790,7 +738,8 @@ pub fn canonicalize_pattern<'a>(
                                     pattern_as.identifier.value,
                                 ) {
                                     Ok(symbol) => {
-                                        rest_name = Some(symbol);
+                                        rest_name =
+                                            Some(Loc::at(pattern_as.identifier.region, symbol));
                                     }
                                     Err(pattern) => {
                                         opt_erroneous = Some(pattern);
@@ -868,7 +817,7 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        Malformed(_str) => {
+        Malformed(_) | MalformedExpr(_) => {
             let problem = MalformedPatternProblem::Unknown;
             malformed_pattern(env, problem, region)
         }
@@ -888,6 +837,139 @@ pub fn canonicalize_pattern<'a>(
         region,
         value: can_pattern,
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn canonicalize_record_destructs<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    output: &mut Output,
+    pattern_type: PatternType,
+    patterns: &ast::Collection<Loc<ast::Pattern<'a>>>,
+    region: Region,
+    permit_shadows: PermitShadows,
+) -> (Vec<Loc<RecordDestruct>>, Option<Pattern>) {
+    use ast::Pattern::*;
+
+    let mut destructs = Vec::with_capacity(patterns.len());
+    let mut opt_erroneous = None;
+
+    for loc_pattern in patterns.iter() {
+        match loc_pattern.value.extract_spaces().item {
+            Identifier { ident: label } => {
+                match scope.introduce(label.into(), region) {
+                    Ok(symbol) => {
+                        output.references.insert_bound(symbol);
+
+                        destructs.push(Loc {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                typ: DestructType::Required,
+                            },
+                        });
+                    }
+                    Err((shadowed_symbol, shadow, new_symbol)) => {
+                        env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                            original_region: shadowed_symbol.region,
+                            shadow: shadow.clone(),
+                            kind: ShadowKind::Variable,
+                        }));
+
+                        // No matter what the other patterns
+                        // are, we're definitely shadowed and will
+                        // get a runtime exception as soon as we
+                        // encounter the first bad pattern.
+                        opt_erroneous = Some(Pattern::Shadowed(
+                            shadowed_symbol.region,
+                            shadow,
+                            new_symbol,
+                        ));
+                    }
+                };
+            }
+
+            RequiredField(label, loc_guard) => {
+                // a guard does not introduce the label into scope!
+                let symbol = scope.scopeless_symbol(&Ident::from(label), loc_pattern.region);
+                let can_guard = canonicalize_pattern(
+                    env,
+                    var_store,
+                    scope,
+                    output,
+                    pattern_type,
+                    &loc_guard.value,
+                    loc_guard.region,
+                    permit_shadows,
+                );
+
+                destructs.push(Loc {
+                    region: loc_pattern.region,
+                    value: RecordDestruct {
+                        var: var_store.fresh(),
+                        label: Lowercase::from(label),
+                        symbol,
+                        typ: DestructType::Guard(var_store.fresh(), can_guard),
+                    },
+                });
+            }
+            OptionalField(label, loc_default) => {
+                // an optional DOES introduce the label into scope!
+                match scope.introduce(label.into(), region) {
+                    Ok(symbol) => {
+                        let (can_default, expr_output) = canonicalize_expr(
+                            env,
+                            var_store,
+                            scope,
+                            loc_default.region,
+                            &loc_default.value,
+                        );
+
+                        // an optional field binds the symbol!
+                        output.references.insert_bound(symbol);
+
+                        output.union(expr_output);
+
+                        destructs.push(Loc {
+                            region: loc_pattern.region,
+                            value: RecordDestruct {
+                                var: var_store.fresh(),
+                                label: Lowercase::from(label),
+                                symbol,
+                                typ: DestructType::Optional(var_store.fresh(), can_default),
+                            },
+                        });
+                    }
+                    Err((shadowed_symbol, shadow, new_symbol)) => {
+                        env.problem(Problem::RuntimeError(RuntimeError::Shadowing {
+                            original_region: shadowed_symbol.region,
+                            shadow: shadow.clone(),
+                            kind: ShadowKind::Variable,
+                        }));
+
+                        // No matter what the other patterns
+                        // are, we're definitely shadowed and will
+                        // get a runtime exception as soon as we
+                        // encounter the first bad pattern.
+                        opt_erroneous = Some(Pattern::Shadowed(
+                            shadowed_symbol.region,
+                            shadow,
+                            new_symbol,
+                        ));
+                    }
+                };
+            }
+            _ => unreachable!(
+                "Any other pattern should have given a parse error: {:?}",
+                loc_pattern.value
+            ),
+        }
+    }
+
+    (destructs, opt_erroneous)
 }
 
 /// When we detect an unsupported pattern type (e.g. 5 = 1 + 2 is unsupported because you can't
@@ -994,6 +1076,10 @@ impl<'a> BindingsFromPattern<'a> {
                         | OpaqueNotInScope(..) => (),
                         List { patterns, .. } => {
                             stack.extend(patterns.patterns.iter().rev().map(Pattern));
+
+                            if let Some((_, Some(rest_sym))) = &patterns.opt_rest {
+                                return Some((rest_sym.value, rest_sym.region));
+                            }
                         }
                     }
                 }

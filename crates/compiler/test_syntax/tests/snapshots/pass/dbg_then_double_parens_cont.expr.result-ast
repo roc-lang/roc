@@ -1,0 +1,32 @@
+@0-5 SpaceAfter(
+    DbgStmt {
+        first: @4-5 Var {
+            module_name: "",
+            ident: "g",
+        },
+        extra_args: [],
+        continuation: @6-12 SpaceBefore(
+            ParensAround(
+                ParensAround(
+                    SpaceAfter(
+                        Tag(
+                            "L",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+        pnc_style: false,
+    },
+    [
+        LineComment(
+            "",
+        ),
+    ],
+)

@@ -6,7 +6,7 @@ use roc_collections::all::MutMap;
 use roc_module::symbol::ModuleId;
 use roc_packaging::cache::RocCacheDir;
 use roc_reporting::report::{Palette, RenderTarget};
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::path::PathBuf;
 
 const SKIP_SUBS_CACHE: bool = {
@@ -22,7 +22,7 @@ pub use roc_load_internal::file::{
     Threading,
 };
 pub use roc_load_internal::module::{
-    EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
+    CheckedModule, EntryPoint, Expectations, ExposedToHost, LoadedModule, MonomorphizedModule,
 };
 pub use roc_solve::FunctionKind;
 
@@ -51,7 +51,7 @@ fn load<'a>(
 pub fn load_single_threaded<'a>(
     arena: &'a Bump,
     load_start: LoadStart<'a>,
-    target_info: TargetInfo,
+    target: Target,
     function_kind: FunctionKind,
     render: RenderTarget,
     palette: Palette,
@@ -65,7 +65,7 @@ pub fn load_single_threaded<'a>(
         arena,
         load_start,
         exposed_types,
-        target_info,
+        target,
         function_kind,
         cached_subs,
         render,
@@ -104,12 +104,14 @@ pub fn load_and_monomorphize_from_str<'a>(
     filename: PathBuf,
     src: &'a str,
     src_dir: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, src, roc_cache_dir, src_dir)?;
+    let load_start =
+        LoadStart::from_str(arena, filename, opt_main_path, src, roc_cache_dir, src_dir)?;
     let exposed_types = ExposedByModule::default();
 
     match load(arena, load_start, exposed_types, roc_cache_dir, load_config)? {
@@ -121,6 +123,7 @@ pub fn load_and_monomorphize_from_str<'a>(
 pub fn load_and_monomorphize<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<MonomorphizedModule<'a>, LoadMonomorphizedError<'a>> {
@@ -129,6 +132,7 @@ pub fn load_and_monomorphize<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,
@@ -145,6 +149,7 @@ pub fn load_and_monomorphize<'a>(
 pub fn load_and_typecheck<'a>(
     arena: &'a Bump,
     filename: PathBuf,
+    opt_main_path: Option<PathBuf>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
@@ -153,6 +158,7 @@ pub fn load_and_typecheck<'a>(
     let load_start = LoadStart::from_path(
         arena,
         filename,
+        opt_main_path,
         load_config.render,
         roc_cache_dir,
         load_config.palette,
@@ -172,7 +178,8 @@ pub fn load_and_typecheck_str<'a>(
     filename: PathBuf,
     source: &'a str,
     src_dir: PathBuf,
-    target_info: TargetInfo,
+    opt_main_path: Option<PathBuf>,
+    target: Target,
     function_kind: FunctionKind,
     render: RenderTarget,
     roc_cache_dir: RocCacheDir<'_>,
@@ -180,7 +187,14 @@ pub fn load_and_typecheck_str<'a>(
 ) -> Result<LoadedModule, LoadingProblem<'a>> {
     use LoadResult::*;
 
-    let load_start = LoadStart::from_str(arena, filename, source, roc_cache_dir, src_dir)?;
+    let load_start = LoadStart::from_str(
+        arena,
+        filename,
+        opt_main_path,
+        source,
+        roc_cache_dir,
+        src_dir,
+    )?;
 
     // NOTE: this function is meant for tests, and so we use single-threaded
     // solving so we don't use too many threads per-test. That gives higher
@@ -188,7 +202,7 @@ pub fn load_and_typecheck_str<'a>(
     match load_single_threaded(
         arena,
         load_start,
-        target_info,
+        target,
         function_kind,
         render,
         palette,
@@ -247,7 +261,7 @@ fn read_cached_types() -> MutMap<ModuleId, TypeState> {
 
     // Wasm seems to re-order definitions between build time and runtime, but only in release mode.
     // That is very strange, but we can solve it separately
-    if !cfg!(target_family = "wasm") && !cfg!(windows) && !SKIP_SUBS_CACHE {
+    if !cfg!(target_family = "wasm") && !SKIP_SUBS_CACHE {
         output.insert(ModuleId::BOOL, deserialize_help(mod_bool));
 
         output.insert(ModuleId::RESULT, deserialize_help(mod_result));

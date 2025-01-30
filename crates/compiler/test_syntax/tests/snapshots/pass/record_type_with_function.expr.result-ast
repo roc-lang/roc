@@ -1,97 +1,105 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-77,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "x",
-                ),
-                @4-77 Record {
-                    fields: [
-                        @6-24 RequiredValue(
-                            @6-10 "init",
-                            [],
-                            @13-24 Function(
-                                [
-                                    @13-15 Record {
-                                        fields: [],
-                                        ext: None,
-                                    },
-                                ],
-                                @19-24 Apply(
-                                    "",
-                                    "Model",
-                                    [],
-                                ),
-                            ),
-                        ),
-                        @26-54 RequiredValue(
-                            @26-32 "update",
-                            [],
-                            @35-54 Function(
-                                [
-                                    @35-40 Apply(
+@0-81 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-77,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "x",
+                    },
+                    @4-77 Record {
+                        fields: [
+                            @6-24 RequiredValue(
+                                @6-10 "init",
+                                [],
+                                @13-24 Function(
+                                    [
+                                        @13-15 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                    ],
+                                    Pure,
+                                    @19-24 Apply(
                                         "",
                                         "Model",
                                         [],
                                     ),
-                                    @42-45 Apply(
+                                ),
+                            ),
+                            @26-54 RequiredValue(
+                                @26-32 "update",
+                                [],
+                                @35-54 Function(
+                                    [
+                                        @35-40 Apply(
+                                            "",
+                                            "Model",
+                                            [],
+                                        ),
+                                        @42-45 Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                    ],
+                                    Pure,
+                                    @49-54 Apply(
+                                        "",
+                                        "Model",
+                                        [],
+                                    ),
+                                ),
+                            ),
+                            @56-75 RequiredValue(
+                                @56-60 "view",
+                                [],
+                                @63-75 Function(
+                                    [
+                                        @63-68 Apply(
+                                            "",
+                                            "Model",
+                                            [],
+                                        ),
+                                    ],
+                                    Pure,
+                                    @72-75 Apply(
                                         "",
                                         "Str",
                                         [],
                                     ),
-                                ],
-                                @49-54 Apply(
-                                    "",
-                                    "Model",
-                                    [],
                                 ),
                             ),
-                        ),
-                        @56-75 RequiredValue(
-                            @56-60 "view",
-                            [],
-                            @63-75 Function(
-                                [
-                                    @63-68 Apply(
-                                        "",
-                                        "Model",
-                                        [],
-                                    ),
-                                ],
-                                @72-75 Apply(
-                                    "",
-                                    "Str",
-                                    [],
-                                ),
-                            ),
-                        ),
-                    ],
-                    ext: None,
-                },
+                        ],
+                        ext: None,
+                    },
+                ),
+            ],
+        },
+        @79-81 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @79-81 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

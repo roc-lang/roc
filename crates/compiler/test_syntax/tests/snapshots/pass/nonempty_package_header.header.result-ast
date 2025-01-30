@@ -1,46 +1,37 @@
-Module {
-    comments: [],
-    header: Package(
+SpacesBefore {
+    before: [],
+    item: Package(
         PackageHeader {
-            before_name: [],
-            name: @8-20 PackageName(
-                "foo/barbaz",
-            ),
-            exposes: KeywordItem {
-                keyword: Spaces {
-                    before: [
+            before_exposes: [],
+            exposes: [
+                @9-12 ModuleName(
+                    "Foo",
+                ),
+                @14-17 ModuleName(
+                    "Bar",
+                ),
+            ],
+            before_packages: [],
+            packages: @19-39 [
+                @25-37 SpaceBefore(
+                    SpaceAfter(
+                        PackageEntry {
+                            shorthand: "foo",
+                            spaces_after_shorthand: [],
+                            platform_marker: None,
+                            package_name: @30-37 PackageName(
+                                "./foo",
+                            ),
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                    [
                         Newline,
                     ],
-                    item: ExposesKeyword,
-                    after: [],
-                },
-                item: [
-                    @34-37 ModuleName(
-                        "Foo",
-                    ),
-                    @39-42 ModuleName(
-                        "Bar",
-                    ),
-                ],
-            },
-            packages: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: PackagesKeyword,
-                    after: [],
-                },
-                item: [
-                    @59-71 PackageEntry {
-                        shorthand: "foo",
-                        spaces_after_shorthand: [],
-                        package_name: @64-71 PackageName(
-                            "./foo",
-                        ),
-                    },
-                ],
-            },
+                ),
+            ],
         },
     ),
 }

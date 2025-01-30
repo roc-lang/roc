@@ -1,0 +1,72 @@
+@0-22 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-20,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-15 Apply(
+                    @0-15 PncApply(
+                        @0-1 NumLiteral(
+                            "1",
+                        ),
+                        [
+                            @2-13 SpaceAfter(
+                                PncApply(
+                                    @2-4 Identifier {
+                                        ident: "ts",
+                                    },
+                                    [
+                                        @5-9 SpaceAfter(
+                                            NumLiteral(
+                                                "0",
+                                            ),
+                                            [
+                                                Newline,
+                                                Newline,
+                                                LineComment(
+                                                    "",
+                                                ),
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    ),
+                    [
+                        @15-16 Identifier {
+                            ident: "f",
+                        },
+                    ],
+                ),
+                @17-20 BoundVariable(
+                    "i7f",
+                ),
+            ),
+        ],
+    },
+    @21-22 SpaceBefore(
+        Var {
+            module_name: "",
+            ident: "e",
+        },
+        [
+            Newline,
+        ],
+    ),
+)

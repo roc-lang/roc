@@ -1,0 +1,83 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+    ],
+    regions: [
+        @0-39,
+        @40-85,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        IngestedFileImport(
+            IngestedFileImport {
+                before_path: [],
+                path: @7-25 PlainLine(
+                    "path/to/file.txt",
+                ),
+                name: KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @29-33 "file",
+                },
+                annotation: Some(
+                    IngestedFileAnnotation {
+                        before_colon: [],
+                        annotation: @36-39 Apply(
+                            "",
+                            "Str",
+                            [],
+                        ),
+                    },
+                ),
+            },
+        ),
+        IngestedFileImport(
+            IngestedFileImport {
+                before_path: [],
+                path: @47-65 PlainLine(
+                    "path/to/file.txt",
+                ),
+                name: KeywordItem {
+                    keyword: Spaces {
+                        before: [],
+                        item: ImportAsKeyword,
+                        after: [],
+                    },
+                    item: @70-74 "file",
+                },
+                annotation: Some(
+                    IngestedFileAnnotation {
+                        before_colon: [],
+                        annotation: @78-85 Apply(
+                            "",
+                            "List",
+                            [
+                                @83-85 Apply(
+                                    "",
+                                    "U8",
+                                    [],
+                                ),
+                            ],
+                        ),
+                    },
+                ),
+            },
+        ),
+    ],
+}

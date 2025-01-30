@@ -124,13 +124,16 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-extern void send_panic_msg_to_rust(void* msg, uint32_t tag_id);
+extern void send_panic_msg_to_rust(void* msg, uint32_t panic_tag);
 
-void roc_panic(void* msg, unsigned int tag_id)
+void roc_panic(void* msg, unsigned int panic_tag)
 {
-    send_panic_msg_to_rust(msg, tag_id);
+    send_panic_msg_to_rust(msg, panic_tag);
     exit(101);
 }
+
+// TODO: add a way to send dbg to rust.
+void roc_debug(void* loc, void* msg) {}
 
 //--------------------------
 

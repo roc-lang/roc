@@ -1,0 +1,25 @@
+@0-10 SpaceAfter(
+    Str(
+        Line(
+            [
+                Interpolated(
+                    @3-8 ParensAround(
+                        SpaceAfter(
+                            Tag(
+                                "S",
+                            ),
+                            [
+                                LineComment(
+                                    "",
+                                ),
+                            ],
+                        ),
+                    ),
+                ),
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

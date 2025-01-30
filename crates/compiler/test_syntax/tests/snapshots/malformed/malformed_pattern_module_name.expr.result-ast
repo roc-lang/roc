@@ -1,40 +1,45 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
+@0-37 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @14-21 SpaceBefore(
+                        Malformed(
+                            "Foo.val",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @25-26 Num(
+                    "1",
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @31-32 SpaceBefore(
+                        Underscore(
+                            "",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @36-37 Num(
+                    "4",
+                ),
+                guard: None,
+            },
+        ],
+    ),
     [
-        WhenBranch {
-            patterns: [
-                @14-21 SpaceBefore(
-                    Malformed(
-                        "Foo.and",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @25-26 Num(
-                "1",
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @31-32 SpaceBefore(
-                    Underscore(
-                        "",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @36-37 Num(
-                "4",
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

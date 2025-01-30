@@ -1,21 +1,23 @@
 Defs {
     tags: [
-        Index(0),
+        EitherIndex(0),
     ],
     regions: [
         @0-53,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
-    spaces: [],
+    spaces: [
+        Newline,
+    ],
     type_defs: [
         Opaque {
             header: TypeHeader {
-                name: @0-10 "Bookmark",
+                name: @0-8 "Bookmark",
                 vars: [
                     @9-10 Identifier(
                         "a",

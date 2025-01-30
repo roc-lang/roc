@@ -1,0 +1,52 @@
+@0-8 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-3,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Stmt(
+                @0-3 BinOps(
+                    [
+                        (
+                            @0-1 Var {
+                                module_name: "",
+                                ident: "n",
+                            },
+                            @1-2 Star,
+                        ),
+                    ],
+                    @2-3 Var {
+                        module_name: "",
+                        ident: "f",
+                    },
+                ),
+            ),
+        ],
+    },
+    @6-8 SpaceBefore(
+        UnaryOp(
+            @7-8 Var {
+                module_name: "",
+                ident: "f",
+            },
+            @6-7 Negate,
+        ),
+        [
+            Newline,
+            LineComment(
+                "",
+            ),
+        ],
+    ),
+)

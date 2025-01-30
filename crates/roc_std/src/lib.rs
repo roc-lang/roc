@@ -10,19 +10,16 @@ use core::hash::{Hash, Hasher};
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Drop;
 use core::str;
+use std::convert::Infallible;
 
 mod roc_box;
-mod roc_dict;
 mod roc_list;
-mod roc_set;
 mod roc_str;
 mod storage;
 
 pub use roc_box::RocBox;
-pub use roc_dict::RocDict;
-pub use roc_list::{RocList, SendSafeRocList};
-pub use roc_set::RocSet;
-pub use roc_str::{InteriorNulError, RocStr, SendSafeRocStr};
+pub use roc_list::{ReadOnlyRocList, RocList, SendSafeRocList};
+pub use roc_str::{InteriorNulError, ReadOnlyRocStr, RocStr, SendSafeRocStr};
 pub use storage::Storage;
 
 // A list of C functions that are being imported
@@ -36,6 +33,7 @@ extern "C" {
     ) -> *mut c_void;
     pub fn roc_dealloc(ptr: *mut c_void, alignment: u32);
     pub fn roc_panic(c_ptr: *mut c_void, tag_id: u32);
+    pub fn roc_dbg(loc: *mut c_void, msg: *mut c_void, src: *mut c_void);
     pub fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void;
 }
 
@@ -101,6 +99,13 @@ where
     }
 }
 
+impl<T, E> Eq for RocResult<T, E>
+where
+    T: Eq,
+    E: Eq,
+{
+}
+
 impl<T, E> PartialEq for RocResult<T, E>
 where
     T: PartialEq,
@@ -108,6 +113,37 @@ where
 {
     fn eq(&self, other: &Self) -> bool {
         self.as_result_of_refs() == other.as_result_of_refs()
+    }
+}
+
+impl<T, E> Ord for RocResult<T, E>
+where
+    T: Ord,
+    E: Ord,
+{
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_result_of_refs().cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> PartialOrd for RocResult<T, E>
+where
+    T: PartialOrd,
+    E: PartialOrd,
+{
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        self.as_result_of_refs()
+            .partial_cmp(&other.as_result_of_refs())
+    }
+}
+
+impl<T, E> Hash for RocResult<T, E>
+where
+    T: Hash,
+    E: Hash,
+{
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_result_of_refs().hash(state)
     }
 }
 
@@ -178,6 +214,32 @@ impl<T, E> RocResult<T, E> {
     }
 }
 
+impl<T, E> RocRefcounted for RocResult<T, E>
+where
+    T: RocRefcounted,
+    E: RocRefcounted,
+{
+    fn inc(&mut self) {
+        unsafe {
+            match self.tag {
+                RocResultTag::RocOk => (*self.payload.ok).inc(),
+                RocResultTag::RocErr => (*self.payload.err).inc(),
+            }
+        }
+    }
+    fn dec(&mut self) {
+        unsafe {
+            match self.tag {
+                RocResultTag::RocOk => (*self.payload.ok).dec(),
+                RocResultTag::RocErr => (*self.payload.err).dec(),
+            }
+        }
+    }
+    fn is_refcounted() -> bool {
+        T::is_refcounted() || E::is_refcounted()
+    }
+}
+
 impl<T, E> From<RocResult<T, E>> for Result<T, E> {
     fn from(roc_result: RocResult<T, E>) -> Self {
         use RocResultTag::*;
@@ -227,7 +289,7 @@ impl<T, E> Drop for RocResult<T, E> {
     }
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, Hash)]
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Default)]
 #[repr(C, align(16))]
 pub struct RocDec([u8; 16]);
 
@@ -261,86 +323,82 @@ impl RocDec {
 
     #[allow(clippy::should_implement_trait)]
     pub fn from_str(value: &str) -> Option<Self> {
-        // Split the string into the parts before and after the "."
-        let mut parts = value.split('.');
+        let (sign, value) = match value.chars().next() {
+            Some('+') => (1i128, &value[1..]),
+            Some('-') => (-1i128, &value[1..]),
+            _ => (1i128, value),
+        };
+        let mut digits = vec![];
+        let mut point = None;
+        let mut epow = 0;
+        for (i, c) in value.char_indices() {
+            match c {
+                '.' => {
+                    if point.is_some() {
+                        // there should only be one "." in the string
+                        return None;
+                    } else {
+                        point = Some(digits.len());
+                    }
+                }
+                '_' => {} // ignore
 
-        let before_point = match parts.next() {
-            Some(answer) => answer,
-            None => {
-                return None;
+                // parse e<num> suffix
+                'e' => match value[i + 1..].parse() {
+                    Ok(pow) => {
+                        epow = pow;
+                        break;
+                    }
+                    Err(_) => return None,
+                },
+                _ => digits.push(c.to_digit(10)?),
             }
-        };
-
-        let opt_after_point = match parts.next() {
-            Some(answer) if answer.len() <= Self::DECIMAL_PLACES => Some(answer),
-            _ => None,
-        };
-
-        // There should have only been one "." in the string!
-        if parts.next().is_some() {
+        }
+        if digits.is_empty() {
+            // no digits parsed
             return None;
         }
 
-        // Calculate the low digits - the ones after the decimal point.
-        let lo = match opt_after_point {
-            Some(after_point) => {
-                match after_point.parse::<i128>() {
-                    Ok(answer) => {
-                        // Translate e.g. the 1 from 0.1 into 10000000000000000000
-                        // by "restoring" the elided trailing zeroes to the number!
-                        let trailing_zeroes = Self::DECIMAL_PLACES - after_point.len();
-                        let lo = answer * 10i128.pow(trailing_zeroes as u32);
-
-                        if !before_point.starts_with('-') {
-                            lo
-                        } else {
-                            -lo
-                        }
-                    }
-                    Err(_) => {
-                        return None;
-                    }
-                }
+        let mut point = point.unwrap_or(digits.len());
+        // eg for "1.3e2" we want a string like "130", so move point and append 0's as necessary
+        while epow > 0 {
+            if point == digits.len() {
+                digits.push(0);
             }
-            None => 0,
-        };
-
-        // Calculate the high digits - the ones before the decimal point.
-        let (is_pos, digits) = match before_point.chars().next() {
-            Some('+') => (true, &before_point[1..]),
-            Some('-') => (false, &before_point[1..]),
-            _ => (true, before_point),
-        };
-
-        let mut hi: i128 = 0;
-        macro_rules! adjust_hi {
-            ($op:ident) => {{
-                for digit in digits.chars() {
-                    if digit == '_' {
-                        continue;
-                    }
-
-                    let digit = digit.to_digit(10)?;
-                    hi = hi.checked_mul(10)?;
-                    hi = hi.$op(digit as _)?;
-                }
-            }};
+            point += 1;
+            epow -= 1;
+        }
+        // eg for "1e-1" we want a string like "0.1", so insert 0's as necessary
+        while (point as i32) + epow < 1 {
+            digits.insert(0, 0);
+            point += 1;
         }
 
-        if is_pos {
-            adjust_hi!(checked_add);
-        } else {
-            adjust_hi!(checked_sub);
-        }
+        let (before_point, after_point) = digits.split_at(point);
 
-        match hi.checked_mul(Self::ONE_POINT_ZERO) {
-            Some(hi) => hi.checked_add(lo).map(|num| Self(num.to_ne_bytes())),
-            None => None,
+        let mut hi = 0i128;
+        for &d in before_point {
+            hi = hi.checked_mul(10)?;
+            hi = hi.checked_add(d.into())?;
         }
-    }
+        let hi = hi.checked_mul(sign)?;
 
-    pub fn from_str_to_i128_unsafe(val: &str) -> i128 {
-        Self::from_str(val).unwrap().as_i128()
+        let mut lo = 0i128;
+        for &d in after_point
+            .iter()
+            // add infinite trailing 0's, then truncate by Self::DECIMAL_PLACES
+            // so eg ".123" becomes ".12300000000000000000", and ".0000000000000000000123" becomes ".00000000000000000001"
+            .chain(std::iter::repeat(&0))
+            .take(Self::DECIMAL_PLACES)
+        {
+            lo = lo.checked_mul(10)?;
+            lo = lo.checked_add(d.into())?;
+        }
+        let lo = lo.checked_mul(sign)?;
+
+        let num = hi.checked_mul(Self::ONE_POINT_ZERO)?.checked_add(lo)?;
+
+        Some(Self(num.to_ne_bytes()))
     }
 
     /// This is private because RocDec being an i128 is an implementation detail
@@ -420,8 +478,20 @@ impl fmt::Display for RocDec {
     }
 }
 
+impl PartialOrd for RocDec {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RocDec {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.as_i128().cmp(&other.as_i128())
+    }
+}
+
 #[repr(C, align(16))]
-#[derive(Clone, Copy, Eq, Default)]
+#[derive(Clone, Copy, Eq, Default, PartialEq)]
 pub struct I128([u8; 16]);
 
 impl From<i128> for I128 {
@@ -448,15 +518,9 @@ impl fmt::Display for I128 {
     }
 }
 
-impl PartialEq for I128 {
-    fn eq(&self, other: &Self) -> bool {
-        i128::from(*self).eq(&i128::from(*other))
-    }
-}
-
 impl PartialOrd for I128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        i128::from(*self).partial_cmp(&i128::from(*other))
+        Some(self.cmp(other))
     }
 }
 
@@ -473,7 +537,7 @@ impl Hash for I128 {
 }
 
 #[repr(C, align(16))]
-#[derive(Clone, Copy, Eq, Default)]
+#[derive(Clone, Copy, Eq, Default, PartialEq)]
 pub struct U128([u8; 16]);
 
 impl From<u128> for U128 {
@@ -500,15 +564,9 @@ impl fmt::Display for U128 {
     }
 }
 
-impl PartialEq for U128 {
-    fn eq(&self, other: &Self) -> bool {
-        u128::from(*self).eq(&u128::from(*other))
-    }
-}
-
 impl PartialOrd for U128 {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        u128::from(*self).partial_cmp(&u128::from(*other))
+        Some(self.cmp(other))
     }
 }
 
@@ -523,3 +581,104 @@ impl Hash for U128 {
         u128::from(*self).hash(state);
     }
 }
+
+pub const ROC_REFCOUNT_CONSTANT: usize = 0;
+// The top bit indicates if refcounts should be atomic.
+pub const ROC_REFCOUNT_IS_ATOMIC: usize = isize::MIN as usize;
+// The remaining bits are the actual refcount.
+pub const ROC_REFCOUNT_VALUE_MASK: usize = !ROC_REFCOUNT_IS_ATOMIC;
+
+/// All Roc types that are refcounted must implement this trait.
+///
+/// For aggregate types, this must recurse down the structure.
+pub trait RocRefcounted {
+    /// Increments the refcount.
+    fn inc(&mut self);
+
+    /// Decrements the refcount potentially freeing the underlying allocation.
+    fn dec(&mut self);
+
+    /// Returns true if the type is actually refcounted by roc.
+    fn is_refcounted() -> bool;
+}
+
+#[macro_export]
+macro_rules! roc_refcounted_noop_impl {
+    ( $( $T:tt),+ ) => {
+        $(
+            impl RocRefcounted for $T {
+                fn inc(&mut self) {}
+                fn dec(&mut self) {}
+                fn is_refcounted() -> bool {
+                    false
+                }
+            }
+        )+
+    };
+}
+roc_refcounted_noop_impl!(bool);
+roc_refcounted_noop_impl!(u8, u16, u32, u64, u128, U128);
+roc_refcounted_noop_impl!(i8, i16, i32, i64, i128, I128);
+roc_refcounted_noop_impl!(f32, f64);
+roc_refcounted_noop_impl!(RocDec);
+roc_refcounted_noop_impl!(Infallible, ());
+
+macro_rules! roc_refcounted_arr_impl {
+    ( $n:tt ) => {
+        impl<T> RocRefcounted for [T; $n]
+        where
+            T: RocRefcounted,
+        {
+            fn inc(&mut self) {
+                self.iter_mut().for_each(|x| x.inc());
+            }
+            fn dec(&mut self) {
+                self.iter_mut().for_each(|x| x.dec());
+            }
+            fn is_refcounted() -> bool {
+                T::is_refcounted()
+            }
+        }
+    };
+}
+
+roc_refcounted_arr_impl!(0);
+roc_refcounted_arr_impl!(1);
+roc_refcounted_arr_impl!(2);
+roc_refcounted_arr_impl!(3);
+roc_refcounted_arr_impl!(4);
+roc_refcounted_arr_impl!(5);
+roc_refcounted_arr_impl!(6);
+roc_refcounted_arr_impl!(7);
+roc_refcounted_arr_impl!(8);
+
+macro_rules! roc_refcounted_tuple_impl {
+    ( $( $idx:tt $T:ident),* ) => {
+        impl<$($T, )+> RocRefcounted for ($($T, )*)
+        where
+            $($T : RocRefcounted, )*
+        {
+            fn inc(&mut self) {
+                $(
+                self.$idx.inc();
+                )*
+            }
+            fn dec(&mut self) {
+                $(
+                self.$idx.dec();
+                )*
+            }
+            fn is_refcounted() -> bool {
+                $($T::is_refcounted() || )* false
+            }
+        }
+    };
+}
+
+roc_refcounted_tuple_impl!(0 A, 1 B);
+roc_refcounted_tuple_impl!(0 A, 1 B, 2 C);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G);
+roc_refcounted_tuple_impl!(0 A, 1 B, 3 C, 3 D, 4 E, 5 F, 6 G, 7 H);

@@ -1,152 +1,30 @@
-Module {
-    comments: [],
-    header: Hosted(
+SpacesBefore {
+    before: [],
+    item: Hosted(
         HostedHeader {
-            before_name: [],
-            name: @7-10 ModuleName(
-                "Foo",
-            ),
-            exposes: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ExposesKeyword,
-                    after: [
-                        Newline,
-                    ],
-                },
-                item: Collection {
-                    items: [
-                        @45-50 SpaceBefore(
-                            ExposedName(
-                                "Stuff",
-                            ),
-                            [
-                                Newline,
-                            ],
+            before_exposes: [],
+            exposes: Collection {
+                items: [
+                    @8-13 ExposedName(
+                        "Stuff",
+                    ),
+                    @15-21 ExposedName(
+                        "Things",
+                    ),
+                    @27-40 SpaceBefore(
+                        ExposedName(
+                            "somethingElse",
                         ),
-                        @64-70 SpaceBefore(
-                            ExposedName(
-                                "Things",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @84-97 SpaceBefore(
-                            ExposedName(
-                                "somethingElse",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                final_comments: [
+                    Newline,
+                ],
             },
-            imports: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ImportsKeyword,
-                    after: [
-                        Newline,
-                    ],
-                },
-                item: Collection {
-                    items: [
-                        @143-147 SpaceBefore(
-                            Module(
-                                ModuleName(
-                                    "Blah",
-                                ),
-                                [],
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @161-182 SpaceBefore(
-                            Module(
-                                ModuleName(
-                                    "Baz",
-                                ),
-                                [
-                                    @167-172 ExposedName(
-                                        "stuff",
-                                    ),
-                                    @174-180 ExposedName(
-                                        "things",
-                                    ),
-                                ],
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
-            },
-            generates: KeywordItem {
-                keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: GeneratesKeyword,
-                    after: [],
-                },
-                item: UppercaseIdent(
-                    "Bar",
-                ),
-            },
-            generates_with: KeywordItem {
-                keyword: Spaces {
-                    before: [],
-                    item: WithKeyword,
-                    after: [
-                        Newline,
-                    ],
-                },
-                item: Collection {
-                    items: [
-                        @239-242 SpaceBefore(
-                            ExposedName(
-                                "map",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @256-261 SpaceBefore(
-                            ExposedName(
-                                "after",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                        @275-279 SpaceBefore(
-                            ExposedName(
-                                "loop",
-                            ),
-                            [
-                                Newline,
-                            ],
-                        ),
-                    ],
-                    final_comments: [
-                        Newline,
-                    ],
-                },
-            },
+            old_imports: None,
         },
     ),
 }

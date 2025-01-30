@@ -1,0 +1,74 @@
+@1-17 SpaceBefore(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @1-12,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @1-6 SpaceAfter(
+                        Apply(
+                            @1-3 Tag(
+                                "MT",
+                            ),
+                            [
+                                @5-6 SpaceBefore(
+                                    Identifier {
+                                        ident: "q",
+                                    },
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @8-12 Apply(
+                        @8-9 Var {
+                            module_name: "",
+                            ident: "g",
+                        },
+                        [
+                            @11-12 SpaceBefore(
+                                Var {
+                                    module_name: "",
+                                    ident: "q",
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ],
+        },
+        @13-17 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "dbgT",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

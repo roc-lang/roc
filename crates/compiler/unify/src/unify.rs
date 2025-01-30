@@ -1,3 +1,4 @@
+use roc_collections::soa::slice_extend_new;
 use roc_collections::VecMap;
 use roc_debug_flags::{dbg_do, dbg_set};
 #[cfg(debug_assertions)]
@@ -355,9 +356,9 @@ fn unify_help<M: MetaCollector>(
         }
     } else {
         let error_context = if mismatches.contains(&Mismatch::TypeNotInRange) {
-            ErrorTypeContext::ExpandRanges
+            ErrorTypeContext::EXPAND_RANGES
         } else {
-            ErrorTypeContext::None
+            ErrorTypeContext::empty()
         };
 
         let type1 = env.var_to_error_type_contextual(var1, error_context, observed_pol);
@@ -447,9 +448,9 @@ fn debug_print_unified_types<M: MetaCollector>(
         //        let (type1, _problems1) = subs.var_to_error_type(ctx.first);
         //        let (type2, _problems2) = subs.var_to_error_type(ctx.second);
         //        println!("\n --------------- \n");
-        //        dbg!(ctx.first, type1);
+        //        eprintln!("{:?}, {:?}", ctx.first, type1);
         //        println!("\n --- \n");
-        //        dbg!(ctx.second, type2);
+        //        eprintln!({:?}, {:?}", ctx.second, type2);
         //        println!("\n --------------- \n");
         let content_1 = env.get(ctx.first).content;
         let content_2 = env.get(ctx.second).content;
@@ -509,6 +510,8 @@ fn unify_context<M: MetaCollector>(env: &mut Env, pool: &mut Pool, ctx: Context)
         }
         LambdaSet(lset) => unify_lambda_set(env, pool, &ctx, *lset, &ctx.second_desc.content),
         ErasedLambda => unify_erased_lambda(env, pool, &ctx, &ctx.second_desc.content),
+        Pure => unify_pure(env, &ctx, &ctx.second_desc.content),
+        Effectful => unify_effectful(env, &ctx, &ctx.second_desc.content),
         &RangedNumber(range_vars) => unify_ranged_number(env, pool, &ctx, range_vars),
         Error => {
             // Error propagates. Whatever we're comparing it to doesn't matter!
@@ -579,6 +582,7 @@ fn unify_ranged_number<M: MetaCollector>(
             None => not_in_range_mismatch(),
         },
         LambdaSet(..) | ErasedLambda => mismatch!(),
+        Pure | Effectful => mismatch!("Cannot unify RangedNumber with fx var"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -636,9 +640,6 @@ fn check_and_merge_valid_range<M: MetaCollector>(
             }
             Symbol::NUM_I64 | Symbol::NUM_SIGNED64 => {
                 merge_if!(range.contains_int_width(IntLitWidth::I64))
-            }
-            Symbol::NUM_NAT | Symbol::NUM_NATURAL => {
-                merge_if!(range.contains_int_width(IntLitWidth::Nat))
             }
             Symbol::NUM_U64 | Symbol::NUM_UNSIGNED64 => {
                 merge_if!(range.contains_int_width(IntLitWidth::U64))
@@ -903,6 +904,7 @@ fn unify_alias<M: MetaCollector>(
         }
         LambdaSet(..) => mismatch!("cannot unify alias {:?} with lambda set {:?}: lambda sets should never be directly behind an alias!", ctx.first, other_content),
         ErasedLambda => mismatch!("cannot unify alias {:?} with an erased lambda!", ctx.first),
+        Pure|Effectful => mismatch!("cannot unify alias {:?} with an fx var!", ctx.first),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1102,6 +1104,7 @@ fn unify_structure<M: MetaCollector>(
             )
         }
         ErasedLambda => mismatch!(),
+        Pure | Effectful => mismatch!("Cannot unify structure {:?} with fx vars", &flat_type),
         RangedNumber(other_range_vars) => {
             check_and_merge_valid_range(env, pool, ctx, ctx.second, *other_range_vars, ctx.first)
         }
@@ -1137,6 +1140,49 @@ fn unify_erased_lambda<M: MetaCollector>(
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
         RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
+        Pure | Effectful => mismatch!("Lambda set cannot unify with fx vars"),
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_pure<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
+    match other {
+        Pure | FlexVar(_) => merge(env, ctx, Pure),
+        Effectful => merge(env, ctx, Effectful),
+        RigidVar(_)
+        | FlexAbleVar(_, _)
+        | RigidAbleVar(_, _)
+        | RecursionVar { .. }
+        | Content::LambdaSet(_)
+        | ErasedLambda
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(_) => {
+            mismatch!("Cannot unify pure with {:?}", other)
+        }
+        Error => merge(env, ctx, Error),
+    }
+}
+
+#[inline(always)]
+#[must_use]
+fn unify_effectful<M: MetaCollector>(env: &mut Env, ctx: &Context, other: &Content) -> Outcome<M> {
+    match other {
+        Effectful | FlexVar(_) => merge(env, ctx, Effectful),
+        Pure => mismatch!("Cannot unify effectful with pure"),
+        RigidVar(_)
+        | FlexAbleVar(_, _)
+        | RigidAbleVar(_, _)
+        | RecursionVar { .. }
+        | Content::LambdaSet(_)
+        | ErasedLambda
+        | Structure(_)
+        | Alias(_, _, _, _)
+        | RangedNumber(_) => {
+            mismatch!("Cannot unify effectful with {:?}", other)
+        }
         Error => merge(env, ctx, Error),
     }
 }
@@ -1192,6 +1238,7 @@ fn unify_lambda_set<M: MetaCollector>(
         Structure(..) => mismatch!("Lambda set cannot unify with non-lambda set structure"),
         RangedNumber(..) => mismatch!("Lambda sets are never numbers"),
         Alias(..) => mismatch!("Lambda set can never be directly under an alias!"),
+        Pure | Effectful => mismatch!("Lambda sets never unify with fx vars"),
         Error => merge(env, ctx, Error),
     }
 }
@@ -1235,9 +1282,9 @@ fn extract_specialization_lambda_set<M: MetaCollector>(
         // lambda set does not line up with one required by the ability member prototype.
         // As an example, consider
         //
-        //   Q := [ F (Str -> Str) ] implements [Eq {isEq}]
+        //   Q := [ F (Str -> Str) ] implements [Eq {is_eq}]
         //
-        //   isEq = \@Q _, @Q _ -> Bool.false
+        //   is_eq = \@Q _, @Q _ -> Bool.false
         //
         // here the lambda set of `F`'s payload is part of the specialization signature, but it is
         // irrelevant to the specialization. As such, I believe it is safe to drop the
@@ -1790,7 +1837,7 @@ fn unify_unspecialized_lambdas<M: MetaCollector>(
     );
 
     Ok((
-        SubsSlice::extend_new(&mut env.unspecialized_lambda_sets, merged_uls),
+        slice_extend_new(&mut env.unspecialized_lambda_sets, merged_uls),
         whole_outcome,
     ))
 }
@@ -2536,6 +2583,8 @@ enum Rec {
     None,
     Left(Variable),
     Right(Variable),
+    #[allow(dead_code)]
+    // dead_code because of https://github.com/roc-lang/roc/pull/6819/files#r1655317562
     Both(Variable, Variable),
 }
 
@@ -3243,7 +3292,7 @@ fn unify_flat_type<M: MetaCollector>(
             let mut outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
 
             if outcome.mismatches.is_empty() {
-                let chosen_args = SubsSlice::reserve_into_subs(env, l_args.len());
+                let chosen_args = env.reserve_into_vars(l_args.len());
                 for ((store, var1), var2) in chosen_args
                     .into_iter()
                     .zip(l_args.into_iter())
@@ -3259,17 +3308,19 @@ fn unify_flat_type<M: MetaCollector>(
 
             outcome
         }
-        (Func(l_args, l_closure, l_ret), Func(r_args, r_closure, r_ret))
+        (Func(l_args, l_closure, l_ret, l_fx), Func(r_args, r_closure, r_ret, r_fx))
             if l_args.len() == r_args.len() =>
         {
             let arg_outcome = unify_zip_slices(env, pool, *l_args, *r_args, ctx.mode);
             let ret_outcome = unify_pool(env, pool, *l_ret, *r_ret, ctx.mode);
             let closure_outcome = unify_pool(env, pool, *l_closure, *r_closure, ctx.mode);
+            let fx_outcome = unify_pool(env, pool, *l_fx, *r_fx, ctx.mode);
 
             let mut outcome = ret_outcome;
 
             outcome.union(closure_outcome);
             outcome.union(arg_outcome);
+            outcome.union(fx_outcome);
 
             if outcome.mismatches.is_empty() {
                 let merged_closure_var = choose_merged_var(env, *l_closure, *r_closure);
@@ -3277,13 +3328,35 @@ fn unify_flat_type<M: MetaCollector>(
                 outcome.union(merge(
                     env,
                     ctx,
-                    Structure(Func(*r_args, merged_closure_var, *r_ret)),
+                    Structure(Func(*r_args, merged_closure_var, *r_ret, *r_fx)),
                 ));
             }
 
             outcome
         }
-        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret)) => {
+        (EffectfulFunc, Func(args, closure, ret, fx)) => {
+            let mut outcome = unify_pool(env, pool, Variable::EFFECTFUL, *fx, ctx.mode);
+
+            outcome.union(merge(
+                env,
+                ctx,
+                Structure(Func(*args, *closure, *ret, Variable::EFFECTFUL)),
+            ));
+
+            outcome
+        }
+        (Func(args, closure, ret, fx), EffectfulFunc) => {
+            let mut outcome = unify_pool(env, pool, *fx, Variable::EFFECTFUL, ctx.mode);
+
+            outcome.union(merge(
+                env,
+                ctx,
+                Structure(Func(*args, *closure, *ret, Variable::EFFECTFUL)),
+            ));
+
+            outcome
+        }
+        (FunctionOrTagUnion(tag_names, tag_symbols, ext), Func(args, closure, ret, fx)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
@@ -3294,10 +3367,11 @@ fn unify_flat_type<M: MetaCollector>(
                 *args,
                 *ret,
                 *closure,
+                *fx,
                 true,
             )
         }
-        (Func(args, closure, ret), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
+        (Func(args, closure, ret, fx), FunctionOrTagUnion(tag_names, tag_symbols, ext)) => {
             unify_function_or_tag_union_and_func(
                 env,
                 pool,
@@ -3308,6 +3382,7 @@ fn unify_flat_type<M: MetaCollector>(
                 *args,
                 *ret,
                 *closure,
+                *fx,
                 false,
             )
         }
@@ -3326,7 +3401,7 @@ fn unify_flat_type<M: MetaCollector>(
             *ext2,
         ),
         (TagUnion(tags1, ext1), FunctionOrTagUnion(tag_names, _, ext2)) => {
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3335,7 +3410,7 @@ fn unify_flat_type<M: MetaCollector>(
             unify_tag_unions(env, pool, ctx, *tags1, *ext1, tags2, *ext2)
         }
         (FunctionOrTagUnion(tag_names, _, ext1), TagUnion(tags2, ext2)) => {
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3348,7 +3423,7 @@ fn unify_flat_type<M: MetaCollector>(
             // this never happens in type-correct programs, but may happen if there is a type error
             debug_assert!(is_recursion_var(env, *recursion_var));
 
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3360,7 +3435,7 @@ fn unify_flat_type<M: MetaCollector>(
         (FunctionOrTagUnion(tag_names, _, ext1), RecursiveTagUnion(recursion_var, tags2, ext2)) => {
             debug_assert!(is_recursion_var(env, *recursion_var));
 
-            let empty_tag_var_slices = SubsSlice::extend_new(
+            let empty_tag_var_slices = slice_extend_new(
                 &mut env.variable_slices,
                 std::iter::repeat(Default::default()).take(tag_names.len()),
             );
@@ -3435,7 +3510,9 @@ fn unify_rigid<M: MetaCollector>(
         | Structure(_)
         | Alias(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3496,7 +3573,9 @@ fn unify_rigid_able<M: MetaCollector>(
         | Alias(..)
         | RangedNumber(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // Type mismatch! Rigid can only unify with flex, even if the
             // rigid names are the same.
             mismatch!("Rigid {:?} with {:?}", ctx.first, &other)
@@ -3537,7 +3616,9 @@ fn unify_flex<M: MetaCollector>(
         | Alias(_, _, _, _)
         | RangedNumber(..)
         | LambdaSet(..)
-        | ErasedLambda => {
+        | ErasedLambda
+        | Pure
+        | Effectful => {
             // TODO special-case boolean here
             // In all other cases, if left is flex, defer to right.
             merge(env, ctx, *other)
@@ -3588,7 +3669,7 @@ pub fn merged_ability_slices(
     let merged = merge_sorted_keys(left.iter().copied(), right.iter().copied());
 
     // TODO: check if there's an existing run in subs rather than re-inserting
-    SubsSlice::extend_new(&mut subs.symbol_names, merged)
+    slice_extend_new(&mut subs.symbol_names, merged)
 }
 
 #[inline(always)]
@@ -3633,6 +3714,7 @@ fn unify_flex_able<M: MetaCollector>(
 
         RigidVar(_) => mismatch!("FlexAble can never unify with non-able Rigid"),
         LambdaSet(..) | ErasedLambda => mismatch!("FlexAble with LambdaSet"),
+        Pure | Effectful => mismatch!("FlexAble with fx var"),
 
         Alias(name, _args, _real_var, AliasKind::Opaque) => {
             // Opaque type wins
@@ -3801,6 +3883,8 @@ fn unify_recursion<M: MetaCollector>(
 
         ErasedLambda => mismatch!(),
 
+        Pure | Effectful => mismatch!("RecursionVar with fx var"),
+
         Error => merge(env, ctx, Error),
     };
 
@@ -3869,6 +3953,7 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
     function_arguments: VariableSubsSlice,
     function_return: Variable,
     function_lambda_set: Variable,
+    function_fx: Variable,
     left: bool,
 ) -> Outcome<M> {
     let tag_names = env.get_subs_slice(tag_names_slice).to_vec();
@@ -3887,10 +3972,16 @@ fn unify_function_or_tag_union_and_func<M: MetaCollector>(
         unify_pool(env, pool, function_return, new_tag_union_var, ctx.mode)
     };
 
+    outcome.union(if left {
+        unify_pool(env, pool, Variable::PURE, function_fx, ctx.mode)
+    } else {
+        unify_pool(env, pool, function_fx, Variable::PURE, ctx.mode)
+    });
+
     {
         let lambda_names = env.get_subs_slice(tag_fn_lambdas).to_vec();
-        let new_lambda_names = SubsSlice::extend_new(&mut env.symbol_names, lambda_names);
-        let empty_captures_slices = SubsSlice::extend_new(
+        let new_lambda_names = slice_extend_new(&mut env.symbol_names, lambda_names);
+        let empty_captures_slices = slice_extend_new(
             &mut env.variable_slices,
             std::iter::repeat(Default::default()).take(new_lambda_names.len()),
         );
@@ -3956,7 +4047,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
             .collect();
         all_tags.sort();
         all_tags.dedup();
-        SubsSlice::extend_new(&mut env.tag_names, all_tags)
+        slice_extend_new(&mut env.tag_names, all_tags)
     };
     let merged_lambdas = {
         let mut all_lambdas: Vec<_> = (env.get_subs_slice(tag_symbols_1).iter())
@@ -3965,7 +4056,7 @@ fn unify_two_function_or_tag_unions<M: MetaCollector>(
             .collect();
         all_lambdas.sort();
         all_lambdas.dedup();
-        SubsSlice::extend_new(&mut env.symbol_names, all_lambdas)
+        slice_extend_new(&mut env.symbol_names, all_lambdas)
     };
 
     let mut outcome = unify_pool(env, pool, ext1.var(), ext2.var(), ctx.mode);

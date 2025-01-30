@@ -1,8 +1,8 @@
-Closure(
+@0-8 Closure(
     [
-        @1-2 Identifier(
-            "a",
-        ),
+        @1-2 Identifier {
+            ident: "a",
+        },
     ],
     @6-8 Num(
         "42",

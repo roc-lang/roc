@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: Nix macOS x86_64 cargo test
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -13,18 +9,16 @@ env:
 jobs:
   nix-macos-x86-64:
     name: nix-macos-x86-64
-    runs-on: [macos-12]
+    runs-on: [macos-13]
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - uses: cachix/install-nix-action@v22
 
-      - name: execute cli_run tests only, the full tests take too long but are run nightly
-        run: nix develop -c cargo test --locked --release -p roc_cli
+      - name: execute cli_tests tests only, the full tests take too long but are run nightly
+        run: nix develop -c cargo test --locked --release -p roc_cli -- --skip hello_gui
+        # see 5932 for hello_gui
 
-      - name: make a libapp.so for the next step
-        run: nix develop -c cargo run -- gen-stub-lib examples/platform-switching/rocLovesRust.roc
-
-      - name: check that the platform`s produced dylib is loadable
-        run: cd examples/platform-switching/rust-platform && nix develop -c cargo test --release --locked
+      - name: roc test all builtins
+        run: nix develop -c ./ci/roc_test_builtins.sh

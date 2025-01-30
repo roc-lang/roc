@@ -87,8 +87,7 @@ program. Among other things, canonicalization
     solving.
 - Determines the order definitions are used in, if they are defined
     out-of-order.
-- Eliminates syntax sugar (for example, renaming `+` to the function call `add`
-    and converting backpassing to function calls).
+- Eliminates syntax sugar (for example, renaming `+` to the function call `add`).
 - Collects declared abilities, and ability implementations defined for opaque
     types. Derived abilities for opaque types are elaborated during
     canonicalization.

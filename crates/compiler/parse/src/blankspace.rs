@@ -1,5 +1,7 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::ast::SpacesBefore;
+use crate::parser::succeed;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
 use crate::parser::{self, and, backtrackable, BadInputError, Parser, Progress::*};
@@ -70,11 +72,29 @@ where
                 parser,
                 one_of![
                     backtrackable(space0_e(indent_after_problem)),
-                    succeed!(&[] as &[_]),
+                    succeed(&[] as &[_]),
                 ],
             ),
         ),
         spaces_around_help,
+    )
+}
+
+pub fn space0_before<'a, P, S, E>(
+    parser: P,
+    indent_before_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(space0_e(indent_before_problem), parser),
+        |(space_list, loc_expr): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item: loc_expr,
+        },
     )
 }
 
@@ -89,14 +109,14 @@ where
             spaces(),
             and(
                 parser,
-                one_of![backtrackable(spaces()), succeed!(&[] as &[_]),],
+                one_of![backtrackable(spaces()), succeed(&[] as &[_]),],
             ),
         ),
         spaces_around_help,
     )
 }
 
-fn spaces_around_help<'a, S>(
+pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
         &'a [CommentOrNewline<'a>],
@@ -138,7 +158,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(spaces(), parser),
+        and(spaces(), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -161,7 +181,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(space0_e(indent_problem), parser),
+        and(space0_e(indent_problem), parser),
         |arena: &'a Bump, (space_list, loc_expr): (&'a [CommentOrNewline<'a>], Loc<S>)| {
             if space_list.is_empty() {
                 loc_expr
@@ -170,6 +190,24 @@ where
                     .alloc(loc_expr.value)
                     .with_spaces_before(space_list, loc_expr.region)
             }
+        },
+    )
+}
+
+pub fn plain_spaces_before<'a, P, S, E>(
+    parser: P,
+    indent_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(backtrackable(space0_e(indent_problem)), parser),
+        |(space_list, item): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item,
         },
     )
 }
@@ -184,7 +222,7 @@ where
     E: 'a + SpaceProblem,
 {
     parser::map_with_arena(
-        and!(parser, space0_e(indent_problem)),
+        and(parser, space0_e(indent_problem)),
         |arena: &'a Bump, (loc_expr, space_list): (Loc<S>, &'a [CommentOrNewline<'a>])| {
             if space_list.is_empty() {
                 loc_expr
@@ -322,43 +360,6 @@ pub fn fast_eat_until_control_character(bytes: &[u8]) -> usize {
     simple_eat_until_control_character(&bytes[i..]) + i
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use proptest::prelude::*;
-
-    #[test]
-    fn test_eat_whitespace_simple() {
-        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
-    }
-
-    proptest! {
-        #[test]
-        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
-            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
-        }
-    }
-
-    #[test]
-    fn test_eat_until_control_character_simple() {
-        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
-        assert_eq!(
-            simple_eat_until_control_character(bytes),
-            fast_eat_until_control_character(bytes)
-        );
-    }
-
-    proptest! {
-        #[test]
-        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
-            prop_assert_eq!(
-                simple_eat_until_control_character(&bytes),
-                fast_eat_until_control_character(&bytes));
-        }
-    }
-}
-
 pub fn space0_e<'a, E>(
     indent_problem: fn(Position) -> E,
 ) -> impl Parser<'a, &'a [CommentOrNewline<'a>], E>
@@ -369,8 +370,62 @@ where
         let start = state.pos();
         match spaces().parse(arena, state, min_indent) {
             Ok((progress, spaces, state)) => {
-                if progress == NoProgress || state.column() >= min_indent {
+                if spaces.is_empty() || state.column() >= min_indent {
                     Ok((progress, spaces, state))
+                } else {
+                    Err((progress, indent_problem(start)))
+                }
+            }
+            Err((progress, err)) => Err((progress, err)),
+        }
+    }
+}
+
+pub fn require_newline_or_eof<'a, E>(newline_problem: fn(Position) -> E) -> impl Parser<'a, (), E>
+where
+    E: 'a + SpaceProblem,
+{
+    move |arena: &'a Bump, state: State<'a>, min_indent| {
+        // TODO: we can do this more efficiently by stopping as soon as we see a '#' or a newline
+        let (_, res, _) = space0_e(newline_problem).parse(arena, state.clone(), min_indent)?;
+
+        if !res.is_empty() || state.has_reached_end() {
+            Ok((NoProgress, (), state))
+        } else {
+            Err((NoProgress, newline_problem(state.pos())))
+        }
+    }
+}
+
+pub fn loc_space0_e<'a, E>(
+    indent_problem: fn(Position) -> E,
+) -> impl Parser<'a, Loc<&'a [CommentOrNewline<'a>]>, E>
+where
+    E: 'a + SpaceProblem,
+{
+    move |arena, state: State<'a>, min_indent: u32| {
+        let mut newlines = Vec::new_in(arena);
+        let start = state.pos();
+        let mut comment_start = None;
+        let mut comment_end = None;
+
+        let res = consume_spaces(state, |start, space, end| {
+            newlines.push(space);
+            if !matches!(space, CommentOrNewline::Newline) {
+                if comment_start.is_none() {
+                    comment_start = Some(start);
+                }
+                comment_end = Some(end);
+            }
+        });
+
+        match res {
+            Ok((progress, state)) => {
+                if newlines.is_empty() || state.column() >= min_indent {
+                    let start = comment_start.unwrap_or(state.pos());
+                    let end = comment_end.unwrap_or(state.pos());
+                    let region = Region::new(start, end);
+                    Ok((progress, Loc::at(region, newlines.into_bump_slice()), state))
                 } else {
                     Err((progress, indent_problem(start)))
                 }
@@ -423,7 +478,7 @@ where
     F: FnMut(Position, CommentOrNewline<'a>, Position),
 {
     let mut progress = NoProgress;
-    let mut found_newline = false;
+    let mut found_newline = state.is_at_start_of_file();
     loop {
         let whitespace = fast_eat_whitespace(state.bytes());
         if whitespace > 0 {
@@ -437,11 +492,8 @@ where
             Some(b'#') => {
                 state.advance_mut(1);
 
-                let is_doc_comment = state.bytes().first() == Some(&b'#')
-                    && (state.bytes().get(1) == Some(&b' ')
-                        || state.bytes().get(1) == Some(&b'\n')
-                        || begins_with_crlf(&state.bytes()[1..])
-                        || Option::is_none(&state.bytes().get(1)));
+                let is_doc_comment =
+                    state.bytes().first() == Some(&b'#') && state.bytes().get(1) != Some(&b'#');
 
                 if is_doc_comment {
                     state.advance_mut(1);
@@ -516,4 +568,41 @@ where
     }
 
     Ok((progress, state))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use proptest::prelude::*;
+
+    #[test]
+    fn test_eat_whitespace_simple() {
+        let bytes = &[0, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(simple_eat_whitespace(bytes), fast_eat_whitespace(bytes));
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_whitespace(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(simple_eat_whitespace(&bytes), fast_eat_whitespace(&bytes));
+        }
+    }
+
+    #[test]
+    fn test_eat_until_control_character_simple() {
+        let bytes = &[32, 0, 0, 0, 0, 0, 0, 0];
+        assert_eq!(
+            simple_eat_until_control_character(bytes),
+            fast_eat_until_control_character(bytes)
+        );
+    }
+
+    proptest! {
+        #[test]
+        fn test_eat_until_control_character(bytes in proptest::collection::vec(any::<u8>(), 0..100)) {
+            prop_assert_eq!(
+                simple_eat_until_control_character(&bytes),
+                fast_eat_until_control_character(&bytes));
+        }
+    }
 }

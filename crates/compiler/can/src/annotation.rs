@@ -1,11 +1,13 @@
 use crate::env::Env;
-use crate::procedure::References;
-use crate::scope::{PendingAbilitiesInScope, Scope};
+use crate::procedure::{QualifiedReference, References};
+use crate::scope::{PendingAbilitiesInScope, Scope, SymbolLookup};
 use roc_collections::{ImMap, MutSet, SendMap, VecMap, VecSet};
-use roc_module::ident::{Ident, Lowercase, TagName};
+use roc_module::ident::{Ident, IdentSuffix, Lowercase, TagName};
 use roc_module::symbol::Symbol;
-use roc_parse::ast::{AssignedField, ExtractSpaces, Pattern, Tag, TypeAnnotation, TypeHeader};
-use roc_problem::can::ShadowKind;
+use roc_parse::ast::{
+    AssignedField, ExtractSpaces, FunctionArrow, Tag, TypeAnnotation, TypeHeader, TypeVar,
+};
+use roc_problem::can::{Problem, ShadowKind};
 use roc_region::all::{Loc, Region};
 use roc_types::subs::{VarStore, Variable};
 use roc_types::types::{
@@ -17,7 +19,7 @@ use roc_types::types::{
 pub struct Annotation {
     pub typ: Type,
     pub introduced_variables: IntroducedVariables,
-    pub references: VecSet<Symbol>,
+    pub references: References,
     pub aliases: VecMap<Symbol, Alias>,
 }
 
@@ -28,9 +30,7 @@ impl Annotation {
         references: &mut References,
         introduced_variables: &mut IntroducedVariables,
     ) {
-        for symbol in self.references.iter() {
-            references.insert_type_lookup(*symbol);
-        }
+        references.union_mut(&self.references);
 
         introduced_variables.union(&self.introduced_variables);
 
@@ -132,7 +132,7 @@ pub struct AbleVariable {
     pub first_seen: Region,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct IntroducedVariables {
     pub wildcards: Vec<Loc<Variable>>,
     pub lambda_sets: Vec<Variable>,
@@ -144,7 +144,6 @@ pub struct IntroducedVariables {
     pub able: VecSet<AbleVariable>,
     /// Extension variables which should be inferred in output position.
     pub infer_ext_in_output: Vec<Variable>,
-    pub host_exposed_aliases: VecMap<Symbol, Variable>,
 }
 
 impl IntroducedVariables {
@@ -156,7 +155,6 @@ impl IntroducedVariables {
             .chain(self.named.iter().map(|nv| &nv.variable))
             .chain(self.able.iter().map(|av| &av.variable))
             .chain(self.infer_ext_in_output.iter())
-            .chain(self.host_exposed_aliases.values())
             .all(|&v| v != var));
     }
 
@@ -205,17 +203,10 @@ impl IntroducedVariables {
         self.lambda_sets.push(var);
     }
 
-    pub fn insert_host_exposed_alias(&mut self, symbol: Symbol, var: Variable) {
-        self.debug_assert_not_already_present(var);
-        self.host_exposed_aliases.insert(symbol, var);
-    }
-
     pub fn union(&mut self, other: &Self) {
         self.wildcards.extend(other.wildcards.iter().copied());
         self.lambda_sets.extend(other.lambda_sets.iter().copied());
         self.inferred.extend(other.inferred.iter().copied());
-        self.host_exposed_aliases
-            .extend(other.host_exposed_aliases.iter().map(|(k, v)| (*k, *v)));
 
         self.named.extend(other.named.iter().cloned());
         self.able.extend(other.able.iter().cloned());
@@ -227,7 +218,6 @@ impl IntroducedVariables {
         self.wildcards.extend(other.wildcards);
         self.lambda_sets.extend(other.lambda_sets);
         self.inferred.extend(other.inferred);
-        self.host_exposed_aliases.extend(other.host_exposed_aliases);
 
         self.named.extend(other.named);
         self.able.extend(other.able);
@@ -291,7 +281,7 @@ pub(crate) fn canonicalize_annotation(
     annotation_for: AnnotationFor,
 ) -> Annotation {
     let mut introduced_variables = IntroducedVariables::default();
-    let mut references = VecSet::default();
+    let mut references = References::new();
     let mut aliases = VecMap::default();
 
     let (annotation, region) = match annotation {
@@ -381,13 +371,20 @@ pub(crate) fn make_apply_symbol(
     scope: &mut Scope,
     module_name: &str,
     ident: &str,
+    references: &mut References,
 ) -> Result<Symbol, Type> {
     if module_name.is_empty() {
         // Since module_name was empty, this is an unqualified type.
         // Look it up in scope!
 
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => Ok(symbol),
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
+                references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
+                Ok(symbol)
+            }
             Err(problem) => {
                 env.problem(roc_problem::can::Problem::RuntimeError(problem));
 
@@ -396,7 +393,13 @@ pub(crate) fn make_apply_symbol(
         }
     } else {
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => Ok(symbol),
+            Ok(SymbolLookup {
+                symbol,
+                module_params: _,
+            }) => {
+                references.insert_type_lookup(symbol, QualifiedReference::Qualified);
+                Ok(symbol)
+            }
             Err(problem) => {
                 // Either the module wasn't imported, or
                 // it was imported but it doesn't expose this ident.
@@ -437,7 +440,7 @@ pub fn find_type_def_symbols(
                     stack.push(&t.value);
                 }
             }
-            Function(arguments, result) => {
+            Function(arguments, _arrow, result) => {
                 for t in arguments.iter() {
                     stack.push(&t.value);
                 }
@@ -462,13 +465,13 @@ pub fn find_type_def_symbols(
                 while let Some(assigned_field) = inner_stack.pop() {
                     match assigned_field {
                         AssignedField::RequiredValue(_, _, t)
-                        | AssignedField::OptionalValue(_, _, t) => {
+                        | AssignedField::OptionalValue(_, _, t)
+                        | AssignedField::IgnoredValue(_, _, t) => {
                             stack.push(&t.value);
                         }
                         AssignedField::LabelOnly(_) => {}
                         AssignedField::SpaceBefore(inner, _)
                         | AssignedField::SpaceAfter(inner, _) => inner_stack.push(inner),
-                        AssignedField::Malformed(_) => {}
                     }
                 }
 
@@ -493,7 +496,6 @@ pub fn find_type_def_symbols(
                         Tag::SpaceBefore(inner, _) | Tag::SpaceAfter(inner, _) => {
                             inner_stack.push(inner)
                         }
-                        Tag::Malformed(_) => {}
                     }
                 }
 
@@ -537,12 +539,12 @@ fn can_annotation_help(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
 ) -> Type {
     use roc_parse::ast::TypeAnnotation::*;
 
     match annotation {
-        Function(argument_types, return_type) => {
+        Function(argument_types, arrow, return_type) => {
             let mut args = Vec::new();
 
             for arg in *argument_types {
@@ -577,17 +579,21 @@ fn can_annotation_help(
             introduced_variables.insert_lambda_set(lambda_set);
             let closure = Type::Variable(lambda_set);
 
-            Type::Function(args, Box::new(closure), Box::new(ret))
+            let fx_type = match arrow {
+                FunctionArrow::Pure => Type::Pure,
+                FunctionArrow::Effectful => Type::Effectful,
+            };
+
+            Type::Function(args, Box::new(closure), Box::new(ret), Box::new(fx_type))
         }
         Apply(module_name, ident, type_arguments) => {
-            let symbol = match make_apply_symbol(env, region, scope, module_name, ident) {
+            let symbol = match make_apply_symbol(env, region, scope, module_name, ident, references)
+            {
                 Err(problem) => return problem,
                 Ok(symbol) => symbol,
             };
 
             let mut args = Vec::new();
-
-            references.insert(symbol);
 
             if scope.abilities_store.is_ability(symbol) {
                 let fresh_ty_var = find_fresh_var_name(introduced_variables);
@@ -744,11 +750,11 @@ fn can_annotation_help(
             let mut vars = Vec::with_capacity(loc_vars.len());
             let mut lowercase_vars: Vec<Loc<AliasVar>> = Vec::with_capacity(loc_vars.len());
 
-            references.insert(symbol);
+            references.insert_type_lookup(symbol, QualifiedReference::Unqualified);
 
             for loc_var in *loc_vars {
                 let var = match loc_var.value {
-                    Pattern::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
+                    TypeVar::Identifier(name) if name.chars().next().unwrap().is_lowercase() => {
                         name
                     }
                     _ => unreachable!("I thought this was validated during parsing"),
@@ -835,6 +841,28 @@ fn can_annotation_help(
             // TODO: handle implicit ext variables in `as` aliases
             let infer_ext_in_output = vec![];
 
+            {
+                let roc_types::types::VariableDetail {
+                    type_variables,
+                    lambda_set_variables: _,
+                    recursion_variables,
+                } = alias_actual.variables_detail();
+
+                let mut hidden = type_variables;
+
+                for var in (lowercase_vars.iter().map(|lv| lv.value.var))
+                    .chain(recursion_variables.iter().copied())
+                    .chain(infer_ext_in_output.iter().copied())
+                {
+                    hidden.remove(&var);
+                }
+
+                if !hidden.is_empty() {
+                    env.problem(roc_problem::can::Problem::UnboundTypeVarsInAs(region));
+                    return Type::Error;
+                }
+            }
+
             scope.add_alias(
                 symbol,
                 region,
@@ -879,7 +907,9 @@ fn can_annotation_help(
                 "tuples should never be implicitly inferred open"
             );
 
-            debug_assert!(!elems.is_empty()); // We don't allow empty tuples
+            if elems.is_empty() {
+                env.problem(roc_problem::can::Problem::EmptyTupleType(region));
+            }
 
             let elem_types = can_assigned_tuple_elems(
                 env,
@@ -962,19 +992,10 @@ fn can_annotation_help(
             );
 
             if tags.is_empty() {
-                match ext {
-                    Some(_) => {
-                        // just `a` does not mean the same as `[]`, so even
-                        // if there are no fields, still make this a `TagUnion`,
-                        // not an EmptyTagUnion
-                        Type::TagUnion(
-                            Default::default(),
-                            TypeExtension::from_type(ext_type, is_implicit_openness),
-                        )
-                    }
-
-                    None => Type::EmptyTagUnion,
-                }
+                Type::TagUnion(
+                    Default::default(),
+                    TypeExtension::from_type(ext_type, is_implicit_openness),
+                )
             } else {
                 let mut tag_types = can_tags(
                     env,
@@ -1055,7 +1076,7 @@ fn canonicalize_has_clause(
     introduced_variables: &mut IntroducedVariables,
     clause: &Loc<roc_parse::ast::ImplementsClause<'_>>,
     pending_abilities_in_scope: &PendingAbilitiesInScope,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
 ) -> Result<(), Type> {
     let Loc {
         region,
@@ -1078,7 +1099,7 @@ fn canonicalize_has_clause(
     {
         let ability = match ability {
             TypeAnnotation::Apply(module_name, ident, _type_arguments) => {
-                let symbol = make_apply_symbol(env, region, scope, module_name, ident)?;
+                let symbol = make_apply_symbol(env, region, scope, module_name, ident, references)?;
 
                 // Ability defined locally, whose members we are constructing right now...
                 if !pending_abilities_in_scope.contains_key(&symbol)
@@ -1096,7 +1117,6 @@ fn canonicalize_has_clause(
             }
         };
 
-        references.insert(ability);
         let already_seen = can_abilities.insert(ability);
 
         if already_seen {
@@ -1130,7 +1150,7 @@ fn can_extension_type(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
     opt_ext: &Option<&Loc<TypeAnnotation>>,
     ext_problem_kind: roc_problem::can::ExtensionTypeKind,
 ) -> (Type, ExtImplicitOpenness) {
@@ -1168,6 +1188,7 @@ fn can_extension_type(
                 local_aliases,
                 references,
             );
+
             if valid_extension_type(shallow_dealias_with_scope(scope, &ext_type)) {
                 if matches!(loc_ann.extract_spaces().item, TypeAnnotation::Wildcard)
                     && matches!(ext_problem_kind, ExtensionTypeKind::TagUnion)
@@ -1333,7 +1354,7 @@ fn can_assigned_fields<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
 ) -> SendMap<Lowercase, RecordField<Type>> {
     use roc_parse::ast::AssignedField::*;
     use roc_types::types::RecordField::*;
@@ -1344,7 +1365,7 @@ fn can_assigned_fields<'a>(
     // field names we've seen so far in this record
     let mut seen = std::collections::HashMap::with_capacity(fields.len());
 
-    'outer: for loc_field in fields.iter() {
+    for loc_field in fields.iter() {
         let mut field = &loc_field.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1367,6 +1388,8 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidRequired(field_type));
 
                     break 'inner label;
@@ -1385,10 +1408,13 @@ fn can_assigned_fields<'a>(
                     );
 
                     let label = Lowercase::from(field_name.value);
+                    check_record_field_suffix(env, label.suffix(), &field_type, &loc_field.region);
+
                     field_types.insert(label.clone(), RigidOptional(field_type));
 
                     break 'inner label;
                 }
+                IgnoredValue(_, _, _) => unreachable!(),
                 LabelOnly(loc_field_name) => {
                     // Interpret { a, b } as { a : a, b : b }
                     let field_name = Lowercase::from(loc_field_name.value);
@@ -1414,12 +1440,6 @@ fn can_assigned_fields<'a>(
                     field = nested;
                     continue 'inner;
                 }
-                Malformed(string) => {
-                    malformed(env, region, string);
-
-                    // completely skip this element, advance to the next tag
-                    continue 'outer;
-                }
             }
         };
 
@@ -1438,6 +1458,23 @@ fn can_assigned_fields<'a>(
     field_types
 }
 
+fn check_record_field_suffix(
+    env: &mut Env,
+    suffix: IdentSuffix,
+    field_type: &Type,
+    region: &Region,
+) {
+    match (suffix, field_type) {
+        (IdentSuffix::None, Type::Function(_, _, _, fx)) if **fx == Type::Effectful => env
+            .problems
+            .push(Problem::UnsuffixedEffectfulRecordField(*region)),
+        (IdentSuffix::Bang, Type::Function(_, _, _, fx)) if **fx == Type::Pure => {
+            env.problems.push(Problem::SuffixedPureRecordField(*region))
+        }
+        _ => {}
+    }
+}
+
 // TODO trim down these arguments!
 #[allow(clippy::too_many_arguments)]
 fn can_assigned_tuple_elems(
@@ -1448,7 +1485,7 @@ fn can_assigned_tuple_elems(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
 ) -> VecMap<usize, Type> {
     let mut elem_types = VecMap::with_capacity(elems.len());
 
@@ -1482,14 +1519,14 @@ fn can_tags<'a>(
     var_store: &mut VarStore,
     introduced_variables: &mut IntroducedVariables,
     local_aliases: &mut VecMap<Symbol, Alias>,
-    references: &mut VecSet<Symbol>,
+    references: &mut References,
 ) -> Vec<(TagName, Vec<Type>)> {
     let mut tag_types = Vec::with_capacity(tags.len());
 
     // tag names we've seen so far in this tag union
     let mut seen = std::collections::HashMap::with_capacity(tags.len());
 
-    'outer: for loc_tag in tags.iter() {
+    for loc_tag in tags.iter() {
         let mut tag = &loc_tag.value;
 
         // use this inner loop to unwrap the SpaceAfter/SpaceBefore
@@ -1527,12 +1564,6 @@ fn can_tags<'a>(
                     // check the nested tag instead
                     tag = nested;
                     continue 'inner;
-                }
-                Tag::Malformed(string) => {
-                    malformed(env, region, string);
-
-                    // completely skip this element, advance to the next tag
-                    continue 'outer;
                 }
             }
         };

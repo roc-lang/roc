@@ -19,7 +19,7 @@ macro_rules! run_jit_function_raw {
             let result = main();
 
             if !$errors.is_empty() {
-                dbg!(&$errors);
+                eprintln!("{:?}", &$errors);
 
                 assert_eq!(
                     $errors,

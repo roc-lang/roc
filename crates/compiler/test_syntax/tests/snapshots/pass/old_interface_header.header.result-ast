@@ -1,0 +1,21 @@
+SpacesBefore {
+    before: [],
+    item: Module(
+        ModuleHeader {
+            after_keyword: [],
+            params: None,
+            exposes: [
+                @23-26 ExposedName(
+                    "Foo",
+                ),
+                @28-31 ExposedName(
+                    "foo",
+                ),
+                @33-36 ExposedName(
+                    "bar",
+                ),
+            ],
+            interface_imports: None,
+        },
+    ),
+}

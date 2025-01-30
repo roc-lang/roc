@@ -1,0 +1,32 @@
+[package]
+name = "test_compile"
+description = "Utility functions for starting from strings of code and compiling various IRs."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_builtins.workspace = true
+roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
+roc_region.workspace = true
+roc_collections.workspace = true
+roc_load.workspace = true
+roc_parse.workspace = true
+roc_can.workspace = true
+roc_can_solo.workspace = true
+roc_module.workspace = true
+roc_types.workspace = true
+roc_problem.workspace = true
+roc_constrain.workspace = true
+roc_reporting.workspace = true
+roc_target.workspace = true
+roc_solve.workspace = true
+roc_solve_problem.workspace = true
+
+roc_specialize_types.workspace = true
+bumpalo.workspace = true
+
+[dev-dependencies]
+pretty_assertions.workspace = true

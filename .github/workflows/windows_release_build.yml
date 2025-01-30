@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: windows - release build
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -15,31 +11,31 @@ jobs:
     name: windows-release-build
     runs-on: windows-2022
     env:
-      LLVM_SYS_130_PREFIX: C:\LLVM-13.0.1-win64
+      LLVM_SYS_180_PREFIX: C:\LLVM-18.1.8-win64
 
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
 
       - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
 
       - name: download and install zig
         run: |
-          curl.exe -f --output "C:\zig-windows-x86_64-0.9.1.zip" --url https://ziglang.org/download/0.9.1/zig-windows-x86_64-0.9.1.zip
+          curl.exe -f --output "C:\zig-windows-x86_64-0.13.0.zip" --url https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
           cd C:\
-          7z x zig-windows-x86_64-0.9.1.zip
-          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.9.1\"
+          7z x zig-windows-x86_64-0.13.0.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.13.0\"
 
       - name: zig version
         run: zig version
 
-      - name: install rust nightly 1.71.0
-        run: rustup install nightly-2023-05-28
+      - name: install rust nightly 1.77.0
+        run: rustup install nightly-2024-02-03
 
-      - name: set up llvm 13
+      - name: set up llvm 18
         run: |
-          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v13.0.1/LLVM-13.0.1-win64.7z
-          7z x LLVM-13.0.1-win64.7z -oC:\LLVM-13.0.1-win64
+          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z
+          7z x LLVM-18.1.8-win64.7z -oC:\LLVM-18.1.8-win64
 
-      - name: cargo build release. Twice for zig lld-link error.
-        run: cargo build --locked --release || cargo build --locked --release
+      - name: cargo build release.
+        run: cargo build --locked --release

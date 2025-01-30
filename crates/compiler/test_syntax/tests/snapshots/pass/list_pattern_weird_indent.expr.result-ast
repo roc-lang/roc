@@ -1,40 +1,45 @@
-When(
-    @5-7 List(
-        [],
-    ),
-    [
-        WhenBranch {
-            patterns: [
-                @15-24 SpaceBefore(
-                    List(
-                        [
-                            @16-17 NumLiteral(
-                                "1",
-                            ),
-                            @19-20 NumLiteral(
-                                "2",
-                            ),
-                            @22-23 SpaceBefore(
-                                NumLiteral(
-                                    "3",
+@0-30 SpaceAfter(
+    When(
+        @5-7 List(
+            [],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @15-24 SpaceBefore(
+                        List(
+                            [
+                                @16-17 NumLiteral(
+                                    "1",
                                 ),
-                                [
-                                    Newline,
-                                ],
-                            ),
+                                @19-20 NumLiteral(
+                                    "2",
+                                ),
+                                @22-23 SpaceBefore(
+                                    NumLiteral(
+                                        "3",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
                         ],
                     ),
-                    [
-                        Newline,
-                    ],
+                ],
+                value: @28-30 Str(
+                    PlainLine(
+                        "",
+                    ),
                 ),
-            ],
-            value: @28-30 Str(
-                PlainLine(
-                    "",
-                ),
-            ),
-            guard: None,
-        },
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

@@ -8,40 +8,43 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_builtins = { path = "../builtins" }
-roc_can = { path = "../can" }
-roc_checkmate = { path = "../checkmate" }
-roc_collections = { path = "../collections" }
-roc_constrain = { path = "../constrain" }
-roc_debug_flags = { path = "../debug_flags" }
-roc_derive = { path = "../derive" }
-roc_derive_key = { path = "../derive_key" }
-roc_error_macros = { path = "../../error_macros" }
-roc_late_solve = { path = "../late_solve" }
-roc_module = { path = "../module" }
-roc_mono = { path = "../mono" }
-roc_packaging = { path = "../../packaging" }
-roc_parse = { path = "../parse" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_reporting = { path = "../../reporting" }
-roc_solve = { path = "../solve" }
-roc_solve_problem = { path = "../solve_problem" }
-roc_target = { path = "../roc_target" }
-roc_tracing = { path = "../../tracing" }
-roc_types = { path = "../types" }
-roc_unify = { path = "../unify" }
-
-ven_pretty = { path = "../../vendor/pretty" }
-
+roc_builtins.workspace = true
+roc_can.workspace = true
+roc_can_solo.workspace = true
+roc_work.workspace = true
+roc_checkmate.workspace = true
+roc_collections.workspace = true
+roc_constrain.workspace = true
+roc_debug_flags.workspace = true
+roc_derive.workspace = true
+roc_derive_key.workspace = true
+roc_error_macros.workspace = true
+roc_late_solve.workspace = true
+roc_module.workspace = true
+roc_mono.workspace = true
+roc_packaging.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve.workspace = true
+roc_solve_problem.workspace = true
+roc_target.workspace = true
+roc_tracing.workspace = true
+roc_types.workspace = true
+roc_unify.workspace = true
+roc_worker.workspace = true
+roc_lower_params.workspace = true
+ven_pretty.workspace = true
 bumpalo.workspace = true
 crossbeam.workspace = true
 parking_lot.workspace = true
 tempfile.workspace = true
+base64-url.workspace = true
+blake3.workspace = true
 
 [dev-dependencies]
-roc_test_utils = { path = "../../test_utils" }
-
+roc_test_utils_dir.workspace = true
 indoc.workspace = true
 maplit.workspace = true
 pretty_assertions.workspace = true

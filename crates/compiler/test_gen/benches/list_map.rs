@@ -30,7 +30,7 @@ const ROC_LIST_MAP: &str = indoc::indoc!(
     r#"
     app "bench" provides [main] to "./platform"
 
-    main : List I64 -> Nat
+    main : List I64 -> U64
     main = \list ->
         list
             |> List.map (\x -> x + 2)
@@ -42,7 +42,7 @@ const ROC_LIST_MAP_WITH_INDEX: &str = indoc::indoc!(
     r#"
     app "bench" provides [main] to "./platform"
 
-    main : List I64 -> Nat
+    main : List I64 -> U64
     main = \list ->
         list
         |> List.mapWithIndex (\x, _ -> x + 2)
@@ -57,7 +57,7 @@ fn roc_function<'a, 'b>(
     let config = helpers::llvm::HelperConfig {
         mode: LlvmBackendMode::GenTest,
         ignore_problems: false,
-        add_debug_info: true,
+        emit_debug_info: true,
         opt_level: OptLevel::Optimize,
     };
 

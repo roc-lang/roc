@@ -1,0 +1,44 @@
+[package]
+name = "roc_language_server"
+version = "0.0.1"
+edition = "2021"
+
+[[bin]]
+name = "roc_language_server"
+path = "src/server.rs"
+
+[dev-dependencies]
+expect-test = "1.4.1"
+
+
+[dependencies]
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_fmt.workspace = true
+roc_load.workspace = true
+roc_module.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_reporting.workspace = true
+roc_solve_problem.workspace = true
+roc_target.workspace = true
+roc_types.workspace = true
+roc_packaging.workspace = true
+
+bumpalo.workspace = true
+parking_lot.workspace = true
+
+tower-lsp = "0.17.0"
+tokio = { version = "1.20.1", features = [
+    "rt",
+    "rt-multi-thread",
+    "macros",
+    "io-std",
+] }
+log.workspace = true
+indoc.workspace = true
+env_logger = "0.10.1"
+futures.workspace = true
+roc_error_macros.workspace = true
+

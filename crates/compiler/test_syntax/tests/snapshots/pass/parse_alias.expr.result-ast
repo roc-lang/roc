@@ -1,54 +1,59 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-        ],
-        regions: [
-            @0-26,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [
-            Alias {
-                header: TypeHeader {
-                    name: @0-4 "Blah",
-                    vars: [
-                        @5-6 Identifier(
-                            "a",
-                        ),
-                        @7-8 Identifier(
-                            "b",
-                        ),
-                    ],
+@0-30 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-26,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-4 "Blah",
+                        vars: [
+                            @5-6 Identifier(
+                                "a",
+                            ),
+                            @7-8 Identifier(
+                                "b",
+                            ),
+                        ],
+                    },
+                    ann: @11-26 Apply(
+                        "Foo.Bar",
+                        "Baz",
+                        [
+                            @23-24 BoundVariable(
+                                "x",
+                            ),
+                            @25-26 BoundVariable(
+                                "y",
+                            ),
+                        ],
+                    ),
                 },
-                ann: @11-26 Apply(
-                    "Foo.Bar",
-                    "Baz",
-                    [
-                        @23-24 BoundVariable(
-                            "x",
-                        ),
-                        @25-26 BoundVariable(
-                            "y",
-                        ),
-                    ],
-                ),
-            },
-        ],
-        value_defs: [],
-    },
-    @28-30 SpaceBefore(
-        Num(
-            "42",
+            ],
+            value_defs: [],
+        },
+        @28-30 SpaceBefore(
+            Num(
+                "42",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

@@ -1,0 +1,13 @@
+[package]
+name = "roc_std_heap"
+description = "Rust representations of a Roc threadsafe version of the refcounted heap that can avoid a wrapping Mutex and RefCell"
+
+authors = ["The Roc Contributors"]
+edition = "2021"
+license = "UPL-1.0"
+repository = "https://github.com/roc-lang/roc"
+version = "0.0.1"
+
+[dependencies]
+roc_std.workspace = true
+memmap2 = "=0.9.4"       # should this be a workspace dependency? workspace is at "0.5.10"

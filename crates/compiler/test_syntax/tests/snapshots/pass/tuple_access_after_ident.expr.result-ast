@@ -1,24 +1,24 @@
-Defs(
+@0-21 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-15,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
             Body(
-                @0-3 Identifier(
-                    "abc",
-                ),
+                @0-3 Identifier {
+                    ident: "abc",
+                },
                 @6-15 Tuple(
                     [
                         @7-8 Num(

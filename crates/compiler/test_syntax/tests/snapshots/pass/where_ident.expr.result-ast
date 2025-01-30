@@ -1,86 +1,74 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483649),
-        ],
-        regions: [
-            @0-39,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-5 Identifier(
-                    "where",
-                ),
-                @8-20 Record {
-                    fields: [
-                        @9-19 RequiredValue(
-                            @9-14 "where",
-                            [],
-                            @16-19 Apply(
-                                "",
-                                "I32",
+@0-52 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-39,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-5 Identifier {
+                        ident: "where",
+                    },
+                    ann_type: @8-20 Record {
+                        fields: [
+                            @9-19 RequiredValue(
+                                @9-14 "where",
                                 [],
+                                @16-19 Apply(
+                                    "",
+                                    "I32",
+                                    [],
+                                ),
                             ),
-                        ),
+                        ],
+                        ext: None,
+                    },
+                    lines_between: [
+                        Newline,
                     ],
-                    ext: None,
+                    body_pattern: @21-26 Identifier {
+                        ident: "where",
+                    },
+                    body_expr: @29-39 Record(
+                        [
+                            @30-38 RequiredValue(
+                                @30-35 "where",
+                                [],
+                                @37-38 Num(
+                                    "1",
+                                ),
+                            ),
+                        ],
+                    ),
                 },
+            ],
+        },
+        @41-52 SpaceBefore(
+            RecordAccess(
+                Var {
+                    module_name: "",
+                    ident: "where",
+                },
+                "where",
             ),
-            AnnotatedBody {
-                ann_pattern: @0-5 Identifier(
-                    "where",
-                ),
-                ann_type: @8-20 Record {
-                    fields: [
-                        @9-19 RequiredValue(
-                            @9-14 "where",
-                            [],
-                            @16-19 Apply(
-                                "",
-                                "I32",
-                                [],
-                            ),
-                        ),
-                    ],
-                    ext: None,
-                },
-                comment: None,
-                body_pattern: @21-26 Identifier(
-                    "where",
-                ),
-                body_expr: @29-39 Record(
-                    [
-                        @30-38 RequiredValue(
-                            @30-35 "where",
-                            [],
-                            @37-38 Num(
-                                "1",
-                            ),
-                        ),
-                    ],
-                ),
-            },
-        ],
-    },
-    @41-52 SpaceBefore(
-        RecordAccess(
-            Var {
-                module_name: "",
-                ident: "where",
-            },
-            "where",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

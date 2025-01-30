@@ -11,7 +11,7 @@ use roc_mono::layout::{InLayout, LayoutInterner, LayoutRepr, STLayoutInterner};
 use crate::llvm::build::{load_roc_value, use_roc_value};
 
 use super::{
-    build::{BuilderExt, Env},
+    build::{create_entry_block_alloca, store_roc_value, BuilderExt, Env},
     convert::basic_type_from_layout,
     scope::Scope,
 };
@@ -50,19 +50,16 @@ impl<'ctx> RocStruct<'ctx> {
         scope: &Scope<'a, 'ctx>,
         sorted_fields: &[Symbol],
     ) -> Self {
-        let BuildStruct {
-            struct_type,
-            struct_val,
-        } = build_struct_helper(env, layout_interner, scope, sorted_fields);
-
         let passed_by_ref = layout_repr.is_passed_by_reference(layout_interner);
 
         if passed_by_ref {
-            let alloca = env.builder.build_alloca(struct_type, "struct_alloca");
-            env.builder.build_store(alloca, struct_val);
-            RocStruct::ByReference(alloca)
+            let struct_alloca =
+                build_struct_alloca_helper(env, layout_interner, scope, sorted_fields);
+            RocStruct::ByReference(struct_alloca)
         } else {
-            RocStruct::ByValue(struct_val)
+            let struct_value =
+                build_struct_value_helper(env, layout_interner, scope, sorted_fields);
+            RocStruct::ByValue(struct_value)
         }
     }
 
@@ -156,8 +153,7 @@ fn index_struct_ptr<'a, 'ctx>(
     let name = format!("struct_field_access_record_{index}");
     let field_value = env
         .builder
-        .new_build_struct_gep(struct_type, ptr, index as u32, &name)
-        .unwrap();
+        .new_build_struct_gep(struct_type, ptr, index as u32, &name);
 
     load_roc_value(
         env,
@@ -179,17 +175,12 @@ fn get_field_from_value<'ctx>(
         .unwrap()
 }
 
-struct BuildStruct<'ctx> {
-    struct_type: StructType<'ctx>,
-    struct_val: StructValue<'ctx>,
-}
-
-fn build_struct_helper<'a, 'ctx>(
+fn build_struct_value_helper<'a, 'ctx>(
     env: &Env<'a, 'ctx, '_>,
     layout_interner: &STLayoutInterner<'a>,
     scope: &Scope<'a, 'ctx>,
     sorted_fields: &[Symbol],
-) -> BuildStruct<'ctx> {
+) -> StructValue<'ctx> {
     let ctx = env.context;
 
     // Determine types
@@ -228,12 +219,49 @@ fn build_struct_helper<'a, 'ctx>(
 
     // Create the struct_type
     let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
-    let struct_val = struct_from_fields(env, struct_type, field_vals.into_iter().enumerate());
+    struct_from_fields(env, struct_type, field_vals.into_iter().enumerate())
+}
 
-    BuildStruct {
-        struct_type,
-        struct_val,
+fn build_struct_alloca_helper<'a, 'ctx>(
+    env: &Env<'a, 'ctx, '_>,
+    layout_interner: &STLayoutInterner<'a>,
+    scope: &Scope<'a, 'ctx>,
+    sorted_fields: &[Symbol],
+) -> PointerValue<'ctx> {
+    let ctx = env.context;
+
+    // Determine types
+    let num_fields = sorted_fields.len();
+    let mut field_types = AVec::with_capacity_in(num_fields, env.arena);
+    let mut field_expr_repr = AVec::with_capacity_in(num_fields, env.arena);
+
+    for symbol in sorted_fields.iter() {
+        // Zero-sized fields have no runtime representation.
+        // The layout of the struct expects them to be dropped!
+        let (field_expr, field_layout) = scope.load_symbol_and_layout(symbol);
+        if !layout_interner
+            .get_repr(field_layout)
+            .is_dropped_because_empty()
+        {
+            let field_repr = layout_interner.get_repr(field_layout);
+            let field_type = basic_type_from_layout(env, layout_interner, field_repr);
+            field_types.push(field_type);
+
+            field_expr_repr.push((field_expr, field_repr));
+        }
     }
+
+    // Create the struct_type
+    let struct_type = ctx.struct_type(field_types.into_bump_slice(), false);
+    let alloca = create_entry_block_alloca(env, struct_type, "struct_alloca");
+
+    for (i, (field_expr, field_repr)) in field_expr_repr.into_iter().enumerate() {
+        let dst =
+            env.builder
+                .new_build_struct_gep(struct_type, alloca, i as u32, "struct_field_gep");
+        store_roc_value(env, layout_interner, field_repr, dst, field_expr);
+    }
+    alloca
 }
 
 pub fn struct_from_fields<'a, 'ctx, 'env, I>(

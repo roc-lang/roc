@@ -1,50 +1,56 @@
-If(
-    [
-        (
-            @3-5 Var {
-                module_name: "",
-                ident: "t1",
-            },
-            @13-14 SpaceBefore(
-                SpaceAfter(
-                    Num(
-                        "1",
+@0-43 SpaceAfter(
+    If {
+        if_thens: [
+            (
+                @3-5 Var {
+                    module_name: "",
+                    ident: "t1",
+                },
+                @13-14 SpaceBefore(
+                    SpaceAfter(
+                        Num(
+                            "1",
+                        ),
+                        [
+                            Newline,
+                        ],
                     ),
                     [
                         Newline,
                     ],
                 ),
-                [
-                    Newline,
-                ],
             ),
-        ),
-        (
-            @23-25 Var {
-                module_name: "",
-                ident: "t2",
-            },
-            @33-34 SpaceBefore(
-                SpaceAfter(
-                    Num(
-                        "2",
+            (
+                @23-25 Var {
+                    module_name: "",
+                    ident: "t2",
+                },
+                @33-34 SpaceBefore(
+                    SpaceAfter(
+                        Num(
+                            "2",
+                        ),
+                        [
+                            Newline,
+                        ],
                     ),
                     [
                         Newline,
                     ],
                 ),
-                [
-                    Newline,
-                ],
             ),
-        ),
-    ],
-    @42-43 SpaceBefore(
-        Num(
-            "3",
-        ),
-        [
-            Newline,
         ],
-    ),
+        final_else: @42-43 SpaceBefore(
+            Num(
+                "3",
+            ),
+            [
+                Newline,
+            ],
+        ),
+        indented_else: false,
+    },
+    [
+        Newline,
+    ],
 )

@@ -1,46 +1,51 @@
 on:
+#  pull_request:
   workflow_dispatch:
   schedule:
-    - cron:  '0 9 * * *'
+    - cron: "0 9 * * *"
 
 name: Nightly Release macOS Apple Silicon
+
+env:
+  RUST_BACKTRACE: 1
+  LLVM_SYS_180_PREFIX: /opt/homebrew/opt/llvm@18
 
 jobs:
   test-and-build:
     name: Rust tests, build and package nightly release
     runs-on: [self-hosted, macOS, ARM64]
+    env:
+      LIBRARY_PATH: /opt/homebrew/Cellar/zstd/1.5.6/lib
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v3
-      - name: zig version
-        run: zig version
-      - name: llvm version
-        run: llc --version | grep LLVM
+      - uses: actions/checkout@v4
+
+      - name: Update PATH to use zig 13
+        run: |
+          echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
+
+      - run: zig version
 
       - name: run tests
         run: cargo test --locked --release
-        
+
       - name: get commit SHA
-        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
-        
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
-        
+
       - name: build file name
         env:
-            DATE: ${{ env.DATE }}
-            SHA: ${{ env.SHA }}
-        run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_apple_silicon-$DATE-$SHA" >> $GITHUB_ENV  
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
+        run: echo "RELEASE_FOLDER_NAME=roc_nightly-macos_apple_silicon-$DATE-$SHA" >> $GITHUB_ENV
 
       - name: write version to file
         run: ./ci/write_version.sh
 
       - name: build nightly release
-        run: cargo build --locked --profile=release-with-lto --bin roc
-
-      # this makes the roc binary a lot smaller
-      - name: strip debug info
-        run: strip ./target/release-with-lto/roc
+        run: cargo build --locked --profile=release-with-lto --bin roc --bin roc_language_server
 
       - name: package release
         run: ./ci/package_release.sh ${{ env.RELEASE_FOLDER_NAME }}
@@ -51,16 +56,17 @@ jobs:
       - name: extract tar for a quick test
         run: ls | grep tar | xargs tar -xf
 
-      - name: test with rust platform
-        run: cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc examples/platform-switching/rocLovesRust.roc
+      - name: test with zig platform
+        run: |
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"
       - name: print date
         run: date
       - name: Upload artifact Actually uploading to github releases has to be done manually
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           retention-days: 4
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

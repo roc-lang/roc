@@ -6,26 +6,30 @@ use const_format::concatcp;
 use roc_load::MonomorphizedModule;
 use roc_mono::ir::OptLevel;
 use roc_repl_eval::gen::Problems;
-use roc_repl_ui::colors::{BLUE, END_COL, PINK};
+use roc_repl_ui::colors::{CYAN, END_COL};
 use roc_repl_ui::repl_state::{ReplAction, ReplState};
 use roc_repl_ui::{format_output, is_incomplete, CONT_PROMPT, PROMPT, SHORT_INSTRUCTIONS, TIPS};
-use roc_reporting::report::{ANSI_STYLE_CODES, DEFAULT_PALETTE};
-use roc_target::TargetInfo;
+use roc_reporting::report::{
+    strip_colors, to_file_problem_report_string, ANSI_STYLE_CODES, DEFAULT_PALETTE,
+};
+use roc_target::Target;
 use rustyline::highlight::{Highlighter, PromptInfo};
 use rustyline::validate::{self, ValidationContext, ValidationResult, Validator};
+use rustyline::Config;
 use rustyline_derive::{Completer, Helper, Hinter};
+use std::any::Any;
+use std::backtrace::Backtrace;
 use std::borrow::Cow;
+use std::panic::{AssertUnwindSafe, PanicInfo};
+use std::sync::{Arc, Mutex, OnceLock};
 use target_lexicon::Triple;
 
 use crate::cli_gen::eval_llvm;
 
 pub const WELCOME_MESSAGE: &str = concatcp!(
-    "\n  The rockin’ ",
-    BLUE,
-    "roc repl",
-    END_COL,
-    "\n",
-    PINK,
+    "\n  The rockin' ",
+    CYAN,
+    "roc repl\n",
     "────────────────────────",
     END_COL,
     "\n\n"
@@ -37,24 +41,60 @@ pub struct ReplHelper {
     state: ReplState,
 }
 
-pub fn main() -> i32 {
+static BACKTRACE: OnceLock<Arc<Mutex<Option<String>>>> = OnceLock::new();
+
+fn init_backtrace_storage() {
+    BACKTRACE.get_or_init(|| Arc::new(Mutex::new(None)));
+}
+
+fn panic_hook(_: &PanicInfo) {
+    if let Some(storage) = BACKTRACE.get() {
+        let _ = storage.lock().map(|ref mut storage| {
+            **storage = Some(Backtrace::force_capture().to_string());
+        });
+    }
+}
+
+pub fn main(has_color: bool, has_header: bool) -> i32 {
     use rustyline::error::ReadlineError;
     use rustyline::Editor;
+
+    init_backtrace_storage();
+    std::panic::set_hook(Box::new(panic_hook));
+
+    let strip_colors_if_necessary = |s: &str| {
+        if has_color {
+            s.to_string()
+        } else {
+            strip_colors(s)
+        }
+    };
 
     // To debug rustyline:
     // <UNCOMMENT> env_logger::init();
     // <RUN WITH:> RUST_LOG=rustyline=debug cargo run repl 2> debug.log
-    print!("{WELCOME_MESSAGE}{SHORT_INSTRUCTIONS}");
+    if has_header {
+        print!(
+            "{}{}",
+            strip_colors_if_necessary(WELCOME_MESSAGE),
+            strip_colors_if_necessary(SHORT_INSTRUCTIONS),
+        );
+    }
 
-    let mut editor = Editor::<ReplHelper>::new();
+    let editor_color_mode = if has_color {
+        rustyline::ColorMode::Enabled
+    } else {
+        rustyline::ColorMode::Disabled
+    };
+    let mut editor =
+        Editor::<ReplHelper>::with_config(Config::builder().color_mode(editor_color_mode).build());
     let repl_helper = ReplHelper::default();
     editor.set_helper(Some(repl_helper));
-    let target = Triple::host();
-    let target_info = TargetInfo::from(&target);
+    let target = Triple::host().into();
     let mut arena = Bump::new();
 
     loop {
-        match editor.readline(PROMPT) {
+        match editor.readline(&strip_colors_if_necessary(PROMPT)) {
             Ok(line) => {
                 let line = line.trim();
 
@@ -66,17 +106,29 @@ pub fn main() -> i32 {
                     .state;
 
                 arena.reset();
-                match repl_state.step(&arena, line, target_info, DEFAULT_PALETTE) {
+
+                let action = std::panic::catch_unwind(AssertUnwindSafe(|| {
+                    repl_state.step(&arena, line, target, DEFAULT_PALETTE)
+                }))
+                .unwrap_or_else(|e| notify_repl_panic(target, e));
+
+                match action {
                     ReplAction::Eval { opt_mono, problems } => {
-                        let output = evaluate(opt_mono, problems, &target);
+                        let output = evaluate(opt_mono, problems, target);
                         // If there was no output, don't print a blank line!
                         // (This happens for something like a type annotation.)
                         if !output.is_empty() {
-                            println!("{output}");
+                            println!("{}", strip_colors_if_necessary(&output));
                         }
                     }
                     ReplAction::Exit => {
                         return 0;
+                    }
+                    ReplAction::FileProblem { filename, error } => {
+                        println!(
+                            "{}",
+                            to_file_problem_report_string(filename, error, has_color)
+                        );
                     }
                     ReplAction::Help => {
                         println!("{TIPS}");
@@ -104,10 +156,41 @@ pub fn main() -> i32 {
     }
 }
 
+fn notify_repl_panic(target: Target, e: Box<dyn Any + Send>) -> ReplAction<'static> {
+    let message = if let Some(s) = e.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = e.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "Unknown error".to_string()
+    };
+
+    let backtrace = BACKTRACE
+        .get()
+        .and_then(|storage| storage.lock().ok().as_deref_mut().and_then(Option::take))
+        .unwrap_or_else(|| "<Backtrace not found>".to_string());
+
+    println!(
+        "\
+The Roc compiler had an internal error.
+Please file a bug report at
+    https://github.com/roc-lang/roc/issues/new
+Please include the following data:
+
+Error message: {}
+Stack backtrace:
+{}
+Machine Target: {:#?}
+",
+        message, backtrace, target
+    );
+    ReplAction::Nothing
+}
+
 pub fn evaluate(
     opt_mono: Option<MonomorphizedModule<'_>>,
     problems: Problems,
-    target: &Triple,
+    target: Target,
 ) -> String {
     let opt_output = opt_mono.and_then(|mono| eval_llvm(mono, target, OptLevel::Normal));
     format_output(ANSI_STYLE_CODES, opt_output, problems)

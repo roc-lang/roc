@@ -1,24 +1,24 @@
-Defs(
+@0-28 Defs(
     Defs {
         tags: [
-            Index(2147483648),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-25,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
             Body(
-                @0-1 Identifier(
-                    "x",
-                ),
+                @0-1 Identifier {
+                    ident: "x",
+                },
                 @4-25 When(
                     @9-10 Var {
                         module_name: "",

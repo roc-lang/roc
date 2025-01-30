@@ -1,52 +1,57 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-26,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @4-26 Where(
-                    @4-5 BoundVariable(
-                        "a",
+@0-29 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-26,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @4-26 Where(
+                        @4-5 BoundVariable(
+                            "a",
+                        ),
+                        [
+                            @12-26 ImplementsClause {
+                                var: @12-13 "a",
+                                abilities: [
+                                    @25-26 Apply(
+                                        "",
+                                        "A",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
                     ),
-                    [
-                        @12-26 ImplementsClause {
-                            var: @12-13 "a",
-                            abilities: [
-                                @25-26 Apply(
-                                    "",
-                                    "A",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
                 ),
-            ),
-        ],
-    },
-    @28-29 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "f",
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @28-29 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

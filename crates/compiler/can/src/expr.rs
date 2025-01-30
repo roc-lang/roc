@@ -1,34 +1,36 @@
 use crate::abilities::SpecializationId;
 use crate::annotation::{freshen_opaque_def, IntroducedVariables};
-use crate::builtins::builtin_defs_map;
 use crate::def::{can_defs_with_return, Annotation, Def};
 use crate::env::Env;
 use crate::num::{
     finish_parsing_base, finish_parsing_float, finish_parsing_num, float_expr_from_result,
     int_expr_from_result, num_expr_from_result, FloatBound, IntBound, NumBound,
 };
+use crate::params_in_abilities_unimplemented;
 use crate::pattern::{canonicalize_pattern, BindingsFromPattern, Pattern, PermitShadows};
-use crate::procedure::References;
-use crate::scope::Scope;
+use crate::procedure::{QualifiedReference, References};
+use crate::scope::{Scope, SymbolLookup};
 use crate::traverse::{walk_expr, Visitor};
-use roc_collections::soa::Index;
+use bumpalo::collections::Vec as BumpVec;
+use roc_collections::soa::index_push_new;
 use roc_collections::{SendMap, VecMap, VecSet};
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::Symbol;
-use roc_parse::ast::{self, Defs, PrecedenceConflict, StrLiteral};
+use roc_module::symbol::{IdentId, ModuleId, Symbol};
+use roc_parse::ast::{self, Defs, PrecedenceConflict, ResultTryKind, StrLiteral};
 use roc_parse::ident::Accessor;
 use roc_parse::pattern::PatternType::*;
 use roc_problem::can::{PrecedenceProblem, Problem, RuntimeError};
 use roc_region::all::{Loc, Region};
 use roc_types::num::SingleQuoteBound;
 use roc_types::subs::{ExhaustiveMark, IllegalCycleMark, RedundantMark, VarStore, Variable};
-use roc_types::types::{Alias, Category, IndexOrField, LambdaSet, OptAbleVar, Type};
+use roc_types::types::{
+    Alias, Category, EarlyReturnKind, IndexOrField, LambdaSet, OptAbleVar, Type,
+};
+use soa::Index;
 use std::fmt::{Debug, Display};
-use std::fs::File;
-use std::io::Read;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::{char, u32};
@@ -39,7 +41,7 @@ pub type PendingDerives = VecMap<Symbol, (Type, Vec<Loc<Symbol>>)>;
 #[derive(Clone, Default, Debug)]
 pub struct Output {
     pub references: References,
-    pub tail_call: Option<Symbol>,
+    pub tail_calls: Vec<Symbol>,
     pub introduced_variables: IntroducedVariables,
     pub aliases: VecMap<Symbol, Alias>,
     pub non_closures: VecSet<Symbol>,
@@ -50,8 +52,8 @@ impl Output {
     pub fn union(&mut self, other: Self) {
         self.references.union_mut(&other.references);
 
-        if let (None, Some(later)) = (self.tail_call, other.tail_call) {
-            self.tail_call = Some(later);
+        if self.tail_calls.is_empty() && !other.tail_calls.is_empty() {
+            self.tail_calls = other.tail_calls;
         }
 
         self.introduced_variables
@@ -85,7 +87,55 @@ impl Display for IntValue {
     }
 }
 
-#[derive(Clone, Debug)]
+impl IntValue {
+    pub fn as_u8(self) -> u8 {
+        self.as_u128() as u8
+    }
+
+    pub fn as_i8(self) -> i8 {
+        self.as_i128() as i8
+    }
+
+    pub fn as_u16(self) -> u16 {
+        self.as_u128() as u16
+    }
+
+    pub fn as_i16(self) -> i16 {
+        self.as_i128() as i16
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.as_u128() as u32
+    }
+
+    pub fn as_i32(self) -> i32 {
+        self.as_i128() as i32
+    }
+
+    pub fn as_u64(self) -> u64 {
+        self.as_u128() as u64
+    }
+
+    pub fn as_i64(self) -> i64 {
+        self.as_i128() as i64
+    }
+
+    pub fn as_u128(self) -> u128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128) as u128,
+            IntValue::U128(u128) => u128::from_ne_bytes(u128),
+        }
+    }
+
+    pub fn as_i128(self) -> i128 {
+        match self {
+            IntValue::I128(i128) => i128::from_ne_bytes(i128),
+            IntValue::U128(u128) => u128::from_ne_bytes(u128) as i128,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum Expr {
     // Literals
 
@@ -104,11 +154,18 @@ pub enum Expr {
         loc_elems: Vec<Loc<Expr>>,
     },
 
-    // An ingested files, it's bytes, and the type variable.
+    // An ingested files, its bytes, and the type variable.
     IngestedFile(Box<PathBuf>, Arc<Vec<u8>>, Variable),
 
     // Lookups
     Var(Symbol, Variable),
+    /// Like Var, but from a module with params
+    ParamsVar {
+        symbol: Symbol,
+        var: Variable,
+        params_symbol: Symbol,
+        params_var: Variable,
+    },
     AbilityMember(
         /// Actual member name
         Symbol,
@@ -124,7 +181,7 @@ pub enum Expr {
         /// The actual condition of the when expression.
         loc_cond: Box<Loc<Expr>>,
         cond_var: Variable,
-        /// Result type produced by the branches.
+        /// Type of each branch (and therefore the type of the entire `when` expression)
         expr_var: Variable,
         region: Region,
         /// The branches of the when, and the type of the condition that they expect to be matched
@@ -148,7 +205,7 @@ pub enum Expr {
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
     Call(
-        Box<(Variable, Loc<Expr>, Variable, Variable)>,
+        Box<(Variable, Loc<Expr>, Variable, Variable, Variable)>,
         Vec<(Variable, Loc<Expr>)>,
         CalledVia,
     ),
@@ -178,6 +235,9 @@ pub enum Expr {
         tuple_var: Variable,
         elems: Vec<(Variable, Box<Loc<Expr>>)>,
     },
+
+    /// Module params expression in import
+    ImportParams(ModuleId, Region, Option<(Variable, Box<Expr>)>),
 
     /// The "crash" keyword
     Crash {
@@ -261,39 +321,44 @@ pub enum Expr {
         lookups_in_cond: Vec<ExpectLookup>,
     },
 
-    // not parsed, but is generated when lowering toplevel effectful expects
-    ExpectFx {
-        loc_condition: Box<Loc<Expr>>,
-        loc_continuation: Box<Loc<Expr>>,
-        lookups_in_cond: Vec<ExpectLookup>,
-    },
-
     Dbg {
-        loc_condition: Box<Loc<Expr>>,
+        source_location: Box<str>,
+        source: Box<str>,
+        loc_message: Box<Loc<Expr>>,
         loc_continuation: Box<Loc<Expr>>,
         variable: Variable,
         symbol: Symbol,
     },
 
-    /// Rendered as empty box in editor
-    TypedHole(Variable),
+    Try {
+        result_expr: Box<Loc<Expr>>,
+        result_var: Variable,
+        return_var: Variable,
+        ok_payload_var: Variable,
+        err_payload_var: Variable,
+        err_ext_var: Variable,
+        kind: TryKind,
+    },
+
+    Return {
+        return_value: Box<Loc<Expr>>,
+        return_var: Variable,
+    },
 
     /// Compiles, but will crash if reached
     RuntimeError(RuntimeError),
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TryKind {
+    KeywordPrefix,
+    OperatorSuffix,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ExpectLookup {
     pub symbol: Symbol,
     pub var: Variable,
-    pub ability_info: Option<SpecializationId>,
-}
-
-#[derive(Clone, Copy, Debug)]
-pub struct DbgLookup {
-    pub symbol: Symbol,
-    pub var: Variable,
-    pub region: Region,
     pub ability_info: Option<SpecializationId>,
 }
 
@@ -308,6 +373,12 @@ impl Expr {
             Self::SingleQuote(..) => Category::Character,
             Self::List { .. } => Category::List,
             &Self::Var(sym, _) => Category::Lookup(sym),
+            &Self::ParamsVar {
+                symbol,
+                var: _,
+                params_symbol: _,
+                params_var: _,
+            } => Category::Lookup(symbol),
             &Self::AbilityMember(sym, _, _) => Category::Lookup(sym),
             Self::When { .. } => Category::When,
             Self::If { .. } => Category::If,
@@ -324,6 +395,8 @@ impl Expr {
             Self::RecordAccessor(data) => Category::Accessor(data.field.clone()),
             Self::TupleAccess { index, .. } => Category::TupleAccess(*index),
             Self::RecordUpdate { .. } => Category::Record,
+            Self::ImportParams(_, _, Some((_, expr))) => expr.category(),
+            Self::ImportParams(_, _, None) => Category::Unknown,
             Self::Tag {
                 name, arguments, ..
             } => Category::TagApply {
@@ -339,20 +412,121 @@ impl Expr {
                 Category::OpaqueWrap(opaque_name)
             }
             Self::Expect { .. } => Category::Expect,
-            Self::ExpectFx { .. } => Category::Expect,
             Self::Crash { .. } => Category::Crash,
+            Self::Return { .. } => Category::Return(EarlyReturnKind::Return),
 
             Self::Dbg { .. } => Category::Expect,
+            Self::Try { .. } => Category::TrySuccess,
 
             // these nodes place no constraints on the expression's type
-            Self::TypedHole(_) | Self::RuntimeError(..) => Category::Unknown,
+            Self::RuntimeError(..) => Category::Unknown,
+        }
+    }
+
+    pub fn contains_any_early_returns(&self) -> bool {
+        match self {
+            Self::Num { .. }
+            | Self::Int { .. }
+            | Self::Float { .. }
+            | Self::Str { .. }
+            | Self::IngestedFile { .. }
+            | Self::SingleQuote { .. }
+            | Self::Var { .. }
+            | Self::AbilityMember { .. }
+            | Self::ParamsVar { .. }
+            | Self::Closure(..)
+            | Self::EmptyRecord
+            | Self::RecordAccessor(_)
+            | Self::ZeroArgumentTag { .. }
+            | Self::OpaqueWrapFunction(_)
+            | Self::RuntimeError(..) => false,
+            Self::Return { .. } | Self::Try { .. } => true,
+            Self::List { loc_elems, .. } => loc_elems
+                .iter()
+                .any(|elem| elem.value.contains_any_early_returns()),
+            Self::When {
+                loc_cond, branches, ..
+            } => {
+                loc_cond.value.contains_any_early_returns()
+                    || branches.iter().any(|branch| {
+                        branch
+                            .guard
+                            .as_ref()
+                            .is_some_and(|guard| guard.value.contains_any_early_returns())
+                            || branch.value.value.contains_any_early_returns()
+                    })
+            }
+            Self::If {
+                branches,
+                final_else,
+                ..
+            } => {
+                final_else.value.contains_any_early_returns()
+                    || branches.iter().any(|(cond, then)| {
+                        cond.value.contains_any_early_returns()
+                            || then.value.contains_any_early_returns()
+                    })
+            }
+            Self::LetRec(defs, expr, _cycle_mark) => {
+                expr.value.contains_any_early_returns()
+                    || defs
+                        .iter()
+                        .any(|def| def.loc_expr.value.contains_any_early_returns())
+            }
+            Self::LetNonRec(def, expr) => {
+                def.loc_expr.value.contains_any_early_returns()
+                    || expr.value.contains_any_early_returns()
+            }
+            Self::Call(_func, args, _called_via) => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.value.contains_any_early_returns()),
+            Self::RunLowLevel { args, .. } | Self::ForeignCall { args, .. } => args
+                .iter()
+                .any(|(_var, arg_expr)| arg_expr.contains_any_early_returns()),
+            Self::Tuple { elems, .. } => elems
+                .iter()
+                .any(|(_var, loc_elem)| loc_elem.value.contains_any_early_returns()),
+            Self::Record { fields, .. } => fields
+                .iter()
+                .any(|(_field_name, field)| field.loc_expr.value.contains_any_early_returns()),
+            Self::RecordAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::TupleAccess { loc_expr, .. } => loc_expr.value.contains_any_early_returns(),
+            Self::RecordUpdate { updates, .. } => {
+                updates.iter().any(|(_field_name, field_update)| {
+                    field_update.loc_expr.value.contains_any_early_returns()
+                })
+            }
+            Self::ImportParams(_module_id, _region, params) => params
+                .as_ref()
+                .is_some_and(|(_var, p)| p.contains_any_early_returns()),
+            Self::Tag { arguments, .. } => arguments
+                .iter()
+                .any(|(_var, arg)| arg.value.contains_any_early_returns()),
+            Self::OpaqueRef { argument, .. } => argument.1.value.contains_any_early_returns(),
+            Self::Crash { msg, .. } => msg.value.contains_any_early_returns(),
+            Self::Dbg {
+                loc_message,
+                loc_continuation,
+                ..
+            } => {
+                loc_message.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
+            Self::Expect {
+                loc_condition,
+                loc_continuation,
+                ..
+            } => {
+                loc_condition.value.contains_any_early_returns()
+                    || loc_continuation.value.contains_any_early_returns()
+            }
         }
     }
 }
 
 /// Stores exhaustiveness-checking metadata for a closure argument that may
 /// have an annotated type.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AnnotatedMark {
     pub annotation_var: Variable,
     pub exhaustive: ExhaustiveMark,
@@ -376,11 +550,13 @@ impl AnnotatedMark {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ClosureData {
     pub function_type: Variable,
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub name: Symbol,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub recursive: Recursive,
@@ -457,6 +633,8 @@ impl StructAccessorData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: field_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -469,7 +647,7 @@ impl StructAccessorData {
 /// An opaque wrapper like `@Foo`, which is equivalent to `\p -> @Foo p`
 /// These are desugared to closures, but we distinguish them so we can have
 /// better error messages during constraint generation.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OpaqueWrapFunctionData {
     pub opaque_name: Symbol,
     pub opaque_var: Variable,
@@ -530,6 +708,8 @@ impl OpaqueWrapFunctionData {
             function_type: function_var,
             closure_type: closure_var,
             return_type: opaque_var,
+            fx_type: Variable::PURE,
+            early_returns: vec![],
             name: function_name,
             captured_symbols: vec![],
             recursive: Recursive::NotRecursive,
@@ -539,7 +719,7 @@ impl OpaqueWrapFunctionData {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Field {
     pub var: Variable,
     // The region of the full `foo: f bar`, rather than just `f bar`
@@ -563,7 +743,7 @@ impl Recursive {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranchPattern {
     pub pattern: Loc<Pattern>,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -572,7 +752,7 @@ pub struct WhenBranchPattern {
     pub degenerate: bool,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WhenBranch {
     pub patterns: Vec<WhenBranchPattern>,
     pub value: Loc<Expr>,
@@ -581,33 +761,163 @@ pub struct WhenBranch {
     pub redundant: RedundantMark,
 }
 
-impl WhenBranch {
-    pub fn pattern_region(&self) -> Region {
-        Region::span_across(
-            &self
-                .patterns
-                .first()
-                .expect("when branch has no pattern?")
-                .pattern
-                .region,
-            &self
-                .patterns
-                .last()
-                .expect("when branch has no pattern?")
-                .pattern
-                .region,
-        )
-    }
-}
+#[allow(clippy::too_many_arguments)]
+fn canonicalize_expr_apply<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    loc_fn: &&'a Loc<ast::Expr>,
+    args: BumpVec<'a, (Variable, Loc<Expr>)>,
+    output: &mut Output,
+    region: Region,
+    application_style: CalledVia,
+) -> Expr {
+    use Expr::*;
 
-impl WhenBranch {
-    pub fn region(&self) -> Region {
-        Region::across_all(
-            self.patterns
-                .iter()
-                .map(|p| &p.pattern.region)
-                .chain([self.value.region].iter()),
-        )
+    let fn_region = loc_fn.region;
+    if let ast::Expr::OpaqueRef(name) = loc_fn.value {
+        // We treat opaques specially, since an opaque can wrap exactly one argument.
+
+        if args.is_empty() {
+            let loc_name = Loc::at(region, (*name).into());
+            let problem = roc_problem::can::RuntimeError::OpaqueNotApplied(loc_name);
+            env.problem(Problem::RuntimeError(problem.clone()));
+            RuntimeError(problem)
+        } else if args.len() > 1 {
+            let problem = roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+            RuntimeError(problem)
+        } else {
+            match scope.lookup_opaque_ref(name, loc_fn.region) {
+                Err(runtime_error) => {
+                    env.problem(Problem::RuntimeError(runtime_error.clone()));
+                    RuntimeError(runtime_error)
+                }
+                Ok((name, opaque_def)) => {
+                    let argument = Box::new(args.first().unwrap().clone());
+                    output
+                        .references
+                        .insert_type_lookup(name, QualifiedReference::Unqualified);
+
+                    let (type_arguments, lambda_set_variables, specialized_def_type) =
+                        freshen_opaque_def(var_store, opaque_def);
+
+                    OpaqueRef {
+                        opaque_var: var_store.fresh(),
+                        name,
+                        argument,
+                        specialized_def_type: Box::new(specialized_def_type),
+                        type_arguments,
+                        lambda_set_variables,
+                    }
+                }
+            }
+        }
+    } else if let ast::Expr::Crash = loc_fn.value {
+        // We treat crash specially, since crashing must be applied with one argument.
+
+        debug_assert!(!args.is_empty());
+
+        let crash = if args.len() > 1 {
+            let args_region = Region::span_across(
+                &args.first().unwrap().1.region,
+                &args.last().unwrap().1.region,
+            );
+            env.problem(Problem::OverAppliedCrash {
+                region: args_region,
+            });
+            // Still crash, just with our own message, and drop the references.
+            Crash {
+                msg: Box::new(Loc::at(
+                    region,
+                    Expr::Str(String::from("hit a crash!").into_boxed_str()),
+                )),
+                ret_var: var_store.fresh(),
+            }
+        } else {
+            let msg = args.first().unwrap();
+            Crash {
+                msg: Box::new(msg.1.clone()),
+                ret_var: var_store.fresh(),
+            }
+        };
+
+        crash
+    } else {
+        // Canonicalize the function expression and its arguments
+        let (fn_expr, fn_expr_output) =
+            canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
+
+        output.union(fn_expr_output);
+
+        // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
+        output.tail_calls = vec![];
+
+        match fn_expr.value {
+            Var(symbol, _) => {
+                output.references.insert_call(symbol);
+
+                // we're tail-calling a symbol by name, check if it's the tail-callable symbol
+                if env
+                    .tailcallable_symbol
+                    .is_some_and(|tc_sym| tc_sym == symbol)
+                {
+                    output.tail_calls.push(symbol);
+                }
+
+                Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    args.to_vec(),
+                    application_style,
+                )
+            }
+            RuntimeError(_) => {
+                // We can't call a runtime error; bail out by propagating it!
+                return fn_expr.value;
+            }
+            Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                ..
+            } => Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                arguments: args.to_vec(),
+            },
+            ZeroArgumentTag {
+                variant_var,
+                ext_var,
+                name,
+                ..
+            } => Tag {
+                tag_union_var: variant_var,
+                ext_var,
+                name,
+                arguments: args.to_vec(),
+            },
+            _ => {
+                // This could be something like ((if True then fn1 else fn2) arg1 arg2).
+                Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    args.to_vec(),
+                    application_style,
+                )
+            }
+        }
     }
 }
 
@@ -631,34 +941,7 @@ pub fn canonicalize_expr<'a>(
 
             (answer, Output::default())
         }
-        ast::Expr::Record(fields) => {
-            if fields.is_empty() {
-                (EmptyRecord, Output::default())
-            } else {
-                match canonicalize_fields(env, var_store, scope, region, fields.items) {
-                    Ok((can_fields, output)) => (
-                        Record {
-                            record_var: var_store.fresh(),
-                            fields: can_fields,
-                        },
-                        output,
-                    ),
-                    Err(CanonicalizeRecordProblem::InvalidOptionalValue {
-                        field_name,
-                        field_region,
-                        record_region,
-                    }) => (
-                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
-                            field_name,
-                            field_region,
-                            record_region,
-                        }),
-                        Output::default(),
-                    ),
-                }
-            }
-        }
-
+        ast::Expr::Record(fields) => canonicalize_record(env, var_store, scope, region, *fields),
         ast::Expr::RecordUpdate {
             fields,
             update: loc_update,
@@ -685,6 +968,18 @@ pub fn canonicalize_expr<'a>(
                         record_region,
                     }) => (
                         Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                            field_name,
+                            field_region,
+                            record_region,
+                        }),
+                        Output::default(),
+                    ),
+                    Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                        field_name,
+                        field_region,
+                        record_region,
+                    }) => (
+                        Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
                             field_name,
                             field_region,
                             record_region,
@@ -722,7 +1017,6 @@ pub fn canonicalize_expr<'a>(
 
             let output = Output {
                 references,
-                tail_call: None,
                 ..Default::default()
             };
 
@@ -736,48 +1030,6 @@ pub fn canonicalize_expr<'a>(
         }
 
         ast::Expr::Str(literal) => flatten_str_literal(env, var_store, scope, literal),
-
-        ast::Expr::IngestedFile(file_path, _) => match File::open(file_path) {
-            Ok(mut file) => {
-                let mut bytes = vec![];
-                match file.read_to_end(&mut bytes) {
-                    Ok(_) => (
-                        Expr::IngestedFile(
-                            file_path.to_path_buf().into(),
-                            Arc::new(bytes),
-                            var_store.fresh(),
-                        ),
-                        Output::default(),
-                    ),
-                    Err(e) => {
-                        env.problems.push(Problem::FileProblem {
-                            filename: file_path.to_path_buf(),
-                            error: e.kind(),
-                        });
-
-                        // This will not manifest as a real runtime error and is just returned to have a value here.
-                        // The pushed FileProblem will be fatal to compilation.
-                        (
-                            Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
-                            Output::default(),
-                        )
-                    }
-                }
-            }
-            Err(e) => {
-                env.problems.push(Problem::FileProblem {
-                    filename: file_path.to_path_buf(),
-                    error: e.kind(),
-                });
-
-                // This will not manifest as a real runtime error and is just returned to have a value here.
-                // The pushed FileProblem will be fatal to compilation.
-                (
-                    Expr::RuntimeError(roc_problem::can::RuntimeError::NoImplementation),
-                    Output::default(),
-                )
-            }
-        },
 
         ast::Expr::SingleQuote(string) => {
             let mut it = string.chars().peekable();
@@ -832,7 +1084,6 @@ pub fn canonicalize_expr<'a>(
 
                 let output = Output {
                     references,
-                    tail_call: None,
                     ..Default::default()
                 };
 
@@ -845,13 +1096,36 @@ pub fn canonicalize_expr<'a>(
                 )
             }
         }
+        ast::Expr::PncApply(loc_fn, loc_args) => {
+            // The function's return type
+            let mut args = BumpVec::with_capacity_in(loc_args.items.len(), env.arena);
+            let mut output = Output::default();
+
+            for loc_arg in loc_args.items.iter() {
+                let (arg_expr, arg_out) =
+                    canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
+
+                args.push((var_store.fresh(), arg_expr));
+                output.references.union_mut(&arg_out.references);
+            }
+            let value = canonicalize_expr_apply(
+                env,
+                var_store,
+                scope,
+                loc_fn,
+                args,
+                &mut output,
+                region,
+                CalledVia::Space,
+            );
+            (value, output)
+        }
         ast::Expr::Apply(loc_fn, loc_args, application_style) => {
             // The expression that evaluates to the function being called, e.g. `foo` in
             // (foo) bar baz
-            let fn_region = loc_fn.region;
 
             // The function's return type
-            let mut args = Vec::new();
+            let mut args = BumpVec::with_capacity_in(loc_args.len(), env.arena);
             let mut output = Output::default();
 
             for loc_arg in loc_args.iter() {
@@ -861,158 +1135,17 @@ pub fn canonicalize_expr<'a>(
                 args.push((var_store.fresh(), arg_expr));
                 output.references.union_mut(&arg_out.references);
             }
-
-            if let ast::Expr::OpaqueRef(name) = loc_fn.value {
-                // We treat opaques specially, since an opaque can wrap exactly one argument.
-
-                debug_assert!(!args.is_empty());
-
-                if args.len() > 1 {
-                    let problem =
-                        roc_problem::can::RuntimeError::OpaqueAppliedToMultipleArgs(region);
-                    env.problem(Problem::RuntimeError(problem.clone()));
-                    (RuntimeError(problem), output)
-                } else {
-                    match scope.lookup_opaque_ref(name, loc_fn.region) {
-                        Err(runtime_error) => {
-                            env.problem(Problem::RuntimeError(runtime_error.clone()));
-                            (RuntimeError(runtime_error), output)
-                        }
-                        Ok((name, opaque_def)) => {
-                            let argument = Box::new(args.pop().unwrap());
-                            output.references.insert_type_lookup(name);
-
-                            let (type_arguments, lambda_set_variables, specialized_def_type) =
-                                freshen_opaque_def(var_store, opaque_def);
-
-                            let opaque_ref = OpaqueRef {
-                                opaque_var: var_store.fresh(),
-                                name,
-                                argument,
-                                specialized_def_type: Box::new(specialized_def_type),
-                                type_arguments,
-                                lambda_set_variables,
-                            };
-
-                            (opaque_ref, output)
-                        }
-                    }
-                }
-            } else if let ast::Expr::Crash = loc_fn.value {
-                // We treat crash specially, since crashing must be applied with one argument.
-
-                debug_assert!(!args.is_empty());
-
-                let mut args = Vec::new();
-                let mut output = Output::default();
-
-                for loc_arg in loc_args.iter() {
-                    let (arg_expr, arg_out) =
-                        canonicalize_expr(env, var_store, scope, loc_arg.region, &loc_arg.value);
-
-                    args.push(arg_expr);
-                    output.references.union_mut(&arg_out.references);
-                }
-
-                let crash = if args.len() > 1 {
-                    let args_region = Region::span_across(
-                        &loc_args.first().unwrap().region,
-                        &loc_args.last().unwrap().region,
-                    );
-                    env.problem(Problem::OverAppliedCrash {
-                        region: args_region,
-                    });
-                    // Still crash, just with our own message, and drop the references.
-                    Crash {
-                        msg: Box::new(Loc::at(
-                            region,
-                            Expr::Str(String::from("hit a crash!").into_boxed_str()),
-                        )),
-                        ret_var: var_store.fresh(),
-                    }
-                } else {
-                    let msg = args.pop().unwrap();
-                    Crash {
-                        msg: Box::new(msg),
-                        ret_var: var_store.fresh(),
-                    }
-                };
-
-                (crash, output)
-            } else {
-                // Canonicalize the function expression and its arguments
-                let (fn_expr, fn_expr_output) =
-                    canonicalize_expr(env, var_store, scope, fn_region, &loc_fn.value);
-
-                output.union(fn_expr_output);
-
-                // Default: We're not tail-calling a symbol (by name), we're tail-calling a function value.
-                output.tail_call = None;
-
-                let expr = match fn_expr.value {
-                    Var(symbol, _) => {
-                        output.references.insert_call(symbol);
-
-                        // we're tail-calling a symbol by name, check if it's the tail-callable symbol
-                        output.tail_call = match &env.tailcallable_symbol {
-                            Some(tc_sym) if *tc_sym == symbol => Some(symbol),
-                            Some(_) | None => None,
-                        };
-
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                fn_expr,
-                                var_store.fresh(),
-                                var_store.fresh(),
-                            )),
-                            args,
-                            *application_style,
-                        )
-                    }
-                    RuntimeError(_) => {
-                        // We can't call a runtime error; bail out by propagating it!
-                        return (fn_expr, output);
-                    }
-                    Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        ..
-                    } => Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        arguments: args,
-                    },
-                    ZeroArgumentTag {
-                        variant_var,
-                        ext_var,
-                        name,
-                        ..
-                    } => Tag {
-                        tag_union_var: variant_var,
-                        ext_var,
-                        name,
-                        arguments: args,
-                    },
-                    _ => {
-                        // This could be something like ((if True then fn1 else fn2) arg1 arg2).
-                        Call(
-                            Box::new((
-                                var_store.fresh(),
-                                fn_expr,
-                                var_store.fresh(),
-                                var_store.fresh(),
-                            )),
-                            args,
-                            *application_style,
-                        )
-                    }
-                };
-
-                (expr, output)
-            }
+            let value = canonicalize_expr_apply(
+                env,
+                var_store,
+                scope,
+                loc_fn,
+                args,
+                &mut output,
+                region,
+                *application_style,
+            );
+            (value, output)
         }
         ast::Expr::Var { module_name, ident } => {
             canonicalize_var_lookup(env, var_store, scope, module_name, ident, region)
@@ -1056,16 +1189,16 @@ pub fn canonicalize_expr<'a>(
         }
         ast::Expr::Defs(loc_defs, loc_ret) => {
             // The body expression gets a new scope for canonicalization,
-            scope.inner_scope(|inner_scope| {
+            scope.inner_def_scope(|inner_scope| {
                 let defs: Defs = (*loc_defs).clone();
                 can_defs_with_return(env, var_store, inner_scope, env.arena.alloc(defs), loc_ret)
             })
         }
-        ast::Expr::RecordBuilder(_) => {
-            unreachable!("RecordBuilder should have been desugared by now")
+        ast::Expr::RecordBuilder { .. } => {
+            internal_error!("Record builder should have been desugared by now")
         }
-        ast::Expr::Backpassing(_, _, _) => {
-            unreachable!("Backpassing should have been desugared by now")
+        ast::Expr::RecordUpdater(_) => {
+            internal_error!("Record updater should have been desugared by now")
         }
         ast::Expr::Closure(loc_arg_patterns, loc_body_expr) => {
             let (closure_data, output) =
@@ -1080,12 +1213,12 @@ pub fn canonicalize_expr<'a>(
                 canonicalize_expr(env, var_store, scope, loc_cond.region, &loc_cond.value);
 
             // the condition can never be a tail-call
-            output.tail_call = None;
+            output.tail_calls = vec![];
 
             let mut can_branches = Vec::with_capacity(branches.len());
 
             for branch in branches.iter() {
-                let (can_when_branch, branch_references) = scope.inner_scope(|inner_scope| {
+                let (can_when_branch, branch_references) = scope.inner_def_scope(|inner_scope| {
                     canonicalize_when_branch(
                         env,
                         var_store,
@@ -1105,7 +1238,7 @@ pub fn canonicalize_expr<'a>(
             // if code gen mistakenly thinks this is a tail call just because its condition
             // happened to be one. (The condition gave us our initial output value.)
             if branches.is_empty() {
-                output.tail_call = None;
+                output.tail_calls = vec![];
             }
 
             // Incorporate all three expressions into a combined Output value.
@@ -1135,35 +1268,35 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::AccessorFunction(field) => (
-            RecordAccessor(StructAccessorData {
-                name: scope.gen_unique_symbol(),
-                function_var: var_store.fresh(),
-                record_var: var_store.fresh(),
-                ext_var: var_store.fresh(),
-                closure_var: var_store.fresh(),
-                field_var: var_store.fresh(),
-                field: match field {
-                    Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
-                    Accessor::TupleIndex(index) => IndexOrField::Index(index.parse().unwrap()),
-                },
-            }),
-            Output::default(),
-        ),
+        ast::Expr::AccessorFunction(field) => {
+            canonicalize_accessor_function(env, var_store, scope, field, region)
+        }
         ast::Expr::TupleAccess(tuple_expr, field) => {
             let (loc_expr, output) = canonicalize_expr(env, var_store, scope, region, tuple_expr);
 
-            (
+            let res = if let Ok(index) = field.parse() {
                 TupleAccess {
                     tuple_var: var_store.fresh(),
                     ext_var: var_store.fresh(),
                     elem_var: var_store.fresh(),
                     loc_expr: Box::new(loc_expr),
-                    index: field.parse().unwrap(),
-                },
-                output,
-            )
+                    index,
+                }
+            } else {
+                let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                env.problem(Problem::RuntimeError(error.clone()));
+                Expr::RuntimeError(error)
+            };
+            (res, output)
         }
+        ast::Expr::TrySuffix { .. } => internal_error!(
+            "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
+        ),
+        ast::Expr::Try => {
+            // Treat remaining `try` keywords as normal variables so that we can continue to support `Result.try`
+            canonicalize_var_lookup(env, var_store, scope, "", "try", region)
+        }
+
         ast::Expr::Tag(tag) => {
             let variant_var = var_store.fresh();
             let ext_var = var_store.fresh();
@@ -1191,7 +1324,9 @@ pub fn canonicalize_expr<'a>(
                 }
                 Ok((name, opaque_def)) => {
                     let mut output = Output::default();
-                    output.references.insert_type_lookup(name);
+                    output
+                        .references
+                        .insert_type_lookup(name, QualifiedReference::Unqualified);
 
                     let (type_arguments, lambda_set_variables, specialized_def_type) =
                         freshen_opaque_def(var_store, opaque_def);
@@ -1216,41 +1351,26 @@ pub fn canonicalize_expr<'a>(
                 }
             }
         }
-        ast::Expr::Expect(condition, continuation) => {
-            let mut output = Output::default();
+        ast::Expr::Dbg => {
+            // Dbg was not desugared as either part of an `Apply` or a `Pizza` binop, so it's
+            // invalid.
+            env.problem(Problem::UnappliedDbg { region });
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let invalid_dbg_expr = crate::desugar::desugar_invalid_dbg_expr(env, scope, region);
 
-            // Get all the lookups that were referenced in the condition,
-            // so we can print their values later.
-            let lookups_in_cond = get_lookup_symbols(&loc_condition.value);
+            let (loc_expr, output) =
+                canonicalize_expr(env, var_store, scope, region, invalid_dbg_expr);
 
-            let (loc_continuation, output2) = canonicalize_expr(
-                env,
-                var_store,
-                scope,
-                continuation.region,
-                &continuation.value,
-            );
-
-            output.union(output1);
-            output.union(output2);
-
-            (
-                Expect {
-                    loc_condition: Box::new(loc_condition),
-                    loc_continuation: Box::new(loc_continuation),
-                    lookups_in_cond,
-                },
-                output,
-            )
+            (loc_expr.value, output)
         }
-        ast::Expr::Dbg(condition, continuation) => {
+        ast::Expr::DbgStmt { .. } => {
+            internal_error!("DbgStmt should have been desugared by now")
+        }
+        ast::Expr::LowLevelDbg((source_location, source), message, continuation) => {
             let mut output = Output::default();
 
-            let (loc_condition, output1) =
-                canonicalize_expr(env, var_store, scope, condition.region, &condition.value);
+            let (loc_message, output1) =
+                canonicalize_expr(env, var_store, scope, message.region, &message.value);
 
             let (loc_continuation, output2) = canonicalize_expr(
                 env,
@@ -1263,17 +1383,19 @@ pub fn canonicalize_expr<'a>(
             output.union(output1);
             output.union(output2);
 
-            // the symbol is used to bind the condition `x = condition`, and identify this `dbg`.
+            // the symbol is used to bind the message `x = message`, and identify this `dbg`.
             // That would cause issues if we dbg a variable, like `dbg y`, because in the IR we
             // cannot alias variables. Hence, we make the dbg use that same variable `y`
-            let symbol = match &loc_condition.value {
+            let symbol = match &loc_message.value {
                 Expr::Var(symbol, _) => *symbol,
                 _ => scope.gen_unique_symbol(),
             };
 
             (
                 Dbg {
-                    loc_condition: Box::new(loc_condition),
+                    source_location: (*source_location).into(),
+                    source: (*source).into(),
+                    loc_message: Box::new(loc_message),
                     loc_continuation: Box::new(loc_continuation),
                     variable: var_store.fresh(),
                     symbol,
@@ -1281,7 +1403,73 @@ pub fn canonicalize_expr<'a>(
                 output,
             )
         }
-        ast::Expr::If(if_thens, final_else_branch) => {
+        ast::Expr::LowLevelTry(loc_expr, kind) => {
+            let (loc_result_expr, output) =
+                canonicalize_expr(env, var_store, scope, loc_expr.region, &loc_expr.value);
+
+            let return_var = var_store.fresh();
+
+            scope
+                .early_returns
+                .push((return_var, loc_expr.region, EarlyReturnKind::Try));
+
+            (
+                Try {
+                    result_expr: Box::new(loc_result_expr),
+                    result_var: var_store.fresh(),
+                    return_var,
+                    ok_payload_var: var_store.fresh(),
+                    err_payload_var: var_store.fresh(),
+                    err_ext_var: var_store.fresh(),
+                    kind: match kind {
+                        ResultTryKind::KeywordPrefix => TryKind::KeywordPrefix,
+                        ResultTryKind::OperatorSuffix => TryKind::OperatorSuffix,
+                    },
+                },
+                output,
+            )
+        }
+        ast::Expr::Return(return_expr, after_return) => {
+            let mut output = Output::default();
+
+            if let Some(after_return) = after_return {
+                let region_with_return =
+                    Region::span_across(&return_expr.region, &after_return.region);
+
+                env.problem(Problem::StatementsAfterReturn {
+                    region: region_with_return,
+                });
+            }
+
+            let (loc_return_expr, output1) = canonicalize_expr(
+                env,
+                var_store,
+                scope,
+                return_expr.region,
+                &return_expr.value,
+            );
+
+            output.union(output1);
+
+            let return_var = var_store.fresh();
+
+            scope
+                .early_returns
+                .push((return_var, return_expr.region, EarlyReturnKind::Return));
+
+            (
+                Return {
+                    return_value: Box::new(loc_return_expr),
+                    return_var,
+                },
+                output,
+            )
+        }
+        ast::Expr::If {
+            if_thens,
+            final_else: final_else_branch,
+            ..
+        } => {
             let mut branches = Vec::with_capacity(if_thens.len());
             let mut output = Output::default();
 
@@ -1356,10 +1544,6 @@ pub fn canonicalize_expr<'a>(
                 Output::default(),
             )
         }
-        ast::Expr::MalformedClosure => {
-            use roc_problem::can::RuntimeError::*;
-            (RuntimeError(MalformedClosure(region)), Output::default())
-        }
         ast::Expr::MalformedIdent(name, bad_ident) => {
             use roc_problem::can::RuntimeError::*;
 
@@ -1368,18 +1552,30 @@ pub fn canonicalize_expr<'a>(
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::MultipleRecordBuilders(sub_expr) => {
+        ast::Expr::EmptyRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = MultipleRecordBuilders(sub_expr.region);
+            let problem = EmptyRecordBuilder(sub_expr.region);
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
         }
-        ast::Expr::UnappliedRecordBuilder(sub_expr) => {
+        ast::Expr::SingleFieldRecordBuilder(sub_expr) => {
             use roc_problem::can::RuntimeError::*;
 
-            let problem = UnappliedRecordBuilder(sub_expr.region);
+            let problem = SingleFieldRecordBuilder(sub_expr.region);
+            env.problem(Problem::RuntimeError(problem.clone()));
+
+            (RuntimeError(problem), Output::default())
+        }
+        ast::Expr::OptionalFieldInRecordBuilder(loc_name, loc_value) => {
+            use roc_problem::can::RuntimeError::*;
+
+            let sub_region = Region::span_across(&loc_name.region, &loc_value.region);
+            let problem = OptionalFieldInRecordBuilder {
+                record: region,
+                field: sub_region,
+            };
             env.problem(Problem::RuntimeError(problem.clone()));
 
             (RuntimeError(problem), Output::default())
@@ -1452,6 +1648,85 @@ pub fn canonicalize_expr<'a>(
     )
 }
 
+fn canonicalize_accessor_function(
+    env: &mut Env<'_>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    field: &Accessor<'_>,
+    region: Region,
+) -> (Expr, Output) {
+    (
+        Expr::RecordAccessor(StructAccessorData {
+            name: scope.gen_unique_symbol(),
+            function_var: var_store.fresh(),
+            record_var: var_store.fresh(),
+            ext_var: var_store.fresh(),
+            closure_var: var_store.fresh(),
+            field_var: var_store.fresh(),
+            field: match field {
+                Accessor::RecordField(field) => IndexOrField::Field((*field).into()),
+                Accessor::TupleIndex(index) => match index.parse() {
+                    Ok(index) => IndexOrField::Index(index),
+                    Err(_) => {
+                        let error = roc_problem::can::RuntimeError::InvalidTupleIndex(region);
+                        env.problem(Problem::RuntimeError(error.clone()));
+                        return (Expr::RuntimeError(error), Output::default());
+                    }
+                },
+            },
+        }),
+        Output::default(),
+    )
+}
+
+pub fn canonicalize_record<'a>(
+    env: &mut Env<'a>,
+    var_store: &mut VarStore,
+    scope: &mut Scope,
+    region: Region,
+    fields: ast::Collection<'a, Loc<ast::AssignedField<'a, ast::Expr<'a>>>>,
+) -> (Expr, Output) {
+    use Expr::*;
+
+    if fields.is_empty() {
+        (EmptyRecord, Output::default())
+    } else {
+        match canonicalize_fields(env, var_store, scope, region, fields.items) {
+            Ok((can_fields, output)) => (
+                Record {
+                    record_var: var_store.fresh(),
+                    fields: can_fields,
+                },
+                output,
+            ),
+            Err(CanonicalizeRecordProblem::InvalidOptionalValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidOptionalValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+            Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+                record_region,
+            }) => (
+                Expr::RuntimeError(roc_problem::can::RuntimeError::InvalidIgnoredValue {
+                    field_name,
+                    field_region,
+                    record_region,
+                }),
+                Output::default(),
+            ),
+        }
+    }
+}
+
 pub fn canonicalize_closure<'a>(
     env: &mut Env<'a>,
     var_store: &mut VarStore,
@@ -1460,7 +1735,7 @@ pub fn canonicalize_closure<'a>(
     loc_body_expr: &'a Loc<ast::Expr<'a>>,
     opt_def_name: Option<Symbol>,
 ) -> (ClosureData, Output) {
-    scope.inner_scope(|inner_scope| {
+    scope.inner_function_scope(|inner_scope| {
         canonicalize_closure_body(
             env,
             var_store,
@@ -1520,6 +1795,8 @@ fn canonicalize_closure_body<'a>(
         &loc_body_expr.value,
     );
 
+    let mut references_top_level = false;
+
     let mut captured_symbols: Vec<_> = new_output
         .references
         .value_lookups()
@@ -1530,7 +1807,11 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !new_output.references.bound_symbols().any(|x| x == s))
         .filter(|s| bound_by_argument_patterns.iter().all(|(k, _)| s != k))
         // filter out top-level symbols those will be globally available, and don't need to be captured
-        .filter(|s| !env.top_level_symbols.contains(s))
+        .filter(|s| {
+            let is_top_level = env.top_level_symbols.contains(s);
+            references_top_level = references_top_level || is_top_level;
+            !is_top_level
+        })
         // filter out imported symbols those will be globally available, and don't need to be captured
         .filter(|s| s.module_id() == env.home)
         // filter out functions that don't close over anything
@@ -1538,6 +1819,15 @@ fn canonicalize_closure_body<'a>(
         .filter(|s| !output.non_closures.contains(s))
         .map(|s| (s, var_store.fresh()))
         .collect();
+
+    if references_top_level {
+        if let Some(params_record) = env.home_params_record {
+            // If this module has params and the closure references top-level symbols,
+            // we need to capture the whole record so we can pass it.
+            // The lower_params pass will take care of removing the captures for top-level fns.
+            captured_symbols.push(params_record);
+        }
+    }
 
     output.union(new_output);
 
@@ -1560,6 +1850,17 @@ fn canonicalize_closure_body<'a>(
         }
     }
 
+    let mut final_expr = &loc_body_expr;
+    while let Expr::LetRec(_, inner, _) | Expr::LetNonRec(_, inner) = &final_expr.value {
+        final_expr = inner;
+    }
+
+    if let Expr::Return { return_value, .. } = &final_expr.value {
+        env.problem(Problem::ReturnAtEndOfFunction {
+            region: return_value.region,
+        });
+    }
+
     // store the references of this function in the Env. This information is used
     // when we canonicalize a surrounding def (if it exists)
     env.closures.insert(symbol, output.references.clone());
@@ -1573,10 +1874,14 @@ fn canonicalize_closure_body<'a>(
         output.non_closures.insert(symbol);
     }
 
+    let return_type_var = var_store.fresh();
+
     let closure_data = ClosureData {
         function_type: var_store.fresh(),
         closure_type: var_store.fresh(),
-        return_type: var_store.fresh(),
+        return_type: return_type_var,
+        fx_type: var_store.fresh(),
+        early_returns: scope.early_returns.clone(),
         name: symbol,
         captured_symbols,
         recursive: Recursive::NotRecursive,
@@ -1590,7 +1895,8 @@ fn canonicalize_closure_body<'a>(
 enum MultiPatternVariables {
     OnePattern,
     MultiPattern {
-        bound_occurrences: VecMap<Symbol, (Region, u8)>,
+        num_patterns: usize,
+        bound_occurrences: VecMap<Symbol, (Region, usize)>,
     },
 }
 
@@ -1599,7 +1905,8 @@ impl MultiPatternVariables {
     fn new(num_patterns: usize) -> Self {
         if num_patterns > 1 {
             Self::MultiPattern {
-                bound_occurrences: VecMap::with_capacity(2),
+                num_patterns,
+                bound_occurrences: VecMap::with_capacity(num_patterns),
             }
         } else {
             Self::OnePattern
@@ -1610,7 +1917,9 @@ impl MultiPatternVariables {
     fn add_pattern(&mut self, pattern: &Loc<Pattern>) {
         match self {
             MultiPatternVariables::OnePattern => {}
-            MultiPatternVariables::MultiPattern { bound_occurrences } => {
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences, ..
+            } => {
                 for (sym, region) in BindingsFromPattern::new(pattern) {
                     if !bound_occurrences.contains_key(&sym) {
                         bound_occurrences.insert(sym, (region, 0));
@@ -1623,15 +1932,18 @@ impl MultiPatternVariables {
 
     #[inline(always)]
     fn get_unbound(self) -> impl Iterator<Item = (Symbol, Region)> {
-        let bound_occurrences = match self {
-            MultiPatternVariables::OnePattern => Default::default(),
-            MultiPatternVariables::MultiPattern { bound_occurrences } => bound_occurrences,
+        let (bound_occurrences, num_patterns) = match self {
+            MultiPatternVariables::OnePattern => (Default::default(), 1),
+            MultiPatternVariables::MultiPattern {
+                bound_occurrences,
+                num_patterns,
+            } => (bound_occurrences, num_patterns),
         };
 
         bound_occurrences
             .into_iter()
-            .filter_map(|(sym, (region, occurs))| {
-                if occurs == 1 {
+            .filter_map(move |(sym, (region, occurs))| {
+                if occurs != num_patterns {
                     Some((sym, region))
                 } else {
                     None
@@ -1751,6 +2063,11 @@ enum CanonicalizeRecordProblem {
         field_region: Region,
         record_region: Region,
     },
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
 }
 fn canonicalize_fields<'a>(
     env: &mut Env<'a>,
@@ -1799,6 +2116,21 @@ fn canonicalize_fields<'a>(
                     record_region: region,
                 });
             }
+            Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+                field_name,
+                field_region,
+            }) => {
+                env.problems.push(Problem::InvalidIgnoredValue {
+                    field_name: field_name.clone(),
+                    field_region,
+                    record_region: region,
+                });
+                return Err(CanonicalizeRecordProblem::InvalidIgnoredValue {
+                    field_name,
+                    field_region,
+                    record_region: region,
+                });
+            }
         }
     }
 
@@ -1807,6 +2139,10 @@ fn canonicalize_fields<'a>(
 
 enum CanonicalizeFieldProblem {
     InvalidOptionalValue {
+        field_name: Lowercase,
+        field_region: Region,
+    },
+    InvalidIgnoredValue {
         field_name: Lowercase,
         field_region: Region,
     },
@@ -1839,6 +2175,12 @@ fn canonicalize_field<'a>(
             field_region: Region::span_across(&label.region, &loc_expr.region),
         }),
 
+        // An ignored value, e.g. `{ _name: 123 }`
+        IgnoredValue(name, _, value) => Err(CanonicalizeFieldProblem::InvalidIgnoredValue {
+            field_name: Lowercase::from(name.value),
+            field_region: Region::span_across(&name.region, &value.region),
+        }),
+
         // A label with no value, e.g. `{ name }` (this is sugar for { name: name })
         LabelOnly(_) => {
             internal_error!("Somehow a LabelOnly record field was not desugared!");
@@ -1846,10 +2188,6 @@ fn canonicalize_field<'a>(
 
         SpaceBefore(sub_field, _) | SpaceAfter(sub_field, _) => {
             canonicalize_field(env, var_store, scope, sub_field)
-        }
-
-        Malformed(_string) => {
-            internal_error!("TODO canonicalize malformed record field");
         }
     }
 }
@@ -1869,17 +2207,19 @@ fn canonicalize_var_lookup(
         // Since module_name was empty, this is an unqualified var.
         // Look it up in scope!
         match scope.lookup_str(ident, region) {
-            Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+            Ok(lookup) => {
+                output
+                    .references
+                    .insert_value_lookup(lookup, QualifiedReference::Unqualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1892,17 +2232,19 @@ fn canonicalize_var_lookup(
         // Since module_name was nonempty, this is a qualified var.
         // Look it up in the env!
         match env.qualified_lookup(scope, module_name, ident, region) {
-            Ok(symbol) => {
-                output.references.insert_value_lookup(symbol);
+            Ok(lookup) => {
+                output
+                    .references
+                    .insert_value_lookup(lookup, QualifiedReference::Qualified);
 
-                if scope.abilities_store.is_ability_member_name(symbol) {
+                if scope.abilities_store.is_ability_member_name(lookup.symbol) {
                     AbilityMember(
-                        symbol,
+                        params_in_abilities_unimplemented!(lookup),
                         Some(scope.abilities_store.fresh_specialization_id()),
                         var_store.fresh(),
                     )
                 } else {
-                    Var(symbol, var_store.fresh())
+                    lookup_to_expr(var_store, lookup)
                 }
             }
             Err(problem) => {
@@ -1920,444 +2262,22 @@ fn canonicalize_var_lookup(
     (can_expr, output)
 }
 
-/// Currently uses the heuristic of "only inline if it's a builtin"
-pub fn inline_calls(var_store: &mut VarStore, expr: Expr) -> Expr {
-    use Expr::*;
-
-    match expr {
-        // Num stores the `a` variable in `Num a`. Not the same as the variable
-        // stored in Int and Float below, which is strictly for better error messages
-        other @ Num(..)
-        | other @ Int(..)
-        | other @ Float(..)
-        | other @ Str { .. }
-        | other @ IngestedFile(..)
-        | other @ SingleQuote(..)
-        | other @ RuntimeError(_)
-        | other @ EmptyRecord
-        | other @ RecordAccessor { .. }
-        | other @ RecordUpdate { .. }
-        | other @ Var(..)
-        | other @ AbilityMember(..)
-        | other @ RunLowLevel { .. }
-        | other @ TypedHole { .. }
-        | other @ ForeignCall { .. }
-        | other @ OpaqueWrapFunction(_)
-        | other @ Crash { .. } => other,
-
-        List {
-            elem_var,
-            loc_elems,
-        } => {
-            let mut new_elems = Vec::with_capacity(loc_elems.len());
-
-            for loc_elem in loc_elems {
-                let value = inline_calls(var_store, loc_elem.value);
-
-                new_elems.push(Loc {
-                    value,
-                    region: loc_elem.region,
-                });
-            }
-
-            List {
-                elem_var,
-                loc_elems: new_elems,
-            }
-        }
-        // Branching
-        When {
-            cond_var,
-            expr_var,
-            region,
-            loc_cond,
-            branches,
-            branches_cond_var,
-            exhaustive,
-        } => {
-            let loc_cond = Box::new(Loc {
-                region: loc_cond.region,
-                value: inline_calls(var_store, loc_cond.value),
-            });
-
-            let mut new_branches = Vec::with_capacity(branches.len());
-
-            for branch in branches {
-                let value = Loc {
-                    value: inline_calls(var_store, branch.value.value),
-                    region: branch.value.region,
-                };
-                let guard = match branch.guard {
-                    Some(loc_expr) => Some(Loc {
-                        region: loc_expr.region,
-                        value: inline_calls(var_store, loc_expr.value),
-                    }),
-                    None => None,
-                };
-                let new_branch = WhenBranch {
-                    patterns: branch.patterns,
-                    value,
-                    guard,
-                    redundant: RedundantMark::new(var_store),
-                };
-
-                new_branches.push(new_branch);
-            }
-
-            When {
-                cond_var,
-                expr_var,
-                region,
-                loc_cond,
-                branches: new_branches,
-                branches_cond_var,
-                exhaustive,
-            }
-        }
-        If {
-            cond_var,
-            branch_var,
-            branches,
-            final_else,
-        } => {
-            let mut new_branches = Vec::with_capacity(branches.len());
-
-            for (loc_cond, loc_expr) in branches {
-                let loc_cond = Loc {
-                    value: inline_calls(var_store, loc_cond.value),
-                    region: loc_cond.region,
-                };
-
-                let loc_expr = Loc {
-                    value: inline_calls(var_store, loc_expr.value),
-                    region: loc_expr.region,
-                };
-
-                new_branches.push((loc_cond, loc_expr));
-            }
-
-            let final_else = Box::new(Loc {
-                region: final_else.region,
-                value: inline_calls(var_store, final_else.value),
-            });
-
-            If {
-                cond_var,
-                branch_var,
-                branches: new_branches,
-                final_else,
-            }
-        }
-
-        Expect {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            Expect {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
-        ExpectFx {
-            loc_condition,
-            loc_continuation,
-            lookups_in_cond,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            ExpectFx {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                lookups_in_cond,
-            }
-        }
-
-        Dbg {
-            loc_condition,
-            loc_continuation,
-            variable,
+fn lookup_to_expr(
+    var_store: &mut VarStore,
+    SymbolLookup {
+        symbol,
+        module_params,
+    }: SymbolLookup,
+) -> Expr {
+    if let Some((params_var, params_symbol)) = module_params {
+        Expr::ParamsVar {
             symbol,
-        } => {
-            let loc_condition = Loc {
-                region: loc_condition.region,
-                value: inline_calls(var_store, loc_condition.value),
-            };
-
-            let loc_continuation = Loc {
-                region: loc_continuation.region,
-                value: inline_calls(var_store, loc_continuation.value),
-            };
-
-            Dbg {
-                loc_condition: Box::new(loc_condition),
-                loc_continuation: Box::new(loc_continuation),
-                variable,
-                symbol,
-            }
+            var: var_store.fresh(),
+            params_symbol,
+            params_var,
         }
-
-        LetRec(defs, loc_expr, mark) => {
-            let mut new_defs = Vec::with_capacity(defs.len());
-
-            for def in defs {
-                new_defs.push(Def {
-                    loc_pattern: def.loc_pattern,
-                    loc_expr: Loc {
-                        region: def.loc_expr.region,
-                        value: inline_calls(var_store, def.loc_expr.value),
-                    },
-                    expr_var: def.expr_var,
-                    pattern_vars: def.pattern_vars,
-                    annotation: def.annotation,
-                });
-            }
-
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, loc_expr.value),
-            };
-
-            LetRec(new_defs, Box::new(loc_expr), mark)
-        }
-
-        LetNonRec(def, loc_expr) => {
-            let def = Def {
-                loc_pattern: def.loc_pattern,
-                loc_expr: Loc {
-                    region: def.loc_expr.region,
-                    value: inline_calls(var_store, def.loc_expr.value),
-                },
-                expr_var: def.expr_var,
-                pattern_vars: def.pattern_vars,
-                annotation: def.annotation,
-            };
-
-            let loc_expr = Loc {
-                region: loc_expr.region,
-                value: inline_calls(var_store, loc_expr.value),
-            };
-
-            LetNonRec(Box::new(def), Box::new(loc_expr))
-        }
-
-        Closure(ClosureData {
-            function_type,
-            closure_type,
-            return_type,
-            recursive,
-            name,
-            captured_symbols,
-            arguments,
-            loc_body,
-        }) => {
-            let loc_expr = *loc_body;
-            let loc_expr = Loc {
-                value: inline_calls(var_store, loc_expr.value),
-                region: loc_expr.region,
-            };
-
-            Closure(ClosureData {
-                function_type,
-                closure_type,
-                return_type,
-                recursive,
-                name,
-                captured_symbols,
-                arguments,
-                loc_body: Box::new(loc_expr),
-            })
-        }
-
-        Record { record_var, fields } => {
-            todo!(
-                "Inlining for Record with record_var {:?} and fields {:?}",
-                record_var,
-                fields
-            );
-        }
-
-        RecordAccess {
-            record_var,
-            ext_var,
-            field_var,
-            loc_expr,
-            field,
-        } => {
-            todo!("Inlining for RecordAccess with record_var {:?}, ext_var {:?}, field_var {:?}, loc_expr {:?}, field {:?}", record_var, ext_var, field_var, loc_expr, field);
-        }
-
-        Tuple { tuple_var, elems } => {
-            todo!(
-                "Inlining for Tuple with tuple_var {:?} and elems {:?}",
-                tuple_var,
-                elems
-            );
-        }
-
-        TupleAccess {
-            tuple_var,
-            ext_var,
-            elem_var,
-            loc_expr,
-            index,
-        } => {
-            todo!("Inlining for TupleAccess with tuple_var {:?}, ext_var {:?}, elem_var {:?}, loc_expr {:?}, index {:?}", tuple_var, ext_var, elem_var, loc_expr, index);
-        }
-
-        Tag {
-            tag_union_var: variant_var,
-            ext_var,
-            name,
-            arguments,
-        } => {
-            todo!(
-                "Inlining for Tag with variant_var {:?}, ext_var {:?}, name {:?}, arguments {:?}",
-                variant_var,
-                ext_var,
-                name,
-                arguments
-            );
-        }
-
-        OpaqueRef {
-            opaque_var,
-            name,
-            argument,
-            specialized_def_type,
-            type_arguments,
-            lambda_set_variables,
-        } => {
-            let (var, loc_expr) = *argument;
-            let argument = Box::new((
-                var,
-                loc_expr.map_owned(|expr| inline_calls(var_store, expr)),
-            ));
-
-            OpaqueRef {
-                opaque_var,
-                name,
-                argument,
-                specialized_def_type,
-                type_arguments,
-                lambda_set_variables,
-            }
-        }
-
-        ZeroArgumentTag {
-            closure_name,
-            variant_var,
-            ext_var,
-            name,
-        } => {
-            todo!(
-                "Inlining for ZeroArgumentTag with closure_name {:?}, variant_var {:?}, ext_var {:?}, name {:?}",
-                closure_name,
-                variant_var,
-                ext_var,
-                name,
-            );
-        }
-
-        Call(boxed_tuple, args, called_via) => {
-            let (fn_var, loc_expr, closure_var, expr_var) = *boxed_tuple;
-
-            match loc_expr.value {
-                Var(symbol, _) if symbol.is_builtin() => {
-                    match builtin_defs_map(symbol, var_store) {
-                        Some(Def {
-                            loc_expr:
-                                Loc {
-                                    value:
-                                        Closure(ClosureData {
-                                            recursive,
-                                            arguments: params,
-                                            loc_body: boxed_body,
-                                            ..
-                                        }),
-                                    ..
-                                },
-                            ..
-                        }) => {
-                            debug_assert_eq!(recursive, Recursive::NotRecursive);
-
-                            // Since this is a canonicalized Expr, we should have
-                            // already detected any arity mismatches and replaced this
-                            // with a RuntimeError if there was a mismatch.
-                            debug_assert_eq!(params.len(), args.len());
-
-                            // Start with the function's body as the answer.
-                            let mut loc_answer = *boxed_body;
-
-                            // Wrap the body in one LetNonRec for each argument,
-                            // such that at the end we have all the arguments in
-                            // scope with the values the caller provided.
-                            for (
-                                (_param_var, _exhaustive_mark, loc_pattern),
-                                (expr_var, loc_expr),
-                            ) in params.iter().cloned().zip(args.into_iter()).rev()
-                            {
-                                // TODO get the correct vars into here.
-                                // Not sure if param_var should be involved.
-                                let pattern_vars = SendMap::default();
-
-                                let def = Def {
-                                    loc_pattern,
-                                    loc_expr,
-                                    expr_var,
-                                    pattern_vars,
-                                    annotation: None,
-                                };
-
-                                loc_answer = Loc {
-                                    region: Region::zero(),
-                                    value: LetNonRec(Box::new(def), Box::new(loc_answer)),
-                                };
-                            }
-
-                            loc_answer.value
-                        }
-                        Some(_) => {
-                            unreachable!("Tried to inline a non-function");
-                        }
-                        None => {
-                            unreachable!(
-                                "Tried to inline a builtin that wasn't registered: {:?}",
-                                symbol
-                            );
-                        }
-                    }
-                }
-                _ => {
-                    // For now, we only inline calls to builtins. Leave this alone!
-                    Call(
-                        Box::new((fn_var, loc_expr, closure_var, expr_var)),
-                        args,
-                        called_via,
-                    )
-                }
-            }
-        }
+    } else {
+        Expr::Var(symbol, var_store.fresh())
     }
 }
 
@@ -2387,22 +2307,30 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         | ast::Expr::Num(_)
         | ast::Expr::NonBase10Int { .. }
         | ast::Expr::AccessorFunction(_)
+        | ast::Expr::RecordUpdater(_)
         | ast::Expr::Crash
+        | ast::Expr::Dbg
+        | ast::Expr::Try
         | ast::Expr::Underscore(_)
         | ast::Expr::MalformedIdent(_, _)
         | ast::Expr::Tag(_)
-        | ast::Expr::OpaqueRef(_)
-        | ast::Expr::MalformedClosure => true,
+        | ast::Expr::OpaqueRef(_) => true,
+        ast::Expr::LowLevelTry(loc_expr, _) => is_valid_interpolation(&loc_expr.value),
         // Newlines are disallowed inside interpolation, and these all require newlines
-        ast::Expr::Dbg(_, _)
-        | ast::Expr::Defs(_, _)
-        | ast::Expr::Expect(_, _)
+        ast::Expr::DbgStmt { .. }
+        | ast::Expr::LowLevelDbg(_, _, _)
+        | ast::Expr::Return(_, _)
         | ast::Expr::When(_, _)
-        | ast::Expr::Backpassing(_, _, _)
-        | ast::Expr::IngestedFile(_, _)
         | ast::Expr::SpaceBefore(_, _)
         | ast::Expr::Str(StrLiteral::Block(_))
         | ast::Expr::SpaceAfter(_, _) => false,
+        // Desugared dbg expression
+        ast::Expr::Defs(_, loc_ret) => match loc_ret.value {
+            ast::Expr::LowLevelDbg(_, _, continuation) => {
+                is_valid_interpolation(&continuation.value)
+            }
+            _ => false,
+        },
         // These can contain subexpressions, so we need to recursively check those
         ast::Expr::Str(StrLiteral::Line(segments)) => {
             segments.iter().all(|segment| match segment {
@@ -2416,24 +2344,33 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
         }
         ast::Expr::Record(fields) => fields.iter().all(|loc_field| match loc_field.value {
             ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+            | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+            | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                 loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
             }
-            ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+            ast::AssignedField::LabelOnly(_) => true,
             ast::AssignedField::SpaceBefore(_, _) | ast::AssignedField::SpaceAfter(_, _) => false,
         }),
         ast::Expr::Tuple(fields) => fields
             .iter()
             .all(|loc_field| is_valid_interpolation(&loc_field.value)),
-        ast::Expr::MultipleRecordBuilders(loc_expr)
-        | ast::Expr::UnappliedRecordBuilder(loc_expr)
+        ast::Expr::EmptyRecordBuilder(loc_expr)
+        | ast::Expr::SingleFieldRecordBuilder(loc_expr)
+        | ast::Expr::OptionalFieldInRecordBuilder(_, loc_expr)
         | ast::Expr::PrecedenceConflict(PrecedenceConflict { expr: loc_expr, .. })
         | ast::Expr::UnaryOp(loc_expr, _)
         | ast::Expr::Closure(_, loc_expr) => is_valid_interpolation(&loc_expr.value),
         ast::Expr::TupleAccess(sub_expr, _)
         | ast::Expr::ParensAround(sub_expr)
-        | ast::Expr::RecordAccess(sub_expr, _) => is_valid_interpolation(sub_expr),
+        | ast::Expr::RecordAccess(sub_expr, _)
+        | ast::Expr::TrySuffix(sub_expr) => is_valid_interpolation(sub_expr),
         ast::Expr::Apply(loc_expr, args, _called_via) => {
+            is_valid_interpolation(&loc_expr.value)
+                && args
+                    .iter()
+                    .all(|loc_arg| is_valid_interpolation(&loc_arg.value))
+        }
+        ast::Expr::PncApply(loc_expr, args) => {
             is_valid_interpolation(&loc_expr.value)
                 && args
                     .iter()
@@ -2445,7 +2382,11 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
                     .iter()
                     .all(|(loc_expr, _binop)| is_valid_interpolation(&loc_expr.value))
         }
-        ast::Expr::If(branches, final_branch) => {
+        ast::Expr::If {
+            if_thens: branches,
+            final_else: final_branch,
+            ..
+        } => {
             is_valid_interpolation(&final_branch.value)
                 && branches.iter().all(|(loc_before, loc_after)| {
                     is_valid_interpolation(&loc_before.value)
@@ -2459,32 +2400,28 @@ pub fn is_valid_interpolation(expr: &ast::Expr<'_>) -> bool {
             is_valid_interpolation(&update.value)
                 && fields.iter().all(|loc_field| match loc_field.value {
                     ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
-                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val) => {
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
                         loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
                     }
-                    ast::AssignedField::Malformed(_) | ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::LabelOnly(_) => true,
                     ast::AssignedField::SpaceBefore(_, _)
                     | ast::AssignedField::SpaceAfter(_, _) => false,
                 })
         }
-        ast::Expr::RecordBuilder(fields) => fields.iter().all(|loc_field| match loc_field.value {
-            ast::RecordBuilderField::Value(_label, comments, loc_expr) => {
-                comments.is_empty() && is_valid_interpolation(&loc_expr.value)
-            }
-            ast::RecordBuilderField::ApplyValue(
-                _label,
-                comments_before,
-                comments_after,
-                loc_expr,
-            ) => {
-                comments_before.is_empty()
-                    && comments_after.is_empty()
-                    && is_valid_interpolation(&loc_expr.value)
-            }
-            ast::RecordBuilderField::Malformed(_) | ast::RecordBuilderField::LabelOnly(_) => true,
-            ast::RecordBuilderField::SpaceBefore(_, _)
-            | ast::RecordBuilderField::SpaceAfter(_, _) => false,
-        }),
+        ast::Expr::RecordBuilder { mapper, fields } => {
+            is_valid_interpolation(&mapper.value)
+                && fields.iter().all(|loc_field| match loc_field.value {
+                    ast::AssignedField::RequiredValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::OptionalValue(_label, loc_comments, loc_val)
+                    | ast::AssignedField::IgnoredValue(_label, loc_comments, loc_val) => {
+                        loc_comments.is_empty() && is_valid_interpolation(&loc_val.value)
+                    }
+                    ast::AssignedField::LabelOnly(_) => true,
+                    ast::AssignedField::SpaceBefore(_, _)
+                    | ast::AssignedField::SpaceAfter(_, _) => false,
+                })
+        }
     }
 }
 
@@ -2586,10 +2523,39 @@ fn flatten_str_lines<'a>(
 fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> Expr {
     use StrSegment::*;
 
+    let n = segments.len();
     let mut iter = segments.into_iter().rev();
     let mut loc_expr = match iter.next() {
         Some(Plaintext(string)) => Loc::at(Region::zero(), Expr::Str(string)),
-        Some(Interpolation(loc_expr)) => loc_expr,
+        Some(Interpolation(loc_expr)) => {
+            if n == 1 {
+                // We concat with the empty string to ensure a type error when loc_expr is not a string
+                let empty_string = Loc::at(Region::zero(), Expr::Str("".into()));
+
+                let fn_expr = Loc::at(
+                    Region::zero(),
+                    Expr::Var(Symbol::STR_CONCAT, var_store.fresh()),
+                );
+                let expr = Expr::Call(
+                    Box::new((
+                        var_store.fresh(),
+                        fn_expr,
+                        var_store.fresh(),
+                        var_store.fresh(),
+                        var_store.fresh(),
+                    )),
+                    vec![
+                        (var_store.fresh(), empty_string),
+                        (var_store.fresh(), loc_expr),
+                    ],
+                    CalledVia::StringInterpolation,
+                );
+
+                Loc::at(Region::zero(), expr)
+            } else {
+                loc_expr
+            }
+        }
         None => {
             // No segments? Empty string!
 
@@ -2611,6 +2577,7 @@ fn desugar_str_segments(var_store: &mut VarStore, segments: Vec<StrSegment>) -> 
             Box::new((
                 var_store.fresh(),
                 fn_expr,
+                var_store.fresh(),
                 var_store.fresh(),
                 var_store.fresh(),
             )),
@@ -2639,6 +2606,9 @@ pub struct Declarations {
     // used for ability member specializatons.
     pub specializes: VecMap<usize, Symbol>,
 
+    // used while lowering params.
+    arity_by_name: VecMap<IdentId, usize>,
+
     pub host_exposed_annotations: VecMap<usize, (Variable, crate::def::Annotation)>,
 
     pub function_bodies: Vec<Loc<FunctionDef>>,
@@ -2656,6 +2626,7 @@ impl Declarations {
     pub fn new() -> Self {
         Self::with_capacity(0)
     }
+
     pub fn with_capacity(capacity: usize) -> Self {
         Self {
             declarations: Vec::with_capacity(capacity),
@@ -2667,6 +2638,7 @@ impl Declarations {
             expressions: Vec::with_capacity(capacity),
             specializes: VecMap::default(), // number of specializations is probably low
             destructs: Vec::new(),          // number of destructs is probably low
+            arity_by_name: VecMap::with_capacity(capacity),
         }
     }
 
@@ -2701,13 +2673,18 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
 
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
+
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         let tag = match loc_closure_data.value.recursive {
             Recursive::NotRecursive | Recursive::Recursive => {
@@ -2749,13 +2726,18 @@ impl Declarations {
         let function_def = FunctionDef {
             closure_type: loc_closure_data.value.closure_type,
             return_type: loc_closure_data.value.return_type,
+            fx_type: loc_closure_data.value.fx_type,
+            early_returns: loc_closure_data.value.early_returns,
             captured_symbols: loc_closure_data.value.captured_symbols,
             arguments: loc_closure_data.value.arguments,
         };
 
+        self.arity_by_name
+            .insert(symbol.value.ident_id(), function_def.arguments.len());
+
         let loc_function_def = Loc::at(loc_closure_data.region, function_def);
 
-        let function_def_index = Index::push_new(&mut self.function_bodies, loc_function_def);
+        let function_def_index = index_push_new(&mut self.function_bodies, loc_function_def);
 
         if let Some(annotation) = host_annotation {
             self.host_exposed_annotations
@@ -2795,24 +2777,6 @@ impl Declarations {
         index
     }
 
-    pub fn push_expect_fx(
-        &mut self,
-        preceding_comment: Region,
-        name: Symbol,
-        loc_expr: Loc<Expr>,
-    ) -> usize {
-        let index = self.declarations.len();
-
-        self.declarations.push(DeclarationTag::ExpectationFx);
-        self.variables.push(Variable::BOOL);
-        self.symbols.push(Loc::at(preceding_comment, name));
-        self.annotations.push(None);
-
-        self.expressions.push(loc_expr);
-
-        index
-    }
-
     pub fn push_value_def(
         &mut self,
         symbol: Loc<Symbol>,
@@ -2828,6 +2792,8 @@ impl Declarations {
             self.host_exposed_annotations
                 .insert(self.declarations.len(), annotation);
         }
+
+        self.arity_by_name.insert(symbol.value.ident_id(), 0);
 
         self.declarations.push(DeclarationTag::Value);
         self.variables.push(expr_var);
@@ -2859,7 +2825,7 @@ impl Declarations {
             pattern_vars,
         };
 
-        let destructure_def_index = Index::push_new(&mut self.destructs, destruct_def);
+        let destructure_def_index = index_push_new(&mut self.destructs, destruct_def);
 
         self.declarations
             .push(DeclarationTag::Destructure(destructure_def_index));
@@ -2924,6 +2890,8 @@ impl Declarations {
                 let function_def = FunctionDef {
                     closure_type: closure_data.closure_type,
                     return_type: closure_data.return_type,
+                    fx_type: closure_data.fx_type,
+                    early_returns: closure_data.early_returns,
                     captured_symbols: closure_data.captured_symbols,
                     arguments: closure_data.arguments,
                 };
@@ -2931,7 +2899,7 @@ impl Declarations {
                 let loc_function_def = Loc::at(def.loc_expr.region, function_def);
 
                 let function_def_index =
-                    Index::push_new(&mut self.function_bodies, loc_function_def);
+                    index_push_new(&mut self.function_bodies, loc_function_def);
 
                 self.declarations[index] = DeclarationTag::Function(function_def_index);
                 self.expressions[index] = *closure_data.loc_body;
@@ -2943,6 +2911,64 @@ impl Declarations {
                 self.variables[index] = def.expr_var;
             }
         }
+    }
+
+    /// Convert a value def to a function def with the given arguments
+    /// Currently used in lower_params
+    pub fn convert_value_to_function(
+        &mut self,
+        index: usize,
+        new_arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
+        var_store: &mut VarStore,
+    ) {
+        match self.declarations[index] {
+            DeclarationTag::Value => {
+                let new_args_len = new_arguments.len();
+
+                let loc_body = self.expressions[index].clone();
+                let region = loc_body.region;
+
+                let closure_data = ClosureData {
+                    function_type: var_store.fresh(),
+                    closure_type: var_store.fresh(),
+                    return_type: var_store.fresh(),
+                    fx_type: var_store.fresh(),
+                    early_returns: vec![],
+                    name: self.symbols[index].value,
+                    captured_symbols: vec![],
+                    recursive: Recursive::NotRecursive,
+                    arguments: new_arguments,
+                    loc_body: Box::new(loc_body),
+                };
+
+                let loc_closure_data = Loc::at(region, closure_data);
+
+                let function_def = FunctionDef {
+                    closure_type: loc_closure_data.value.closure_type,
+                    return_type: loc_closure_data.value.return_type,
+                    fx_type: loc_closure_data.value.fx_type,
+                    early_returns: loc_closure_data.value.early_returns,
+                    captured_symbols: loc_closure_data.value.captured_symbols,
+                    arguments: loc_closure_data.value.arguments,
+                };
+
+                let loc_function_def = Loc::at(region, function_def);
+
+                let function_def_index =
+                    index_push_new(&mut self.function_bodies, loc_function_def);
+
+                if let Some(annotation) = &mut self.annotations[index] {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                if let Some((_var, annotation)) = self.host_exposed_annotations.get_mut(&index) {
+                    annotation.convert_to_fn(new_args_len, var_store);
+                }
+
+                self.declarations[index] = DeclarationTag::Function(function_def_index);
+            }
+            _ => internal_error!("Expected value declaration"),
+        };
     }
 
     pub fn len(&self) -> usize {
@@ -2979,7 +3005,7 @@ impl Declarations {
     pub fn expects(&self) -> ExpectCollector {
         let mut collector = ExpectCollector {
             expects: VecMap::default(),
-            dbgs: VecMap::default(),
+            has_dbgs: false,
         };
 
         let var = Variable::EMPTY_RECORD;
@@ -3003,16 +3029,15 @@ impl Declarations {
 
                     collector.visit_expr(&loc_expr.value, loc_expr.region, var);
                 }
-                ExpectationFx => {
-                    let loc_expr =
-                        toplevel_expect_to_inline_expect_fx(self.expressions[index].clone());
-
-                    collector.visit_expr(&loc_expr.value, loc_expr.region, var);
-                }
             }
         }
 
         collector
+    }
+
+    pub(crate) fn take_arity_by_name(&mut self) -> VecMap<IdentId, usize> {
+        // `arity_by_name` is only needed for lowering module params
+        std::mem::take(&mut self.arity_by_name)
     }
 }
 
@@ -3022,7 +3047,6 @@ roc_error_macros::assert_sizeof_default!(DeclarationTag, 8);
 pub enum DeclarationTag {
     Value,
     Expectation,
-    ExpectationFx,
     Function(Index<Loc<FunctionDef>>),
     Recursive(Index<Loc<FunctionDef>>),
     TailRecursive(Index<Loc<FunctionDef>>),
@@ -3040,7 +3064,7 @@ impl DeclarationTag {
         match self {
             Function(_) | Recursive(_) | TailRecursive(_) => 1,
             Value => 1,
-            Expectation | ExpectationFx => 1,
+            Expectation => 1,
             Destructure(_) => 1,
             MutualRecursion { length, .. } => length as usize + 1,
         }
@@ -3051,6 +3075,8 @@ impl DeclarationTag {
 pub struct FunctionDef {
     pub closure_type: Variable,
     pub return_type: Variable,
+    pub fx_type: Variable,
+    pub early_returns: Vec<(Variable, Region, EarlyReturnKind)>,
     pub captured_symbols: Vec<(Symbol, Variable)>,
     pub arguments: Vec<(Variable, AnnotatedMark, Loc<Pattern>)>,
 }
@@ -3068,6 +3094,12 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
     while let Some(expr) = stack.pop() {
         match expr {
             Expr::Var(symbol, var)
+            | Expr::ParamsVar {
+                symbol,
+                var,
+                params_symbol: _,
+                params_var: _,
+            }
             | Expr::RecordUpdate {
                 symbol,
                 record_var: var,
@@ -3172,10 +3204,10 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             Expr::Tuple { elems, .. } => {
                 stack.extend(elems.iter().map(|(_, elem)| &elem.value));
             }
-            Expr::Expect {
-                loc_continuation, ..
+            Expr::ImportParams(_, _, Some((_, expr))) => {
+                stack.push(expr);
             }
-            | Expr::ExpectFx {
+            Expr::Expect {
                 loc_continuation, ..
             }
             | Expr::Dbg {
@@ -3185,6 +3217,12 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 
                 // Intentionally ignore the lookups in the nested `expect` condition itself,
                 // because they couldn't possibly influence the outcome of this `expect`!
+            }
+            Expr::Try { result_expr, .. } => {
+                stack.push(&result_expr.value);
+            }
+            Expr::Return { return_value, .. } => {
+                stack.push(&return_value.value);
             }
             Expr::Crash { msg, .. } => stack.push(&msg.value),
             Expr::Num(_, _, _, _)
@@ -3196,8 +3234,8 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
             | Expr::RecordAccessor(_)
             | Expr::SingleQuote(..)
             | Expr::EmptyRecord
-            | Expr::TypedHole(_)
             | Expr::RuntimeError(_)
+            | Expr::ImportParams(_, _, None)
             | Expr::OpaqueWrapFunction(_) => {}
         }
     }
@@ -3229,15 +3267,7 @@ pub(crate) fn get_lookup_symbols(expr: &Expr) -> Vec<ExpectLookup> {
 /// This is supposed to happen just before monomorphization:
 /// all type errors and such are generated from the user source,
 /// but this transformation means that we don't need special codegen for toplevel expects
-pub fn toplevel_expect_to_inline_expect_pure(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, false)
-}
-
-pub fn toplevel_expect_to_inline_expect_fx(loc_expr: Loc<Expr>) -> Loc<Expr> {
-    toplevel_expect_to_inline_expect_help(loc_expr, true)
-}
-
-fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: bool) -> Loc<Expr> {
+pub fn toplevel_expect_to_inline_expect_pure(mut loc_expr: Loc<Expr>) -> Loc<Expr> {
     enum StoredDef {
         NonRecursive(Region, Box<Def>),
         Recursive(Region, Vec<Def>, IllegalCycleMark),
@@ -3275,18 +3305,10 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
     }
 
     let expect_region = loc_expr.region;
-    let expect = if has_effects {
-        Expr::ExpectFx {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
-    } else {
-        Expr::Expect {
-            loc_condition: Box::new(loc_expr),
-            loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
-            lookups_in_cond,
-        }
+    let expect = Expr::Expect {
+        loc_condition: Box::new(loc_expr),
+        loc_continuation: Box::new(Loc::at_zero(Expr::EmptyRecord)),
+        lookups_in_cond,
     };
 
     let mut loc_expr = Loc::at(expect_region, expect);
@@ -3308,7 +3330,7 @@ fn toplevel_expect_to_inline_expect_help(mut loc_expr: Loc<Expr>, has_effects: b
 
 pub struct ExpectCollector {
     pub expects: VecMap<Region, Vec<ExpectLookup>>,
-    pub dbgs: VecMap<Symbol, DbgLookup>,
+    pub has_dbgs: bool,
 }
 
 impl crate::traverse::Visitor for ExpectCollector {
@@ -3318,29 +3340,12 @@ impl crate::traverse::Visitor for ExpectCollector {
                 lookups_in_cond,
                 loc_condition,
                 ..
-            }
-            | Expr::ExpectFx {
-                lookups_in_cond,
-                loc_condition,
-                ..
             } => {
                 self.expects
                     .insert(loc_condition.region, lookups_in_cond.to_vec());
             }
-            Expr::Dbg {
-                loc_condition,
-                variable,
-                symbol,
-                ..
-            } => {
-                let lookup = DbgLookup {
-                    symbol: *symbol,
-                    var: *variable,
-                    region: loc_condition.region,
-                    ability_info: None,
-                };
-
-                self.dbgs.insert(*symbol, lookup);
+            Expr::Dbg { .. } => {
+                self.has_dbgs = true;
             }
             _ => (),
         }

@@ -1,16 +1,11 @@
-use std::{
-    cell::RefCell,
-    hash::{BuildHasher, Hasher},
-    marker::PhantomData,
-    sync::Arc,
-};
+use std::{cell::RefCell, hash::BuildHasher, marker::PhantomData, sync::Arc};
 
 use bumpalo::Bump;
 use parking_lot::{Mutex, RwLock};
 use roc_builtins::bitcode::{FloatWidth, IntWidth};
 use roc_collections::{default_hasher, BumpMap};
 use roc_module::symbol::Symbol;
-use roc_target::TargetInfo;
+use roc_target::Target;
 
 use crate::layout::LayoutRepr;
 
@@ -101,6 +96,13 @@ macro_rules! impl_to_from_int_width {
                 match self {
                     $(&$layout => $int_width,)*
                     _ => roc_error_macros::internal_error!("not an integer layout!")
+                }
+            }
+
+            pub fn try_to_int_width(&self) -> Option<IntWidth> {
+                match self {
+                    $(&$layout => Some($int_width),)*
+                    _ => None,
                 }
             }
         }
@@ -201,7 +203,7 @@ pub trait LayoutInterner<'a>: Sized {
         self.get_repr(a) == self.get_repr(b)
     }
 
-    fn target_info(&self) -> TargetInfo;
+    fn target(&self) -> Target;
 
     fn alignment_bytes(&self, layout: InLayout<'a>) -> u32 {
         self.get_repr(layout).alignment_bytes(self)
@@ -442,7 +444,7 @@ pub trait LayoutInterner<'a>: Sized {
 pub struct InLayout<'a>(usize, std::marker::PhantomData<&'a ()>);
 impl<'a> Clone for InLayout<'a> {
     fn clone(&self) -> Self {
-        Self(self.0, Default::default())
+        *self
     }
 }
 
@@ -538,7 +540,7 @@ struct GlobalLayoutInternerInner<'a> {
     map: Mutex<BumpMap<Layout<'a>, InLayout<'a>>>,
     normalized_lambda_set_map: Mutex<BumpMap<LambdaSet<'a>, LambdaSet<'a>>>,
     vec: RwLock<Vec<Layout<'a>>>,
-    target_info: TargetInfo,
+    target: Target,
 }
 
 /// A derivative of a [GlobalLayoutInterner] interner that provides caching desirable for
@@ -557,7 +559,7 @@ pub struct TLLayoutInterner<'a> {
     normalized_lambda_set_map: BumpMap<LambdaSet<'a>, LambdaSet<'a>>,
     /// Cache of interned values from the parent for local access.
     vec: RefCell<Vec<Option<Layout<'a>>>>,
-    target_info: TargetInfo,
+    target: Target,
 }
 
 /// A single-threaded interner, with no concurrency properties.
@@ -569,7 +571,7 @@ pub struct STLayoutInterner<'a> {
     map: BumpMap<Layout<'a>, InLayout<'a>>,
     normalized_lambda_set_map: BumpMap<LambdaSet<'a>, LambdaSet<'a>>,
     vec: Vec<Layout<'a>>,
-    target_info: TargetInfo,
+    target: Target,
 }
 
 /// Interner constructed with an exclusive lock over [GlobalLayoutInterner]
@@ -577,16 +579,15 @@ struct LockedGlobalInterner<'a, 'r> {
     map: &'r mut BumpMap<Layout<'a>, InLayout<'a>>,
     normalized_lambda_set_map: &'r mut BumpMap<LambdaSet<'a>, LambdaSet<'a>>,
     vec: &'r mut Vec<Layout<'a>>,
-    target_info: TargetInfo,
+    target: Target,
 }
 
 /// Generic hasher for a value, to be used by all interners.
 ///
 /// This uses the [default_hasher], so interner maps should also rely on [default_hasher].
 fn hash<V: std::hash::Hash>(val: V) -> u64 {
-    let mut state = roc_collections::all::BuildHasher::default().build_hasher();
-    val.hash(&mut state);
-    state.finish()
+    let hasher = roc_collections::all::BuildHasher::default();
+    hasher.hash_one(&val)
 }
 
 #[inline(always)]
@@ -607,8 +608,8 @@ fn make_normalized_lamdba_set<'a>(
 
 impl<'a> GlobalLayoutInterner<'a> {
     /// Creates a new global interner with the given capacity.
-    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
-        STLayoutInterner::with_capacity(cap, target_info).into_global()
+    pub fn with_capacity(cap: usize, target: Target) -> Self {
+        STLayoutInterner::with_capacity(cap, target).into_global()
     }
 
     /// Creates a derivative [TLLayoutInterner] pointing back to this global interner.
@@ -618,7 +619,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map: Default::default(),
             normalized_lambda_set_map: Default::default(),
             vec: Default::default(),
-            target_info: self.0.target_info,
+            target: self.0.target,
         }
     }
 
@@ -630,7 +631,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
-            target_info,
+            target,
         } = match Arc::try_unwrap(self.0) {
             Ok(inner) => inner,
             Err(li) => return Err(Self(li)),
@@ -642,7 +643,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
-            target_info,
+            target,
         })
     }
 
@@ -696,7 +697,7 @@ impl<'a> GlobalLayoutInterner<'a> {
                 map: &mut map,
                 normalized_lambda_set_map: &mut normalized_lambda_set_map,
                 vec: &mut vec,
-                target_info: self.0.target_info,
+                target: self.0.target,
             };
             reify::reify_lambda_set_captures(arena, &mut interner, slot, normalized.set)
         } else {
@@ -758,7 +759,7 @@ impl<'a> GlobalLayoutInterner<'a> {
             map: &mut map,
             normalized_lambda_set_map: &mut normalized_lambda_set_map,
             vec: &mut vec,
-            target_info: self.0.target_info,
+            target: self.0.target,
         };
         let full_layout = reify::reify_recursive_layout(arena, &mut interner, slot, normalized);
 
@@ -920,19 +921,19 @@ impl<'a> LayoutInterner<'a> for TLLayoutInterner<'a> {
         value
     }
 
-    fn target_info(&self) -> TargetInfo {
-        self.target_info
+    fn target(&self) -> Target {
+        self.target
     }
 }
 
 impl<'a> STLayoutInterner<'a> {
     /// Creates a new single threaded interner with the given capacity.
-    pub fn with_capacity(cap: usize, target_info: TargetInfo) -> Self {
+    pub fn with_capacity(cap: usize, target: Target) -> Self {
         let mut interner = Self {
             map: BumpMap::with_capacity_and_hasher(cap, default_hasher()),
             normalized_lambda_set_map: BumpMap::with_capacity_and_hasher(cap, default_hasher()),
             vec: Vec::with_capacity(cap),
-            target_info,
+            target,
         };
         fill_reserved_layouts(&mut interner);
         interner
@@ -947,13 +948,13 @@ impl<'a> STLayoutInterner<'a> {
             map,
             normalized_lambda_set_map,
             vec,
-            target_info,
+            target,
         } = self;
         GlobalLayoutInterner(Arc::new(GlobalLayoutInternerInner {
             map: Mutex::new(map),
             normalized_lambda_set_map: Mutex::new(normalized_lambda_set_map),
             vec: RwLock::new(vec),
-            target_info,
+            target,
         }))
     }
 
@@ -1065,8 +1066,8 @@ macro_rules! st_impl {
                 self.vec[index]
             }
 
-            fn target_info(&self) -> TargetInfo {
-                self.target_info
+            fn target(&self) -> Target{
+                self.target
             }
         }
     };
@@ -1751,13 +1752,13 @@ pub mod dbg_stable {
 mod insert_lambda_set {
     use bumpalo::Bump;
     use roc_module::symbol::Symbol;
-    use roc_target::TargetInfo;
+    use roc_target::Target;
 
     use crate::layout::{LambdaSet, Layout, LayoutRepr, SemanticRepr};
 
     use super::{GlobalLayoutInterner, InLayout, LayoutInterner, NeedsRecursionPointerFixup};
 
-    const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
+    const TARGET: Target = Target::LinuxX64;
     const TEST_SET: &&[(Symbol, &[InLayout])] =
         &(&[(Symbol::ATTR_ATTR, &[Layout::UNIT] as &[_])] as &[_]);
     const TEST_ARGS: &&[InLayout] = &(&[Layout::UNIT] as &[_]);
@@ -1769,7 +1770,7 @@ mod insert_lambda_set {
     fn two_threads_write() {
         for _ in 0..100 {
             let mut arenas: Vec<_> = std::iter::repeat_with(Bump::new).take(10).collect();
-            let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+            let global = GlobalLayoutInterner::with_capacity(2, TARGET);
             let set = TEST_SET;
             let repr = Layout::UNIT;
             std::thread::scope(|s| {
@@ -1790,7 +1791,7 @@ mod insert_lambda_set {
     #[test]
     fn insert_then_reintern() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut interner = global.fork();
 
         let lambda_set =
@@ -1805,7 +1806,7 @@ mod insert_lambda_set {
     #[test]
     fn write_global_then_single_threaded() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let set = TEST_SET;
         let repr = Layout::UNIT;
 
@@ -1825,7 +1826,7 @@ mod insert_lambda_set {
     #[test]
     fn write_single_threaded_then_global() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut st_interner = global.unwrap().unwrap();
 
         let set = TEST_SET;
@@ -1845,13 +1846,13 @@ mod insert_lambda_set {
 #[cfg(test)]
 mod insert_recursive_layout {
     use bumpalo::Bump;
-    use roc_target::TargetInfo;
+    use roc_target::Target;
 
     use crate::layout::{Builtin, InLayout, Layout, LayoutRepr, SemanticRepr, UnionLayout};
 
     use super::{GlobalLayoutInterner, LayoutInterner};
 
-    const TARGET_INFO: TargetInfo = TargetInfo::default_x86_64();
+    const TARGET: Target = Target::LinuxX64;
 
     fn make_layout<'a>(arena: &'a Bump, interner: &mut impl LayoutInterner<'a>) -> Layout<'a> {
         let list_rec = Layout {
@@ -1898,7 +1899,7 @@ mod insert_recursive_layout {
     #[test]
     fn write_two_threads() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let layout = {
             let mut interner = global.fork();
             make_layout(arena, &mut interner)
@@ -1920,7 +1921,7 @@ mod insert_recursive_layout {
     #[test]
     fn write_twice_thread_local_single_thread() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut interner = global.fork();
         let layout = make_layout(arena, &mut interner);
 
@@ -1936,7 +1937,7 @@ mod insert_recursive_layout {
     #[test]
     fn write_twice_single_thread() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut interner = GlobalLayoutInterner::unwrap(global).unwrap();
         let layout = make_layout(arena, &mut interner);
 
@@ -1953,7 +1954,7 @@ mod insert_recursive_layout {
     fn many_threads_read_write() {
         for _ in 0..100 {
             let mut arenas: Vec<_> = std::iter::repeat_with(Bump::new).take(10).collect();
-            let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+            let global = GlobalLayoutInterner::with_capacity(2, TARGET);
             std::thread::scope(|s| {
                 let mut handles = Vec::with_capacity(10);
                 for arena in arenas.iter_mut() {
@@ -1976,7 +1977,7 @@ mod insert_recursive_layout {
     #[test]
     fn insert_then_reintern() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut interner = global.fork();
 
         let layout = make_layout(arena, &mut interner);
@@ -1989,7 +1990,7 @@ mod insert_recursive_layout {
     #[test]
     fn write_global_then_single_threaded() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let layout = {
             let mut interner = global.fork();
             make_layout(arena, &mut interner)
@@ -2011,7 +2012,7 @@ mod insert_recursive_layout {
     #[test]
     fn write_single_threaded_then_global() {
         let arena = &Bump::new();
-        let global = GlobalLayoutInterner::with_capacity(2, TARGET_INFO);
+        let global = GlobalLayoutInterner::with_capacity(2, TARGET);
         let mut st_interner = global.unwrap().unwrap();
 
         let layout = make_layout(arena, &mut st_interner);

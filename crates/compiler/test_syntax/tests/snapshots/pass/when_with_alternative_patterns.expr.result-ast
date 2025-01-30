@@ -1,87 +1,92 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
-    [
-        WhenBranch {
-            patterns: [
-                @11-17 SpaceBefore(
-                    StrLiteral(
-                        PlainLine(
-                            "blah",
-                        ),
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-                @20-26 StrLiteral(
-                    PlainLine(
-                        "blop",
-                    ),
-                ),
-            ],
-            value: @30-31 Num(
-                "1",
-            ),
-            guard: None,
+@0-75 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
         },
-        WhenBranch {
-            patterns: [
-                @33-38 SpaceBefore(
-                    StrLiteral(
-                        PlainLine(
-                            "foo",
-                        ),
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-                @43-48 SpaceBefore(
-                    SpaceAfter(
+        [
+            WhenBranch {
+                patterns: [
+                    @11-17 SpaceBefore(
                         StrLiteral(
                             PlainLine(
-                                "bar",
+                                "blah",
                             ),
                         ),
                         [
                             Newline,
                         ],
                     ),
-                    [
-                        Newline,
-                    ],
-                ),
-                @51-56 StrLiteral(
-                    PlainLine(
-                        "baz",
-                    ),
-                ),
-            ],
-            value: @60-61 Num(
-                "2",
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @63-70 SpaceBefore(
-                    StrLiteral(
+                    @20-26 StrLiteral(
                         PlainLine(
-                            "stuff",
+                            "blop",
                         ),
                     ),
-                    [
-                        Newline,
-                    ],
+                ],
+                value: @30-31 Num(
+                    "1",
                 ),
-            ],
-            value: @74-75 Num(
-                "4",
-            ),
-            guard: None,
-        },
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @33-38 SpaceBefore(
+                        StrLiteral(
+                            PlainLine(
+                                "foo",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @43-48 SpaceBefore(
+                        SpaceAfter(
+                            StrLiteral(
+                                PlainLine(
+                                    "bar",
+                                ),
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                    @51-56 StrLiteral(
+                        PlainLine(
+                            "baz",
+                        ),
+                    ),
+                ],
+                value: @60-61 Num(
+                    "2",
+                ),
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @63-70 SpaceBefore(
+                        StrLiteral(
+                            PlainLine(
+                                "stuff",
+                            ),
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @74-75 Num(
+                    "4",
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

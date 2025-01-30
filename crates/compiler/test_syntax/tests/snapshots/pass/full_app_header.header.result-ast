@@ -1,74 +1,28 @@
-Module {
-    comments: [],
-    header: App(
+SpacesBefore {
+    before: [],
+    item: App(
         AppHeader {
-            before_name: [],
-            name: @4-15 PlainLine(
-                "quicksort",
-            ),
-            packages: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: PackagesKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @31-47 PackageEntry {
-                            shorthand: "pf",
-                            spaces_after_shorthand: [],
-                            package_name: @35-47 PackageName(
-                                "./platform",
-                            ),
-                        },
-                    ],
-                },
-            ),
-            imports: Some(
-                KeywordItem {
-                    keyword: Spaces {
-                        before: [
-                            Newline,
-                        ],
-                        item: ImportsKeyword,
-                        after: [],
-                    },
-                    item: [
-                        @64-75 Package(
-                            "foo",
-                            ModuleName(
-                                "Bar.Baz",
-                            ),
-                            [],
-                        ),
-                    ],
-                },
-            ),
-            provides: ProvidesTo {
-                provides_keyword: Spaces {
-                    before: [
-                        Newline,
-                    ],
-                    item: ProvidesKeyword,
-                    after: [],
-                },
-                entries: [
-                    @93-102 ExposedName(
-                        "quicksort",
-                    ),
-                ],
-                types: None,
-                to_keyword: Spaces {
-                    before: [],
-                    item: ToKeyword,
-                    after: [],
-                },
-                to: @108-110 ExistingPackage(
-                    "pf",
+            before_provides: [],
+            provides: [
+                @6-15 ExposedName(
+                    "quicksort",
                 ),
-            },
+            ],
+            before_packages: [],
+            packages: @18-47 [
+                @20-45 PackageEntry {
+                    shorthand: "pf",
+                    spaces_after_shorthand: [],
+                    platform_marker: Some(
+                        [],
+                    ),
+                    package_name: @33-45 PackageName(
+                        "./platform",
+                    ),
+                },
+            ],
+            old_imports: None,
+            old_provides_to_new_package: None,
         },
     ),
 }

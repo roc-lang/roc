@@ -1,0 +1,32 @@
+@0-33 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-5 SpaceAfter(
+                    Str(
+                        PlainLine(
+                            "123",
+                        ),
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+                @17-19 Pizza,
+            ),
+        ],
+        @20-33 Apply(
+            @20-23 Try,
+            [
+                @24-33 Var {
+                    module_name: "Str",
+                    ident: "toU64",
+                },
+            ],
+            Space,
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

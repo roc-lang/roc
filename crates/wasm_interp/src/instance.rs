@@ -20,9 +20,11 @@ pub enum Action {
 
 #[derive(Debug, Clone, Copy)]
 enum BlockType {
-    Loop(usize),         // Loop block, with start address to loop back to
-    Normal,              // Block created by `block` instruction
-    Locals(usize),       // Special "block" for locals. Holds function index for debug
+    Loop(usize), // Loop block, with start address to loop back to
+    Normal,      // Block created by `block` instruction
+    #[allow(dead_code)]
+    Locals(usize), // Special "block" for locals. Holds function index for debug
+    #[allow(dead_code)]
     FunctionBody(usize), // Special block surrounding the function body. Holds function index for debug
 }
 

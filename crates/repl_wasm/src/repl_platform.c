@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 /*
     A bare-bones Roc "platform" for REPL code, providing heap allocation for builtins.
@@ -52,8 +54,11 @@ void roc_dealloc(void *ptr, unsigned int alignment)
 
 //--------------------------
 
-void roc_panic(void *ptr, unsigned int alignment)
+extern void send_panic_msg_to_js(void *ptr, unsigned int panic_tag);
+
+void roc_panic(void *ptr, unsigned int panic_tag)
 {
+    send_panic_msg_to_js(ptr, panic_tag);
 #if ENABLE_PRINTF
     char *msg = (char *)ptr;
     fprintf(stderr,
@@ -61,6 +66,9 @@ void roc_panic(void *ptr, unsigned int alignment)
 #endif
     abort();
 }
+
+// TODO: add a way to send dbg to js.
+void roc_debug(void* loc, void* msg) {}
 
 //--------------------------
 

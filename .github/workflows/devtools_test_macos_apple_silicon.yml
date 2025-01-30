@@ -1,11 +1,11 @@
 on:
-    pull_request:
+  pull_request:
 
 name: devtools nix files test - macos
 
 concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
     devtools-test-macos:
@@ -13,21 +13,21 @@ jobs:
         runs-on: [self-hosted, macOS, ARM64]
         timeout-minutes: 120
         steps:
-            - uses: actions/checkout@v3
+            - uses: actions/checkout@v4
 
-            - name: Only run all steps if flake.lock or flake.nix changed
-              id: checklock
+            - name: Only run all steps if a nix file changed
               run: |
-                if git diff --name-only ${{ github.event.before }} ${{ github.sha }} | grep 'flake'; then
-                  echo "A flake file was changed. Testing devtools nix files..."
-                  echo "flake_changed=true" >> $GITHUB_ENV
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep 'nix'; then
+                  echo "A nix file was changed. Testing devtools nix files..."
+                  echo "nix_changed=true" >> $GITHUB_ENV
                 else
-                  echo "No flake file was changed. No need to run tests."
-                  echo "flake_changed=false" >> $GITHUB_ENV
+                  echo "A nix file was changed. No need to run tests."
+                  echo "nix_changed=false" >> $GITHUB_ENV
                 fi
 
             - name: test devtools/flake.nix
-              if: env.flake_changed == 'true'
+              if: env.nix_changed == 'true'
               id: devtools_test_step
               run: |
                 sed -i '' "s|/home/username/gitrepos/roc|$(realpath .)|g" devtools/flake.nix
@@ -41,12 +41,9 @@ jobs:
                 nix develop --show-trace
 
             - name: Print tip on fail
-              if: env.flake_changed == 'true'
+              if: steps.devtools_test_step.outcome == 'failure'
               run: |
                 echo "The devtools test failed, this can likely be fixed by"
                 echo "locally deleting devtools/flake.lock and following the"
                 echo "instructions in devtools/README.md. This will create a"
                 echo "new flake.lock you should use to replace the old devtools/flake.lock"
-
-
-  

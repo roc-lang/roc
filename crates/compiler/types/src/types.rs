@@ -5,14 +5,15 @@ use crate::subs::{
     VariableSubsSlice,
 };
 use roc_collections::all::{HumanIndex, ImMap, ImSet, MutMap, MutSet, SendMap};
-use roc_collections::soa::{Index, Slice};
+use roc_collections::soa::{index_push_new, slice_extend_new};
 use roc_collections::VecMap;
 use roc_error_macros::internal_error;
 use roc_module::called_via::CalledVia;
 use roc_module::ident::{ForeignSymbol, Lowercase, TagName};
 use roc_module::low_level::LowLevel;
-use roc_module::symbol::{Interns, Symbol};
+use roc_module::symbol::{Interns, ModuleId, Symbol};
 use roc_region::all::{Loc, Region};
+use soa::{Index, Slice};
 use std::fmt;
 use std::fmt::Write;
 use std::path::PathBuf;
@@ -305,7 +306,7 @@ impl FromIterator<Symbol> for AbilitySet {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OptAbleVar {
     pub var: Variable,
     pub opt_abilities: Option<AbilitySet>,
@@ -375,6 +376,8 @@ pub enum TypeTag {
         Index<TypeTag>,
         /// return type
         Index<TypeTag>,
+        /// fx type
+        Index<TypeTag>,
     ),
     /// Closure arguments are implicit
     ClosureTag {
@@ -418,6 +421,9 @@ pub enum TypeTag {
     RecursiveTagUnion(Variable, UnionTags, ExtImplicitOpenness),
     Record(RecordFields),
     Tuple(TupleElems),
+    // A function fx type
+    Pure,
+    Effectful,
 }
 
 /// Look-aside slice of types used in [Types], when the slice does not correspond to the direct
@@ -602,7 +608,7 @@ impl Types {
         self.tags_slices
             .extend(repeat(Slice::default()).take(length));
 
-        Slice::extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
+        slice_extend_new(&mut self.tags, repeat(TypeTag::EmptyRecord).take(length))
     }
 
     fn reserve_type_tag(&mut self) -> Index<TypeTag> {
@@ -610,7 +616,7 @@ impl Types {
 
         self.tags_slices.push(Slice::default());
 
-        Index::push_new(&mut self.tags, TypeTag::EmptyRecord)
+        index_push_new(&mut self.tags, TypeTag::EmptyRecord)
     }
 
     fn set_type_tag(&mut self, index: Index<TypeTag>, tag: TypeTag, type_slice: Slice<TypeTag>) {
@@ -644,10 +650,10 @@ impl Types {
         extension: &TypeExtension,
     ) -> (UnionTags, Slice<TypeTag>) {
         let tag_names_slice =
-            Slice::extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
+            slice_extend_new(&mut self.tag_names, tags.iter().map(|(n, _)| n.clone()));
 
         // Store the payload slices in the aside buffer
-        let type_slices = Slice::extend_new(
+        let type_slices = slice_extend_new(
             &mut self.aside_types_slices,
             std::iter::repeat(Slice::default()).take(tags.len()),
         );
@@ -698,7 +704,7 @@ impl Types {
             Slice::new(slice.start() as _, slice.len() as _)
         };
 
-        let type_argument_abilities = Slice::extend_new(
+        let type_argument_abilities = slice_extend_new(
             &mut self.type_arg_abilities,
             type_arguments
                 .iter()
@@ -706,7 +712,7 @@ impl Types {
         );
 
         // TODO: populate correctly
-        let type_argument_regions = Slice::extend_new(
+        let type_argument_regions = slice_extend_new(
             &mut self.regions,
             std::iter::repeat(Region::zero()).take(type_arguments.len()),
         );
@@ -732,10 +738,11 @@ impl Types {
         arguments: Slice<TypeTag>,
         lambda_set: Index<TypeTag>,
         ret: Index<TypeTag>,
+        fx: Index<TypeTag>,
     ) -> Index<TypeTag> {
         let index = self.reserve_type_tag();
 
-        let tag = TypeTag::Function(lambda_set, ret);
+        let tag = TypeTag::Function(lambda_set, ret, fx);
         self.set_type_tag(index, tag, arguments);
         index
     }
@@ -747,19 +754,20 @@ impl Types {
             Type::EmptyTagUnion => {
                 self.set_type_tag(index, TypeTag::EmptyTagUnion, Slice::default())
             }
-            Type::Function(arguments, lambda_set, return_type) => {
+            Type::Function(arguments, lambda_set, return_type, fx_type) => {
                 let argument_slice = self.from_old_type_slice(arguments.iter());
 
                 let tag = TypeTag::Function(
                     self.from_old_type(lambda_set),
                     self.from_old_type(return_type),
+                    self.from_old_type(fx_type),
                 );
 
                 self.set_type_tag(index, tag, argument_slice)
             }
             Type::Apply(symbol, arguments, region) => {
                 let type_argument_regions =
-                    Slice::extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
+                    slice_extend_new(&mut self.regions, arguments.iter().map(|t| t.region));
 
                 let type_slice = {
                     let slice = self.reserve_type_tags(arguments.len());
@@ -835,17 +843,17 @@ impl Types {
                     slice
                 };
 
-                let field_types = Slice::extend_new(
+                let field_types = slice_extend_new(
                     &mut self.field_types,
                     fields.values().map(|f| f.map(|_| ())),
                 );
 
-                let field_names = Slice::extend_new(&mut self.field_names, fields.keys().cloned());
+                let field_names = slice_extend_new(&mut self.field_names, fields.keys().cloned());
 
                 let record_fields = RecordFields {
                     length: fields.len() as u16,
                     field_names_start: field_names.start() as u32,
-                    variables_start: field_type_slice.start() as u32,
+                    variables_start: field_type_slice.start(),
                     field_types_start: field_types.start() as u32,
                 };
 
@@ -870,11 +878,11 @@ impl Types {
                 };
 
                 let elem_index_slice =
-                    Slice::extend_new(&mut self.tuple_elem_indices, elems.iter().map(|(i, _)| *i));
+                    slice_extend_new(&mut self.tuple_elem_indices, elems.iter().map(|(i, _)| *i));
 
                 let tuple_elems = TupleElems {
                     length: elems.len() as u16,
-                    variables_start: elem_type_slice.start() as u32,
+                    variables_start: elem_type_slice.start(),
                     elem_index_start: elem_index_slice.start() as u32,
                 };
 
@@ -902,7 +910,7 @@ impl Types {
                 infer_ext_in_output_types,
             }) => {
                 let type_argument_regions =
-                    Slice::extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
+                    slice_extend_new(&mut self.regions, type_arguments.iter().map(|t| t.region));
 
                 let type_arguments_slice = {
                     let slice = self.reserve_type_tags(type_arguments.len());
@@ -936,7 +944,7 @@ impl Types {
                     Slice::new(slice.start() as _, slice.len() as _)
                 };
 
-                let type_argument_abilities = Slice::extend_new(
+                let type_argument_abilities = slice_extend_new(
                     &mut self.type_arg_abilities,
                     type_arguments
                         .iter()
@@ -951,7 +959,7 @@ impl Types {
                     infer_ext_in_output_variables: infer_ext_in_output_slice,
                 };
 
-                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let shared = index_push_new(&mut self.aliases, alias_shared);
 
                 let tag = TypeTag::DelayedAlias { shared };
 
@@ -982,7 +990,7 @@ impl Types {
                     infer_ext_in_output_types,
                 );
 
-                let shared = Index::push_new(&mut self.aliases, alias_shared);
+                let shared = index_push_new(&mut self.aliases, alias_shared);
                 let actual = self.from_old_type(actual);
 
                 let tag = match kind {
@@ -1000,6 +1008,8 @@ impl Types {
                 self.set_type_tag(index, TypeTag::RangedNumber(*range), Slice::default())
             }
             Type::Error => self.set_type_tag(index, TypeTag::Error, Slice::default()),
+            Type::Pure => self.set_type_tag(index, TypeTag::Pure, Slice::default()),
+            Type::Effectful => self.set_type_tag(index, TypeTag::Effectful, Slice::default()),
         }
     }
 
@@ -1056,7 +1066,7 @@ impl Types {
                     lambda_set_variables: new_lambda_set_variables,
                     infer_ext_in_output_variables: new_infer_ext_in_output_variables,
                 };
-                Index::push_new(&mut self.aliases, new_shared)
+                index_push_new(&mut self.aliases, new_shared)
             }};
         }
 
@@ -1064,7 +1074,7 @@ impl Types {
             ($union_tags:expr) => {{
                 let (tags, payload_slices) = self.union_tag_slices($union_tags);
 
-                let new_payload_slices = Slice::extend_new(
+                let new_payload_slices = slice_extend_new(
                     &mut self.aside_types_slices,
                     std::iter::repeat(Slice::default()).take(payload_slices.len()),
                 );
@@ -1092,14 +1102,15 @@ impl Types {
                 Variable(v) => (Variable(subst!(v)), Default::default()),
                 EmptyRecord => (EmptyRecord, Default::default()),
                 EmptyTagUnion => (EmptyTagUnion, Default::default()),
-                Function(clos, ret) => {
+                Function(clos, ret, fx) => {
                     let args = self.get_type_arguments(typ);
 
                     let new_args = defer_slice!(args);
                     let new_clos = defer!(clos);
                     let new_ret = defer!(ret);
+                    let new_fx = defer!(fx);
 
-                    (Function(new_clos, new_ret), new_args)
+                    (Function(new_clos, new_ret, new_fx), new_args)
                 }
                 ClosureTag {
                     name,
@@ -1251,6 +1262,8 @@ impl Types {
                 }
                 RangedNumber(range) => (RangedNumber(range), Default::default()),
                 Error => (Error, Default::default()),
+                Pure => (Pure, Default::default()),
+                Effectful => (Effectful, Default::default()),
             };
 
             self.set_type_tag(dest_index, tag, args);
@@ -1280,8 +1293,8 @@ mod debug_types {
     };
 
     use super::{TypeTag, Types};
-    use roc_collections::soa::{Index, Slice};
     use roc_module::ident::TagName;
+    use soa::{Index, Slice};
     use ven_pretty::{text, Arena, DocAllocator, DocBuilder};
 
     pub struct DebugTag<'a>(pub &'a Types, pub Index<TypeTag>);
@@ -1300,17 +1313,21 @@ mod debug_types {
         Arg,
     }
 
+    fn always_true() -> bool {
+        true
+    }
+
     macro_rules! maybe_paren {
         ($paren_if_above:expr, $my_prec:expr, $doc:expr) => {
-            maybe_paren!($paren_if_above, $my_prec, || true, $doc)
+            maybe_paren!($paren_if_above, $my_prec, always_true, $doc)
         };
-        ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {
+        ($paren_if_above:expr, $my_prec:expr, $extra_cond:expr, $doc:expr) => {{
             if $my_prec > $paren_if_above && $extra_cond() {
                 $doc.parens().group()
             } else {
                 $doc
             }
-        };
+        }};
     }
 
     fn typ<'a>(
@@ -1323,7 +1340,7 @@ mod debug_types {
         let group = match types[tag] {
             TypeTag::EmptyRecord => f.text("{}"),
             TypeTag::EmptyTagUnion => f.text("[]"),
-            TypeTag::Function(clos, ret) => {
+            TypeTag::Function(clos, ret, fx) => {
                 let args = types.get_type_arguments(tag);
                 maybe_paren!(
                     Free,
@@ -1334,6 +1351,8 @@ mod debug_types {
                     )
                     .append(f.text(" -"))
                     .append(typ(types, f, Free, clos))
+                    .append(f.text(" -"))
+                    .append(typ(types, f, Free, fx))
                     .append(f.text("->"))
                     .append(f.line())
                     .append(typ(types, f, Arg, ret))
@@ -1415,8 +1434,8 @@ mod debug_types {
                 let (names, kind, tys) = types.record_fields_slices(fields);
                 let fmt_fields = names
                     .into_iter()
-                    .zip(kind.into_iter())
-                    .zip(tys.into_iter())
+                    .zip(kind)
+                    .zip(tys)
                     .map(|((name, kind), ty)| {
                         let (name, kind) = (&types[name], types[kind]);
                         let fmt_kind = f.text(match kind {
@@ -1454,6 +1473,8 @@ mod debug_types {
                         .align(),
                 )
             }
+            TypeTag::Pure => f.text("Pure"),
+            TypeTag::Effectful => f.text("Effectful"),
         };
         group.group()
     }
@@ -1478,19 +1499,19 @@ mod debug_types {
         ext_slice: Slice<TypeTag>,
     ) -> DocBuilder<'a, Arena<'a>> {
         let (tags, payload_slices) = types.union_tag_slices(tags);
-        let fmt_tags =
-            tags.into_iter()
-                .zip(payload_slices.into_iter())
-                .map(|(tag, payload_slice_index)| {
-                    let payload_slice = types[payload_slice_index];
-                    let fmt_payloads = payload_slice
-                        .into_iter()
-                        .map(|p| typ(types, f, TPrec::Arg, p));
-                    let iter = Some(f.text(types[tag].0.to_string()))
-                        .into_iter()
-                        .chain(fmt_payloads);
-                    f.intersperse(iter, f.text(" "))
-                });
+        let fmt_tags = tags
+            .into_iter()
+            .zip(payload_slices)
+            .map(|(tag, payload_slice_index)| {
+                let payload_slice = types[payload_slice_index];
+                let fmt_payloads = payload_slice
+                    .into_iter()
+                    .map(|p| typ(types, f, TPrec::Arg, p));
+                let iter = Some(f.text(types[tag].0.to_string()))
+                    .into_iter()
+                    .chain(fmt_payloads);
+                f.intersperse(iter, f.text(" "))
+            });
 
         prefix.append(f.text("[")).append(
             f.intersperse(fmt_tags, f.reflow(", "))
@@ -1519,7 +1540,7 @@ mod debug_types {
         let args = types.get_type_arguments(tag);
         let fmt_args = args
             .into_iter()
-            .zip(type_argument_abilities.into_iter())
+            .zip(type_argument_abilities)
             .map(|(arg, abilities)| {
                 let abilities = &types[abilities];
                 let arg = typ(types, f, Arg, arg);
@@ -1549,7 +1570,6 @@ mod debug_types {
             U32 | I32 => "32",
             U64 | I64 => "64",
             U128 | I128 => "128",
-            Nat => "Nat",
             F32 => "F32",
             F64 => "F64",
             Dec => "Dec",
@@ -1649,8 +1669,8 @@ impl std::ops::Index<Slice<AsideTypeSlice>> for Types {
 pub enum Type {
     EmptyRec,
     EmptyTagUnion,
-    /// A function. The types of its arguments, size of its closure, then the type of its return value.
-    Function(Vec<Type>, Box<Type>, Box<Type>),
+    /// A function. The types of its arguments, size of its closure, its return value, then the fx type.
+    Function(Vec<Type>, Box<Type>, Box<Type>, Box<Type>),
     Record(SendMap<Lowercase, RecordField<Type>>, TypeExtension),
     Tuple(VecMap<usize, Type>, TypeExtension),
     TagUnion(Vec<(TagName, Vec<Type>)>, TypeExtension),
@@ -1682,6 +1702,9 @@ pub enum Type {
     Apply(Symbol, Vec<Loc<Type>>, Region),
     Variable(Variable),
     RangedNumber(NumericRange),
+    /// A function's fx type
+    Pure,
+    Effectful,
     /// A type error, which will code gen to a runtime error
     Error,
 }
@@ -1726,8 +1749,8 @@ impl Clone for Type {
         match self {
             Self::EmptyRec => Self::EmptyRec,
             Self::EmptyTagUnion => Self::EmptyTagUnion,
-            Self::Function(arg0, arg1, arg2) => {
-                Self::Function(arg0.clone(), arg1.clone(), arg2.clone())
+            Self::Function(arg0, arg1, arg2, arg3) => {
+                Self::Function(arg0.clone(), arg1.clone(), arg2.clone(), arg3.clone())
             }
             Self::Record(arg0, arg1) => Self::Record(arg0.clone(), arg1.clone()),
             Self::Tuple(arg0, arg1) => Self::Tuple(arg0.clone(), arg1.clone()),
@@ -1770,6 +1793,8 @@ impl Clone for Type {
             Self::Variable(arg0) => Self::Variable(*arg0),
             Self::RangedNumber(arg1) => Self::RangedNumber(*arg1),
             Self::Error => Self::Error,
+            Type::Pure => Self::Pure,
+            Type::Effectful => Self::Effectful,
         }
     }
 }
@@ -1882,7 +1907,7 @@ impl fmt::Debug for Type {
         match self {
             Type::EmptyRec => write!(f, "{{}}"),
             Type::EmptyTagUnion => write!(f, "[]"),
-            Type::Function(args, closure, ret) => {
+            Type::Function(args, closure, ret, fx) => {
                 write!(f, "Fn(")?;
 
                 for (index, arg) in args.iter().enumerate() {
@@ -1894,7 +1919,8 @@ impl fmt::Debug for Type {
                 }
 
                 write!(f, " |{closure:?}|")?;
-                write!(f, " -> ")?;
+                write!(f, " -{fx:?}")?;
+                write!(f, "-> ")?;
 
                 ret.fmt(f)?;
 
@@ -2133,13 +2159,15 @@ impl fmt::Debug for Type {
             Type::UnspecializedLambdaSet { unspecialized } => {
                 write!(f, "{unspecialized:?}")
             }
+            Type::Pure => write!(f, "->"),
+            Type::Effectful => write!(f, "=>"),
         }
     }
 }
 
 impl Type {
     pub fn arity(&self) -> usize {
-        if let Type::Function(args, _, _) = self {
+        if let Type::Function(args, _, _, _) = self {
             args.len()
         } else {
             0
@@ -2183,10 +2211,11 @@ impl Type {
                         *typ = replacement.clone();
                     }
                 }
-                Function(args, closure, ret) => {
+                Function(args, closure, ret, fx) => {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                    stack.push(fx);
                 }
                 ClosureTag {
                     name: _,
@@ -2295,7 +2324,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2312,10 +2341,11 @@ impl Type {
                         *v = *replacement;
                     }
                 }
-                Function(args, closure, ret) => {
+                Function(args, closure, ret, fx) => {
                     stack.extend(args);
                     stack.push(closure);
                     stack.push(ret);
+                    stack.push(fx);
                 }
                 ClosureTag {
                     name: _,
@@ -2417,7 +2447,7 @@ impl Type {
                     );
                 }
 
-                EmptyRec | EmptyTagUnion | Error => {}
+                EmptyRec | EmptyTagUnion | Error | Pure | Effectful => {}
             }
         }
     }
@@ -2433,12 +2463,13 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 for arg in args {
                     arg.substitute_alias(rep_symbol, rep_args, actual)?;
                 }
                 closure.substitute_alias(rep_symbol, rep_args, actual)?;
-                ret.substitute_alias(rep_symbol, rep_args, actual)
+                ret.substitute_alias(rep_symbol, rep_args, actual)?;
+                fx.substitute_alias(rep_symbol, rep_args, actual)
             }
             FunctionOrTagUnion(_, _, ext) => match ext {
                 TypeExtension::Open(ext, _) => ext.substitute_alias(rep_symbol, rep_args, actual),
@@ -2532,7 +2563,13 @@ impl Type {
             }
             RangedNumber(_) => Ok(()),
             UnspecializedLambdaSet { .. } => Ok(()),
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => Ok(()),
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => Ok(()),
         }
     }
 
@@ -2547,7 +2584,7 @@ impl Type {
         use Type::*;
 
         match self {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, _fx) => {
                 ret.contains_symbol(rep_symbol)
                     || closure.contains_symbol(rep_symbol)
                     || args.iter().any(|arg| arg.contains_symbol(rep_symbol))
@@ -2595,7 +2632,13 @@ impl Type {
             UnspecializedLambdaSet {
                 unspecialized: Uls(_, sym, _),
             } => *sym == rep_symbol,
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => false,
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => false,
         }
     }
 
@@ -2611,10 +2654,11 @@ impl Type {
 
         match self {
             Variable(v) => *v == rep_variable,
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 ret.contains_variable(rep_variable)
                     || closure.contains_variable(rep_variable)
                     || args.iter().any(|arg| arg.contains_variable(rep_variable))
+                    || fx.contains_variable(rep_variable)
             }
             FunctionOrTagUnion(_, _, ext) => Self::contains_variable_ext(ext, rep_variable),
             ClosureTag {
@@ -2656,7 +2700,7 @@ impl Type {
                 .iter()
                 .any(|arg| arg.value.contains_variable(rep_variable)),
             RangedNumber(_) => false,
-            EmptyRec | EmptyTagUnion | Error => false,
+            EmptyRec | EmptyTagUnion | Error | Pure | Effectful => false,
         }
     }
 
@@ -2757,8 +2801,11 @@ impl Type {
                 }
                 TypeExtension::Closed => fields.values().all(|field| field.as_inner().is_narrow()),
             },
-            Type::Function(args, clos, ret) => {
-                args.iter().all(|a| a.is_narrow()) && clos.is_narrow() && ret.is_narrow()
+            Type::Function(args, clos, ret, fx) => {
+                args.iter().all(|a| a.is_narrow())
+                    && clos.is_narrow()
+                    && ret.is_narrow()
+                    && fx.is_narrow()
             }
             // Lists and sets are morally two-tagged unions, as they can be empty
             Type::Apply(Symbol::LIST_LIST | Symbol::SET_SET, _, _) => false,
@@ -2797,12 +2844,13 @@ fn instantiate_aliases<'a, F>(
     use Type::*;
 
     match typ {
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 instantiate_aliases(arg, region, aliases, ctx);
             }
             instantiate_aliases(closure, region, aliases, ctx);
             instantiate_aliases(ret, region, aliases, ctx);
+            instantiate_aliases(fx, region, aliases, ctx);
         }
         FunctionOrTagUnion(_, _, ext) => {
             if let TypeExtension::Open(ext, _) = ext {
@@ -2961,7 +3009,7 @@ fn instantiate_aliases<'a, F>(
         }
         RangedNumber(_) => {}
         UnspecializedLambdaSet { .. } => {}
-        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+        EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) | Pure | Effectful => {}
     }
 }
 
@@ -2973,9 +3021,10 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
 
     while let Some(tipe) = stack.pop() {
         match tipe {
-            Function(args, closure, ret) => {
+            Function(args, closure, ret, fx) => {
                 stack.push(ret);
                 stack.push(closure);
+                stack.push(fx);
                 stack.extend(args);
             }
             FunctionOrTagUnion(_, _, ext) => {
@@ -3022,7 +3071,13 @@ fn symbols_help(initial: &Type) -> Vec<Symbol> {
             } => {
                 // ignore the member symbol because unspecialized lambda sets are internal-only
             }
-            EmptyRec | EmptyTagUnion | ClosureTag { .. } | Error | Variable(_) => {}
+            EmptyRec
+            | EmptyTagUnion
+            | ClosureTag { .. }
+            | Error
+            | Variable(_)
+            | Pure
+            | Effectful => {}
         }
     }
 
@@ -3042,12 +3097,13 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
             accum.insert(*v);
         }
 
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 variables_help(arg, accum);
             }
             variables_help(closure, accum);
             variables_help(ret, accum);
+            variables_help(fx, accum);
         }
         Record(fields, ext) => {
             for (_, field) in fields {
@@ -3143,6 +3199,7 @@ fn variables_help(tipe: &Type, accum: &mut ImSet<Variable>) {
                 variables_help(&x.value, accum);
             }
         }
+        Pure | Effectful => {}
     }
 }
 
@@ -3171,7 +3228,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             accum.type_variables.insert(*v);
         }
 
-        Function(args, closure, ret) => {
+        Function(args, closure, ret, fx) => {
             for arg in args {
                 variables_help_detailed(arg, accum);
             }
@@ -3182,6 +3239,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
             }
 
             variables_help_detailed(ret, accum);
+            variables_help_detailed(fx, accum);
         }
         Record(fields, ext) => {
             for (_, field) in fields {
@@ -3285,6 +3343,7 @@ fn variables_help_detailed(tipe: &Type, accum: &mut VariableDetail) {
                 variables_help_detailed(&x.value, accum);
             }
         }
+        Pure | Effectful => {}
     }
 }
 
@@ -3370,6 +3429,7 @@ pub enum Reason {
     FnArg {
         name: Option<Symbol>,
         arg_index: HumanIndex,
+        called_via: CalledVia,
     },
     TypedArg {
         name: Option<Symbol>,
@@ -3388,6 +3448,7 @@ pub enum Reason {
         foreign_symbol: ForeignSymbol,
         arg_index: HumanIndex,
     },
+    Stmt(Option<Symbol>),
     FloatLiteral,
     IntLiteral,
     NumLiteral,
@@ -3420,6 +3481,9 @@ pub enum Reason {
         def_region: Region,
     },
     CrashArg,
+    ImportParams(ModuleId),
+    FunctionOutput,
+    TryResult,
 }
 
 #[derive(PartialEq, Eq, Debug, Clone)]
@@ -3469,7 +3533,19 @@ pub enum Category {
 
     Expect,
     Dbg,
+
+    TryTarget,
+    TrySuccess,
+    TryFailure,
+
+    Return(EarlyReturnKind),
     Unknown,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EarlyReturnKind {
+    Return,
+    Try,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -3511,6 +3587,13 @@ impl AliasKind {
             AliasKind::Opaque => "opaque",
         }
     }
+
+    pub fn as_str_plural(&self) -> &'static str {
+        match self {
+            AliasKind::Structural => "aliases",
+            AliasKind::Opaque => "opaque types",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3549,7 +3632,7 @@ pub enum MemberImpl {
     Error,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Alias {
     pub region: Region,
     pub type_variables: Vec<Loc<AliasVar>>,
@@ -3596,6 +3679,8 @@ pub enum ErrorType {
     /// If the name was auto-generated, it will start with a `#`.
     FlexVar(Lowercase),
     RigidVar(Lowercase),
+    InferenceVar,
+    EffectfulFunc,
     /// If the name was auto-generated, it will start with a `#`.
     FlexAbleVar(Lowercase, AbilitySet),
     RigidAbleVar(Lowercase, AbilitySet),
@@ -3608,10 +3693,21 @@ pub enum ErrorType {
         TypeExt,
         Polarity,
     ),
-    Function(Vec<ErrorType>, Box<ErrorType>, Box<ErrorType>),
+    Function(
+        Vec<ErrorType>,
+        Box<ErrorType>,
+        ErrorFunctionFx,
+        Box<ErrorType>,
+    ),
     Alias(Symbol, Vec<ErrorType>, Box<ErrorType>, AliasKind),
     Range(Vec<ErrorType>),
     Error,
+}
+
+#[derive(PartialEq, Eq, Clone, Hash)]
+pub enum ErrorFunctionFx {
+    Pure,
+    Effectful,
 }
 
 impl std::fmt::Debug for ErrorType {
@@ -3638,6 +3734,7 @@ impl ErrorType {
             FlexVar(v) | RigidVar(v) | FlexAbleVar(v, _) | RigidAbleVar(v, _) => {
                 taken.insert(v.clone());
             }
+            InferenceVar => {}
             Record(fields, ext) => {
                 fields
                     .iter()
@@ -3659,7 +3756,7 @@ impl ErrorType {
                     .for_each(|(_, ts)| ts.iter().for_each(|t| t.add_names(taken)));
                 ext.add_names(taken);
             }
-            Function(args, capt, ret) => {
+            Function(args, capt, _fx, ret) => {
                 args.iter().for_each(|t| t.add_names(taken));
                 capt.add_names(taken);
                 ret.add_names(taken);
@@ -3675,6 +3772,7 @@ impl ErrorType {
                     t.add_names(taken);
                 });
             }
+            EffectfulFunc => {}
             Error => {}
         }
     }
@@ -3745,7 +3843,7 @@ fn write_error_type_help(
                 }
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3761,7 +3859,10 @@ fn write_error_type_help(
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_error_type_help(interns, *result, buf, Parens::InFn);
 
@@ -3813,17 +3914,19 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
         Infinite => buf.push('∞'),
         Error => buf.push('?'),
         FlexVar(name) | RigidVar(name) => buf.push_str(name.as_str()),
-        FlexAbleVar(name, symbol) | RigidAbleVar(name, symbol) => {
+        InferenceVar => buf.push('_'),
+        FlexAbleVar(name, abilities) | RigidAbleVar(name, abilities) => {
             let write_parens = parens == Parens::InTypeParam;
             if write_parens {
                 buf.push('(');
             }
             buf.push_str(name.as_str());
-            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, symbol).unwrap();
+            write!(buf, "{} {:?}", roc_parse::keyword::IMPLEMENTS, abilities).unwrap();
             if write_parens {
                 buf.push(')');
             }
         }
+        EffectfulFunc => buf.push_str("EffectfulFunc"),
         Type(symbol, arguments) => {
             let write_parens = parens == Parens::InTypeParam && !arguments.is_empty();
 
@@ -3895,7 +3998,7 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 buf.push(')');
             }
         }
-        Function(arguments, _closure, result) => {
+        Function(arguments, _closure, fx, result) => {
             let write_parens = parens != Parens::Unnecessary;
 
             if write_parens {
@@ -3911,7 +4014,10 @@ fn write_debug_error_type_help(error_type: ErrorType, buf: &mut String, parens: 
                 }
             }
 
-            buf.push_str(" -> ");
+            match fx {
+                ErrorFunctionFx::Pure => buf.push_str(" -> "),
+                ErrorFunctionFx::Effectful => buf.push_str(" => "),
+            }
 
             write_debug_error_type_help(*result, buf, Parens::InFn);
 
@@ -4399,7 +4505,7 @@ fn instantiate_lambda_sets_as_unspecialized(
         match typ {
             Type::EmptyRec => {}
             Type::EmptyTagUnion => {}
-            Type::Function(args, lambda_set, ret) => {
+            Type::Function(args, lambda_set, ret, fx) => {
                 debug_assert!(
                     matches!(**lambda_set, Type::Variable(..)),
                     "lambda set already bound"
@@ -4407,6 +4513,7 @@ fn instantiate_lambda_sets_as_unspecialized(
 
                 **lambda_set = new_uls();
                 stack.push(ret);
+                stack.push(fx);
                 stack.extend(args.iter_mut().rev());
             }
             Type::Record(fields, ext) => {
@@ -4475,6 +4582,7 @@ fn instantiate_lambda_sets_as_unspecialized(
             Type::Variable(_) => {}
             Type::RangedNumber(_) => {}
             Type::Error => {}
+            Type::Pure | Type::Effectful => {}
         }
     }
 }
@@ -4489,16 +4597,20 @@ mod test {
         let l1 = Box::new(Type::Variable(var_store.fresh()));
         let l2 = Box::new(Type::Variable(var_store.fresh()));
         let l3 = Box::new(Type::Variable(var_store.fresh()));
+        let fx1 = Box::new(Type::Variable(var_store.fresh()));
+        let fx2 = Box::new(Type::Variable(var_store.fresh()));
+        let fx3 = Box::new(Type::Variable(var_store.fresh()));
         let mut typ = Type::Function(
-            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec))],
+            vec![Type::Function(vec![], l2, Box::new(Type::EmptyRec), fx1)],
             l1,
             Box::new(Type::TagUnion(
                 vec![(
                     TagName("A".into()),
-                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec))],
+                    vec![Type::Function(vec![], l3, Box::new(Type::EmptyRec), fx2)],
                 )],
                 TypeExtension::Closed,
             )),
+            fx3,
         );
 
         let able_var = var_store.fresh();
@@ -4519,11 +4631,11 @@ mod test {
         }
 
         match typ {
-            Type::Function(args, l1, ret) => {
+            Type::Function(args, l1, ret, _fx) => {
                 check_uls!(*l1, 1);
 
                 match args.as_slice() {
-                    [Type::Function(args, l2, ret)] => {
+                    [Type::Function(args, l2, ret, _fx)] => {
                         check_uls!(**l2, 2);
                         assert!(args.is_empty());
                         assert!(matches!(**ret, Type::EmptyRec));
@@ -4536,7 +4648,7 @@ mod test {
                         [(name, args)] => {
                             assert_eq!(name.0.as_str(), "A");
                             match args.as_slice() {
-                                [Type::Function(args, l3, ret)] => {
+                                [Type::Function(args, l3, ret, _fx)] => {
                                     check_uls!(**l3, 3);
                                     assert!(args.is_empty());
                                     assert!(matches!(**ret, Type::EmptyRec));

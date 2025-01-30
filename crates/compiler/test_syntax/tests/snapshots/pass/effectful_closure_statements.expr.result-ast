@@ -1,0 +1,188 @@
+@0-222 SpaceAfter(
+    Closure(
+        [
+            @1-3 RecordDestructure(
+                [],
+            ),
+        ],
+        @11-222 SpaceBefore(
+            Defs(
+                Defs {
+                    tags: [
+                        EitherIndex(2147483648),
+                        EitherIndex(2147483649),
+                        EitherIndex(2147483650),
+                    ],
+                    regions: [
+                        @11-37,
+                        @42-55,
+                        @61-154,
+                    ],
+                    space_before: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 2 },
+                    ],
+                    space_after: [
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+                        Slice<roc_parse::ast::CommentOrNewline> { start: 3, length: 0 },
+                    ],
+                    spaces: [
+                        Newline,
+                        Newline,
+                        Newline,
+                    ],
+                    type_defs: [],
+                    value_defs: [
+                        Stmt(
+                            @11-37 Apply(
+                                @11-15 Var {
+                                    module_name: "",
+                                    ident: "echo",
+                                },
+                                [
+                                    @16-37 Str(
+                                        PlainLine(
+                                            "Welcome to the DMV!",
+                                        ),
+                                    ),
+                                ],
+                                Space,
+                            ),
+                        ),
+                        Body(
+                            @42-45 Identifier {
+                                ident: "age",
+                            },
+                            @48-55 Var {
+                                module_name: "",
+                                ident: "readInt",
+                            },
+                        ),
+                        Stmt(
+                            @61-154 If {
+                                if_thens: [
+                                    (
+                                        @64-72 BinOps(
+                                            [
+                                                (
+                                                    @64-67 Var {
+                                                        module_name: "",
+                                                        ident: "age",
+                                                    },
+                                                    @68-69 LessThan,
+                                                ),
+                                            ],
+                                            @70-72 Num(
+                                                "16",
+                                            ),
+                                        ),
+                                        @86-134 SpaceBefore(
+                                            SpaceAfter(
+                                                Defs(
+                                                    Defs {
+                                                        tags: [
+                                                            EitherIndex(2147483648),
+                                                        ],
+                                                        regions: [
+                                                            @86-119,
+                                                        ],
+                                                        space_before: [
+                                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                                        ],
+                                                        space_after: [
+                                                            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                                        ],
+                                                        spaces: [],
+                                                        type_defs: [],
+                                                        value_defs: [
+                                                            Stmt(
+                                                                @86-119 Apply(
+                                                                    @86-90 Var {
+                                                                        module_name: "",
+                                                                        ident: "echo",
+                                                                    },
+                                                                    [
+                                                                        @91-119 Str(
+                                                                            PlainLine(
+                                                                                "You're too young to drive!",
+                                                                            ),
+                                                                        ),
+                                                                    ],
+                                                                    Space,
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    },
+                                                    @128-134 SpaceBefore(
+                                                        Apply(
+                                                            @128-132 Var {
+                                                                module_name: "",
+                                                                ident: "exit",
+                                                            },
+                                                            [
+                                                                @133-134 Num(
+                                                                    "1",
+                                                                ),
+                                                            ],
+                                                            Space,
+                                                        ),
+                                                        [
+                                                            Newline,
+                                                        ],
+                                                    ),
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ),
+                                ],
+                                final_else: @152-154 SpaceBefore(
+                                    Record(
+                                        [],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                indented_else: false,
+                            },
+                        ),
+                    ],
+                },
+                @160-222 SpaceBefore(
+                    Apply(
+                        @160-164 Var {
+                            module_name: "",
+                            ident: "echo",
+                        },
+                        [
+                            @165-222 Str(
+                                PlainLine(
+                                    "Let's get started on your driver's license application.",
+                                ),
+                            ),
+                        ],
+                        Space,
+                    ),
+                    [
+                        Newline,
+                        Newline,
+                    ],
+                ),
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -4,9 +4,9 @@ use crate::{aliases::Aliases, solve};
 use roc_can::abilities::{AbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint, Constraints};
 use roc_can::expr::PendingDerives;
-use roc_can::module::{ExposedByModule, ResolvedImplementations, RigidVariables};
+use roc_can::module::{ExposedByModule, ModuleParams, ResolvedImplementations, RigidVariables};
 use roc_collections::all::MutMap;
-use roc_collections::VecMap;
+use roc_collections::{VecMap, VecSet};
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -76,10 +76,16 @@ pub struct SolveConfig<'a> {
     /// Needed during solving to resolve lambda sets from derived implementations that escape into
     /// the user module.
     pub derived_module: SharedDerivedModule,
+    /// Symbols that are exposed to the host which might need special treatment.
+    pub host_exposed_symbols: Option<&'a VecSet<Symbol>>,
 
     #[cfg(debug_assertions)]
     /// The checkmate collector for this module.
     pub checkmate: Option<roc_checkmate::Collector>,
+
+    /// Module params
+    pub module_params: Option<ModuleParams>,
+    pub module_params_vars: VecMap<ModuleId, Variable>,
 }
 
 pub struct SolveOutput {
@@ -144,6 +150,7 @@ pub fn exposed_types_storage_subs(
     home: ModuleId,
     solved_subs: &mut Solved<Subs>,
     exposed_vars_by_symbol: &[(Symbol, Variable)],
+    params_var: Option<Variable>,
     solved_implementations: &ResolvedImplementations,
     abilities_store: &AbilitiesStore,
 ) -> ExposedTypesStorageSubs {
@@ -155,6 +162,9 @@ pub fn exposed_types_storage_subs(
         let new_var = storage_subs.import_variable_from(subs, *var).variable;
         stored_vars_by_symbol.insert(*symbol, new_var);
     }
+
+    let stored_params_var =
+        params_var.map(|params_var| storage_subs.import_variable_from(subs, params_var).variable);
 
     let mut stored_specialization_lambda_set_vars =
         VecMap::with_capacity(solved_implementations.len());
@@ -178,7 +188,9 @@ pub fn exposed_types_storage_subs(
                         .as_inner()
                         .get_content_without_compacting(imported_lset_ambient_function_var)
                     {
-                        Content::Structure(FlatType::Func(_, lambda_set_var, _)) => *lambda_set_var,
+                        Content::Structure(FlatType::Func(_, lambda_set_var, _, _)) => {
+                            *lambda_set_var
+                        }
                         content => internal_error!(
                             "ambient lambda set function import is not a function, found: {:?}",
                             roc_types::subs::SubsFmtContent(content, storage_subs.as_inner())
@@ -213,6 +225,7 @@ pub fn exposed_types_storage_subs(
         stored_vars_by_symbol,
         stored_specialization_lambda_set_vars,
         stored_ability_member_vars,
+        stored_params_var,
     }
 }
 

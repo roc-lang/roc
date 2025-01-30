@@ -20,7 +20,7 @@ links = "app"
 [lib]
 name = "host"
 path = "src/lib.rs"
-crate-type = ["staticlib", "rlib"]
+crate-type = ["staticlib", "lib"]
 
 [[bin]]
 name = "host"

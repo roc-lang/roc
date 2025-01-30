@@ -1,1 +1,1 @@
-Expr(BadExprEnd(@22), @0)
+Expr(BadOperator("->", @24), @0)

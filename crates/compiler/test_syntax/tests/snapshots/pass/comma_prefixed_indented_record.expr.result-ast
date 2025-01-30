@@ -1,0 +1,135 @@
+@0-167 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-164,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Alias {
+                    header: TypeHeader {
+                        name: @0-5 "Model",
+                        vars: [
+                            @6-14 Identifier(
+                                "position",
+                            ),
+                        ],
+                    },
+                    ann: @21-164 SpaceBefore(
+                        Record {
+                            fields: [
+                                @23-47 SpaceAfter(
+                                    RequiredValue(
+                                        @23-32 "evaluated",
+                                        [],
+                                        @35-47 Apply(
+                                            "",
+                                            "Set",
+                                            [
+                                                @39-47 BoundVariable(
+                                                    "position",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @54-76 SpaceAfter(
+                                    RequiredValue(
+                                        @54-61 "openSet",
+                                        [],
+                                        @64-76 Apply(
+                                            "",
+                                            "Set",
+                                            [
+                                                @68-76 BoundVariable(
+                                                    "position",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @83-113 SpaceAfter(
+                                    RequiredValue(
+                                        @83-88 "costs",
+                                        [],
+                                        @91-113 Apply(
+                                            "Dict",
+                                            "Dict",
+                                            [
+                                                @101-109 BoundVariable(
+                                                    "position",
+                                                ),
+                                                @110-113 Apply(
+                                                    "",
+                                                    "F64",
+                                                    [],
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @120-158 SpaceAfter(
+                                    RequiredValue(
+                                        @120-128 "cameFrom",
+                                        [],
+                                        @131-158 Apply(
+                                            "Dict",
+                                            "Dict",
+                                            [
+                                                @141-149 BoundVariable(
+                                                    "position",
+                                                ),
+                                                @150-158 BoundVariable(
+                                                    "position",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                },
+            ],
+            value_defs: [],
+        },
+        @166-167 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "a",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

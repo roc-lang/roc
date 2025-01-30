@@ -1,5 +1,7 @@
 # devtools
 
+[Install nix](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md#installing-nix) if you have not already done so.
+
 To make rust-analyzer and other vscode extensions work well you want them using the same rustc, glibc, zig... as specified in the roc nix flake.
 The easiest way to do this is to use another flake for all your dev tools that takes the roc flake as an input.
 
@@ -31,7 +33,7 @@ eval "$(lorri direnv --shell-file path-to-your-dev-flake-folder/shell.nix)"
 
 ## Extensions
 
-### for those we have some Nix experience
+### for those who have some Nix experience
 
 Add vscode extensions you want to use below `vscodeExtensions = ...`. You can search for extension names [here](https://search.nixos.org/packages?channel=22.05&from=0&size=50&sort=relevance&type=packages&query=vscode-extensions+extensionYouAreSearchingFor). You may not be able to install extensions through the UI in vscode, I'd recommend always adding them to the flake. If you are inside a `nix develop` shell, run `exit` and `nix develop path-to-your-dev-flake-folder` to be able to run vscode with the newly added extensions.
 

@@ -1,0 +1,28 @@
+@0-12 ParensAround(
+    DbgStmt {
+        first: @5-6 Tag(
+            "D",
+        ),
+        extra_args: [
+            @8-9 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "q",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ],
+        continuation: @10-11 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "h",
+            },
+            [
+                Newline,
+            ],
+        ),
+        pnc_style: false,
+    },
+)

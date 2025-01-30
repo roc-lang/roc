@@ -5,7 +5,7 @@ use roc_module::called_via::CalledVia;
 
 use roc_module::symbol::Symbol;
 use roc_region::all::Loc;
-use roc_types::subs::{Content, FlatType, GetSubsSlice, SubsSlice, Variable};
+use roc_types::subs::{Content, FlatType, GetSubsSlice, Variable};
 use roc_types::types::AliasKind;
 
 use crate::decoding::wrap_in_decode_custom_decode_with;
@@ -56,7 +56,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
         let decode_list_fn_var = env.import_builtin_symbol_var(Symbol::DECODE_LIST);
 
         // Decoder elem fmt -a-> b
-        let elem_decoder_var_slice = SubsSlice::insert_into_subs(env.subs, [elem_decoder_var]);
+        let elem_decoder_var_slice = env.subs.insert_into_vars([elem_decoder_var]);
         let this_decode_list_clos_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_list_ret_var = env.subs.fresh_unnamed_flex_var();
         let this_decode_list_fn_var = synth_var(
@@ -65,6 +65,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
                 elem_decoder_var_slice,
                 this_decode_list_clos_var,
                 this_decode_list_ret_var,
+                Variable::PURE,
             )),
         );
 
@@ -78,6 +79,7 @@ pub(crate) fn decoder(env: &mut Env<'_>, _def_symbol: Symbol) -> (Expr, Variable
             Loc::at_zero(decode_list_member),
             this_decode_list_clos_var,
             this_decode_list_ret_var,
+            Variable::PURE,
         ));
 
         let decode_list_call = Call(

@@ -1,0 +1,118 @@
+Defs {
+    tags: [
+        EitherIndex(2147483648),
+        EitherIndex(2147483649),
+        EitherIndex(2147483650),
+    ],
+    regions: [
+        @0-35,
+        @36-75,
+        @76-99,
+    ],
+    space_before: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 1 },
+    ],
+    space_after: [
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 1, length: 0 },
+        Slice<roc_parse::ast::CommentOrNewline> { start: 2, length: 1 },
+    ],
+    spaces: [
+        Newline,
+        Newline,
+        Newline,
+    ],
+    type_defs: [],
+    value_defs: [
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @7-11 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @22-25 ExposedName(
+                                "map",
+                            ),
+                            @27-34 ExposedName(
+                                "Decoder",
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @43-47 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [
+                            @58-61 ExposedName(
+                                "map",
+                            ),
+                            @67-74 SpaceBefore(
+                                ExposedName(
+                                    "Decoder",
+                                ),
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                    },
+                ),
+            },
+        ),
+        ModuleImport(
+            ModuleImport {
+                before_name: [],
+                name: @83-87 ImportedModuleName {
+                    package: None,
+                    name: ModuleName(
+                        "Json",
+                    ),
+                },
+                params: None,
+                alias: None,
+                exposed: Some(
+                    KeywordItem {
+                        keyword: Spaces {
+                            before: [],
+                            item: ImportExposingKeyword,
+                            after: [],
+                        },
+                        item: [],
+                    },
+                ),
+            },
+        ),
+    ],
+}

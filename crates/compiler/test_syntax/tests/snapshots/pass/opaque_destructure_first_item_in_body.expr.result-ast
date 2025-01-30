@@ -1,71 +1,76 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-22,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Body(
-                @0-6 Apply(
-                    @0-6 OpaqueRef(
-                        "@Thunk",
+@0-28 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-22,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-9 Apply(
+                        @0-6 OpaqueRef(
+                            "@Thunk",
+                        ),
+                        [
+                            @7-9 Identifier {
+                                ident: "it",
+                            },
+                        ],
                     ),
-                    [
-                        @7-9 Identifier(
-                            "it",
-                        ),
-                    ],
-                ),
-                @12-22 Apply(
-                    @12-14 Var {
-                        module_name: "",
-                        ident: "id",
-                    },
-                    [
-                        @16-21 ParensAround(
-                            Apply(
-                                @16-18 OpaqueRef(
-                                    "@A",
-                                ),
-                                [
-                                    @19-21 Record(
-                                        [],
+                    @12-22 Apply(
+                        @12-14 Var {
+                            module_name: "",
+                            ident: "id",
+                        },
+                        [
+                            @16-21 ParensAround(
+                                Apply(
+                                    @16-18 OpaqueRef(
+                                        "@A",
                                     ),
-                                ],
-                                Space,
+                                    [
+                                        @19-21 Record(
+                                            [],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
                             ),
-                        ),
-                    ],
-                    Space,
-                ),
-            ),
-        ],
-    },
-    @23-28 SpaceBefore(
-        Apply(
-            @23-25 Var {
-                module_name: "",
-                ident: "it",
-            },
-            [
-                @26-28 Record(
-                    [],
+                        ],
+                        Space,
+                    ),
                 ),
             ],
-            Space,
+        },
+        @23-28 SpaceBefore(
+            Apply(
+                @23-25 Var {
+                    module_name: "",
+                    ident: "it",
+                },
+                [
+                    @26-28 Record(
+                        [],
+                    ),
+                ],
+                Space,
+            ),
+            [
+                Newline,
+            ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

@@ -452,7 +452,7 @@ enum Match {
 }
 
 fn check_for_match(branches: &[Branch]) -> Match {
-    match branches.get(0) {
+    match branches.first() {
         Some(Branch {
             goal,
             patterns,
@@ -634,8 +634,10 @@ fn test_for_pattern<'a>(pattern: &Pattern<'a>) -> Option<Test<'a>> {
 
         List {
             arity,
+            list_layout: _,
             element_layout: _,
             elements: _,
+            opt_rest: _,
         } => IsListLen {
             bound: match arity {
                 ListArity::Exact(_) => ListLenBound::Exact,
@@ -908,7 +910,9 @@ fn to_relevant_branch_help<'a>(
         List {
             arity: my_arity,
             elements,
+            list_layout: _,
             element_layout: _,
+            opt_rest: _,
         } => match test {
             IsListLen {
                 bound: test_bound,
@@ -1765,7 +1769,7 @@ fn test_to_comparison<'a>(
                 LayoutRepr::Builtin(Builtin::List(_elem_layout)) => {
                     let real_len_expr = Expr::Call(Call {
                         call_type: CallType::LowLevel {
-                            op: LowLevel::ListLen,
+                            op: LowLevel::ListLenUsize,
                             update_mode: env.next_update_mode_id(),
                         },
                         arguments: env.arena.alloc([list_sym]),
@@ -1775,7 +1779,7 @@ fn test_to_comparison<'a>(
                     let real_len = env.unique_symbol();
                     let test_len = env.unique_symbol();
 
-                    let usize_layout = Layout::usize(env.target_info);
+                    let usize_layout = Layout::usize(env.target);
 
                     stores.push((real_len, usize_layout, real_len_expr));
                     stores.push((test_len, usize_layout, test_len_expr));
@@ -2333,7 +2337,7 @@ fn decide_to_branching<'a>(
                 let len_symbol = env.unique_symbol();
 
                 let switch = Stmt::Switch {
-                    cond_layout: Layout::usize(env.target_info),
+                    cond_layout: Layout::usize(env.target),
                     cond_symbol: len_symbol,
                     branches: branches.into_bump_slice(),
                     default_branch: (default_branch_info, env.arena.alloc(default_branch)),
@@ -2342,7 +2346,7 @@ fn decide_to_branching<'a>(
 
                 let len_expr = Expr::Call(Call {
                     call_type: CallType::LowLevel {
-                        op: LowLevel::ListLen,
+                        op: LowLevel::ListLenUsize,
                         update_mode: env.next_update_mode_id(),
                     },
                     arguments: env.arena.alloc([inner_cond_symbol]),
@@ -2351,7 +2355,7 @@ fn decide_to_branching<'a>(
                 Stmt::Let(
                     len_symbol,
                     len_expr,
-                    Layout::usize(env.target_info),
+                    Layout::usize(env.target),
                     env.arena.alloc(switch),
                 )
             } else {

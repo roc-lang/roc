@@ -2,36 +2,12 @@ use roc_module::symbol::Symbol;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HigherOrder {
-    ListMap {
-        xs: Symbol,
-    },
-    ListMap2 {
-        xs: Symbol,
-        ys: Symbol,
-    },
-    ListMap3 {
-        xs: Symbol,
-        ys: Symbol,
-        zs: Symbol,
-    },
-    ListMap4 {
-        xs: Symbol,
-        ys: Symbol,
-        zs: Symbol,
-        ws: Symbol,
-    },
-    ListSortWith {
-        xs: Symbol,
-    },
+    ListSortWith { xs: Symbol },
 }
 
 impl HigherOrder {
     pub fn function_arity(&self) -> usize {
         match self {
-            HigherOrder::ListMap { .. } => 1,
-            HigherOrder::ListMap2 { .. } => 2,
-            HigherOrder::ListMap3 { .. } => 3,
-            HigherOrder::ListMap4 { .. } => 4,
             HigherOrder::ListSortWith { .. } => 2,
         }
     }
@@ -42,10 +18,7 @@ impl HigherOrder {
         use HigherOrder::*;
 
         match self {
-            ListMap { .. } | ListSortWith { .. } => 2,
-            ListMap2 { .. } => 3,
-            ListMap3 { .. } => 4,
-            ListMap4 { .. } => 5,
+            ListSortWith { .. } => 2,
         }
     }
 
@@ -61,17 +34,16 @@ enum FirstOrder {
     StrJoinWith,
     StrIsEmpty,
     StrStartsWith,
-    StrStartsWithScalar,
     StrEndsWith,
     StrSplit,
-    StrCountGraphemes,
     StrFromInt,
     StrFromUtf8,
     StrFromUtf8Range,
     StrToUtf8,
     StrRepeat,
     StrFromFloat,
-    ListLen,
+    ListLenU64,
+    ListLenUsize,
     ListGetUnsafe,
     ListSublist,
     ListDropAt,
@@ -121,10 +93,6 @@ enum FirstOrder {
     NumBitwiseOr,
     NumShiftLeftBy,
     NumShiftRightBy,
-    NumBytesToU16,
-    NumBytesToU32,
-    NumBytesToU64,
-    NumBytesToU128,
     NumShiftRightZfBy,
     NumIntCast,
     NumFloatCast,

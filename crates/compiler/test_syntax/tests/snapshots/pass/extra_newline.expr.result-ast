@@ -1,0 +1,81 @@
+@0-50 SpaceAfter(
+    If {
+        if_thens: [
+            (
+                @3-6 Var {
+                    module_name: "",
+                    ident: "foo",
+                },
+                @16-31 SpaceBefore(
+                    SpaceAfter(
+                        Defs(
+                            Defs {
+                                tags: [
+                                    EitherIndex(2147483648),
+                                ],
+                                regions: [
+                                    @16-21,
+                                ],
+                                space_before: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                ],
+                                space_after: [
+                                    Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+                                ],
+                                spaces: [],
+                                type_defs: [],
+                                value_defs: [
+                                    Body(
+                                        @16-17 Identifier {
+                                            ident: "x",
+                                        },
+                                        @20-21 Var {
+                                            module_name: "",
+                                            ident: "a",
+                                        },
+                                    ),
+                                ],
+                            },
+                            @30-31 SpaceBefore(
+                                Var {
+                                    module_name: "",
+                                    ident: "x",
+                                },
+                                [
+                                    LineComment(
+                                        " 1",
+                                    ),
+                                ],
+                            ),
+                        ),
+                        [
+                            LineComment(
+                                " 2",
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ),
+        ],
+        final_else: @49-50 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "c",
+            },
+            [
+                LineComment(
+                    " 3",
+                ),
+            ],
+        ),
+        indented_else: false,
+    },
+    [
+        LineComment(
+            " 4",
+        ),
+    ],
+)

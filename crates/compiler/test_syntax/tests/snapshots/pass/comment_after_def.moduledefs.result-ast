@@ -1,15 +1,15 @@
 Defs {
     tags: [
-        Index(2147483648),
+        EitherIndex(2147483648),
     ],
     regions: [
         @0-7,
     ],
     space_before: [
-        Slice(start = 0, length = 0),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
     ],
     space_after: [
-        Slice(start = 0, length = 1),
+        Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 1 },
     ],
     spaces: [
         LineComment(
@@ -19,9 +19,9 @@ Defs {
     type_defs: [],
     value_defs: [
         Body(
-            @0-3 Identifier(
-                "foo",
-            ),
+            @0-3 Identifier {
+                ident: "foo",
+            },
             @6-7 Num(
                 "1",
             ),

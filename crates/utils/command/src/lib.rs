@@ -21,7 +21,7 @@ pub fn strip_windows_prefix(path_buf: &Path) -> PathBuf {
 pub fn root_dir() -> PathBuf {
     let mut path = env::current_exe().ok().unwrap();
 
-    // Get rid of the filename in target/debug/deps/cli_run-99c65e4e9a1fbd06
+    // Get rid of the filename in target/debug/deps/cli_tests-99c65e4e9a1fbd06
     path.pop();
 
     // If we're in deps/ get rid of deps/ in target/debug/deps/

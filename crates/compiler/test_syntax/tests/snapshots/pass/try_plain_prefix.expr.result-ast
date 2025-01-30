@@ -1,0 +1,20 @@
+@0-21 SpaceAfter(
+    Apply(
+        @0-3 Try,
+        [
+            @5-14 Var {
+                module_name: "Str",
+                ident: "toU64",
+            },
+            @16-21 Str(
+                PlainLine(
+                    "123",
+                ),
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

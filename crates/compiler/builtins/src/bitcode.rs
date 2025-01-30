@@ -1,5 +1,5 @@
 use roc_module::symbol::Symbol;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::ops::Index;
 
 #[derive(Debug, Default, Copy, Clone)]
@@ -11,11 +11,6 @@ impl IntrinsicName {
     pub const fn default() -> Self {
         Self { options: [""; 14] }
     }
-}
-
-#[repr(u8)]
-pub enum DecWidth {
-    Dec,
 }
 
 #[repr(u8)]
@@ -38,7 +33,7 @@ impl FloatWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture::*;
         use FloatWidth::*;
 
@@ -47,7 +42,7 @@ impl FloatWidth {
         // the compiler is targeting (e.g. what the Roc code will be compiled to).
         match self {
             F32 => 4,
-            F64 => match target_info.architecture {
+            F64 => match target.architecture() {
                 X86_64 | Aarch64 | Wasm32 => 8,
                 X86_32 | Aarch32 => 4,
             },
@@ -107,7 +102,7 @@ impl IntWidth {
         }
     }
 
-    pub const fn alignment_bytes(&self, target_info: TargetInfo) -> u32 {
+    pub const fn alignment_bytes(&self, target: Target) -> u32 {
         use roc_target::Architecture;
         use IntWidth::*;
 
@@ -118,7 +113,7 @@ impl IntWidth {
             U8 | I8 => 1,
             U16 | I16 => 2,
             U32 | I32 => 4,
-            U64 | I64 => match target_info.architecture {
+            U64 | I64 => match target.architecture() {
                 Architecture::X86_64
                 | Architecture::Aarch64
                 | Architecture::Aarch32
@@ -130,10 +125,10 @@ impl IntWidth {
                 // according to https://reviews.llvm.org/D28990#655487
                 //
                 // however, rust does not always think that this is true
-                match target_info.architecture {
-                    Architecture::X86_64 => 16,
-                    Architecture::Aarch64 | Architecture::Aarch32 | Architecture::Wasm32 => 16,
-                    Architecture::X86_32 => 8,
+                // Our alignmets here are correct, but they will not match rust/zig/llvm until they update to llvm version 18.
+                match target.architecture() {
+                    Architecture::X86_64 | Architecture::Aarch64 | Architecture::X86_32 => 16,
+                    Architecture::Aarch32 | Architecture::Wasm32 => 8,
                 }
             }
         }
@@ -168,14 +163,6 @@ impl IntWidth {
             Self::U64 => "u64",
             Self::U128 => "u128",
         }
-    }
-}
-
-impl Index<DecWidth> for IntrinsicName {
-    type Output = str;
-
-    fn index(&self, _: DecWidth) -> &Self::Output {
-        self.options[0]
     }
 }
 
@@ -292,15 +279,21 @@ pub const NUM_FLOOR_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_
 pub const NUM_FLOOR_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.floor_f64");
 pub const NUM_ROUND_F32: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f32");
 pub const NUM_ROUND_F64: IntrinsicName = int_intrinsic!("roc_builtins.num.round_f64");
+pub const INT_TO_FLOAT_CAST_F32: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f32");
+pub const INT_TO_FLOAT_CAST_F64: IntrinsicName =
+    int_intrinsic!("roc_builtins.num.num_to_float_cast_f64");
 
 pub const NUM_ADD_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_or_panic");
 pub const NUM_ADD_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_saturated");
+pub const NUM_ADD_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_wrapped");
 pub const NUM_ADD_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.add_with_overflow");
 pub const NUM_ADD_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.add_with_overflow");
 
 pub const NUM_SUB_OR_PANIC_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_or_panic");
 pub const NUM_SUB_SATURATED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_saturated");
+pub const NUM_SUB_WRAP_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_wrapped");
 pub const NUM_SUB_CHECKED_INT: IntrinsicName = int_intrinsic!("roc_builtins.num.sub_with_overflow");
 pub const NUM_SUB_CHECKED_FLOAT: IntrinsicName =
     float_intrinsic!("roc_builtins.num.sub_with_overflow");
@@ -330,24 +323,20 @@ pub const NUM_COUNT_LEADING_ZERO_BITS: IntrinsicName =
 pub const NUM_COUNT_TRAILING_ZERO_BITS: IntrinsicName =
     int_intrinsic!("roc_builtins.num.count_trailing_zero_bits");
 pub const NUM_COUNT_ONE_BITS: IntrinsicName = int_intrinsic!("roc_builtins.num.count_one_bits");
-
-pub const NUM_BYTES_TO_U16: &str = "roc_builtins.num.bytes_to_u16";
-pub const NUM_BYTES_TO_U32: &str = "roc_builtins.num.bytes_to_u32";
-pub const NUM_BYTES_TO_U64: &str = "roc_builtins.num.bytes_to_u64";
-pub const NUM_BYTES_TO_U128: &str = "roc_builtins.num.bytes_to_u128";
+pub const NUM_F32_TO_PARTS: &str = "roc_builtins.num.f32_to_parts";
+pub const NUM_F64_TO_PARTS: &str = "roc_builtins.num.f64_to_parts";
+pub const NUM_F32_FROM_PARTS: &str = "roc_builtins.num.f32_from_parts";
+pub const NUM_F64_FROM_PARTS: &str = "roc_builtins.num.f64_from_parts";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";
 pub const STR_CONCAT: &str = "roc_builtins.str.concat";
 pub const STR_JOIN_WITH: &str = "roc_builtins.str.joinWith";
-pub const STR_SPLIT: &str = "roc_builtins.str.str_split";
-pub const STR_TO_SCALARS: &str = "roc_builtins.str.to_scalars";
-pub const STR_COUNT_GRAPEHEME_CLUSTERS: &str = "roc_builtins.str.count_grapheme_clusters";
+pub const STR_SPLIT_ON: &str = "roc_builtins.str.str_split_on";
 pub const STR_COUNT_UTF8_BYTES: &str = "roc_builtins.str.count_utf8_bytes";
 pub const STR_IS_EMPTY: &str = "roc_builtins.str.is_empty";
 pub const STR_CAPACITY: &str = "roc_builtins.str.capacity";
 pub const STR_STARTS_WITH: &str = "roc_builtins.str.starts_with";
-pub const STR_STARTS_WITH_SCALAR: &str = "roc_builtins.str.starts_with_scalar";
 pub const STR_ENDS_WITH: &str = "roc_builtins.str.ends_with";
 pub const STR_NUMBER_OF_BYTES: &str = "roc_builtins.str.number_of_bytes";
 pub const STR_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.str.from_int");
@@ -358,20 +347,21 @@ pub const STR_TO_DECIMAL: &str = "roc_builtins.str.to_decimal";
 pub const STR_EQUAL: &str = "roc_builtins.str.equal";
 pub const STR_SUBSTRING_UNSAFE: &str = "roc_builtins.str.substring_unsafe";
 pub const STR_TO_UTF8: &str = "roc_builtins.str.to_utf8";
-pub const STR_FROM_UTF8_RANGE: &str = "roc_builtins.str.from_utf8_range";
+pub const STR_FROM_UTF8: &str = "roc_builtins.str.from_utf8";
+pub const STR_FROM_UTF8_LOSSY: &str = "roc_builtins.str.from_utf8_lossy";
 pub const STR_REPEAT: &str = "roc_builtins.str.repeat";
 pub const STR_TRIM: &str = "roc_builtins.str.trim";
 pub const STR_TRIM_START: &str = "roc_builtins.str.trim_start";
 pub const STR_TRIM_END: &str = "roc_builtins.str.trim_end";
 pub const STR_GET_UNSAFE: &str = "roc_builtins.str.get_unsafe";
 pub const STR_RESERVE: &str = "roc_builtins.str.reserve";
-pub const STR_APPEND_SCALAR: &str = "roc_builtins.str.append_scalar";
-pub const STR_GET_SCALAR_UNSAFE: &str = "roc_builtins.str.get_scalar_unsafe";
 pub const STR_CLONE_TO: &str = "roc_builtins.str.clone_to";
 pub const STR_WITH_CAPACITY: &str = "roc_builtins.str.with_capacity";
-pub const STR_GRAPHEMES: &str = "roc_builtins.str.graphemes";
-pub const STR_REFCOUNT_PTR: &str = "roc_builtins.str.refcount_ptr";
+pub const STR_ALLOCATION_PTR: &str = "roc_builtins.str.allocation_ptr";
 pub const STR_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.str.release_excess_capacity";
+pub const STR_WITH_ASCII_LOWERCASED: &str = "roc_builtins.str.with_ascii_lowercased";
+pub const STR_WITH_ASCII_UPPERCASED: &str = "roc_builtins.str.with_ascii_uppercased";
+pub const STR_CASELESS_ASCII_EQUALS: &str = "roc_builtins.str.caseless_ascii_equals";
 
 pub const LIST_MAP: &str = "roc_builtins.list.map";
 pub const LIST_MAP2: &str = "roc_builtins.list.map2";
@@ -386,12 +376,16 @@ pub const LIST_CONCAT: &str = "roc_builtins.list.concat";
 pub const LIST_REPLACE: &str = "roc_builtins.list.replace";
 pub const LIST_REPLACE_IN_PLACE: &str = "roc_builtins.list.replace_in_place";
 pub const LIST_IS_UNIQUE: &str = "roc_builtins.list.is_unique";
+pub const LIST_CLONE: &str = "roc_builtins.list.clone";
 pub const LIST_PREPEND: &str = "roc_builtins.list.prepend";
 pub const LIST_APPEND_UNSAFE: &str = "roc_builtins.list.append_unsafe";
 pub const LIST_RESERVE: &str = "roc_builtins.list.reserve";
 pub const LIST_CAPACITY: &str = "roc_builtins.list.capacity";
-pub const LIST_REFCOUNT_PTR: &str = "roc_builtins.list.refcount_ptr";
+pub const LIST_ALLOCATION_PTR: &str = "roc_builtins.list.allocation_ptr";
 pub const LIST_RELEASE_EXCESS_CAPACITY: &str = "roc_builtins.list.release_excess_capacity";
+pub const LIST_CONCAT_UTF8: &str = "roc_builtins.list.concat_utf8";
+pub const LIST_INCREF: &str = "roc_builtins.list.incref";
+pub const LIST_DECREF: &str = "roc_builtins.list.decref";
 
 pub const DEC_ABS: &str = "roc_builtins.dec.abs";
 pub const DEC_ACOS: &str = "roc_builtins.dec.acos";
@@ -408,6 +402,8 @@ pub const DEC_FROM_FLOAT: IntrinsicName = float_intrinsic!("roc_builtins.dec.fro
 pub const DEC_FROM_INT: IntrinsicName = int_intrinsic!("roc_builtins.dec.from_int");
 pub const DEC_FROM_STR: &str = "roc_builtins.dec.from_str";
 pub const DEC_FROM_U64: &str = "roc_builtins.dec.from_u64";
+pub const DEC_LOG: &str = "roc_builtins.dec.log";
+pub const DEC_POW: &str = "roc_builtins.dec.pow";
 pub const DEC_MUL_OR_PANIC: &str = "roc_builtins.dec.mul_or_panic";
 pub const DEC_MUL_SATURATED: &str = "roc_builtins.dec.mul_saturated";
 pub const DEC_MUL_WITH_OVERFLOW: &str = "roc_builtins.dec.mul_with_overflow";
@@ -419,8 +415,13 @@ pub const DEC_SUB_SATURATED: &str = "roc_builtins.dec.sub_saturated";
 pub const DEC_SUB_WITH_OVERFLOW: &str = "roc_builtins.dec.sub_with_overflow";
 pub const DEC_TAN: &str = "roc_builtins.dec.tan";
 pub const DEC_TO_I128: &str = "roc_builtins.dec.to_i128";
+pub const DEC_FROM_I128: &str = "roc_builtins.dec.from_i128";
 pub const DEC_TO_STR: &str = "roc_builtins.dec.to_str";
+pub const DEC_ROUND: IntrinsicName = int_intrinsic!("roc_builtins.dec.round");
+pub const DEC_FLOOR: IntrinsicName = int_intrinsic!("roc_builtins.dec.floor");
+pub const DEC_CEILING: IntrinsicName = int_intrinsic!("roc_builtins.dec.ceiling");
 
+pub const UTILS_DBG_IMPL: &str = "roc_builtins.utils.dbg_impl";
 pub const UTILS_TEST_PANIC: &str = "roc_builtins.utils.test_panic";
 pub const UTILS_ALLOCATE_WITH_REFCOUNT: &str = "roc_builtins.utils.allocate_with_refcount";
 pub const UTILS_INCREF_RC_PTR: &str = "roc_builtins.utils.incref_rc_ptr";
@@ -439,10 +440,12 @@ pub const UTILS_EXPECT_FAILED_START_SHARED_FILE: &str =
     "roc_builtins.utils.expect_failed_start_shared_file";
 pub const UTILS_EXPECT_READ_ENV_SHARED_BUFFER: &str = "roc_builtins.utils.read_env_shared_buffer";
 pub const NOTIFY_PARENT_EXPECT: &str = "roc_builtins.utils.notify_parent_expect";
-pub const NOTIFY_PARENT_DBG: &str = "roc_builtins.utils.notify_parent_dbg";
 
 pub const UTILS_LONGJMP: &str = "longjmp";
 pub const UTILS_SETJMP: &str = "setjmp";
+
+pub const UTILS_WINDOWS_SETJMP: &str = "windows_setjmp";
+pub const UTILS_WINDOWS_LONGJMP: &str = "windows_longjmp";
 
 #[derive(Debug, Default)]
 pub struct IntToIntrinsicName {

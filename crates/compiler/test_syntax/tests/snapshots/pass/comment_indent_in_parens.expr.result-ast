@@ -1,0 +1,53 @@
+@0-15 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-13,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-10 PncApply(
+                    @0-1 NumLiteral(
+                        "1",
+                    ),
+                    [
+                        @2-7 SpaceAfter(
+                            NumLiteral(
+                                "0",
+                            ),
+                            [
+                                LineComment(
+                                    "",
+                                ),
+                                LineComment(
+                                    "",
+                                ),
+                            ],
+                        ),
+                    ],
+                ),
+                @11-13 BoundVariable(
+                    "gi",
+                ),
+            ),
+        ],
+    },
+    @14-15 SpaceBefore(
+        Tag(
+            "M",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

@@ -1,33 +1,35 @@
-When(
-    @5-6 Num(
-        "0",
-    ),
-    [
-        WhenBranch {
-            patterns: [
-                @14-20 SpaceBefore(
-                    As(
-                        @14-15 SpaceAfter(
-                            Underscore(
+@0-25 SpaceAfter(
+    When(
+        @5-6 Num(
+            "0",
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @14-20 SpaceBefore(
+                        As(
+                            @14-15 Underscore(
                                 "",
                             ),
-                            [],
+                            PatternAs {
+                                spaces_before: [],
+                                identifier: @19-20 "n",
+                            },
                         ),
-                        PatternAs {
-                            spaces_before: [],
-                            identifier: @19-20 "n",
-                        },
+                        [
+                            Newline,
+                        ],
                     ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @24-25 Var {
-                module_name: "",
-                ident: "n",
+                ],
+                value: @24-25 Var {
+                    module_name: "",
+                    ident: "n",
+                },
+                guard: None,
             },
-            guard: None,
-        },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

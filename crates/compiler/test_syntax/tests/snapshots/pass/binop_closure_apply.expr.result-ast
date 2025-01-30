@@ -1,0 +1,41 @@
+@0-12 BinOps(
+    [
+        (
+            @0-1 Var {
+                module_name: "",
+                ident: "d",
+            },
+            @1-2 Plus,
+        ),
+    ],
+    @4-12 Apply(
+        @4-9 SpaceBefore(
+            Closure(
+                [
+                    @5-6 Identifier {
+                        ident: "w",
+                    },
+                ],
+                @8-9 Var {
+                    module_name: "",
+                    ident: "x",
+                },
+            ),
+            [
+                Newline,
+            ],
+        ),
+        [
+            @11-12 SpaceBefore(
+                Var {
+                    module_name: "",
+                    ident: "x",
+                },
+                [
+                    Newline,
+                ],
+            ),
+        ],
+        Space,
+    ),
+)

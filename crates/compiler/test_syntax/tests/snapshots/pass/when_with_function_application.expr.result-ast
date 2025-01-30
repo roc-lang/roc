@@ -1,54 +1,59 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "x",
-    },
-    [
-        WhenBranch {
-            patterns: [
-                @14-15 SpaceBefore(
-                    NumLiteral(
-                        "1",
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @19-33 Apply(
-                @19-26 Var {
-                    module_name: "Num",
-                    ident: "neg",
-                },
-                [
-                    @32-33 SpaceBefore(
-                        Num(
-                            "2",
+@0-44 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "x",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @14-15 SpaceBefore(
+                        NumLiteral(
+                            "1",
                         ),
                         [
                             Newline,
                         ],
                     ),
                 ],
-                Space,
-            ),
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @38-39 SpaceBefore(
-                    Underscore(
-                        "",
-                    ),
+                value: @19-33 Apply(
+                    @19-26 Var {
+                        module_name: "Num",
+                        ident: "neg",
+                    },
                     [
-                        Newline,
+                        @32-33 SpaceBefore(
+                            Num(
+                                "2",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
                     ],
+                    Space,
                 ),
-            ],
-            value: @43-44 Num(
-                "4",
-            ),
-            guard: None,
-        },
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @38-39 SpaceBefore(
+                        Underscore(
+                            "",
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @43-44 Num(
+                    "4",
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

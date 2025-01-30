@@ -1,16 +1,15 @@
 procedure Test.0 ():
     let Test.11 : Str = "";
     let Test.1 : List Str = Array [Test.11];
-    let Test.8 : U64 = lowlevel ListLen Test.1;
+    let Test.8 : U64 = lowlevel ListLenUsize Test.1;
     let Test.9 : U64 = 1i64;
     let Test.10 : Int1 = lowlevel Eq Test.8 Test.9;
     if Test.10 then
-        dec Test.11;
-        decref Test.1;
+        dec Test.1;
         let Test.3 : Str = "B";
         ret Test.3;
     else
-        let Test.5 : U64 = lowlevel ListLen Test.1;
+        let Test.5 : U64 = lowlevel ListLenUsize Test.1;
         dec Test.1;
         let Test.6 : U64 = 1i64;
         let Test.7 : Int1 = lowlevel NumGte Test.5 Test.6;

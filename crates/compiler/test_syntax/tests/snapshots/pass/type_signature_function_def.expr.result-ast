@@ -1,48 +1,24 @@
-Defs(
+@0-46 Defs(
     Defs {
         tags: [
-            Index(2147483649),
+            EitherIndex(2147483648),
         ],
         regions: [
             @0-42,
         ],
         space_before: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         space_after: [
-            Slice(start = 0, length = 0),
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
         ],
         spaces: [],
         type_defs: [],
         value_defs: [
-            Annotation(
-                @0-3 Identifier(
-                    "foo",
-                ),
-                @6-24 Function(
-                    [
-                        @6-9 Apply(
-                            "",
-                            "Int",
-                            [],
-                        ),
-                        @11-16 Apply(
-                            "",
-                            "Float",
-                            [],
-                        ),
-                    ],
-                    @20-24 Apply(
-                        "",
-                        "Bool",
-                        [],
-                    ),
-                ),
-            ),
             AnnotatedBody {
-                ann_pattern: @0-3 Identifier(
-                    "foo",
-                ),
+                ann_pattern: @0-3 Identifier {
+                    ident: "foo",
+                },
                 ann_type: @6-24 Function(
                     [
                         @6-9 Apply(
@@ -56,21 +32,24 @@ Defs(
                             [],
                         ),
                     ],
+                    Pure,
                     @20-24 Apply(
                         "",
                         "Bool",
                         [],
                     ),
                 ),
-                comment: None,
-                body_pattern: @25-28 Identifier(
-                    "foo",
-                ),
+                lines_between: [
+                    Newline,
+                ],
+                body_pattern: @25-28 Identifier {
+                    ident: "foo",
+                },
                 body_expr: @31-42 Closure(
                     [
-                        @32-33 Identifier(
-                            "x",
-                        ),
+                        @32-33 Identifier {
+                            ident: "x",
+                        },
                         @35-36 Underscore(
                             "",
                         ),

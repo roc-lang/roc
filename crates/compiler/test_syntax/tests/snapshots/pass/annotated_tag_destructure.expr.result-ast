@@ -1,105 +1,86 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-46,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [
-            Alias {
-                header: TypeHeader {
-                    name: @0-6 "UserId",
-                    vars: [
-                        @7-8 Identifier(
-                            "x",
+@0-49 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-46,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                AnnotatedBody {
+                    ann_pattern: @0-8 Apply(
+                        @0-6 Tag(
+                            "UserId",
                         ),
-                    ],
-                },
-                ann: @11-25 TagUnion {
-                    ext: None,
-                    tags: [
-                        @13-23 Apply {
-                            name: @13-19 "UserId",
-                            args: [
-                                @20-23 Apply(
-                                    "",
-                                    "I64",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
-                },
-            },
-        ],
-        value_defs: [
-            AnnotatedBody {
-                ann_pattern: @0-8 Apply(
-                    @0-6 Tag(
-                        "UserId",
+                        [
+                            @7-8 Identifier {
+                                ident: "x",
+                            },
+                        ],
                     ),
-                    [
-                        @7-8 Identifier(
-                            "x",
+                    ann_type: @11-25 TagUnion {
+                        ext: None,
+                        tags: [
+                            @13-23 Apply {
+                                name: @13-19 "UserId",
+                                args: [
+                                    @20-23 Apply(
+                                        "",
+                                        "I64",
+                                        [],
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                    lines_between: [
+                        Newline,
+                    ],
+                    body_pattern: @26-34 Apply(
+                        @26-32 Tag(
+                            "UserId",
                         ),
-                    ],
-                ),
-                ann_type: @11-25 TagUnion {
-                    ext: None,
-                    tags: [
-                        @13-23 Apply {
-                            name: @13-19 "UserId",
-                            args: [
-                                @20-23 Apply(
-                                    "",
-                                    "I64",
-                                    [],
-                                ),
-                            ],
-                        },
-                    ],
+                        [
+                            @33-34 Identifier {
+                                ident: "x",
+                            },
+                        ],
+                    ),
+                    body_expr: @37-46 Apply(
+                        @37-43 Tag(
+                            "UserId",
+                        ),
+                        [
+                            @44-46 Num(
+                                "42",
+                            ),
+                        ],
+                        Space,
+                    ),
                 },
-                comment: None,
-                body_pattern: @26-34 Apply(
-                    @26-32 Tag(
-                        "UserId",
-                    ),
-                    [
-                        @33-34 Identifier(
-                            "x",
-                        ),
-                    ],
-                ),
-                body_expr: @37-46 Apply(
-                    @37-43 Tag(
-                        "UserId",
-                    ),
-                    [
-                        @44-46 Num(
-                            "42",
-                        ),
-                    ],
-                    Space,
-                ),
-            },
-        ],
-    },
-    @48-49 SpaceBefore(
-        Var {
-            module_name: "",
-            ident: "x",
+            ],
         },
-        [
-            Newline,
-            Newline,
-        ],
+        @48-49 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "x",
+            },
+            [
+                Newline,
+                Newline,
+            ],
+        ),
     ),
+    [
+        Newline,
+    ],
 )

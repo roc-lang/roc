@@ -1,0 +1,54 @@
+@0-41 When(
+    @5-10 Apply(
+        @5-7 Tag(
+            "Ok",
+        ),
+        [
+            @8-10 List(
+                [],
+            ),
+        ],
+        Space,
+    ),
+    [
+        WhenBranch {
+            patterns: [
+                @18-23 SpaceBefore(
+                    Apply(
+                        @18-20 Tag(
+                            "Ok",
+                        ),
+                        [
+                            @21-23 List(
+                                [],
+                            ),
+                        ],
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @27-29 Record(
+                [],
+            ),
+            guard: None,
+        },
+        WhenBranch {
+            patterns: [
+                @34-35 SpaceBefore(
+                    Underscore(
+                        "",
+                    ),
+                    [
+                        Newline,
+                    ],
+                ),
+            ],
+            value: @39-41 Record(
+                [],
+            ),
+            guard: None,
+        },
+    ],
+)

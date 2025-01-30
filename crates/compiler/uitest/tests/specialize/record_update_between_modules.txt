@@ -23,10 +23,10 @@ procedure Dep.0 ():
     ret Dep.1;
 
 procedure Test.0 ():
-    let Test.5 : {Str, Str} = CallByName Dep.0;
-    let Test.2 : Str = StructAtIndex 0 Test.5;
-    let #Derived_gen.0 : Str = StructAtIndex 1 Test.5;
-    dec #Derived_gen.0;
-    let Test.4 : Str = "http://www.example.com";
-    let Test.1 : {Str, Str} = Struct {Test.2, Test.4};
-    ret Test.1;
+    let Test.6 : {Str, Str} = CallByName Dep.0;
+    let Test.3 : Str = StructAtIndex 0 Test.6;
+    let Bool.21 : Str = StructAtIndex 1 Test.6;
+    dec Bool.21;
+    let Test.5 : Str = "http://www.example.com";
+    let Test.2 : {Str, Str} = Struct {Test.3, Test.5};
+    ret Test.2;

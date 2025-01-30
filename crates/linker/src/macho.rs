@@ -3,26 +3,25 @@ use iced_x86::{Decoder, DecoderOptions, Instruction, OpCodeOperandKind, OpKind};
 use memmap2::MmapMut;
 use object::macho;
 use object::{
-    CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
-    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
-    SymbolIndex, SymbolSection,
+    LittleEndian as LE, Object, ObjectSection, ObjectSymbol, RelocationFlags, RelocationKind,
+    RelocationTarget, Section, SectionIndex, SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::internal_error;
+use roc_target::Architecture;
 use serde::{Deserialize, Serialize};
 use std::{
     ffi::{c_char, CStr},
     io::{BufReader, BufWriter},
     mem,
     path::Path,
-    time::{Duration, Instant},
+    time::Instant,
 };
-use target_lexicon::Triple;
 
+use crate::util::{is_roc_definition, is_roc_undefined, report_timing};
 use crate::{
     align_by_constraint, align_to_offset_by_constraint, load_struct_inplace,
-    load_struct_inplace_mut, load_structs_inplace, load_structs_inplace_mut, open_mmap,
-    open_mmap_mut,
+    load_struct_inplace_mut, load_structs_inplace, open_mmap, open_mmap_mut,
 };
 
 const MIN_SECTION_ALIGNMENT: usize = 0x40;
@@ -30,6 +29,11 @@ const MIN_SECTION_ALIGNMENT: usize = 0x40;
 // TODO: Analyze if this offset is always correct.
 const PLT_ADDRESS_OFFSET: u64 = 0x10;
 const STUB_ADDRESS_OFFSET: u64 = 0x06;
+
+// We assume existence of __ROC_TEXT,__text, __ROC_DATA_CONST,__const, __ROC_DATA,__data and __ROC_DATA,__bss.
+// This will mostly grow in size as the linker matures.
+const NUM_ROC_SEGMENTS: u32 = 3;
+const NUM_ROC_SECTIONS: u32 = 4;
 
 // struct MachoDynamicDeps {
 //     got_app_syms: Vec<(String, usize)>,
@@ -51,11 +55,6 @@ struct SurgeryEntry {
     size: u8,
 }
 
-// TODO: Reanalyze each piece of data in this struct.
-// I think a number of them can be combined to reduce string duplication.
-// Also I think a few of them aren't need.
-// For example, I think preprocessing can deal with all shifting and remove the need for added_byte_count.
-// TODO: we probably should be storing numbers in an endian neutral way.
 #[derive(Default, Serialize, Deserialize, PartialEq, Eq, Debug)]
 struct Metadata {
     app_functions: Vec<String>,
@@ -63,17 +62,25 @@ struct Metadata {
     plt_addresses: MutMap<String, (u64, u64)>,
     surgeries: MutMap<String, Vec<SurgeryEntry>>,
     dynamic_symbol_indices: MutMap<String, u64>,
-    _static_symbol_indices: MutMap<String, u64>,
     roc_symbol_vaddresses: MutMap<String, u64>,
-    exec_len: u64,
-    load_align_constraint: u64,
-    added_byte_count: u64,
+    exec_len: usize,
+    load_align_constraint: usize,
     last_vaddr: u64,
-    _dynamic_section_offset: u64,
-    _dynamic_symbol_table_section_offset: u64,
-    _symbol_table_section_offset: u64,
-    _symbol_table_size: u64,
-    macho_cmd_loc: u64,
+    // Offset just after the last load command.
+    // TODO: this is easy to re-calculate on the fly from just the header.
+    end_of_load_commands: usize,
+    // Offset of the first section following the load commands.
+    start_of_first_section: usize,
+    // Offset of __LINKEDIT segment load command
+    linkedit_segment: usize,
+    // List of all __LINKEDIT load commands and their offset in file.
+    linkedit_offsets: Vec<(u32, usize)>,
+    // Offset of __ROC_TEXT load command
+    roc_text_segment: usize,
+    // Offset of __ROC_DATA_CONST load command
+    roc_data_const_segment: usize,
+    // Offset of __ROC_DATA load command
+    roc_data_segment: usize,
 }
 
 impl Metadata {
@@ -105,44 +112,23 @@ impl Metadata {
     }
 }
 
-fn report_timing(label: &str, duration: Duration) {
-    println!("\t{:9.3} ms   {}", duration.as_secs_f64() * 1000.0, label,);
-}
-
-fn is_roc_symbol(sym: &object::Symbol) -> bool {
-    if let Ok(name) = sym.name() {
-        name.trim_start_matches('_').starts_with("roc_")
-    } else {
-        false
-    }
-}
-
-fn is_roc_definition(sym: &object::Symbol) -> bool {
-    sym.is_definition() && is_roc_symbol(sym)
-}
-
-fn is_roc_undefined(sym: &object::Symbol) -> bool {
-    sym.is_undefined() && is_roc_symbol(sym)
-}
-
 fn collect_roc_definitions<'a>(object: &object::File<'a, &'a [u8]>) -> MutMap<String, u64> {
     let mut vaddresses = MutMap::default();
 
     for sym in object.symbols().filter(is_roc_definition) {
-        // remove potentially trailing "@version".
-        let name = sym
-            .name()
-            .unwrap()
-            .trim_start_matches('_')
-            .split('@')
-            .next()
-            .unwrap();
-
+        let name = sym.name().unwrap().trim_start_matches('_');
         let address = sym.address();
 
         // special exceptions for memcpy and memset.
-        if name == "roc_memset" {
-            vaddresses.insert("memset".to_string(), address);
+        let direct_mapping = match name {
+            "roc_memset" => Some("memset"),
+            "roc_memmove" => Some("memmove"),
+
+            _ => None,
+        };
+
+        if let Some(libc_symbol) = direct_mapping {
+            vaddresses.insert(libc_symbol.to_string(), address);
         }
 
         vaddresses.insert(name.to_string(), address);
@@ -207,29 +193,17 @@ impl<'a> Surgeries<'a> {
     }
 
     fn append_text_section(&mut self, object_bytes: &[u8], sec: &Section, verbose: bool) {
-        let (file_offset, compressed) = match sec.compressed_file_range() {
-            Ok(CompressedFileRange {
-                format: CompressionFormat::None,
-                offset,
-                ..
-            }) => (offset, false),
-            Ok(range) => (range.offset, true),
-            Err(err) => {
-                internal_error!(
-                    "Issues dealing with section compression for {:+x?}: {}",
-                    sec,
-                    err
-                );
-            }
+        let file_offset = if let Some((file_offset, _)) = sec.file_range() {
+            file_offset
+        } else {
+            internal_error!("Could not get file range for {sec:+x?}");
         };
 
-        let data = match sec.uncompressed_data() {
+        let data = match sec.data() {
             Ok(data) => data,
-            Err(err) => {
-                internal_error!("Failed to load text section, {:+x?}: {}", sec, err);
-            }
+            Err(err) => internal_error!("Failed to load text section, {:+x?}: {err}", sec),
         };
-        let mut decoder = Decoder::with_ip(64, &data, sec.address(), DecoderOptions::NONE);
+        let mut decoder = Decoder::with_ip(64, data, sec.address(), DecoderOptions::NONE);
         let mut inst = Instruction::default();
 
         while decoder.can_decode() {
@@ -245,10 +219,6 @@ impl<'a> Surgeries<'a> {
                 Ok(OpKind::NearBranch16 | OpKind::NearBranch32 | OpKind::NearBranch64) => {
                     let target = inst.near_branch_target();
                     if let Some(func_name) = self.app_func_addresses.get(&target) {
-                        if compressed {
-                            internal_error!("Surgical linking does not work with compressed text sections: {:+x?}", sec);
-                        }
-
                         if verbose {
                             println!(
                                 "Found branch from {:+x} to {:+x}({})",
@@ -322,8 +292,8 @@ impl<'a> Surgeries<'a> {
 }
 
 /// Constructs a `Metadata` from a host executable binary, and writes it to disk
-pub(crate) fn preprocess_macho(
-    target: &Triple,
+pub(crate) fn preprocess_macho_le(
+    arch: Architecture,
     host_exe_path: &Path,
     metadata_path: &Path,
     preprocessed_path: &Path,
@@ -363,16 +333,10 @@ pub(crate) fn preprocess_macho(
 
     let (plt_address, plt_offset) = match exec_obj.section_by_name(plt_section_name) {
         Some(section) => {
-            let file_offset = match section.compressed_file_range() {
-                Ok(
-                    range @ CompressedFileRange {
-                        format: CompressionFormat::None,
-                        ..
-                    },
-                ) => range.offset,
-                _ => {
-                    internal_error!("Surgical linking does not work with compressed plt section");
-                }
+            let file_offset = if let Some((file_offset, _)) = section.file_range() {
+                file_offset
+            } else {
+                internal_error!("Could not get file range for {section:+x?}");
             };
             (section.address(), file_offset)
         }
@@ -400,8 +364,9 @@ pub(crate) fn preprocess_macho(
 
         let mut stubs_symbol_index = None;
         let mut stubs_symbol_count = None;
+        let mut start_of_first_section = None;
 
-        'cmds: for _ in 0..num_load_cmds {
+        for _ in 0..num_load_cmds {
             let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, offset);
             let cmd = info.cmd.get(LE);
             let cmdsize = info.cmdsize.get(LE);
@@ -423,14 +388,27 @@ pub(crate) fn preprocess_macho(
                             stubs_symbol_index = Some(section_info.reserved1.get(LE));
                             stubs_symbol_count =
                                 Some(section_info.size.get(LE) / STUB_ADDRESS_OFFSET);
-
-                            break 'cmds;
+                        }
+                        if section_info.size.get(LE) > 0 {
+                            let offset = section_info.offset.get(LE) as usize;
+                            let inner = start_of_first_section.get_or_insert(offset);
+                            *inner = std::cmp::min(*inner, offset);
                         }
                     }
                 }
             }
 
             offset += cmdsize as usize;
+        }
+
+        md.start_of_first_section = start_of_first_section.unwrap_or_else(|| {
+            internal_error!("Could not establish offset of first section following load commands");
+        });
+        if verbose {
+            println!(
+                "Found start of first section following load commands: {}",
+                md.start_of_first_section
+            );
         }
 
         let stubs_symbol_index = stubs_symbol_index.unwrap_or_else(|| {
@@ -445,73 +423,95 @@ pub(crate) fn preprocess_macho(
 
         let shared_lib_filename = shared_lib.file_name();
 
+        if verbose {
+            println!("\nInput load commands:");
+        }
+
         for _ in 0..num_load_cmds {
             let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, offset);
             let cmd = info.cmd.get(LE);
             let cmdsize = info.cmdsize.get(LE);
 
-            if cmd == macho::LC_DYLD_INFO_ONLY {
-                let info = load_struct_inplace::<DyldInfoCommand<LE>>(exec_data, offset);
+            if verbose {
+                println!("  {} => {cmdsize} @ {offset}", format_load_command(cmd));
+            }
 
-                let lazy_bind_offset = info.lazy_bind_off.get(LE) as usize;
+            match cmd {
+                macho::LC_SEGMENT_64 => {
+                    let info =
+                        load_struct_inplace::<macho::SegmentCommand64<LE>>(exec_data, offset);
+                    if &info.segname[0.."__LINKEDIT".len()] == b"__LINKEDIT" {
+                        md.linkedit_segment = offset;
+                    }
+                }
+                macho::LC_DYLD_INFO_ONLY => {
+                    let info = load_struct_inplace::<DyldInfoCommand<LE>>(exec_data, offset);
 
-                let lazy_bind_symbols = mach_object::LazyBind::parse(
-                    &exec_data[lazy_bind_offset..],
-                    mem::size_of::<usize>(),
-                );
+                    let lazy_bind_offset = info.lazy_bind_off.get(LE) as usize;
 
-                // Find all the lazily-bound roc symbols
-                // (e.g. "_roc__mainForHost_1_exposed")
-                // For Macho, we may need to deal with some GOT stuff here as well.
-                for (i, symbol) in lazy_bind_symbols
-                    .skip(stubs_symbol_index as usize)
-                    .take(stubs_symbol_count as usize)
-                    .enumerate()
-                {
-                    if let Some(sym) = app_syms
-                        .iter()
-                        .find(|app_sym| app_sym.name() == Ok(&symbol.name))
+                    let lazy_bind_symbols = mach_object::LazyBind::parse(
+                        &exec_data[lazy_bind_offset..],
+                        mem::size_of::<usize>(),
+                    );
+
+                    // Find all the lazily-bound roc symbols
+                    // (e.g. "_roc__mainForHost_1_exposed")
+                    // For Macho, we may need to deal with some GOT stuff here as well.
+                    for (i, symbol) in lazy_bind_symbols
+                        .skip(stubs_symbol_index as usize)
+                        .take(stubs_symbol_count as usize)
+                        .enumerate()
                     {
-                        let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
-                        let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
-                        app_func_addresses.insert(func_address, sym.name().unwrap());
-                        md.plt_addresses
-                            .insert(sym.name().unwrap().to_string(), (func_offset, func_address));
+                        if let Some(sym) = app_syms
+                            .iter()
+                            .find(|app_sym| app_sym.name() == Ok(&symbol.name))
+                        {
+                            let func_address = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_address;
+                            let func_offset = (i as u64 + 1) * STUB_ADDRESS_OFFSET + plt_offset;
+                            app_func_addresses.insert(func_address, sym.name().unwrap());
+                            md.plt_addresses.insert(
+                                sym.name().unwrap().to_string(),
+                                (func_offset, func_address),
+                            );
+                        }
                     }
                 }
-            } else if cmd == macho::LC_LOAD_DYLIB {
-                let info = load_struct_inplace::<DylibCommand<LE>>(exec_data, offset);
-                let name_offset = info.dylib.name.offset.get(LE) as usize;
-                let str_start_index = offset + name_offset;
-                let str_end_index = offset + cmdsize as usize;
-                let str_bytes = &exec_data[str_start_index..str_end_index];
-                let path = {
-                    if str_bytes[str_bytes.len() - 1] == 0 {
-                        // If it's nul-terminated, it's a C String.
-                        // Use the unchecked version because these are
-                        // padded with 0s at the end, so since we don't
-                        // know the exact length, using the checked version
-                        // of this can fail due to the interior nul bytes.
-                        //
-                        // Also, we have to use from_ptr instead of
-                        // from_bytes_with_nul_unchecked because currently
-                        // std::ffi::CStr is actually not a char* under
-                        // the hood (!) but rather an array, so to strip
-                        // the trailing null bytes we have to use from_ptr.
-                        let c_str = unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const c_char) };
+                macho::LC_LOAD_DYLIB => {
+                    let info = load_struct_inplace::<DylibCommand<LE>>(exec_data, offset);
+                    let name_offset = info.dylib.name.offset.get(LE) as usize;
+                    let str_start_index = offset + name_offset;
+                    let str_end_index = offset + cmdsize as usize;
+                    let str_bytes = &exec_data[str_start_index..str_end_index];
+                    let path = {
+                        if str_bytes[str_bytes.len() - 1] == 0 {
+                            // If it's nul-terminated, it's a C String.
+                            // Use the unchecked version because these are
+                            // padded with 0s at the end, so since we don't
+                            // know the exact length, using the checked version
+                            // of this can fail due to the interior nul bytes.
+                            //
+                            // Also, we have to use from_ptr instead of
+                            // from_bytes_with_nul_unchecked because currently
+                            // std::ffi::CStr is actually not a char* under
+                            // the hood (!) but rather an array, so to strip
+                            // the trailing null bytes we have to use from_ptr.
+                            let c_str =
+                                unsafe { CStr::from_ptr(str_bytes.as_ptr() as *const c_char) };
 
-                        Path::new(c_str.to_str().unwrap())
-                    } else {
-                        // It wasn't nul-terminated, so treat all the bytes
-                        // as the string
+                            Path::new(c_str.to_str().unwrap())
+                        } else {
+                            // It wasn't nul-terminated, so treat all the bytes
+                            // as the string
 
-                        Path::new(std::str::from_utf8(str_bytes).unwrap())
+                            Path::new(std::str::from_utf8(str_bytes).unwrap())
+                        }
+                    };
+
+                    if path.file_name() == shared_lib_filename {
+                        macho_load_so_offset = Some(offset);
                     }
-                };
-
-                if path.file_name() == shared_lib_filename {
-                    macho_load_so_offset = Some(offset);
                 }
+                _ => {}
             }
 
             offset += cmdsize as usize;
@@ -544,59 +544,29 @@ pub(crate) fn preprocess_macho(
 
     let text_disassembly_duration = text_disassembly_start.elapsed();
 
-    let scanning_dynamic_deps_duration;
-    let platform_gen_start;
+    let scanning_dynamic_deps_start = Instant::now();
 
-    let out_mmap = {
-        match target
-            .endianness()
-            .unwrap_or(target_lexicon::Endianness::Little)
-        {
-            target_lexicon::Endianness::Little => {
-                let scanning_dynamic_deps_start = Instant::now();
+    let scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
 
-                // let ElfDynamicDeps {
-                //     got_app_syms,
-                //     got_sections,
-                //     dynamic_lib_count,
-                //     shared_lib_index,
-                // } = scan_elf_dynamic_deps(
-                //     &exec_obj, &mut md, &app_syms, shared_lib, exec_data, verbose,
-                // );
+    let platform_gen_start = Instant::now();
 
-                scanning_dynamic_deps_duration = scanning_dynamic_deps_start.elapsed();
-
-                platform_gen_start = Instant::now();
-
-                // TODO little endian
-                let macho_load_so_offset = match macho_load_so_offset {
-                    Some(offset) => offset,
-                    None => {
-                        internal_error!("Host does not link library `{}`!", shared_lib.display());
-                    }
-                };
-
-                // TODO this is correct on modern Macs (they align to the page size)
-                // but maybe someone can override the alignment somehow? Maybe in the
-                // future this could change? Is there some way to make this more future-proof?
-                md.load_align_constraint = 4096;
-
-                gen_macho_le(
-                    exec_data,
-                    &mut md,
-                    preprocessed_path,
-                    macho_load_so_offset,
-                    target,
-                    verbose,
-                )
-            }
-            target_lexicon::Endianness::Big => {
-                // TODO Is big-endian macOS even a thing that exists anymore?
-                // Just ancient PowerPC machines maybe?
-                todo!("Roc does not yet support big-endian macOS hosts!");
-            }
+    // TODO little endian
+    let macho_load_so_offset = match macho_load_so_offset {
+        Some(offset) => offset,
+        None => {
+            internal_error!("Host does not link library `{}`!", shared_lib.display());
         }
     };
+
+    md.load_align_constraint = page_size(arch);
+
+    let out_mmap = gen_macho_le(
+        exec_data,
+        &mut md,
+        preprocessed_path,
+        macho_load_so_offset,
+        verbose,
+    );
 
     let platform_gen_duration = platform_gen_start.elapsed();
 
@@ -652,8 +622,7 @@ fn gen_macho_le(
     md: &mut Metadata,
     out_filename: &Path,
     macho_load_so_offset: usize,
-    _target: &Triple,
-    _verbose: bool,
+    verbose: bool,
 ) -> MmapMut {
     // Just adding some extra context/useful info here.
     // I was talking to Jakub from the Zig team about macho linking and here are some useful comments:
@@ -666,456 +635,288 @@ fn gen_macho_le(
     // https://github.com/kubkon/zignature
     // https://github.com/kubkon/zig-deploy
 
-    use macho::{Section64, SegmentCommand64};
+    use macho::{VM_PROT_EXECUTE as E, VM_PROT_READ as R, VM_PROT_WRITE as W};
 
     let exec_header = load_struct_inplace::<macho::MachHeader64<LE>>(exec_data, 0);
+    let size_of_header = mem::size_of::<macho::MachHeader64<LE>>();
     let num_load_cmds = exec_header.ncmds.get(LE);
     let size_of_cmds = exec_header.sizeofcmds.get(LE) as usize;
 
-    // Add a new text segment and data segment
-    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
-    let section_size = mem::size_of::<Section64<LE>>();
+    // Add a new text segment and data segment load commands.
+    let required_size = headerpad_size();
 
     // We need the full command size, including the dynamic-length string at the end.
     // To get that, we need to load the command.
     let info = load_struct_inplace::<macho::LoadCommand<LE>>(exec_data, macho_load_so_offset);
     let total_cmd_size = info.cmdsize.get(LE) as usize;
 
-    // ======================== Important TODO ==========================
-    // TODO: we accidentally instroduced a big change here.
-    // We use a mix of added_bytes and md.added_byte_count.
-    // Theses should proabably be the same variable.
-    // Also, I just realized that I have been shifting a lot of virtual offsets.
-    // This should not be necessary. If we add a fully 4k of buffer to the file, all of the virtual offsets will still stay aligned.
-    // So a lot of the following work can probably be commented out if we fix that.
-    // Of coruse, it will cost about 4k bytes to a final executable.
-    // This is what the elf version currently does.
-    // Theoretically it is not needed (if we update all virtual addresses in the binary),
-    // but I definitely ran into problems with elf when not adding this extra buffering.
+    let available_size =
+        md.start_of_first_section - (size_of_cmds + size_of_header - total_cmd_size);
 
-    // Copy header and shift everything to enable more program sections.
-    let added_byte_count = ((2 * segment_cmd_size) + (2 * section_size) - total_cmd_size) as u64;
-    md.added_byte_count = added_byte_count
-        // add some alignment padding
-        + (MIN_SECTION_ALIGNMENT as u64 - added_byte_count % MIN_SECTION_ALIGNMENT as u64);
-
-    md.exec_len = exec_data.len() as u64 + md.added_byte_count;
-
-    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len as usize);
-    let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
-
-    // "Delete" the dylib load command - by copying all the bytes before it
-    // and all the bytes after it, while skipping over its bytes.
-    // It has a dynamic-length string at the end that we also need to delete,
-    // in addition to the header.
-    out_mmap[..macho_load_so_offset].copy_from_slice(&exec_data[..macho_load_so_offset]);
-
-    out_mmap[macho_load_so_offset..end_of_cmds - total_cmd_size]
-        .copy_from_slice(&exec_data[macho_load_so_offset + total_cmd_size..end_of_cmds]);
-
-    // Copy the rest of the file, leaving a gap for the surgical linking to add our 2 commands
-    // (which happens after preprocessing), and some zero padding at the end for alignemnt.
-    // (It seems to cause bugs if that padding isn't there!)
-    let rest_of_data = &exec_data[end_of_cmds..];
-    let start_index = end_of_cmds + md.added_byte_count as usize;
-
-    out_mmap[start_index..start_index + rest_of_data.len()].copy_from_slice(rest_of_data);
-
-    let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
-
-    // TODO: this needs to change to adding the 2 new commands when we are ready.
-    // -1 because we're deleting 1 load command and then NOT adding 2 new ones.
-    {
-        let added_bytes = -(total_cmd_size as isize); // TODO: Change when add the new sections.
-        out_header.ncmds.set(LE, num_load_cmds - 1);
-        out_header
-            .sizeofcmds
-            .set(LE, (size_of_cmds as isize + added_bytes) as u32);
+    if available_size < required_size {
+        // Inform the user that the host has to be relinked with `-headerpad <size>` flag so that the surgical linker
+        // can add Roc specific load commands and not clobber the first section.
+        let optimal_headerpad_size = align_by_constraint(required_size, md.load_align_constraint);
+        internal_error!("Not enough free space between end of load commands and start of first section in the host.
+            Consider recompiling the host with \"-Wl,-headerpad,0x{optimal_headerpad_size:x}\" linker flag.");
     }
 
-    // Go through every command and shift it by added_bytes if it's absolute, unless it's inside the command header
+    md.exec_len = exec_data.len();
+
+    let mut out_mmap = open_mmap_mut(out_filename, md.exec_len);
+    let end_of_cmds = size_of_cmds + mem::size_of_val(exec_header);
+
+    // Copy load commands over making space for Roc-specific commands
+    let start_of_roc_commands = {
+        let mut out_offset = 0;
+        let mut in_offset = 0;
+        let mut size = md.linkedit_segment;
+
+        out_mmap[out_offset..out_offset + size]
+            .copy_from_slice(&exec_data[in_offset..in_offset + size]);
+        out_offset += size;
+        in_offset += size;
+
+        // Make space for Roc segment load commands
+        let start_of_roc_commands = out_offset;
+        out_offset += required_size;
+        md.linkedit_segment += required_size;
+
+        // "Delete" the dylib load command - by copying all the bytes before it
+        // and all the bytes after it, while skipping over its bytes.
+        // It has a dynamic-length string at the end that we also need to delete,
+        // in addition to the header.
+        size = macho_load_so_offset - in_offset;
+        out_mmap[out_offset..out_offset + size]
+            .copy_from_slice(&exec_data[in_offset..in_offset + size]);
+        out_offset += size;
+        in_offset += size;
+
+        // Skip "deleted" load command
+        in_offset += total_cmd_size;
+
+        size = end_of_cmds - in_offset;
+        out_mmap[out_offset..out_offset + size]
+            .copy_from_slice(&exec_data[in_offset..in_offset + size]);
+
+        // Copy the rest of the file.
+        out_mmap[md.start_of_first_section..]
+            .copy_from_slice(&exec_data[md.start_of_first_section..]);
+
+        start_of_roc_commands
+    };
+
+    // Add Roc segment commands with segments size 0.
+    {
+        let mut offset = start_of_roc_commands;
+
+        md.roc_text_segment = offset;
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_TEXT", E | R, false, 1);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__text",
+            b"__ROC_TEXT",
+            macho::S_ATTR_PURE_INSTRUCTIONS | macho::S_ATTR_SOME_INSTRUCTIONS,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+
+        md.roc_data_const_segment = offset;
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_DATA_CONST", W | R, true, 1);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__const",
+            b"__ROC_DATA_CONST",
+            macho::S_REGULAR,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+
+        md.roc_data_segment = offset;
+        set_segment_load_command(&mut out_mmap, offset, b"__ROC_DATA", W | R, false, 2);
+        offset += mem::size_of::<macho::SegmentCommand64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__data",
+            b"__ROC_DATA",
+            macho::S_REGULAR,
+        );
+        offset += mem::size_of::<macho::Section64<LE>>();
+        set_section_load_command(
+            &mut out_mmap,
+            offset,
+            b"__bss",
+            b"__ROC_DATA",
+            macho::S_ZEROFILL,
+        );
+    }
+
+    let out_header = load_struct_inplace_mut::<macho::MachHeader64<LE>>(&mut out_mmap, 0);
+    let num_load_cmds = num_load_cmds + NUM_ROC_SEGMENTS - 1;
+    let size_of_cmds = (size_of_cmds - total_cmd_size + required_size) as u32;
+    out_header.ncmds.set(LE, num_load_cmds);
+    out_header.sizeofcmds.set(LE, size_of_cmds);
+
+    // Go through every command and record interesting information.
     let mut offset = mem::size_of_val(exec_header);
 
-    // TODO: Add this back in the future when needed.
-    // let cpu_type = match target.architecture {
-    //     target_lexicon::Architecture::X86_64 => macho::CPU_TYPE_X86_64,
-    //     target_lexicon::Architecture::Aarch64(_) => macho::CPU_TYPE_ARM64,
-    //     _ => {
-    //         // We should have verified this via supported() before calling this function
-    //         unreachable!()
-    //     }
-    // };
+    if verbose {
+        println!("\nOutput load commands:");
+    }
 
-    // minus one because we "deleted" a load command
-    for _ in 0..(num_load_cmds - 1) {
+    for _ in 0..num_load_cmds {
         let info = load_struct_inplace::<macho::LoadCommand<LE>>(&out_mmap, offset);
+        let cmd = info.cmd.get(LE);
         let cmd_size = info.cmdsize.get(LE) as usize;
+        if verbose {
+            println!("  {} => {cmd_size} @ {offset}", format_load_command(cmd));
+        }
 
-        match info.cmd.get(LE) {
-            macho::LC_SEGMENT_64 => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SegmentCommand64<LE>>(&mut out_mmap, offset);
-
-                // Ignore page zero, it never moves.
-                if cmd.segname == "__PAGEZERO\0\0\0\0\0\0".as_bytes() || cmd.vmaddr.get(LE) == 0 {
-                    offset += cmd_size;
-                    continue;
-                }
-
-                let old_file_offest = cmd.fileoff.get(LE);
-                // The segment with file offset zero also includes the header.
-                // As such, its file offset does not change.
-                // Instead, its file size should be increased.
-                if old_file_offest > 0 {
-                    cmd.fileoff.set(LE, old_file_offest + md.added_byte_count);
-                    cmd.vmaddr.set(LE, cmd.vmaddr.get(LE) + md.added_byte_count);
-                } else {
-                    cmd.filesize
-                        .set(LE, cmd.filesize.get(LE) + md.added_byte_count);
-                    cmd.vmsize.set(LE, cmd.vmsize.get(LE) + md.added_byte_count);
-                }
-
-                // let num_sections = cmd.nsects.get(LE);
-                // let sections = load_structs_inplace_mut::<macho::Section64<LE >>(
-                //     &mut out_mmap,
-                //     offset + mem::size_of::<macho::SegmentCommand64<LE >>(),
-                //     num_sections as usize,
-                // );
-                // struct Relocation {
-                //     offset: u32,
-                //     num_relocations: u32,
-                // }
-
-                // let mut relocation_offsets = Vec::with_capacity(sections.len());
-
-                // for section in sections {
-                //     section.addr.set(
-                //         LE ,
-                //         section.addr.get(LE) + md.added_byte_count as u64,
-                //     );
-
-                //     // If offset is zero, don't update it.
-                //     // Zero is used for things like BSS that don't exist in the file.
-                //     let old_offset = section.offset.get(LE);
-                //     if old_offset > 0 {
-                //         section
-                //             .offset
-                //             .set(LE , old_offset + md.added_byte_count as u32);
-                //     }
-
-                //     // dbg!(&section.reloff.get(LE));
-                //     // dbg!(section.reloff.get(LE) as i32);
-                //     // dbg!(&section);
-                //     // dbg!(&md.added_byte_count);
-                //     // dbg!(String::from_utf8_lossy(&section.sectname));
-                //     if section.nreloc.get(LE) > 0 {
-                //         section.reloff.set(
-                //             LE ,
-                //             section.reloff.get(LE) + md.added_byte_count as u32,
-                //         );
-                //     }
-
-                //     relocation_offsets.push(Relocation {
-                //         offset: section.reloff.get(LE),
-                //         num_relocations: section.nreloc.get(LE),
-                //     });
-                // }
-
-                // TODO FIXME this is necessary for ARM, but seems to be broken. Skipping for now since we're just targeting x86
-                // for Relocation {
-                //     offset,
-                //     num_relocations,
-                // } in relocation_offsets
-                // {
-                //     let relos = load_structs_inplace_mut::<macho::Relocation<LE >>(
-                //         &mut out_mmap,
-                //         offset as usize,
-                //         num_relocations as usize,
-                //     );
-
-                //     // TODO this has never been tested, because scattered relocations only come up on ARM!
-                //     for relo in relos.iter_mut() {
-                //         if relo.r_scattered(LE , cpu_type) {
-                //             let mut scattered_info = relo.scattered_info(LE);
-
-                //             if !scattered_info.r_pcrel {
-                //                 scattered_info.r_value += md.added_byte_count as u32;
-
-                //                 let new_info = scattered_info.relocation(LE );
-
-                //                 relo.r_word0 = new_info.r_word0;
-                //                 relo.r_word1 = new_info.r_word1;
-                //             }
-                //         }
-                //     }
-                // }
-
-                // TODO this seems to be wrong and unnecessary, and should probably be deleted.
-                // offset += num_sections as usize * mem::size_of::<macho::Section64<LE >>();
-            }
-            macho::LC_SYMTAB => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SymtabCommand<LE>>(&mut out_mmap, offset);
-
-                let sym_offset = cmd.symoff.get(LE);
-                let num_syms = cmd.nsyms.get(LE);
-
-                if num_syms > 0 {
-                    cmd.symoff.set(LE, sym_offset + md.added_byte_count as u32);
-                }
-
-                if cmd.strsize.get(LE) > 0 {
-                    cmd.stroff
-                        .set(LE, cmd.stroff.get(LE) + md.added_byte_count as u32);
-                }
-
-                let table = load_structs_inplace_mut::<macho::Nlist64<LE>>(
-                    &mut out_mmap,
-                    sym_offset as usize + md.added_byte_count as usize,
-                    num_syms as usize,
-                );
-
-                for entry in table {
-                    let entry_type = entry.n_type & macho::N_TYPE;
-                    if entry_type == macho::N_ABS || entry_type == macho::N_SECT {
-                        entry
-                            .n_value
-                            .set(LE, entry.n_value.get(LE) + md.added_byte_count);
-                    }
-                }
-            }
-            macho::LC_DYSYMTAB => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::DysymtabCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.ntoc.get(LE) > 0 {
-                    cmd.tocoff
-                        .set(LE, cmd.tocoff.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.nmodtab.get(LE) > 0 {
-                    cmd.modtaboff
-                        .set(LE, cmd.modtaboff.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.nextrefsyms.get(LE) > 0 {
-                    cmd.extrefsymoff
-                        .set(LE, cmd.extrefsymoff.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.nindirectsyms.get(LE) > 0 {
-                    cmd.indirectsymoff
-                        .set(LE, cmd.indirectsymoff.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.nextrel.get(LE) > 0 {
-                    cmd.extreloff
-                        .set(LE, cmd.extreloff.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.nlocrel.get(LE) > 0 {
-                    cmd.locreloff
-                        .set(LE, cmd.locreloff.get(LE) + md.added_byte_count as u32);
-                }
-
-                // TODO maybe we need to update something else too - relocations maybe?
-                // I think this also has symbols that need to get moved around.
-                // Look at otool -I at least for the indirect symbols.
-            }
-            macho::LC_TWOLEVEL_HINTS => {
-                let cmd = load_struct_inplace_mut::<macho::TwolevelHintsCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.nhints.get(LE) > 0 {
-                    cmd.offset
-                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
-                }
-            }
-            macho::LC_FUNCTION_STARTS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff
-                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
-                    // TODO: This lists the start of every function. Which, of course, have moved.
-                    // That being said, to my understanding this section is optional and may just be debug information.
-                    // As such, updating it should not be required.
-                    // It will be more work to update due to being in "DWARF-style ULEB128" values.
-                }
-            }
-            macho::LC_DATA_IN_CODE => {
-                let (offset, size) = {
-                    let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                        &mut out_mmap,
-                        offset,
-                    );
-
-                    if cmd.datasize.get(LE) > 0 {
-                        cmd.dataoff
-                            .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
-                    }
-                    (cmd.dataoff.get(LE), cmd.datasize.get(LE))
-                };
-
-                // Update every data in code entry.
-                if size > 0 {
-                    let entry_size = mem::size_of::<macho::DataInCodeEntry<LE>>();
-                    let entries = load_structs_inplace_mut::<macho::DataInCodeEntry<LE>>(
-                        &mut out_mmap,
-                        offset as usize,
-                        size as usize / entry_size,
-                    );
-                    for entry in entries.iter_mut() {
-                        entry
-                            .offset
-                            .set(LE, entry.offset.get(LE) + md.added_byte_count as u32)
-                    }
-                }
-            }
-            macho::LC_CODE_SIGNATURE
-            | macho::LC_SEGMENT_SPLIT_INFO
-            | macho::LC_DYLIB_CODE_SIGN_DRS
-            | macho::LC_LINKER_OPTIMIZATION_HINT
-            | macho::LC_DYLD_EXPORTS_TRIE
-            | macho::LC_DYLD_CHAINED_FIXUPS => {
-                let cmd = load_struct_inplace_mut::<macho::LinkeditDataCommand<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.datasize.get(LE) > 0 {
-                    cmd.dataoff
-                        .set(LE, cmd.dataoff.get(LE) + md.added_byte_count as u32);
-                }
-            }
-            macho::LC_ENCRYPTION_INFO_64 => {
-                let cmd = load_struct_inplace_mut::<macho::EncryptionInfoCommand64<LE>>(
-                    &mut out_mmap,
-                    offset,
-                );
-
-                if cmd.cryptsize.get(LE) > 0 {
-                    cmd.cryptoff
-                        .set(LE, cmd.cryptoff.get(LE) + md.added_byte_count as u32);
-                }
-            }
-            macho::LC_DYLD_INFO | macho::LC_DYLD_INFO_ONLY => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::DyldInfoCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.rebase_size.get(LE) > 0 {
-                    cmd.rebase_off
-                        .set(LE, cmd.rebase_off.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.bind_size.get(LE) > 0 {
-                    cmd.bind_off
-                        .set(LE, cmd.bind_off.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.weak_bind_size.get(LE) > 0 {
-                    cmd.weak_bind_off
-                        .set(LE, cmd.weak_bind_off.get(LE) + md.added_byte_count as u32);
-                }
-
-                if cmd.lazy_bind_size.get(LE) > 0 {
-                    cmd.lazy_bind_off
-                        .set(LE, cmd.lazy_bind_off.get(LE) + md.added_byte_count as u32);
-                }
-
-                // TODO: Parse and update the related tables here.
-                // It is possible we may just need to delete things that point to stuff that will be in the roc app.
-                // We also may just be able to ignore it (lazy bindings should never run).
-                // This definitely has a list of virtual address that need to be updated.
-                // Some of them definitely will point to the roc app and should probably be removed.
-                // Also `xcrun dyldinfo` is useful for debugging this.
-            }
-            macho::LC_SYMSEG => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::SymsegCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.size.get(LE) > 0 {
-                    cmd.offset
-                        .set(LE, cmd.offset.get(LE) + md.added_byte_count as u32);
-                }
-            }
-            macho::LC_MAIN => {
-                let cmd =
-                    load_struct_inplace_mut::<macho::EntryPointCommand<LE>>(&mut out_mmap, offset);
-
-                cmd.entryoff
-                    .set(LE, cmd.entryoff.get(LE) + md.added_byte_count);
-            }
-            macho::LC_NOTE => {
-                let cmd = load_struct_inplace_mut::<macho::NoteCommand<LE>>(&mut out_mmap, offset);
-
-                if cmd.size.get(LE) > 0 {
-                    cmd.offset.set(LE, cmd.offset.get(LE) + md.added_byte_count);
-                }
-            }
-            macho::LC_ID_DYLIB
+        match cmd {
+            macho::LC_SEGMENT_64
+            | macho::LC_MAIN
+            | macho::LC_ID_DYLIB
             | macho::LC_LOAD_WEAK_DYLIB
             | macho::LC_LOAD_DYLIB
             | macho::LC_REEXPORT_DYLIB
             | macho::LC_SOURCE_VERSION
-            | macho::LC_IDENT
-            | macho::LC_LINKER_OPTION
             | macho::LC_BUILD_VERSION
             | macho::LC_VERSION_MIN_MACOSX
             | macho::LC_VERSION_MIN_IPHONEOS
             | macho::LC_VERSION_MIN_WATCHOS
             | macho::LC_VERSION_MIN_TVOS
-            | macho::LC_UUID
             | macho::LC_RPATH
             | macho::LC_ID_DYLINKER
             | macho::LC_LOAD_DYLINKER
             | macho::LC_DYLD_ENVIRONMENT
+            | macho::LC_UNIXTHREAD => {}
+
+            macho::LC_SYMTAB
+            | macho::LC_DYSYMTAB
+            | macho::LC_FUNCTION_STARTS
+            | macho::LC_DATA_IN_CODE
+            | macho::LC_DYLD_INFO
+            | macho::LC_DYLD_INFO_ONLY
+            | macho::LC_DYLD_EXPORTS_TRIE
+            | macho::LC_DYLD_CHAINED_FIXUPS
+            | macho::LC_UUID
+            | macho::LC_CODE_SIGNATURE => {
+                md.linkedit_offsets.push((cmd, offset));
+            }
+
+            macho::LC_LINKER_OPTIMIZATION_HINT
+            | macho::LC_NOTE
+            | macho::LC_IDENT
+            | macho::LC_LINKER_OPTION => {
+                internal_error!("Invalid load command in final linked image: {cmd:#x}");
+            }
+
+            macho::LC_DYLIB_CODE_SIGN_DRS => {
+                internal_error!("Invalid load command in executable program: {cmd:#x}");
+            }
+
+            macho::LC_TWOLEVEL_HINTS
+            | macho::LC_SEGMENT_SPLIT_INFO
+            | macho::LC_ENCRYPTION_INFO_64
+            | macho::LC_SYMSEG
             | macho::LC_ROUTINES_64
             | macho::LC_THREAD
-            | macho::LC_UNIXTHREAD
             | macho::LC_PREBOUND_DYLIB
             | macho::LC_SUB_FRAMEWORK
             | macho::LC_SUB_CLIENT
             | macho::LC_SUB_UMBRELLA
-            | macho::LC_SUB_LIBRARY => {
-                // These don't involve file offsets, so no change is needed for these.
-                // Just continue the loop!
+            | macho::LC_SUB_LIBRARY
+            | macho::LC_PREBIND_CKSUM
+            | macho::LC_FVMFILE
+            | macho::LC_IDFVMLIB
+            | macho::LC_LOADFVMLIB => {
+                internal_error!("Unhandled load command: {cmd:#x}");
             }
-            macho::LC_PREBIND_CKSUM => {
-                // We don't *think* we need to change this, but
-                // maybe what we're doing will break checksums?
-            }
-            macho::LC_SEGMENT | macho::LC_ROUTINES | macho::LC_ENCRYPTION_INFO => {
-                // These are 32-bit and unsuppoted
-                unreachable!();
-            }
-            macho::LC_FVMFILE | macho::LC_IDFVMLIB | macho::LC_LOADFVMLIB => {
-                // These are obsolete and unsupported
-                unreachable!()
-            }
-            cmd => {
-                eprintln!(
-                    "- - - Unrecognized Mach-O command during linker preprocessing: 0x{cmd:x?}"
-                );
-                // panic!(
-                //     "Unrecognized Mach-O command during linker preprocessing: 0x{:x?}",
-                //     cmd
-                // );
+
+            _ => {
+                internal_error!("Unknown load command: {cmd:#x}");
             }
         }
 
-        offset += dbg!(cmd_size);
+        offset += cmd_size;
     }
 
     // cmd_loc should be where the last offset ended
-    md.macho_cmd_loc = offset as u64;
+    md.end_of_load_commands = offset;
 
     out_mmap
+}
+
+fn set_segment_load_command(
+    bytes: &mut [u8],
+    offset: usize,
+    name: &[u8],
+    prot: u32,
+    is_relro: bool,
+    nsects: u32,
+) {
+    let cmdsize = mem::size_of::<macho::SegmentCommand64<LE>>() as u32
+        + mem::size_of::<macho::Section64<LE>>() as u32 * nsects;
+    let info = load_struct_inplace_mut::<macho::SegmentCommand64<LE>>(bytes, offset);
+
+    info.cmd.set(LE, macho::LC_SEGMENT_64);
+    info.cmdsize.set(LE, cmdsize);
+
+    assert!(name.len() <= 16);
+    info.segname.fill(0);
+    info.segname[0..name.len()].copy_from_slice(name);
+
+    info.vmaddr.set(LE, 0);
+    info.vmsize.set(LE, 0);
+    info.fileoff.set(LE, 0);
+    info.filesize.set(LE, 0);
+
+    info.maxprot.set(LE, prot);
+    info.initprot.set(LE, prot);
+
+    info.nsects.set(LE, nsects);
+    info.flags.set(
+        LE,
+        if is_relro {
+            macho::SG_PROTECTED_VERSION_1
+        } else {
+            0
+        },
+    );
+}
+
+fn set_section_load_command(
+    bytes: &mut [u8],
+    offset: usize,
+    sectname: &[u8],
+    segname: &[u8],
+    flags: u32,
+) {
+    let info = load_struct_inplace_mut::<macho::Section64<LE>>(bytes, offset);
+
+    assert!(sectname.len() <= 16);
+    info.sectname.fill(0);
+    info.sectname[0..sectname.len()].copy_from_slice(sectname);
+
+    assert!(segname.len() <= 16);
+    info.segname.fill(0);
+    info.segname[0..segname.len()].copy_from_slice(segname);
+
+    info.addr.set(LE, 0);
+    info.size.set(LE, 0);
+    info.offset.set(LE, 0);
+    info.align.set(LE, 0);
+    info.reloff.set(LE, 0);
+    info.nreloc.set(LE, 0);
+
+    info.flags.set(LE, flags);
+
+    info.reserved1.set(LE, 0);
+    info.reserved2.set(LE, 0);
+    info.reserved3.set(LE, 0);
 }
 
 // fn scan_macho_dynamic_deps(
@@ -1150,8 +951,8 @@ pub(crate) fn surgery_macho(
     let loading_metadata_duration = loading_metadata_start.elapsed();
 
     let load_and_mmap_start = Instant::now();
-    let max_out_len = md.exec_len + roc_app_bytes.len() as u64 + md.load_align_constraint;
-    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len as usize);
+    let max_out_len = md.exec_len + roc_app_bytes.len() + md.load_align_constraint;
+    let mut exec_mmap = open_mmap_mut(executable_path, max_out_len);
     let load_and_mmap_duration = load_and_mmap_start.elapsed();
 
     let out_gen_start = Instant::now();
@@ -1223,15 +1024,12 @@ fn surgery_macho_help(
     offset_ref: &mut usize, // TODO return this instead of taking a mutable reference to it
     app_obj: object::File,
 ) {
-    let mut offset = align_by_constraint(md.exec_len as usize, MIN_SECTION_ALIGNMENT);
+    let mut offset = align_by_constraint(md.exec_len, MIN_SECTION_ALIGNMENT);
     // let new_rodata_section_offset = offset;
 
     // Align physical and virtual address of new segment.
-    let mut virt_offset = align_to_offset_by_constraint(
-        md.last_vaddr as usize,
-        offset,
-        md.load_align_constraint as usize,
-    );
+    let mut virt_offset =
+        align_to_offset_by_constraint(md.last_vaddr as usize, offset, md.load_align_constraint);
     let new_rodata_section_vaddr = virt_offset;
     if verbose {
         println!();
@@ -1252,7 +1050,11 @@ fn surgery_macho_help(
 
     let rodata_sections: Vec<Section> = app_obj
         .sections()
-        .filter(|sec| sec.kind() == SectionKind::ReadOnlyData)
+        .filter(|sec| match sec.kind() {
+            SectionKind::ReadOnlyData => sec.name().unwrap_or("") != "__eh_frame",
+            SectionKind::ReadOnlyString => true,
+            _ => false,
+        })
         .collect();
 
     // bss section is like rodata section, but it has zero file size and non-zero virtual size.
@@ -1269,6 +1071,15 @@ fn surgery_macho_help(
         internal_error!("No text sections found. This application has no code.");
     }
 
+    if verbose {
+        println!();
+        println!("Roc symbol addresses: {:+x?}", md.roc_symbol_vaddresses);
+        println!("App functions: {:?}", md.app_functions);
+        println!("Dynamic symbol indices: {:+x?}", md.dynamic_symbol_indices);
+        println!("PLT addresses: {:+x?}", md.plt_addresses);
+        println!();
+    }
+
     // Calculate addresses and load symbols.
     // Note, it is important the bss sections come after the rodata sections.
     for sec in rodata_sections
@@ -1277,15 +1088,14 @@ fn surgery_macho_help(
         .chain(text_sections.iter())
     {
         offset = align_by_constraint(offset, MIN_SECTION_ALIGNMENT);
-        virt_offset =
-            align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint as usize);
+        virt_offset = align_to_offset_by_constraint(virt_offset, offset, md.load_align_constraint);
         if verbose {
             println!(
                 "Section, {}, is being put at offset: {:+x}(virt: {:+x})",
                 sec.name().unwrap(),
                 offset,
                 virt_offset
-            )
+            );
         }
         section_offset_map.insert(sec.index(), (offset, virt_offset));
         for sym in symbols.iter() {
@@ -1304,7 +1114,7 @@ fn surgery_macho_help(
             Some((_, size)) => size,
             None => 0,
         };
-        if sec.name().unwrap_or_default().starts_with("__BSS") {
+        if sec.name().unwrap_or_default().starts_with("__bss") {
             // bss sections only modify the virtual size.
             virt_offset += sec.size() as usize;
         } else if section_size != sec.size() {
@@ -1331,98 +1141,132 @@ fn surgery_macho_help(
     for sec in rodata_sections
         .iter()
         .chain(bss_sections.iter())
+        // TODO why do we even include uninitialized data if it cannot
+        // ever have any relocations in the first place?
         .chain(text_sections.iter())
     {
-        let data = match sec.data() {
-            Ok(data) => data,
-            Err(err) => {
-                internal_error!(
-                    "Failed to load data for section, {:+x?}: {}",
-                    sec.name().unwrap(),
-                    err
-                );
-            }
-        };
+        let data = sec.data().unwrap_or_else(|err| {
+            internal_error!(
+                "Failed to load data for section, {:+x?}: {err}",
+                sec.name().unwrap(),
+            );
+        });
         let (section_offset, section_virtual_offset) =
             section_offset_map.get(&sec.index()).unwrap();
         let (section_offset, section_virtual_offset) = (*section_offset, *section_virtual_offset);
         exec_mmap[section_offset..section_offset + data.len()].copy_from_slice(data);
         // Deal with definitions and relocations for this section.
         if verbose {
+            let segname = sec
+                .segment_name()
+                .expect(
+                    "valid segment
+                    name",
+                )
+                .unwrap();
+            let sectname = sec.name().unwrap();
             println!();
             println!(
-                "Processing Relocations for Section: 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
+                "Processing Relocations for Section '{segname},{sectname}': 0x{sec:+x?} @ {section_offset:+x} (virt: {section_virtual_offset:+x})"
             );
         }
+
+        let mut subtractor: Option<SymbolIndex> = None;
         for rel in sec.relocations() {
             if verbose {
                 println!("\tFound Relocation: {rel:+x?}");
             }
             match rel.1.target() {
                 RelocationTarget::Symbol(index) => {
-                    let target_offset = if let Some(target_offset) = symbol_vaddr_map.get(&index) {
-                        if verbose {
-                            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
-                        }
-                        Some(*target_offset as i64)
-                    } else {
-                        app_obj
-                            .symbol_by_index(index)
-                            .and_then(|sym| sym.name())
-                            .ok()
-                            .and_then(|name| {
-                                md.roc_symbol_vaddresses.get(name).map(|address| {
-                                    let vaddr = (*address + md.added_byte_count) as i64;
-                                    if verbose {
-                                        println!(
-                                            "\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}"
-                                        );
-                                    }
-                                    vaddr
-                                })
-                            })
-                    };
-
-                    if let Some(target_offset) = target_offset {
-                        let virt_base = section_virtual_offset + rel.0 as usize;
-                        let base = section_offset + rel.0 as usize;
-                        let target: i64 = match rel.1.kind() {
-                            RelocationKind::Relative | RelocationKind::PltRelative => {
-                                target_offset - virt_base as i64 + rel.1.addend()
-                            }
-                            x => {
-                                internal_error!("Relocation Kind not yet support: {:?}", x);
-                            }
-                        };
-                        if verbose {
-                            println!(
-                                "\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})"
-                            );
-                            println!("\t\tFinal relocation target offset: {target:+x}");
-                        }
-                        match rel.1.size() {
-                            32 => {
-                                let data = (target as i32).to_le_bytes();
-                                exec_mmap[base..base + 4].copy_from_slice(&data);
-                            }
-                            64 => {
-                                let data = target.to_le_bytes();
-                                exec_mmap[base..base + 8].copy_from_slice(&data);
-                            }
-                            x => {
-                                internal_error!("Relocation size not yet supported: {}", x);
-                            }
-                        }
+                    let target_offset = if let Some(target_offset) =
+                        get_target_offset(index, &app_obj, md, &symbol_vaddr_map, verbose)
+                    {
+                        target_offset
                     } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["__divti3", "__udivti3", "___divti3", "___udivti3"].contains(&sym.name().unwrap_or_default()))
                     {
                         // Explicitly ignore some symbols that are currently always linked.
+                        continue;
+                    } else if matches!(app_obj.symbol_by_index(index), Ok(sym) if ["_longjmp", "_setjmp"].contains(&sym.name().unwrap_or_default()))
+                    {
+                        // Explicitly ignore `longjmp` and `setjmp` which are used only in `roc test` mode and thus are unreferenced
+                        // by the app and can be safely skipped.
+                        // In the future, `longjmp` and `setjmp` will be obsoleted and thus this prong can be safely deleted.
                         continue;
                     } else {
                         internal_error!(
                             "Undefined Symbol in relocation, {:+x?}: {:+x?}",
                             rel,
                             app_obj.symbol_by_index(index)
-                        );
+                        )
+                    };
+
+                    let virt_base = section_virtual_offset + rel.0 as usize;
+                    let base = section_offset + rel.0 as usize;
+                    let target: i64 = match rel.1.kind() {
+                        RelocationKind::Relative | RelocationKind::PltRelative => {
+                            target_offset - virt_base as i64 + rel.1.addend()
+                        }
+                        RelocationKind::Absolute => {
+                            target_offset + rel.1.addend()
+                                - subtractor
+                                    .take()
+                                    .map(|index| {
+                                        get_target_offset(
+                                            index,
+                                            &app_obj,
+                                            md,
+                                            &symbol_vaddr_map,
+                                            verbose,
+                                        )
+                                        .unwrap_or(0)
+                                    })
+                                    .unwrap()
+                        }
+                        RelocationKind::Unknown => {
+                            if let RelocationFlags::MachO { r_type, .. } = rel.1.flags() {
+                                match r_type {
+                                    macho::ARM64_RELOC_SUBTRACTOR => {
+                                        if subtractor.is_some() {
+                                            internal_error!("Malformed object: SUBTRACTOR must not be followed by SUBTRACTOR");
+                                        } else {
+                                            subtractor = Some(index);
+                                        }
+                                        continue;
+                                    }
+                                    _ => {
+                                        if verbose {
+                                            println!(
+                                                "\t\tHandle other MachO relocs: {}",
+                                                format_reloc_type(r_type)
+                                            );
+                                        }
+                                        0
+                                    }
+                                }
+                            } else {
+                                internal_error!("Invalid relocation found for Mach-O: {:?}", rel);
+                            }
+                        }
+                        x => {
+                            internal_error!("Relocation Kind not yet support: {:?}", x);
+                        }
+                    };
+                    if verbose {
+                        println!("\t\tRelocation base location: {base:+x} (virt: {virt_base:+x})");
+                        println!("\t\tFinal relocation target offset: {target:+x}");
+                    }
+                    match rel.1.size() {
+                        32 => {
+                            let data = (target as i32).to_le_bytes();
+                            exec_mmap[base..base + 4].copy_from_slice(&data);
+                        }
+                        64 => {
+                            let data = target.to_le_bytes();
+                            exec_mmap[base..base + 8].copy_from_slice(&data);
+                        }
+                        x => {
+                            internal_error!("Relocation size not yet supported: {}", x);
+                        }
                     }
                 }
 
@@ -1435,7 +1279,7 @@ fn surgery_macho_help(
 
     // Flush app only data to speed up write to disk.
     exec_mmap
-        .flush_async_range(md.exec_len as usize, offset - md.exec_len as usize)
+        .flush_async_range(md.exec_len, offset - md.exec_len)
         .unwrap_or_else(|e| internal_error!("{}", e));
 
     // TODO: look into merging symbol tables, debug info, and eh frames to enable better debugger experience.
@@ -1552,7 +1396,7 @@ fn surgery_macho_help(
                 println!("\tPerforming surgery: {s:+x?}");
             }
             let surgery_virt_offset = match s.virtual_offset {
-                VirtualOffset::Relative(vs) => (vs + md.added_byte_count) as i64,
+                VirtualOffset::Relative(vs) => vs as i64,
                 VirtualOffset::Absolute => 0,
             };
             match s.size {
@@ -1562,8 +1406,7 @@ fn surgery_macho_help(
                         println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 4]
+                    exec_mmap[s.file_offset as usize..s.file_offset as usize + 4]
                         .copy_from_slice(&data);
                 }
                 8 => {
@@ -1572,8 +1415,7 @@ fn surgery_macho_help(
                         println!("\tTarget Jump: {target:+x}");
                     }
                     let data = target.to_le_bytes();
-                    exec_mmap[(s.file_offset + md.added_byte_count) as usize
-                        ..(s.file_offset + md.added_byte_count) as usize + 8]
+                    exec_mmap[s.file_offset as usize..s.file_offset as usize + 8]
                         .copy_from_slice(&data);
                 }
                 x => {
@@ -1585,8 +1427,8 @@ fn surgery_macho_help(
         // Replace plt call code with just a jump.
         // This is a backup incase we missed a call to the plt.
         if let Some((plt_off, plt_vaddr)) = md.plt_addresses.get(func_name) {
-            let plt_off = (*plt_off + md.added_byte_count) as usize;
-            let plt_vaddr = *plt_vaddr + md.added_byte_count;
+            let plt_off = *plt_off as usize;
+            let plt_vaddr = *plt_vaddr;
             let jmp_inst_len = 5;
             let target =
                 (func_virt_offset as i64 - (plt_vaddr as i64 + jmp_inst_len as i64)) as i32;
@@ -1622,4 +1464,150 @@ fn surgery_macho_help(
     }
 
     *offset_ref = offset;
+}
+
+fn get_target_offset(
+    index: SymbolIndex,
+    app_obj: &object::File,
+    md: &Metadata,
+    symbol_vaddr_map: &MutMap<SymbolIndex, usize>,
+    verbose: bool,
+) -> Option<i64> {
+    if let Some(target_offset) = symbol_vaddr_map.get(&index) {
+        if verbose {
+            println!("\t\tRelocation targets symbol in app at: {target_offset:+x}");
+        }
+        Some(*target_offset as i64)
+    } else {
+        app_obj
+            .symbol_by_index(index)
+            .and_then(|sym| sym.name().map(|name| name.trim_start_matches('_')))
+            .ok()
+            .and_then(|name| {
+                md.roc_symbol_vaddresses.get(name).map(|address| {
+                    let vaddr = *address as i64;
+                    if verbose {
+                        println!("\t\tRelocation targets symbol in host: {name} @ {vaddr:+x}");
+                    }
+                    vaddr
+                })
+            })
+    }
+}
+
+fn format_reloc_type(value: u8) -> impl std::fmt::Display {
+    struct Inner(u8);
+
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let name: &str = match self.0 {
+                macho::ARM64_RELOC_ADDEND => "ARM64_RELOC_ADDEND",
+                macho::ARM64_RELOC_PAGE21 => "ARM64_RELOC_PAGE21",
+                macho::ARM64_RELOC_PAGEOFF12 => "ARM64_RELOC_PAGEOFF12",
+                macho::ARM64_RELOC_BRANCH26 => "ARM64_RELOC_BRANCH26",
+                macho::ARM64_RELOC_UNSIGNED => "ARM64_RELOC_UNSIGNED",
+                macho::ARM64_RELOC_SUBTRACTOR => "ARM64_RELOC_SUBTRACTOR",
+                macho::ARM64_RELOC_GOT_LOAD_PAGE21 => "ARM64_RELOC_GOT_LOAD_PAGE21",
+                macho::ARM64_RELOC_GOT_LOAD_PAGEOFF12 => "ARM64_RELOC_GOT_LOAD_PAGEOFF12",
+                macho::ARM64_RELOC_TLVP_LOAD_PAGE21 => "ARM64_RELOC_TLVP_LOAD_PAGE21",
+                macho::ARM64_RELOC_TLVP_LOAD_PAGEOFF12 => "ARM64_RELOC_TLVP_LOAD_PAGEOFF12",
+                macho::ARM64_RELOC_POINTER_TO_GOT => "ARM64_RELOC_POINTER_TO_GOT",
+                macho::ARM64_RELOC_AUTHENTICATED_POINTER => "ARM64_RELOC_AUTHENTICATED_POINTER",
+                _ => "ARM64_RELOC_UNKNOWN",
+            };
+            write!(f, "{name}({})", self.0)
+        }
+    }
+
+    Inner(value)
+}
+
+fn format_load_command(cmd: u32) -> impl std::fmt::Display {
+    macro_rules! fmt_lc {
+        ($self:ident, [$($const:ident,)*]) => {
+            match $self.0 {
+                $(macho::$const => stringify!($const),)*
+                _ => "LC_UNKNOWN",
+            }
+        };
+    }
+
+    struct Inner(u32);
+
+    impl std::fmt::Display for Inner {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            let name = fmt_lc!(
+                self,
+                [
+                    LC_SEGMENT_64,
+                    LC_MAIN,
+                    LC_ID_DYLIB,
+                    LC_LOAD_DYLIB,
+                    LC_LOAD_WEAK_DYLIB,
+                    LC_REEXPORT_DYLIB,
+                    LC_SOURCE_VERSION,
+                    LC_BUILD_VERSION,
+                    LC_VERSION_MIN_MACOSX,
+                    LC_VERSION_MIN_IPHONEOS,
+                    LC_VERSION_MIN_TVOS,
+                    LC_VERSION_MIN_WATCHOS,
+                    LC_RPATH,
+                    LC_ID_DYLINKER,
+                    LC_LOAD_DYLINKER,
+                    LC_DYLD_ENVIRONMENT,
+                    LC_UNIXTHREAD,
+                    LC_SYMTAB,
+                    LC_DYSYMTAB,
+                    LC_FUNCTION_STARTS,
+                    LC_DATA_IN_CODE,
+                    LC_DYLD_INFO,
+                    LC_DYLD_INFO_ONLY,
+                    LC_DYLD_EXPORTS_TRIE,
+                    LC_DYLD_CHAINED_FIXUPS,
+                    LC_UUID,
+                    LC_CODE_SIGNATURE,
+                    LC_LINKER_OPTIMIZATION_HINT,
+                    LC_NOTE,
+                    LC_IDENT,
+                    LC_LINKER_OPTION,
+                    LC_DYLIB_CODE_SIGN_DRS,
+                    LC_TWOLEVEL_HINTS,
+                    LC_SEGMENT_SPLIT_INFO,
+                    LC_ENCRYPTION_INFO_64,
+                    LC_SYMSEG,
+                    LC_ROUTINES_64,
+                    LC_THREAD,
+                    LC_PREBOUND_DYLIB,
+                    LC_SUB_FRAMEWORK,
+                    LC_SUB_CLIENT,
+                    LC_SUB_UMBRELLA,
+                    LC_SUB_LIBRARY,
+                    LC_PREBIND_CKSUM,
+                    LC_FVMFILE,
+                    LC_IDFVMLIB,
+                    LC_LOADFVMLIB,
+                ]
+            );
+            write!(f, "{name}({})", self.0)
+        }
+    }
+
+    Inner(cmd)
+}
+
+fn page_size(arch: Architecture) -> usize {
+    match arch {
+        Architecture::X86_64 => 0x1000,
+        Architecture::Aarch64 => 0x4000,
+        _ => unreachable!(),
+    }
+}
+
+/// Calculate the required headerpad size, that is, free space between the end of any set of existing
+/// load commands and the start of first section.
+pub(crate) fn headerpad_size() -> usize {
+    use macho::{Section64, SegmentCommand64};
+    let segment_cmd_size = mem::size_of::<SegmentCommand64<LE>>();
+    let section_size = mem::size_of::<Section64<LE>>();
+    segment_cmd_size * NUM_ROC_SEGMENTS as usize + section_size * NUM_ROC_SECTIONS as usize
 }

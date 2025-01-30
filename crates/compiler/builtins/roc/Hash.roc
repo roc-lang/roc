@@ -1,32 +1,42 @@
-interface Hash
-    exposes [
-        Hash,
-        Hasher,
-        hash,
-        addBytes,
-        addU8,
-        addU16,
-        addU32,
-        addU64,
-        addU128,
-        hashBool,
-        hashI8,
-        hashI16,
-        hashI32,
-        hashI64,
-        hashI128,
-        hashNat,
-        hashDec,
-        complete,
-        hashStrBytes,
-        hashList,
-        hashUnordered,
-    ] imports [
-        Bool.{ Bool, isEq },
-        List,
-        Str,
-        Num.{ U8, U16, U32, U64, U128, I8, I16, I32, I64, I128, Nat, Dec },
-    ]
+module [
+    Hash,
+    Hasher,
+    hash,
+    add_bytes,
+    add_u8,
+    add_u16,
+    add_u32,
+    add_u64,
+    add_u128,
+    hash_bool,
+    hash_i8,
+    hash_i16,
+    hash_i32,
+    hash_i64,
+    hash_i128,
+    hash_dec,
+    complete,
+    hash_str_bytes,
+    hash_list,
+    hash_unordered,
+]
+
+import Bool exposing [Bool]
+import List
+import Str
+import Num exposing [
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    Dec,
+]
 
 ## A value that can be hashed.
 Hash implements
@@ -42,104 +52,90 @@ Hash implements
 ## cryptographically-secure hashing.
 Hasher implements
     ## Adds a list of bytes to the hasher.
-    addBytes : a, List U8 -> a where a implements Hasher
+    add_bytes : a, List U8 -> a where a implements Hasher
 
     ## Adds a single U8 to the hasher.
-    addU8 : a, U8 -> a where a implements Hasher
+    add_u8 : a, U8 -> a where a implements Hasher
 
     ## Adds a single U16 to the hasher.
-    addU16 : a, U16 -> a where a implements Hasher
+    add_u16 : a, U16 -> a where a implements Hasher
 
     ## Adds a single U32 to the hasher.
-    addU32 : a, U32 -> a where a implements Hasher
+    add_u32 : a, U32 -> a where a implements Hasher
 
     ## Adds a single U64 to the hasher.
-    addU64 : a, U64 -> a where a implements Hasher
+    add_u64 : a, U64 -> a where a implements Hasher
 
     ## Adds a single U128 to the hasher.
-    addU128 : a, U128 -> a where a implements Hasher
+    add_u128 : a, U128 -> a where a implements Hasher
 
     ## Completes the hasher, extracting a hash value from its
     ## accumulated hash state.
     complete : a -> U64 where a implements Hasher
 
 ## Adds a string into a [Hasher] by hashing its UTF-8 bytes.
-hashStrBytes = \hasher, s ->
-    addBytes hasher (Str.toUtf8 s)
+hash_str_bytes = |hasher, s|
+    add_bytes(hasher, Str.to_utf8(s))
 
 ## Adds a list of [Hash]able elements to a [Hasher] by hashing each element.
-hashList = \hasher, lst ->
-    List.walk lst hasher \accumHasher, elem ->
-        hash accumHasher elem
+hash_list = |hasher, lst|
+    List.walk(
+        lst,
+        hasher,
+        |accum_hasher, elem|
+            hash(accum_hasher, elem),
+    )
 
 ## Adds a single [Bool] to a hasher.
-hashBool : a, Bool -> a where a implements Hasher
-hashBool = \hasher, b ->
-    asU8 = if b then 1 else 0
-    addU8 hasher asU8
+hash_bool : a, Bool -> a where a implements Hasher
+hash_bool = |hasher, b|
+    as_u8 = if b then 1 else 0
+    add_u8(hasher, as_u8)
 
 ## Adds a single I8 to a hasher.
-hashI8 : a, I8 -> a where a implements Hasher
-hashI8 = \hasher, n -> addU8 hasher (Num.toU8 n)
+hash_i8 : a, I8 -> a where a implements Hasher
+hash_i8 = |hasher, n| add_u8(hasher, Num.to_u8(n))
 
 ## Adds a single I16 to a hasher.
-hashI16 : a, I16 -> a where a implements Hasher
-hashI16 = \hasher, n -> addU16 hasher (Num.toU16 n)
+hash_i16 : a, I16 -> a where a implements Hasher
+hash_i16 = |hasher, n| add_u16(hasher, Num.to_u16(n))
 
 ## Adds a single I32 to a hasher.
-hashI32 : a, I32 -> a where a implements Hasher
-hashI32 = \hasher, n -> addU32 hasher (Num.toU32 n)
+hash_i32 : a, I32 -> a where a implements Hasher
+hash_i32 = |hasher, n| add_u32(hasher, Num.to_u32(n))
 
 ## Adds a single I64 to a hasher.
-hashI64 : a, I64 -> a where a implements Hasher
-hashI64 = \hasher, n -> addU64 hasher (Num.toU64 n)
+hash_i64 : a, I64 -> a where a implements Hasher
+hash_i64 = |hasher, n| add_u64(hasher, Num.to_u64(n))
 
 ## Adds a single I128 to a hasher.
-hashI128 : a, I128 -> a where a implements Hasher
-hashI128 = \hasher, n -> addU128 hasher (Num.toU128 n)
-
-## Adds a single Nat to a hasher.
-hashNat : a, Nat -> a where a implements Hasher
-hashNat = \hasher, n ->
-    isPlatform32bit =
-        x : Nat
-        x = 0xffff_ffff
-        y = Num.addWrap x 1
-
-        y == 0
-
-    if isPlatform32bit then
-        addU32 hasher (Num.toU32 n)
-    else
-        addU64 hasher (Num.toU64 n)
-
-## LOWLEVEL get the i128 representation of a Dec.
-i128OfDec : Dec -> I128
+hash_i128 : a, I128 -> a where a implements Hasher
+hash_i128 = |hasher, n| add_u128(hasher, Num.to_u128(n))
 
 ## Adds a single [Dec] to a hasher.
-hashDec : a, Dec -> a where a implements Hasher
-hashDec = \hasher, n -> hashI128 hasher (i128OfDec n)
+hash_dec : a, Dec -> a where a implements Hasher
+hash_dec = |hasher, n| hash_i128(hasher, Num.without_decimal_point(n))
 
 ## Adds a container of [Hash]able elements to a [Hasher] by hashing each element.
 ## The container is iterated using the walk method passed in.
 ## The order of the elements does not affect the final hash.
-hashUnordered = \hasher, container, walk ->
-    walk
-        container
-        0
-        (\accum, elem ->
+hash_unordered = |hasher, container, walk|
+    walk(
+        container,
+        0,
+        |accum, elem|
             x =
                 # Note, we intentionally copy the hasher in every iteration.
                 # Having the same base state is required for unordered hashing.
                 hasher
-                |> hash elem
+                |> hash(elem)
                 |> complete
-            nextAccum = Num.addWrap accum x
+            next_accum = Num.add_wrap(accum, x)
 
-            if nextAccum < accum then
+            if next_accum < accum then
                 # we don't want to lose a bit of entropy on overflow, so add it back in.
-                Num.addWrap nextAccum 1
+                Num.add_wrap(next_accum, 1)
             else
-                nextAccum
-        )
-    |> \accum -> addU64 hasher accum
+                next_accum,
+    )
+    |> |accum| add_u64(hasher, accum)

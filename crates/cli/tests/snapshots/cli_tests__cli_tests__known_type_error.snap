@@ -1,0 +1,30 @@
+---
+source: crates/cli/tests/cli_tests.rs
+expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
+---
+
+── TYPE MISMATCH in tests/test-projects/known_bad/TypeError.roc ────────────────
+
+Something is off with the body of the main definition:
+
+3│  main : Str -> Task {} []
+4│  main = \_ ->
+5│      "this is a string, not a Task {} [] function like the platform expects."
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+The body is a string of type:
+
+    Str
+
+But the type annotation on main says it should be:
+
+    Task {} []
+
+Tip: Add type annotations to functions or values to help you figure
+this out.
+
+────────────────────────────────────────────────────────────────────────────────
+
+1 error and 0 warnings found in <ignored for test> ms.
+

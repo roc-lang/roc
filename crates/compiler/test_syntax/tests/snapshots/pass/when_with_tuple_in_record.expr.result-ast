@@ -1,94 +1,99 @@
-When(
-    @5-18 Record(
+@0-65 SpaceAfter(
+    When(
+        @5-18 Record(
+            [
+                @6-17 RequiredValue(
+                    @6-9 "foo",
+                    [],
+                    @11-17 Tuple(
+                        [
+                            @12-13 Num(
+                                "1",
+                            ),
+                            @15-16 Num(
+                                "2",
+                            ),
+                        ],
+                    ),
+                ),
+            ],
+        ),
         [
-            @6-17 RequiredValue(
-                @6-9 "foo",
-                [],
-                @11-17 Tuple(
-                    [
-                        @12-13 Num(
-                            "1",
+            WhenBranch {
+                patterns: [
+                    @23-36 SpaceBefore(
+                        RecordDestructure(
+                            [
+                                @24-35 RequiredField(
+                                    "foo",
+                                    @29-35 Tuple(
+                                        [
+                                            @30-31 NumLiteral(
+                                                "1",
+                                            ),
+                                            @33-34 Identifier {
+                                                ident: "x",
+                                            },
+                                        ],
+                                    ),
+                                ),
+                            ],
                         ),
-                        @15-16 Num(
-                            "2",
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @40-41 Var {
+                    module_name: "",
+                    ident: "x",
+                },
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @43-56 SpaceBefore(
+                        RecordDestructure(
+                            [
+                                @44-55 RequiredField(
+                                    "foo",
+                                    @49-55 Tuple(
+                                        [
+                                            @50-51 Underscore(
+                                                "",
+                                            ),
+                                            @53-54 Identifier {
+                                                ident: "b",
+                                            },
+                                        ],
+                                    ),
+                                ),
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @60-65 BinOps(
+                    [
+                        (
+                            @60-61 Num(
+                                "3",
+                            ),
+                            @62-63 Plus,
                         ),
                     ],
+                    @64-65 Var {
+                        module_name: "",
+                        ident: "b",
+                    },
                 ),
-            ),
+                guard: None,
+            },
         ],
     ),
     [
-        WhenBranch {
-            patterns: [
-                @23-36 SpaceBefore(
-                    RecordDestructure(
-                        [
-                            @24-35 RequiredField(
-                                "foo",
-                                @29-35 Tuple(
-                                    [
-                                        @30-31 NumLiteral(
-                                            "1",
-                                        ),
-                                        @33-34 Identifier(
-                                            "x",
-                                        ),
-                                    ],
-                                ),
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @40-41 Var {
-                module_name: "",
-                ident: "x",
-            },
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @43-56 SpaceBefore(
-                    RecordDestructure(
-                        [
-                            @44-55 RequiredField(
-                                "foo",
-                                @49-55 Tuple(
-                                    [
-                                        @50-51 Underscore(
-                                            "",
-                                        ),
-                                        @53-54 Identifier(
-                                            "b",
-                                        ),
-                                    ],
-                                ),
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @60-65 BinOps(
-                [
-                    (
-                        @60-61 Num(
-                            "3",
-                        ),
-                        @62-63 Plus,
-                    ),
-                ],
-                @64-65 Var {
-                    module_name: "",
-                    ident: "b",
-                },
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

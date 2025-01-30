@@ -1,6 +1,6 @@
-Module {
-    comments: [],
-    header: Platform(
+SpacesBefore {
+    before: [],
+    item: Platform(
         PlatformHeader {
             before_name: [],
             name: @9-14 PackageName(
@@ -16,24 +16,35 @@ Module {
                 },
                 item: PlatformRequires {
                     rigids: [],
-                    signature: @32-49 TypedIdent {
-                        ident: @32-36 "main",
-                        spaces_before_colon: [],
-                        ann: @39-49 Apply(
-                            "",
-                            "Task",
-                            [
-                                @44-46 Record {
-                                    fields: [],
-                                    ext: None,
-                                },
-                                @47-49 TagUnion {
-                                    ext: None,
-                                    tags: [],
-                                },
-                            ],
-                        ),
-                    },
+                    signatures: [
+                        @32-58 TypedIdent {
+                            ident: @32-37 "main!",
+                            spaces_before_colon: [],
+                            ann: @40-58 Function(
+                                [
+                                    @40-42 Record {
+                                        fields: [],
+                                        ext: None,
+                                    },
+                                ],
+                                Effectful,
+                                @46-58 Apply(
+                                    "",
+                                    "Result",
+                                    [
+                                        @53-55 Record {
+                                            fields: [],
+                                            ext: None,
+                                        },
+                                        @56-58 TagUnion {
+                                            ext: None,
+                                            tags: [],
+                                        },
+                                    ],
+                                ),
+                            ),
+                        },
+                    ],
                 },
             },
             exposes: KeywordItem {
@@ -67,13 +78,13 @@ Module {
                     after: [],
                 },
                 item: [
-                    @110-123 Module(
+                    @119-130 Module(
                         ModuleName(
-                            "Task",
+                            "Foo",
                         ),
                         [
-                            @117-121 ExposedName(
-                                "Task",
+                            @125-128 ExposedName(
+                                "Foo",
                             ),
                         ],
                     ),
@@ -88,8 +99,8 @@ Module {
                     after: [],
                 },
                 item: [
-                    @141-152 ExposedName(
-                        "mainForHost",
+                    @148-161 ExposedName(
+                        "main_for_host",
                     ),
                 ],
             },

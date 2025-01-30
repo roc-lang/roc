@@ -1,63 +1,69 @@
-Defs(
-    Defs {
-        tags: [
-            Index(0),
-        ],
-        regions: [
-            @0-43,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [
-            Ability {
-                header: TypeHeader {
-                    name: @0-4 "Hash",
-                    vars: [],
-                },
-                loc_implements: @5-15 Implements,
-                members: [
-                    AbilityMember {
-                        name: @18-22 SpaceBefore(
-                            "hash",
-                            [
-                                Newline,
-                            ],
-                        ),
-                        typ: @25-43 Function(
-                            [
-                                @25-26 SpaceAfter(
-                                    BoundVariable(
-                                        "a",
-                                    ),
-                                    [
-                                        Newline,
-                                    ],
-                                ),
-                            ],
-                            @40-43 Apply(
-                                "",
-                                "U64",
-                                [],
-                            ),
-                        ),
+@0-46 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(0),
+            ],
+            regions: [
+                @0-43,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [
+                Ability {
+                    header: TypeHeader {
+                        name: @0-4 "Hash",
+                        vars: [],
                     },
-                ],
-            },
-        ],
-        value_defs: [],
-    },
-    @45-46 SpaceBefore(
-        Num(
-            "1",
+                    loc_implements: @5-15 Implements,
+                    members: [
+                        AbilityMember {
+                            name: @18-22 SpaceBefore(
+                                "hash",
+                                [
+                                    Newline,
+                                ],
+                            ),
+                            typ: @25-43 Function(
+                                [
+                                    @25-26 SpaceAfter(
+                                        BoundVariable(
+                                            "a",
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                ],
+                                Pure,
+                                @40-43 Apply(
+                                    "",
+                                    "U64",
+                                    [],
+                                ),
+                            ),
+                        },
+                    ],
+                },
+            ],
+            value_defs: [],
+        },
+        @45-46 SpaceBefore(
+            Num(
+                "1",
+            ),
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

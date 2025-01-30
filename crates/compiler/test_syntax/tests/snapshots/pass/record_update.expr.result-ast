@@ -1,4 +1,4 @@
-RecordUpdate {
+@0-28 RecordUpdate {
     update: @2-13 Var {
         module_name: "Foo.Bar",
         ident: "baz",

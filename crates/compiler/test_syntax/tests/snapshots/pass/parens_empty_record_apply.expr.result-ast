@@ -1,0 +1,23 @@
+@0-8 Apply(
+    @1-4 ParensAround(
+        Record(
+            Collection {
+                items: [],
+                final_comments: [
+                    Newline,
+                ],
+            },
+        ),
+    ),
+    [
+        @5-8 Record(
+            Collection {
+                items: [],
+                final_comments: [
+                    Newline,
+                ],
+            },
+        ),
+    ],
+    Space,
+)

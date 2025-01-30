@@ -30,7 +30,7 @@ rustflags = ["-Clink-args=/FORCE:UNRESOLVED"]
 # https://github.com/rust-lang/cargo/issues/3946#issuecomment-973132993
 ROC_WORKSPACE_DIR = { value = "", relative = true }
 
-# Debug flags. Keep this up-to-date with compiler/debug_flags/src/lib.rs.
+# Debug flags. Explanations for these are in compiler/debug_flags/src/lib.rs.
 # Set = "1" to turn a debug flag on.
 ROC_PRETTY_PRINT_ALIAS_CONTENTS        = "0"
 ROC_PRINT_UNIFICATIONS                 = "0"
@@ -38,13 +38,21 @@ ROC_PRINT_UNDERIVABLE                  = "0"
 ROC_TRACE_COMPACTION                   = "0"
 ROC_PRINT_UNIFICATIONS_DERIVED         = "0"
 ROC_PRINT_MISMATCHES                   = "0"
-ROC_VERIFY_RIGID_LET_GENERALIZED       = "0"
+ROC_PRINT_FIXPOINT_FIXING              = "0"
+ROC_VERIFY_OCCURS_ONE_RECURSION        = "0"
 ROC_CHECK_MONO_IR                      = "0"
 ROC_PRINT_IR_AFTER_SPECIALIZATION      = "0"
 ROC_PRINT_IR_AFTER_RESET_REUSE         = "0"
-ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION = "0"
 ROC_PRINT_IR_AFTER_REFCOUNT            = "0"
-ROC_PRINT_RUNTIME_ERROR_GEN            = "0"
+ROC_PRINT_IR_AFTER_TRMC                = "0"
+ROC_PRINT_IR_AFTER_DROP_SPECIALIZATION = "0"
 ROC_DEBUG_ALIAS_ANALYSIS               = "0"
+ROC_PRINT_RUNTIME_ERROR_GEN            = "0"
+ROC_NO_UNBOUND_LAYOUT                  = "0"
 ROC_PRINT_LLVM_FN_VERIFICATION         = "0"
+ROC_WRITE_FINAL_WASM                   = "0"
+ROC_LOG_WASM_INTERP                    = "0"
 ROC_PRINT_LOAD_LOG                     = "0"
+ROC_SKIP_SUBS_CACHE                    = "0"
+ROC_PRINT_BUILD_COMMANDS               = "0"
+ROC_PRINT_BUILD_COMMANDS_WITH_ENV_VARS = "0"

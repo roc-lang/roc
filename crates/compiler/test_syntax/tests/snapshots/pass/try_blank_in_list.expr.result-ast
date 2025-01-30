@@ -1,0 +1,25 @@
+@0-16 SpaceAfter(
+    Apply(
+        @0-1 Tag(
+            "L",
+        ),
+        [
+            @1-16 List(
+                [
+                    @2-5 SpaceAfter(
+                        Try,
+                        [
+                            LineComment(
+                                "[then2[#",
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

@@ -9,6 +9,7 @@
 // Not a useful lint for us
 #![allow(clippy::too_many_arguments)]
 
+pub mod borrow;
 pub mod code_gen_help;
 pub mod drop_specialization;
 pub mod inc_dec;

@@ -11,7 +11,7 @@ use object::{
         ImageSectionHeader, ImageThunkData64,
     },
     read::pe::ImportTable,
-    LittleEndian as LE, Object, RelocationTarget, SectionIndex,
+    LittleEndian as LE, Object, ObjectSection, ObjectSymbol, RelocationTarget, SectionIndex,
 };
 use serde::{Deserialize, Serialize};
 
@@ -20,7 +20,7 @@ use roc_error_macros::internal_error;
 
 use crate::{
     generate_dylib::APP_DLL, load_struct_inplace, load_struct_inplace_mut,
-    load_structs_inplace_mut, open_mmap, open_mmap_mut,
+    load_structs_inplace_mut, open_mmap, open_mmap_mut, util::is_roc_definition,
 };
 
 /// The metadata stores information about/from the host .exe because
@@ -95,8 +95,6 @@ impl PeMetadata {
     }
 
     fn from_preprocessed_host(preprocessed_data: &[u8], new_sections: &[[u8; 8]]) -> Self {
-        use object::ObjectSection;
-
         let dynhost_obj = object::read::pe::PeFile64::parse(preprocessed_data)
             .unwrap_or_else(|err| internal_error!("Failed to parse executable file: {}", err));
 
@@ -183,17 +181,23 @@ pub(crate) fn preprocess_windows(
     host_exe_filename: &Path,
     metadata_filename: &Path,
     preprocessed_filename: &Path,
-    dummy_dll_symbols: &[String],
+    shared_lib: &Path,
     _verbose: bool,
     _time: bool,
 ) -> object::read::Result<()> {
-    let data = open_mmap(host_exe_filename);
+    let exec_data = open_mmap(host_exe_filename);
+    let shared_lib_data = &*open_mmap(shared_lib);
+    let shared_lib_obj = match object::File::parse(shared_lib_data) {
+        Ok(obj) => obj,
+        Err(e) => internal_error!("Failed to parse shared library file: {e}"),
+    };
+    let dummy_dll_symbols = shared_lib_obj.symbols().filter(is_roc_definition).count();
 
     let new_sections = [*b".text\0\0\0", *b".rdata\0\0"];
     let mut preprocessed = Preprocessor::preprocess(
         preprocessed_filename,
-        &data,
-        dummy_dll_symbols.len(),
+        &exec_data,
+        dummy_dll_symbols,
         &new_sections,
     );
 
@@ -435,17 +439,87 @@ pub(crate) fn surgery_pe(executable_path: &Path, metadata_path: &Path, roc_app_b
                     );
                 } else {
                     let is_ingested_compiler_rt = [
-                        "__muloti4",
+                        "__addtf3",
+                        "__ceilx",
+                        "__cmpdf2",
+                        "__cmphf2",
+                        "__cmpsf2",
+                        "__cmptf2",
+                        "__cmpxf2",
+                        "__cosx",
+                        "__divsf3",
+                        "__divtf3",
                         "__divti3",
-                        "__udivti3",
-                        "__modti3",
-                        "__umodti3",
+                        "__exp2x",
+                        "__expx",
+                        "__extendhfsf2",
+                        "__fabsx",
                         "__fixdfti",
                         "__fixsfti",
                         "__fixunsdfti",
                         "__fixunssfti",
+                        "__floorx",
+                        "__fmax",
+                        "__fmaxx",
+                        "__fminx",
+                        "__fmodx",
+                        "__gedf2",
+                        "__gehf2",
+                        "__gesf2",
+                        "__getf2",
+                        "__gexf2",
+                        "__log10x",
+                        "__log2x",
+                        "__logx",
                         "__lshrti3",
-                        "memcpy_decision",
+                        "__modti3",
+                        "__muloti4",
+                        "__multf3",
+                        "__roundx",
+                        "__sincosx",
+                        "__sinx",
+                        "__sqrtx",
+                        "__tanx",
+                        "__truncsfhf2",
+                        "__truncx",
+                        "__udivmoddi4",
+                        "__udivti3",
+                        "__umodti3",
+                        "ceilq",
+                        "cos",
+                        "cosf",
+                        "cosq",
+                        "exp",
+                        "exp2",
+                        "exp2q",
+                        "expf",
+                        "expq",
+                        "floor",
+                        "floorf",
+                        "floorq",
+                        "fmaq",
+                        "fmaxf",
+                        "fmaxl",
+                        "fmodf",
+                        "log10",
+                        "log10q",
+                        "log2",
+                        "log2q",
+                        "logq",
+                        "memcpy",
+                        "roundq",
+                        "sin",
+                        "sincos",
+                        "sincosf",
+                        "sincosq",
+                        "sinf",
+                        "sinq",
+                        "sqrt",
+                        "sqrtf",
+                        "sqrtq",
+                        "tan",
+                        "tanf",
+                        "tanq",
                     ]
                     .contains(&name.as_str());
                     if *address == 0 && !name.starts_with("roc") && !is_ingested_compiler_rt {
@@ -540,7 +614,6 @@ impl DynamicRelocationsPe {
         let mut it = import_table.descriptors()?;
         while let Some(descriptor) = it.next()? {
             let name = import_table.name(descriptor.name.get(LE))?;
-            // dbg!(String::from_utf8_lossy(name));
 
             if name == APP_DLL.as_bytes() {
                 return Ok(Some((*descriptor, index)));
@@ -1094,8 +1167,6 @@ fn process_internal_relocations(
 
 impl<'a> AppSections<'a> {
     fn from_data(data: &'a [u8]) -> Self {
-        use object::ObjectSection;
-
         let file = object::File::parse(data).unwrap();
 
         let mut sections = Vec::new();
@@ -1123,8 +1194,6 @@ impl<'a> AppSections<'a> {
             for (offset_in_section, relocation) in section.relocations() {
                 match relocation.target() {
                     RelocationTarget::Symbol(symbol_index) => {
-                        use object::ObjectSymbol;
-
                         let symbol = file.symbol_by_index(symbol_index);
 
                         let address = symbol.as_ref().map(|s| s.address()).unwrap_or_default();
@@ -1182,8 +1251,6 @@ impl<'a> AppSections<'a> {
         let mut other_symbols = Vec::new();
 
         for symbol in file.symbols() {
-            use object::ObjectSymbol;
-
             if symbol.name_bytes().unwrap_or_default().starts_with(b"roc") {
                 if let object::SymbolSection::Section(index) = symbol.section() {
                     let (kind, offset_in_host_section) = section_starts[&index];
@@ -1367,11 +1434,9 @@ const ___CHKSTK_MS: [u8; 48] = [
 mod test {
     const PE_DYNHOST: &[u8] = include_bytes!("../dynhost_benchmarks_windows.exe") as &[_];
 
+    use indoc::indoc;
     use object::read::pe::PeFile64;
     use object::{pe, LittleEndian as LE, Object};
-
-    use crate::preprocessed_host_filename;
-    use indoc::indoc;
     use serial_test::serial;
     use target_lexicon::Triple;
 
@@ -1669,7 +1734,7 @@ mod test {
                 "app.zig",
                 "-target",
                 "x86_64-windows-gnu",
-                "--strip",
+                "-fstrip",
                 "-rdynamic",
                 "-OReleaseFast",
             ])
@@ -1707,7 +1772,7 @@ mod test {
             "-target",
             "x86_64-windows-gnu",
             "-rdynamic",
-            "--strip",
+            "-fstrip",
             "-rdynamic",
             "-OReleaseFast",
         ]);
@@ -1724,14 +1789,14 @@ mod test {
             panic!("zig build-exe failed: {command_str}");
         }
 
-        let preprocessed_host_filename =
-            dir.join(preprocessed_host_filename(&Triple::host()).unwrap());
+        let target: roc_target::Target = Triple::host().into();
+        let preprocessed_host_filename = dir.join(target.prebuilt_surgical_host());
 
         preprocess_windows(
             &dir.join("host.exe"),
             &dir.join("metadata"),
             &preprocessed_host_filename,
-            &names,
+            &dir.join("libapp.dll"),
             false,
             false,
         )
@@ -1929,7 +1994,7 @@ mod test {
             "-target",
             "x86_64-windows-gnu",
             "-rdynamic",
-            "--strip",
+            "-fstrip",
             "-OReleaseFast",
         ]);
 

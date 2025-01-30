@@ -1,10 +1,8 @@
-interface Target
-    exposes [Target, Architecture, OperatingSystem]
-    imports []
+module [Target, Architecture, OperatingSystem]
 
 Target : {
     architecture : Architecture,
-    operatingSystem : OperatingSystem,
+    operating_system : OperatingSystem,
 }
 
 Architecture : [
@@ -16,7 +14,8 @@ Architecture : [
 ]
 
 OperatingSystem : [
+    Freestanding,
+    Linux,
+    Mac,
     Windows,
-    Unix,
-    Wasi,
 ]

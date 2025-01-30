@@ -1,6 +1,5 @@
-use crate::link::{
-    legacy_host_filename, link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy,
-};
+use crate::link::{link, preprocess_host_wasm32, rebuild_host, LinkType, LinkingStrategy};
+use bumpalo::collections::CollectIn;
 use bumpalo::Bump;
 use inkwell::memory_buffer::MemoryBuffer;
 use roc_error_macros::internal_error;
@@ -17,18 +16,17 @@ use roc_reporting::{
     cli::{report_problems, Problems},
     report::{RenderTarget, DEFAULT_PALETTE},
 };
-use roc_target::TargetInfo;
+use roc_target::{Architecture, Target};
 use std::ffi::OsStr;
 use std::ops::Deref;
 use std::{
     path::{Path, PathBuf},
-    thread::JoinHandle,
     time::{Duration, Instant},
 };
-use target_lexicon::Triple;
 
 #[cfg(feature = "target-wasm32")]
 use roc_collections::all::MutSet;
+use roc_target::SurgicalHostArtifacts;
 
 pub const DEFAULT_ROC_FILENAME: &str = "main.roc";
 
@@ -85,6 +83,8 @@ pub struct CodeGenOptions {
     pub backend: CodeGenBackend,
     pub opt_level: OptLevel,
     pub emit_debug_info: bool,
+    pub emit_llvm_ir: bool,
+    pub fuzz: bool,
 }
 
 type GenFromMono<'a> = (CodeObject, CodeGenTiming, ExpectMetadata<'a>);
@@ -94,49 +94,70 @@ pub fn gen_from_mono_module<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
-    target: &target_lexicon::Triple,
+    target: Target,
     code_gen_options: CodeGenOptions,
-    preprocessed_host_path: &Path,
+    built_host_opt: &BuiltHostOpt,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
     let path = roc_file_path;
     let debug = code_gen_options.emit_debug_info;
+    let emit_llvm_ir = code_gen_options.emit_llvm_ir;
+    let fuzz = code_gen_options.fuzz;
     let opt = code_gen_options.opt_level;
 
     match code_gen_options.backend {
-        CodeGenBackend::Wasm => gen_from_mono_module_dev(
-            arena,
-            loaded,
-            target,
-            preprocessed_host_path,
-            wasm_dev_stack_bytes,
-            AssemblyBackendMode::Binary, // dummy value, unused in practice
-        ),
+        CodeGenBackend::Wasm => {
+            assert_ne!(
+                *built_host_opt,
+                BuiltHostOpt::None,
+                "Wasm backend needs a built host."
+            );
+
+            gen_from_mono_module_dev(
+                arena,
+                loaded,
+                target,
+                built_host_opt,
+                wasm_dev_stack_bytes,
+                AssemblyBackendMode::Binary, // dummy value, unused in practice
+            )
+        }
         CodeGenBackend::Assembly(backend_mode) => gen_from_mono_module_dev(
             arena,
             loaded,
             target,
-            preprocessed_host_path,
+            built_host_opt,
             wasm_dev_stack_bytes,
             backend_mode,
         ),
-        CodeGenBackend::Llvm(backend_mode) => {
-            gen_from_mono_module_llvm(arena, loaded, path, target, opt, backend_mode, debug)
-        }
+        CodeGenBackend::Llvm(backend_mode) => gen_from_mono_module_llvm(
+            arena,
+            loaded,
+            path,
+            target,
+            opt,
+            backend_mode,
+            debug,
+            emit_llvm_ir,
+            fuzz,
+        ),
     }
 }
 
 // TODO how should imported modules factor into this? What if those use builtins too?
 // TODO this should probably use more helper functions
 // TODO make this polymorphic in the llvm functions so it can be reused for another backend.
+#[allow(clippy::too_many_arguments)]
 fn gen_from_mono_module_llvm<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
     roc_file_path: &Path,
-    target: &target_lexicon::Triple,
+    target: Target,
     opt_level: OptLevel,
     backend_mode: LlvmBackendMode,
     emit_debug_info: bool,
+    emit_llvm_ir: bool,
+    fuzz: bool,
 ) -> GenFromMono<'a> {
     use crate::target::{self, convert_opt_level};
     use inkwell::attributes::{Attribute, AttributeLoc};
@@ -147,19 +168,14 @@ fn gen_from_mono_module_llvm<'a>(
     let all_code_gen_start = Instant::now();
 
     // Generate the binary
-    let target_info = roc_target::TargetInfo::from(target);
     let context = Context::create();
     let module = arena.alloc(module_from_builtins(target, &context, "app"));
 
-    // strip Zig debug stuff
-    // module.strip_debug_info();
-
-    // mark our zig-defined builtins as internal
     let app_ll_file = {
-        let mut temp = PathBuf::from(roc_file_path);
-        temp.set_extension("ll");
+        let mut roc_file_path_buf = PathBuf::from(roc_file_path);
+        roc_file_path_buf.set_extension("ll");
 
-        temp
+        roc_file_path_buf
     };
 
     let kind_id = Attribute::get_named_enum_kind_id("alwaysinline");
@@ -188,7 +204,6 @@ fn gen_from_mono_module_llvm<'a>(
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-    let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
@@ -199,7 +214,7 @@ fn gen_from_mono_module_llvm<'a>(
         context: &context,
         interns: loaded.interns,
         module,
-        target_info,
+        target,
         mode: backend_mode,
 
         exposed_to_host: loaded
@@ -219,11 +234,16 @@ fn gen_from_mono_module_llvm<'a>(
             exposed_to_host,
             platform_path: _,
         } => {
-            // TODO support multiple of these!
-            debug_assert_eq!(exposed_to_host.len(), 1);
-            let (symbol, layout) = exposed_to_host[0];
+            let entry_points: bumpalo::collections::Vec<_> = exposed_to_host
+                .iter()
+                .map(|(fn_name, symbol, layout)| SingleEntryPoint {
+                    name: fn_name,
+                    symbol: *symbol,
+                    layout: *layout,
+                })
+                .collect_in(arena);
 
-            roc_mono::ir::EntryPoint::Single(SingleEntryPoint { symbol, layout })
+            roc_mono::ir::EntryPoint::Program(entry_points.into_bump_slice())
         }
         EntryPoint::Test => roc_mono::ir::EntryPoint::Expects { symbols: &[] },
     };
@@ -243,43 +263,20 @@ fn gen_from_mono_module_llvm<'a>(
     let generate_final_ir = all_code_gen_start.elapsed();
     let code_gen_object_start = Instant::now();
 
-    env.dibuilder.finalize();
+    crate::llvm_passes::optimize_llvm_ir(&env, target, opt_level, emit_debug_info, &app_ll_file);
 
-    // we don't use the debug info, and it causes weird errors.
-    module.strip_debug_info();
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    mpm.run_on(module);
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        // write the ll code to a file, so we can modify it
-        env.module.print_to_file(&app_ll_file).unwrap();
-
-        internal_error!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
-            app_ll_file,
-            errors.to_string(),
-        );
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    // annotate the LLVM IR output with debug info
-    // so errors are reported with the line number of the LLVM source
-    let memory_buffer = if cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok() {
+    let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
+    let memory_buffer = if fuzz || gen_sanitizers {
         let dir = tempfile::tempdir().unwrap();
         let dir = dir.into_path();
 
-        let app_ll_file = dir.join("app.ll");
-        let app_bc_file = dir.join("app.bc");
-        let app_o_file = dir.join("app.o");
+        let temp_app_ll_file = dir.join("app.ll");
+        let temp_app_processed_file = dir.join("app_processed.ll"); // app.ll with llvm passes applied
+        let temp_app_processed_file_str = temp_app_processed_file.to_str().unwrap().to_owned();
+        let temp_app_o_file = dir.join("app.o");
 
         // write the ll code to a file, so we can modify it
-        module.print_to_file(&app_ll_file).unwrap();
+        module.print_to_file(&temp_app_ll_file).unwrap();
 
         // Apply coverage passes.
         // Note, this is specifically tailored for `cargo afl` and afl++.
@@ -287,33 +284,27 @@ fn gen_from_mono_module_llvm<'a>(
         let mut passes = vec![];
         let mut extra_args = vec![];
         let mut unrecognized = vec![];
-        for sanitizer in std::env::var("ROC_SANITIZERS")
-            .unwrap()
-            .split(',')
-            .map(|x| x.trim())
-        {
-            match sanitizer {
-                "address" => passes.push("asan-module"),
-                "memory" => passes.push("msan-module"),
-                "thread" => passes.push("tsan-module"),
-                "cargo-fuzz" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-inline-8bit-counters",
-                        "-sanitizer-coverage-pc-table",
-                    ]);
+        if fuzz {
+            passes.push("sancov-module");
+            extra_args.extend_from_slice(&[
+                "-sanitizer-coverage-level=4",
+                "-sanitizer-coverage-inline-8bit-counters",
+                "-sanitizer-coverage-pc-table",
+                "-sanitizer-coverage-trace-compares",
+            ]);
+        }
+        if gen_sanitizers {
+            for sanitizer in std::env::var("ROC_SANITIZERS")
+                .unwrap()
+                .split(',')
+                .map(|x| x.trim())
+            {
+                match sanitizer {
+                    "address" => passes.push("asan-module"),
+                    "memory" => passes.push("msan-module"),
+                    "thread" => passes.push("tsan-module"),
+                    x => unrecognized.push(x.to_owned()),
                 }
-                "afl.rs" => {
-                    passes.push("sancov-module");
-                    extra_args.extend_from_slice(&[
-                        "-sanitizer-coverage-level=3",
-                        "-sanitizer-coverage-prune-blocks=0",
-                        "-sanitizer-coverage-trace-pc-guard",
-                    ]);
-                }
-                x => unrecognized.push(x.to_owned()),
             }
         }
         if !unrecognized.is_empty() {
@@ -327,103 +318,62 @@ fn gen_from_mono_module_llvm<'a>(
         }
 
         use std::process::Command;
-        let mut opt = Command::new("opt");
-        opt.args([
-            app_ll_file.to_str().unwrap(),
-            "-o",
-            app_bc_file.to_str().unwrap(),
-        ])
-        .args(extra_args);
-        if !passes.is_empty() {
-            opt.arg(format!("-passes={}", passes.join(",")));
-        }
-        let opt = opt.output().unwrap();
 
-        assert!(opt.stderr.is_empty(), "{opt:#?}");
+        // apply passes to app.ll
+        let mut opt_command = Command::new("opt");
+
+        opt_command
+            .args([
+                temp_app_ll_file.to_str().unwrap(),
+                "-o",
+                &temp_app_processed_file_str,
+            ])
+            .args(extra_args);
+        if !passes.is_empty() {
+            opt_command.arg(format!("-passes={}", passes.join(",")));
+        }
+
+        let opt_output = opt_command.output().unwrap();
+
+        assert!(opt_output.stderr.is_empty(), "{opt_output:#?}");
+
+        if emit_llvm_ir {
+            eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
+
+            std::fs::copy(temp_app_processed_file, app_ll_file).unwrap();
+        }
 
         // write the .o file. Note that this builds the .o for the local machine,
         // and ignores the `target_machine` entirely.
         //
         // different systems name this executable differently, so we shotgun for
         // the most common ones and then give up.
-        let bc_to_object = Command::new("llc")
+        let bc_to_object_output = Command::new("llc")
             .args([
                 "-relocation-model=pic",
                 "-filetype=obj",
-                app_bc_file.to_str().unwrap(),
+                &temp_app_processed_file_str,
                 "-o",
-                app_o_file.to_str().unwrap(),
+                temp_app_o_file.to_str().unwrap(),
             ])
             .output()
             .unwrap();
 
-        assert!(bc_to_object.status.success(), "{bc_to_object:#?}");
+        assert!(
+            bc_to_object_output.status.success(),
+            "{bc_to_object_output:#?}"
+        );
 
-        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
-    } else if emit_debug_info {
-        module.strip_debug_info();
-
-        let mut app_ll_dbg_file = PathBuf::from(roc_file_path);
-        app_ll_dbg_file.set_extension("dbg.ll");
-
-        let mut app_o_file = PathBuf::from(roc_file_path);
-        app_o_file.set_extension("o");
-
-        use std::process::Command;
-
-        // write the ll code to a file, so we can modify it
-        module.print_to_file(&app_ll_file).unwrap();
-
-        // run the debugir https://github.com/vaivaswatha/debugir tool
-        match Command::new("debugir")
-            .args(["-instnamer", app_ll_file.to_str().unwrap()])
-            .output()
-        {
-            Ok(_) => {}
-            Err(error) => {
-                use std::io::ErrorKind;
-                match error.kind() {
-                    ErrorKind::NotFound => internal_error!(
-                        r"I could not find the `debugir` tool on the PATH, install it from https://github.com/vaivaswatha/debugir"
-                    ),
-                    _ => internal_error!("{:?}", error),
-                }
-            }
-        }
-
-        use target_lexicon::Architecture;
-        match target.architecture {
-            Architecture::X86_64
-            | Architecture::X86_32(_)
-            | Architecture::Aarch64(_)
-            | Architecture::Wasm32 => {
-                // write the .o file. Note that this builds the .o for the local machine,
-                // and ignores the `target_machine` entirely.
-                //
-                // different systems name this executable differently, so we shotgun for
-                // the most common ones and then give up.
-                let ll_to_object = Command::new("llc")
-                    .args([
-                        "-relocation-model=pic",
-                        "-filetype=obj",
-                        app_ll_dbg_file.to_str().unwrap(),
-                        "-o",
-                        app_o_file.to_str().unwrap(),
-                    ])
-                    .output()
-                    .unwrap();
-
-                assert!(ll_to_object.stderr.is_empty(), "{ll_to_object:#?}");
-            }
-            _ => unreachable!(),
-        }
-
-        MemoryBuffer::create_from_file(&app_o_file).expect("memory buffer creation works")
+        MemoryBuffer::create_from_file(&temp_app_o_file).expect("memory buffer creation works")
     } else {
+        if emit_llvm_ir {
+            eprintln!("Emitting LLVM IR to {}", &app_ll_file.display());
+            module.print_to_file(&app_ll_file).unwrap();
+        }
+
         // Emit the .o file
-        use target_lexicon::Architecture;
-        match target.architecture {
-            Architecture::X86_64 | Architecture::X86_32(_) | Architecture::Aarch64(_) => {
+        match target.architecture() {
+            Architecture::X86_64 | Architecture::X86_32 | Architecture::Aarch64 => {
                 let reloc = RelocMode::PIC;
                 let target_machine =
                     target::target_machine(target, convert_opt_level(opt_level), reloc).unwrap();
@@ -439,7 +389,7 @@ fn gen_from_mono_module_llvm<'a>(
             }
             _ => internal_error!(
                 "TODO gracefully handle unsupported architecture: {:?}",
-                target.architecture
+                target.architecture()
             ),
         }
     };
@@ -462,47 +412,59 @@ fn gen_from_mono_module_llvm<'a>(
     )
 }
 
-#[cfg(feature = "target-wasm32")]
 fn gen_from_mono_module_dev<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
-    target: &target_lexicon::Triple,
-    preprocessed_host_path: &Path,
+    target: Target,
+    built_host_opt: &BuiltHostOpt,
     wasm_dev_stack_bytes: Option<u32>,
-    backend_mode: AssemblyBackendMode,
+    #[allow(unused_variables)] backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
-    use target_lexicon::Architecture;
+    match (built_host_opt, target.architecture()) {
+        (BuiltHostOpt::Additive(host_path), Architecture::Wasm32) => {
+            #[cfg(feature = "target-wasm32")]
+            {
+                gen_from_mono_module_dev_wasm32(arena, loaded, host_path, wasm_dev_stack_bytes)
+            }
 
-    match target.architecture {
-        Architecture::Wasm32 => gen_from_mono_module_dev_wasm32(
-            arena,
-            loaded,
-            preprocessed_host_path,
-            wasm_dev_stack_bytes,
+            #[cfg(not(feature = "target-wasm32"))]
+            {
+                internal_error!("Compiler was not built with feature 'target-wasm32'.");
+            }
+        }
+        (BuiltHostOpt::None, Architecture::Wasm32) => {
+            internal_error!("Cannot compile wasm32 without a host on the dev compiler backend.")
+        }
+        (BuiltHostOpt::Legacy(host_path), Architecture::Wasm32) => internal_error!(
+            "Unsupported host files found for use with wasm32 dev compiler backend:\n    {}",
+            host_path.display()
         ),
-        Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
-        }
-        _ => todo!(),
-    }
-}
+        (
+            BuiltHostOpt::Surgical(SurgicalHostArtifacts {
+                preprocessed_host, ..
+            }),
+            Architecture::Wasm32,
+        ) => internal_error!(
+            "Unsupported host files found for use with wasm32 dev compiler backend:\n    {}",
+            preprocessed_host.display()
+        ),
+        (_, Architecture::X86_64 | Architecture::Aarch64) => {
+            #[cfg(not(feature = "target-wasm32"))]
+            {
+                gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
+            }
 
-#[cfg(not(feature = "target-wasm32"))]
-pub fn gen_from_mono_module_dev<'a>(
-    arena: &'a bumpalo::Bump,
-    loaded: MonomorphizedModule<'a>,
-    target: &target_lexicon::Triple,
-    _host_input_path: &Path,
-    _wasm_dev_stack_bytes: Option<u32>,
-    backend_mode: AssemblyBackendMode,
-) -> GenFromMono<'a> {
-    use target_lexicon::Architecture;
-
-    match target.architecture {
-        Architecture::X86_64 | Architecture::Aarch64(_) => {
-            gen_from_mono_module_dev_assembly(arena, loaded, target, backend_mode)
+            #[cfg(feature = "target-wasm32")]
+            {
+                internal_error!("Compiler was built with feature 'target-wasm32'.")
+            }
         }
-        _ => todo!(),
+        (_, Architecture::Aarch32) => {
+            internal_error!("Dev compiler backend does not support 32 bit ARM architectures")
+        }
+        (_, Architecture::X86_32) => {
+            internal_error!("Dev compiler backend does not support 32 bit x86 architectures")
+        }
     }
 }
 
@@ -510,7 +472,7 @@ pub fn gen_from_mono_module_dev<'a>(
 fn gen_from_mono_module_dev_wasm32<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
-    preprocessed_host_path: &Path,
+    built_host_path: &Path,
     wasm_dev_stack_bytes: Option<u32>,
 ) -> GenFromMono<'a> {
     let all_code_gen_start = Instant::now();
@@ -536,17 +498,17 @@ fn gen_from_mono_module_dev_wasm32<'a>(
         stack_bytes: wasm_dev_stack_bytes.unwrap_or(roc_gen_wasm::Env::DEFAULT_STACK_BYTES),
     };
 
-    let host_bytes = std::fs::read(preprocessed_host_path).unwrap_or_else(|_| {
+    let host_bytes = std::fs::read(built_host_path).unwrap_or_else(|_| {
         internal_error!(
-            "Failed to read host object file {}! Try omitting --prebuilt-platform",
-            preprocessed_host_path.display()
+            "Failed to read host object file {}!",
+            built_host_path.display()
         )
     });
 
     let host_module = roc_gen_wasm::parse_host(arena, &host_bytes).unwrap_or_else(|e| {
         internal_error!(
             "I ran into a problem with the host object file, {} at offset 0x{:x}:\n{}",
-            preprocessed_host_path.display(),
+            built_host_path.display(),
             e.offset,
             e.message
         )
@@ -580,10 +542,11 @@ fn gen_from_mono_module_dev_wasm32<'a>(
     )
 }
 
+#[allow(dead_code)]
 fn gen_from_mono_module_dev_assembly<'a>(
     arena: &'a bumpalo::Bump,
     loaded: MonomorphizedModule<'a>,
-    target: &target_lexicon::Triple,
+    target: Target,
     backend_mode: AssemblyBackendMode,
 ) -> GenFromMono<'a> {
     let all_code_gen_start = Instant::now();
@@ -695,7 +658,7 @@ pub fn handle_error_module(
 
     let problems = report_problems_typechecked(&mut module);
 
-    problems.print_to_stdout(total_time);
+    problems.print_error_warning_count(total_time);
 
     if print_run_anyway_hint {
         // If you're running "main.roc" then you can just do `roc run`
@@ -714,45 +677,32 @@ pub fn handle_error_module(
 
 pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
     match problem {
-        LoadingProblem::FormattedReport(report) => {
+        LoadingProblem::FormattedReport(report, _) => {
             print!("{report}");
             Ok(1)
         }
         _ => {
             // TODO: tighten up the types here, we should always end up with a
             // formatted report from load.
-            print!("Failed with error: {problem:?}");
+            println!("Failed with error: {problem:?}");
             Ok(1)
         }
     }
 }
 
 pub fn standard_load_config(
-    target: &Triple,
+    target: Target,
     order: BuildOrdering,
     threading: Threading,
 ) -> LoadConfig {
-    let target_info = TargetInfo::from(target);
-
     let exec_mode = match order {
         BuildOrdering::BuildIfChecks => ExecutionMode::ExecutableIfCheck,
         BuildOrdering::AlwaysBuild => ExecutionMode::Executable,
     };
 
-    // UNSTABLE(lambda-erasure)
-    let function_kind = if cfg!(debug_assertions) {
-        if std::env::var("EXPERIMENTAL_ROC_ERASE").is_ok() {
-            FunctionKind::Erased
-        } else {
-            FunctionKind::LambdaSet
-        }
-    } else {
-        FunctionKind::LambdaSet
-    };
-
     LoadConfig {
-        target_info,
-        function_kind,
+        target,
+        function_kind: FunctionKind::from_env(),
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
@@ -763,23 +713,30 @@ pub fn standard_load_config(
 #[allow(clippy::too_many_arguments)]
 pub fn build_file<'a>(
     arena: &'a Bump,
-    target: &Triple,
+    target: Target,
     app_module_path: PathBuf,
     code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    prebuilt_requested: bool,
+    build_host: bool,
+    suppress_build_host_warning: bool,
     wasm_dev_stack_bytes: Option<u32>,
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
+    out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
 
-    // Step 1: compile the app and generate the .o file
-    let loaded =
-        roc_load::load_and_monomorphize(arena, app_module_path.clone(), roc_cache_dir, load_config)
-            .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
+    let loaded = roc_load::load_and_monomorphize(
+        arena,
+        app_module_path.clone(),
+        None,
+        roc_cache_dir,
+        load_config,
+    )
+    .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
 
     build_loaded_file(
         arena,
@@ -789,98 +746,136 @@ pub fn build_file<'a>(
         emit_timings,
         link_type,
         linking_strategy,
-        prebuilt_requested,
+        build_host,
+        suppress_build_host_warning,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        out_path,
+        verbose,
     )
+}
+
+#[derive(Debug, PartialEq, Eq)]
+/// Opt because of possible None value
+// Advice: do not try to wrap this in an Option, that would require cloning in build_loaded_file.
+pub enum BuiltHostOpt {
+    Additive(PathBuf),
+    Legacy(PathBuf),
+    // SurgicalHostArtifacts contains metadata, preprocessed_host
+    Surgical(SurgicalHostArtifacts),
+    None,
+}
+
+fn build_and_preprocess_host(
+    code_gen_options: CodeGenOptions,
+    dll_stub_symbols: Vec<String>,
+    emit_timings: bool,
+    linking_strategy: LinkingStrategy,
+    platform_main_roc: &Path,
+    preprocessed_host_path: &Path,
+    target: Target,
+) -> BuiltHostOpt {
+    let rebuild_thread = match linking_strategy {
+        LinkingStrategy::Additive => spawn_wasm32_host_build_thread(
+            code_gen_options.opt_level,
+            target,
+            platform_main_roc.to_owned(),
+            preprocessed_host_path.to_owned(),
+        ),
+        LinkingStrategy::Surgical => {
+            let preprocessed_path =
+                platform_main_roc.with_file_name(target.prebuilt_surgical_host());
+            let metadata_path = platform_main_roc.with_file_name(target.metadata_file_name());
+
+            spawn_surgical_host_build_thread(
+                code_gen_options.opt_level,
+                target,
+                platform_main_roc.to_owned(),
+                dll_stub_symbols,
+                preprocessed_path,
+                preprocessed_host_path.to_owned(),
+                metadata_path,
+            )
+        }
+        LinkingStrategy::Legacy => spawn_legacy_host_build_thread(
+            code_gen_options.opt_level,
+            target,
+            platform_main_roc.to_owned(),
+        ),
+    };
+    let (rebuild_duration, path) = rebuild_thread.join().expect("Failed to build host.");
+    if emit_timings {
+        println!(
+            "Finished rebuilding the platform host in {} ms\n",
+            rebuild_duration
+        );
+    }
+    path
 }
 
 #[allow(clippy::too_many_arguments)]
 fn build_loaded_file<'a>(
     arena: &'a Bump,
-    target: &Triple,
+    target: Target,
     app_module_path: PathBuf,
     code_gen_options: CodeGenOptions,
     emit_timings: bool,
     link_type: LinkType,
     linking_strategy: LinkingStrategy,
-    prebuilt_requested: bool,
+    build_host_requested: bool,
+    suppress_build_host_warning: bool,
     wasm_dev_stack_bytes: Option<u32>,
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
+    out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
-    let operating_system = roc_target::OperatingSystem::from(target.operating_system);
-
-    let platform_main_roc = match &loaded.entry_point {
+    // get the platform path from the app header
+    let platform_main_roc_path = match &loaded.entry_point {
         EntryPoint::Executable { platform_path, .. } => platform_path.to_path_buf(),
         _ => unreachable!(),
     };
 
-    // the preprocessed host is stored beside the platform's main.roc
-    let preprocessed_host_path = if linking_strategy == LinkingStrategy::Legacy {
-        if let roc_target::OperatingSystem::Wasi = operating_system {
-            // when compiling a wasm application, we implicitly assume here that the host is in zig
-            // and has a file called "host.zig"
-            platform_main_roc.with_file_name("host.zig")
+    let output_exe_path = get_exe_path(
+        out_path,
+        app_module_path.as_path(),
+        target,
+        linking_strategy,
+        link_type,
+    );
+
+    let dll_stub_symbols =
+        roc_linker::ExposedSymbols::from_exposed_to_host(&loaded.interns, &loaded.exposed_to_host);
+
+    let built_host_opt =
+        // Not sure if this is correct for all calls with LinkType::Dylib...
+        if link_type == LinkType::None || link_type == LinkType::Dylib || target == Target::Wasm32 {
+            BuiltHostOpt::None
         } else {
-            platform_main_roc.with_file_name(legacy_host_filename(target).unwrap())
-        }
-    } else {
-        platform_main_roc.with_file_name(roc_linker::preprocessed_host_filename(target).unwrap())
-    };
+            let prebuilt_host = determine_built_host_path(&platform_main_roc_path, target, build_host_requested, link_type, linking_strategy, suppress_build_host_warning);
 
-    // For example, if we're loading the platform from a URL, it's automatically prebuilt
-    // even if the --prebuilt-platform CLI flag wasn't set.
-    let is_platform_prebuilt = prebuilt_requested || loaded.uses_prebuilt_platform;
-
-    let cwd = app_module_path.parent().unwrap();
-    let mut output_exe_path = cwd.join(&*loaded.output_path);
-
-    if let Some(extension) = operating_system.executable_file_ext() {
-        output_exe_path.set_extension(extension);
-    }
-
-    // We don't need to spawn a rebuild thread when using a prebuilt host.
-    let rebuild_thread = if matches!(link_type, LinkType::Dylib | LinkType::None) {
-        None
-    } else if is_platform_prebuilt {
-        if !preprocessed_host_path.exists() {
-            invalid_prebuilt_platform(prebuilt_requested, preprocessed_host_path);
-
-            std::process::exit(1);
-        }
-
-        if linking_strategy == LinkingStrategy::Surgical {
-            // Copy preprocessed host to executable location.
-            // The surgical linker will modify that copy in-place.
-            std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
-        }
-
-        None
-    } else {
-        // TODO this should probably be moved before load_and_monomorphize.
-        // To do this we will need to preprocess files just for their exported symbols.
-        // Also, we should no longer need to do this once we have platforms on
-        // a package repository, as we can then get prebuilt platforms from there.
-
-        let dll_stub_symbols = roc_linker::ExposedSymbols::from_exposed_to_host(
-            &loaded.interns,
-            &loaded.exposed_to_host,
-        );
-
-        let join_handle = spawn_rebuild_thread(
-            code_gen_options.opt_level,
-            linking_strategy,
-            platform_main_roc.clone(),
-            preprocessed_host_path.clone(),
-            output_exe_path.clone(),
-            target,
-            dll_stub_symbols,
-        );
-
-        Some(join_handle)
-    };
+            match prebuilt_host {
+                BuiltHostOpt::None => {
+                    build_and_preprocess_host(
+                        code_gen_options,
+                        dll_stub_symbols,
+                        emit_timings,
+                        linking_strategy,
+                        &platform_main_roc_path,
+                        &output_exe_path,
+                        target,
+                    )
+                }
+                BuiltHostOpt::Surgical(ref surgical_artifacts) => {
+                    // Copy preprocessed host to executable location.
+                    // The surgical linker will modify that copy in-place.
+                    std::fs::copy(&surgical_artifacts.preprocessed_host, output_exe_path.as_path()).unwrap();
+                    prebuilt_host
+                }
+                other => other
+            }
+        };
 
     let buf = &mut String::with_capacity(1024);
 
@@ -913,36 +908,13 @@ fn build_loaded_file<'a>(
     let problems = report_problems_monomorphized(&mut loaded);
     let loaded = loaded;
 
-    enum HostRebuildTiming {
-        BeforeApp(u128),
-        ConcurrentWithApp(JoinHandle<u128>),
-    }
-
-    let opt_rebuild_timing = if let Some(rebuild_thread) = rebuild_thread {
-        if linking_strategy == LinkingStrategy::Additive {
-            let rebuild_duration = rebuild_thread
-                .join()
-                .expect("Failed to (re)build platform.");
-
-            if emit_timings && !is_platform_prebuilt {
-                println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
-            }
-
-            Some(HostRebuildTiming::BeforeApp(rebuild_duration))
-        } else {
-            Some(HostRebuildTiming::ConcurrentWithApp(rebuild_thread))
-        }
-    } else {
-        None
-    };
-
     let (roc_app_bytes, code_gen_timing, expect_metadata) = gen_from_mono_module(
         arena,
         loaded,
         &app_module_path,
         target,
         code_gen_options,
-        &preprocessed_host_path,
+        &built_host_opt,
         wasm_dev_stack_bytes,
     );
 
@@ -975,39 +947,33 @@ fn build_loaded_file<'a>(
         );
     }
 
-    if let Some(HostRebuildTiming::ConcurrentWithApp(thread)) = opt_rebuild_timing {
-        let rebuild_duration = thread.join().expect("Failed to (re)build platform.");
-
-        if emit_timings && !is_platform_prebuilt {
-            println!("Finished rebuilding the platform in {rebuild_duration} ms\n");
-        }
-    }
-
-    // Step 2: link the prebuilt platform and compiled app
+    // link the prebuilt platform and compiled app
     let link_start = Instant::now();
 
     match (linking_strategy, link_type) {
         (LinkingStrategy::Surgical, _) => {
+            let metadata_file = platform_main_roc_path.with_file_name(target.metadata_file_name());
+
             roc_linker::link_preprocessed_host(
                 target,
-                &platform_main_roc,
                 &roc_app_bytes,
                 &output_exe_path,
+                metadata_file,
+                verbose,
             );
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
             // Just copy the object file to the output folder.
-            output_exe_path.set_extension(operating_system.object_file_ext());
             std::fs::write(&output_exe_path, &*roc_app_bytes).unwrap();
         }
         (LinkingStrategy::Legacy, _) => {
-            let extension = if matches!(operating_system, roc_target::OperatingSystem::Wasi) {
+            let extension = if target == Target::Wasm32 {
                 // Legacy linker is only by used llvm wasm backend, not dev.
                 // llvm wasm backend directly emits a bitcode file when targeting wasi, not a `.o` or `.wasm` file.
                 // If we set the extension wrong, zig will print a ton of warnings when linking.
                 "bc"
             } else {
-                operating_system.object_file_ext()
+                target.object_file_ext()
             };
             let app_o_file = tempfile::Builder::new()
                 .prefix("roc_app")
@@ -1018,36 +984,57 @@ fn build_loaded_file<'a>(
 
             std::fs::write(app_o_file, &*roc_app_bytes).unwrap();
 
-            let builtins_host_tempfile = roc_bitcode::host_tempfile()
-                .expect("failed to write host builtins object to tempfile");
-
             let mut inputs = vec![app_o_file.to_str().unwrap()];
 
-            if !matches!(link_type, LinkType::Dylib | LinkType::None) {
-                // the host has been compiled into a .o or .obj file
-                inputs.push(preprocessed_host_path.as_path().to_str().unwrap());
+            let mut host_path = String::new();
+
+            match built_host_opt {
+                BuiltHostOpt::Legacy(p) => {
+                    host_path.push_str(&p.to_string_lossy());
+                    inputs.push(&host_path);
+                }
+                BuiltHostOpt::None => {
+                    // In case of link_type == LinkType::Dylib or target == Target::Wasm32
+                    // When compiling a Dylib there is no host, such as when generating glue using `roc glue`.
+                    if target == Target::Wasm32 {
+                        let wasm_host_zig: PathBuf =
+                            platform_main_roc_path.with_file_name("host.zig");
+
+                        assert!(
+                            wasm_host_zig.exists(),
+                            "No host.zig file found at {} when building wasm32 target.",
+                            wasm_host_zig.display()
+                        );
+
+                        host_path.push_str(&wasm_host_zig.to_string_lossy());
+                        inputs.push(&host_path);
+                    }
+                }
+                other => {
+                    panic!("Unexpected variant of built_host_opt in combination with `LinkingStrategy::Legacy`: {:?}", other);
+                }
             }
+
+            let builtins_host_tempfile = roc_bitcode::host_tempfile()
+                .expect("failed to write host builtins object to tempfile");
 
             if matches!(code_gen_options.backend, CodeGenBackend::Assembly(_)) {
                 inputs.push(builtins_host_tempfile.path().to_str().unwrap());
             }
 
             let (mut child, _) = link(target, output_exe_path.clone(), &inputs, link_type)
-                .map_err(|_| todo!("gracefully handle `ld` failing to spawn."))?;
+                .map_err(|_| todo!("linker failed to spawn."))?;
 
             let exit_status = child
                 .wait()
-                .map_err(|_| todo!("gracefully handle error after `ld` spawned"))?;
+                .map_err(|_| todo!("linker error after spawning"))?;
 
             // Extend the lifetime of the tempfile so it doesn't get dropped
             // (and thus deleted) before the child process is done using it!
             let _ = builtins_host_tempfile;
 
             if !exit_status.success() {
-                todo!(
-                    "gracefully handle `ld` (or `zig` in the case of wasm with --optimize) returning exit code {:?}",
-                    exit_status.code()
-                );
+                todo!("linker failed with exit code {:?}", exit_status.code());
             }
         }
     }
@@ -1068,140 +1055,298 @@ fn build_loaded_file<'a>(
     })
 }
 
-fn invalid_prebuilt_platform(prebuilt_requested: bool, preprocessed_host_path: PathBuf) {
-    let prefix = if prebuilt_requested {
-        "Because I was run with --prebuilt-platform, "
-    } else {
-        ""
-    };
+fn determine_built_host_path(
+    platform_main_roc_path: &Path,
+    target: Target,
+    build_host_requested: bool,
+    link_type: LinkType,
+    linking_strategy: LinkingStrategy,
+    suppress_build_host_warning: bool,
+) -> BuiltHostOpt {
+    if build_host_requested {
+        if !suppress_build_host_warning {
+            // TODO
+            //report_rebuilding_existing_host(&preprocessed_host.to_string_lossy());
+            unimplemented!()
+        }
 
-    let preprocessed_host_path_str = preprocessed_host_path.to_string_lossy();
-    let extra_err_msg = if preprocessed_host_path_str.ends_with(".rh") {
-        "\n\n\tNote: If the platform does have an .rh1 file but no .rh file, it's because it's been built with an older version of roc. Contact the author to release a new build of the platform using a roc release newer than March 21 2023.\n"
+        match link_type {
+            LinkType::Executable => BuiltHostOpt::None,
+            LinkType::Dylib => {
+                eprintln!("You asked me to build the host, but I don't know how to rebuild a host for a dynamic library.");
+                std::process::exit(1);
+            }
+            LinkType::None => {
+                eprintln!("You asked me to build the host, but I don't know how to rebuild a host for an unlinked object.");
+                std::process::exit(1);
+            }
+        }
     } else {
-        ""
-    };
+        match linking_strategy {
+            LinkingStrategy::Legacy => {
+                let legacy_host_path_res = target.find_legacy_host(platform_main_roc_path);
 
+                match legacy_host_path_res {
+                    Ok(legacy_host_path) => BuiltHostOpt::Legacy(legacy_host_path),
+                    Err(err_msg) => {
+                        eprintln!("Legacy linking failed: {}", err_msg);
+                        #[cfg(target_os = "linux")]
+                        eprintln!(
+                            "\n    TIP: Maybe try surgical linking with the flag --linker=surgical"
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            LinkingStrategy::Surgical => {
+                let surgical_artifacts = target.find_surgical_host(platform_main_roc_path);
+
+                match surgical_artifacts {
+                    Ok(surgical_artifacts) => BuiltHostOpt::Surgical(surgical_artifacts),
+                    Err(paths_str) => {
+                        // TODO improve error message
+                        eprintln!(
+                            "LinkingStrategy was set to Surgical (default), but \
+                            I tried to find the surgical host at any of these paths {} but it does not exist.",
+                            paths_str
+                        );
+                        std::process::exit(1);
+                    }
+                }
+            }
+            LinkingStrategy::Additive => {
+                unimplemented!()
+            }
+        }
+    }
+}
+
+/// Get outut path for the executable.
+///
+/// If you specified a path that ends in in a directory separator, then
+/// use that directory, but use the app module's filename for the filename.
+fn get_exe_path(
+    out_path: Option<&Path>,
+    app_module_path: &Path,
+    target: Target,
+    linking_strategy: LinkingStrategy,
+    link_type: LinkType,
+) -> PathBuf {
+    match out_path {
+        Some(path) => {
+            // true iff the path ends with a directory separator,
+            // e.g. '/' on UNIX, '/' or '\\' on Windows
+            let ends_with_sep = {
+                #[cfg(unix)]
+                {
+                    use std::os::unix::ffi::OsStrExt;
+
+                    path.as_os_str().as_bytes().ends_with(&[b'/'])
+                }
+
+                #[cfg(windows)]
+                {
+                    use std::os::windows::ffi::OsStrExt;
+
+                    let last = path.as_os_str().encode_wide().last();
+
+                    last == Some(0x002f)// UTF-16 slash
+                        || last == Some(0x005c) // UTF-16 backslash
+                }
+            };
+
+            if ends_with_sep {
+                let filename = app_module_path.file_name().unwrap_or_default();
+
+                with_output_extension(&path.join(filename), target, linking_strategy, link_type)
+            } else {
+                path.to_path_buf()
+            }
+        }
+        None => with_output_extension(app_module_path, target, linking_strategy, link_type),
+    }
+}
+
+#[allow(dead_code)]
+fn report_rebuilding_existing_host(host_path: &str) {
     eprintln!(
         indoc::indoc!(
             r#"
-            {}I was expecting this file to exist:
+            WARNING: I found an existing compiled host at:
 
                 {}
 
-            However, it was not there!{}
+            However, the --build-host flag was set! I will rebuild the host and overwrite the existing file.
 
-            If you have the platform's source code locally, you may be able to generate it by re-running this command omitting --prebuilt-platform
+            Remove the --build-host flag to use the existing host and silence this warning.
+            Rebuilding hosts using the roc compiler is deprecated and will be removed in a future version.
             "#
         ),
-        prefix,
-        preprocessed_host_path.to_string_lossy(),
-        extra_err_msg
+        host_path,
     );
 }
 
-#[allow(clippy::too_many_arguments)]
-fn spawn_rebuild_thread(
+#[allow(dead_code)]
+fn report_rebuilding_missing_host(host_path: &str) {
+    eprintln!(
+        indoc::indoc!(
+            r#"
+            WARNING: I was expecting a prebuilt host to exist at:
+
+                {}
+
+            However, it was not there! I will rebuild the host and write it to that location.
+
+            Rebuilding hosts using the roc compiler is deprecated and will be removed in a future version.
+            "#
+        ),
+        host_path,
+    );
+}
+
+#[allow(dead_code)]
+fn report_missing_prebuilt_host(msg: &str) {
+    eprintln!(
+        indoc::indoc!(
+            r#"
+            I was expecting a prebuilt host to exist:
+
+                {}
+
+            However, it was not there!
+
+            If you have the platform's source code locally, you may be able to generate it by using a build script.
+            "#
+        ),
+        msg
+    );
+}
+
+#[allow(dead_code)]
+fn report_refusing_to_rebuild_host(host_path: &str) {
+    eprintln!(
+        indoc::indoc!(
+            r#"
+            I found a prebuilt host for this platform, but you requested to rebuild it:
+
+                {}
+
+            Remove the `--build-host` flag to use the prebuilt host.
+            The `--build-host` flag is deprecated and will be removed in a future release.
+            "#
+        ),
+        host_path,
+    );
+}
+
+fn spawn_wasm32_host_build_thread(
     opt_level: OptLevel,
-    linking_strategy: LinkingStrategy,
+    target: Target,
     platform_main_roc: PathBuf,
-    preprocessed_host_path: PathBuf,
-    output_exe_path: PathBuf,
-    target: &Triple,
-    dll_stub_symbols: Vec<String>,
-) -> std::thread::JoinHandle<u128> {
-    let thread_local_target = target.clone();
+    output_path: PathBuf,
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
     std::thread::spawn(move || {
         // Printing to stderr because we want stdout to contain only the output of the roc program.
         // We are aware of the trade-offs.
         // `cargo run` follows the same approach
-        eprintln!("🔨 Rebuilding platform...");
+        eprintln!("🔨 Building host ...");
 
-        let rebuild_host_start = Instant::now();
+        let start = Instant::now();
 
-        match linking_strategy {
-            LinkingStrategy::Additive => {
-                let host_dest = rebuild_host(
-                    opt_level,
-                    &thread_local_target,
-                    platform_main_roc.as_path(),
-                    None,
-                );
+        let host_dest = rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
 
-                preprocess_host_wasm32(host_dest.as_path(), &preprocessed_host_path);
-            }
-            LinkingStrategy::Surgical => {
-                build_and_preprocess_host_lowlevel(
-                    opt_level,
-                    &thread_local_target,
-                    platform_main_roc.as_path(),
-                    preprocessed_host_path.as_path(),
-                    &dll_stub_symbols,
-                );
+        preprocess_host_wasm32(host_dest.as_path(), &output_path);
 
-                // Copy preprocessed host to executable location.
-                // The surgical linker will modify that copy in-place.
-                std::fs::copy(&preprocessed_host_path, output_exe_path.as_path()).unwrap();
-            }
-            LinkingStrategy::Legacy => {
-                rebuild_host(
-                    opt_level,
-                    &thread_local_target,
-                    platform_main_roc.as_path(),
-                    None,
-                );
-            }
-        }
-
-        rebuild_host_start.elapsed().as_millis()
+        (
+            start.elapsed().as_millis(),
+            BuiltHostOpt::Additive(output_path),
+        )
     })
 }
 
-pub fn build_and_preprocess_host(
+/// Note this will copy the preprocessed host to the executable location
+/// where the surgical linker will modify that copy in-place.
+fn spawn_surgical_host_build_thread(
     opt_level: OptLevel,
-    target: &Triple,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    exposed_symbols: roc_linker::ExposedSymbols,
-) {
-    let stub_dll_symbols = exposed_symbols.stub_dll_symbols();
+    target: Target,
+    platform_main_roc: PathBuf,
+    dll_stub_symbols: Vec<String>,
+    preprocessed_path: PathBuf,
+    output_exe_path: PathBuf,
+    metadata_path: PathBuf,
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
+    std::thread::spawn(move || {
+        // Printing to stderr because we want stdout to contain only the output of the roc program.
+        // We are aware of the trade-offs.
+        // `cargo run` follows the same approach
+        eprintln!("🔨 Building host ...");
 
-    build_and_preprocess_host_lowlevel(
-        opt_level,
-        target,
-        platform_main_roc,
-        preprocessed_host_path,
-        &stub_dll_symbols,
-    )
+        let start = Instant::now();
+
+        let stub_lib = roc_linker::generate_stub_lib_from_loaded(
+            target,
+            platform_main_roc.as_path(),
+            dll_stub_symbols.as_slice(),
+        );
+
+        debug_assert!(stub_lib.exists());
+
+        let host_exe = rebuild_host(
+            opt_level,
+            target,
+            platform_main_roc.as_path(),
+            Some(&stub_lib),
+        );
+
+        roc_linker::preprocess_host(
+            target,
+            host_exe.as_path(),
+            metadata_path.as_path(),
+            preprocessed_path.as_path(),
+            &stub_lib,
+            false,
+            false,
+        );
+
+        // Copy preprocessed host to executable location.
+        // The surgical linker will modify that copy in-place.
+        std::fs::copy(&preprocessed_path, &output_exe_path).unwrap();
+
+        (
+            start.elapsed().as_millis(),
+            BuiltHostOpt::Surgical(SurgicalHostArtifacts {
+                metadata: metadata_path,
+                preprocessed_host: preprocessed_path,
+            }),
+        )
+    })
 }
 
-fn build_and_preprocess_host_lowlevel(
+// Note the output host will be
+fn spawn_legacy_host_build_thread(
     opt_level: OptLevel,
-    target: &Triple,
-    platform_main_roc: &Path,
-    preprocessed_host_path: &Path,
-    stub_dll_symbols: &[String],
-) {
-    let stub_lib =
-        roc_linker::generate_stub_lib_from_loaded(target, platform_main_roc, stub_dll_symbols);
+    target: Target,
+    platform_main_roc: PathBuf,
+) -> std::thread::JoinHandle<(u128, BuiltHostOpt)> {
+    std::thread::spawn(move || {
+        // Printing to stderr because we want stdout to contain only the output of the roc program.
+        // We are aware of the trade-offs.
+        // `cargo run` follows the same approach
+        eprintln!("🔨 Building host ...");
 
-    debug_assert!(stub_lib.exists());
+        let start = Instant::now();
 
-    rebuild_host(opt_level, target, platform_main_roc, Some(&stub_lib));
+        let host_dest = rebuild_host(opt_level, target, platform_main_roc.as_path(), None);
 
-    roc_linker::preprocess_host(
-        target,
-        platform_main_roc,
-        preprocessed_host_path,
-        &stub_lib,
-        stub_dll_symbols,
-    )
+        (start.elapsed().as_millis(), BuiltHostOpt::Legacy(host_dest))
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
 pub fn check_file<'a>(
     arena: &'a Bump,
     roc_file_path: PathBuf,
+    opt_main_path: Option<PathBuf>,
     emit_timings: bool,
     roc_cache_dir: RocCacheDir<'_>,
     threading: Threading,
@@ -1210,22 +1355,26 @@ pub fn check_file<'a>(
 
     // only used for generating errors. We don't do code generation, so hardcoding should be fine
     // we need monomorphization for when exhaustiveness checking
-    let target_info = TargetInfo::default_x86_64();
+    let target = Target::LinuxX64;
 
     // Step 1: compile the app and generate the .o file
 
     let load_config = LoadConfig {
-        target_info,
-        // TODO: we may not want this for just checking.
-        function_kind: FunctionKind::LambdaSet,
+        target,
+        function_kind: FunctionKind::from_env(),
         // TODO: expose this from CLI?
         render: RenderTarget::ColorTerminal,
         palette: DEFAULT_PALETTE,
         threading,
         exec_mode: ExecutionMode::Check,
     };
-    let mut loaded =
-        roc_load::load_and_typecheck(arena, roc_file_path, roc_cache_dir, load_config)?;
+    let mut loaded = roc_load::load_and_typecheck(
+        arena,
+        roc_file_path,
+        opt_main_path,
+        roc_cache_dir,
+        load_config,
+    )?;
 
     let buf = &mut String::with_capacity(1024);
 
@@ -1276,14 +1425,16 @@ pub fn build_str_test<'a>(
     arena: &'a Bump,
     app_module_path: &Path,
     app_module_source: &'a str,
-    assume_prebuild: bool,
+    build_host_requested: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
-    let triple = target_lexicon::Triple::host();
+    let target = target_lexicon::Triple::host().into();
 
     let code_gen_options = CodeGenOptions {
         backend: CodeGenBackend::Llvm(LlvmBackendMode::Binary),
         opt_level: OptLevel::Normal,
         emit_debug_info: false,
+        emit_llvm_ir: false,
+        fuzz: false,
     };
 
     let emit_timings = false;
@@ -1295,7 +1446,7 @@ pub fn build_str_test<'a>(
     let build_ordering = BuildOrdering::AlwaysBuild;
     let threading = Threading::AtMost(2);
 
-    let load_config = standard_load_config(&triple, build_ordering, threading);
+    let load_config = standard_load_config(target, build_ordering, threading);
 
     let compilation_start = std::time::Instant::now();
 
@@ -1305,22 +1456,44 @@ pub fn build_str_test<'a>(
         PathBuf::from("valgrind_test.roc"),
         app_module_source,
         app_module_path.to_path_buf(),
+        None,
         roc_cache_dir,
         load_config,
     )
     .map_err(|e| BuildFileError::from_mono_error(e, compilation_start))?;
 
+    // we are in a test, so we don't need to provide a warning about rebuilding the host
+    let suppress_build_host_warning = true;
+
     build_loaded_file(
         arena,
-        &triple,
+        target,
         app_module_path.to_path_buf(),
         code_gen_options,
         emit_timings,
         link_type,
         linking_strategy,
-        assume_prebuild,
+        build_host_requested,
+        suppress_build_host_warning,
         wasm_dev_stack_bytes,
         loaded,
         compilation_start,
+        None,
+        false,
     )
+}
+
+fn with_output_extension(
+    path: &Path,
+    target: Target,
+    linking_strategy: LinkingStrategy,
+    link_type: LinkType,
+) -> PathBuf {
+    match (linking_strategy, link_type) {
+        (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
+            // Additive linking and no linking both output the object file type.
+            path.with_extension(target.object_file_ext())
+        }
+        _ => path.with_extension(target.executable_file_ext().unwrap_or_default()),
+    }
 }

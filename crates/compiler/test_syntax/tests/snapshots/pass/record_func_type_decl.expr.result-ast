@@ -1,100 +1,41 @@
-Defs(
-    Defs {
-        tags: [
-            Index(2147483648),
-        ],
-        regions: [
-            @0-122,
-        ],
-        space_before: [
-            Slice(start = 0, length = 0),
-        ],
-        space_after: [
-            Slice(start = 0, length = 0),
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-1 Identifier(
-                    "f",
-                ),
-                @8-122 SpaceBefore(
-                    Record {
-                        fields: [
-                            @18-38 SpaceBefore(
-                                RequiredValue(
-                                    @18-25 "getLine",
-                                    [],
-                                    @28-38 Apply(
-                                        "",
-                                        "Effect",
-                                        [
-                                            @35-38 Apply(
-                                                "",
-                                                "Str",
-                                                [],
-                                            ),
-                                        ],
-                                    ),
-                                ),
-                                [
-                                    Newline,
-                                ],
-                            ),
-                            @48-75 SpaceBefore(
-                                RequiredValue(
-                                    @48-55 "putLine",
-                                    [],
-                                    @58-75 Function(
-                                        [
-                                            @58-61 Apply(
-                                                "",
-                                                "Str",
-                                                [],
-                                            ),
-                                        ],
-                                        @65-75 Apply(
+@0-126 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-122,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "f",
+                    },
+                    @8-122 SpaceBefore(
+                        Record {
+                            fields: [
+                                @18-38 SpaceBefore(
+                                    RequiredValue(
+                                        @18-25 "getLine",
+                                        [],
+                                        @28-38 Apply(
                                             "",
                                             "Effect",
                                             [
-                                                @72-75 Apply(
+                                                @35-38 Apply(
                                                     "",
-                                                    "Int",
+                                                    "Str",
                                                     [],
                                                 ),
-                                            ],
-                                        ),
-                                    ),
-                                ),
-                                [
-                                    Newline,
-                                ],
-                            ),
-                            @85-94 SpaceBefore(
-                                RequiredValue(
-                                    @85-89 "text",
-                                    [],
-                                    @91-94 Apply(
-                                        "",
-                                        "Str",
-                                        [],
-                                    ),
-                                ),
-                                [
-                                    Newline,
-                                ],
-                            ),
-                            @104-116 SpaceBefore(
-                                SpaceAfter(
-                                    RequiredValue(
-                                        @104-109 "value",
-                                        [],
-                                        @111-116 Apply(
-                                            "",
-                                            "Int",
-                                            [
-                                                @115-116 Wildcard,
                                             ],
                                         ),
                                     ),
@@ -102,27 +43,92 @@ Defs(
                                         Newline,
                                     ],
                                 ),
-                                [
-                                    Newline,
-                                ],
-                            ),
+                                @48-75 SpaceBefore(
+                                    RequiredValue(
+                                        @48-55 "putLine",
+                                        [],
+                                        @58-75 Function(
+                                            [
+                                                @58-61 Apply(
+                                                    "",
+                                                    "Str",
+                                                    [],
+                                                ),
+                                            ],
+                                            Pure,
+                                            @65-75 Apply(
+                                                "",
+                                                "Effect",
+                                                [
+                                                    @72-75 Apply(
+                                                        "",
+                                                        "Int",
+                                                        [],
+                                                    ),
+                                                ],
+                                            ),
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @85-94 SpaceBefore(
+                                    RequiredValue(
+                                        @85-89 "text",
+                                        [],
+                                        @91-94 Apply(
+                                            "",
+                                            "Str",
+                                            [],
+                                        ),
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                                @104-116 SpaceBefore(
+                                    SpaceAfter(
+                                        RequiredValue(
+                                            @104-109 "value",
+                                            [],
+                                            @111-116 Apply(
+                                                "",
+                                                "Int",
+                                                [
+                                                    @115-116 Wildcard,
+                                                ],
+                                            ),
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                            ext: None,
+                        },
+                        [
+                            Newline,
                         ],
-                        ext: None,
-                    },
-                    [
-                        Newline,
-                    ],
+                    ),
                 ),
+            ],
+        },
+        @124-126 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @124-126 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+                Newline,
+            ],
         ),
-        [
-            Newline,
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

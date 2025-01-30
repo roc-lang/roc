@@ -1,0 +1,56 @@
+@0-22 Defs(
+    Defs {
+        tags: [
+            EitherIndex(0),
+        ],
+        regions: [
+            @0-19,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [
+            Ability {
+                header: TypeHeader {
+                    name: @0-1 "S",
+                    vars: [],
+                },
+                loc_implements: @2-12 Implements,
+                members: [
+                    AbilityMember {
+                        name: @13-14 "d",
+                        typ: @15-19 Apply(
+                            "",
+                            "J",
+                            [
+                                @18-19 SpaceBefore(
+                                    BoundVariable(
+                                        "m",
+                                    ),
+                                    [
+                                        Newline,
+                                    ],
+                                ),
+                            ],
+                        ),
+                    },
+                ],
+            },
+        ],
+        value_defs: [],
+    },
+    @21-22 SpaceBefore(
+        Tag(
+            "D",
+        ),
+        [
+            LineComment(
+                "",
+            ),
+        ],
+    ),
+)

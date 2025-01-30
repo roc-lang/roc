@@ -40,7 +40,7 @@ const PURE_ROC_QUICKSORT: &str = indoc::indoc!(
 
         quicksortHelp originalList 0 (n - 1)
 
-    quicksortHelp : List (Num a), Nat, Nat -> List (Num a)
+    quicksortHelp : List (Num a), U64, U64 -> List (Num a)
     quicksortHelp = \list, low, high ->
         if low < high then
             when partition low high list is
@@ -51,7 +51,7 @@ const PURE_ROC_QUICKSORT: &str = indoc::indoc!(
         else
             list
 
-    partition : Nat, Nat, List (Num a) -> [Pair Nat (List (Num a))]
+    partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
     partition = \low, high, initialList ->
         when List.get initialList high is
             Ok pivot ->
@@ -62,7 +62,7 @@ const PURE_ROC_QUICKSORT: &str = indoc::indoc!(
             Err _ ->
                 Pair low initialList
 
-    partitionHelp : Nat, Nat, List (Num c), Nat, Num c -> [Pair Nat (List (Num c))]
+    partitionHelp : U64, U64, List (Num c), U64, Num c -> [Pair U64 (List (Num c))]
     partitionHelp = \i, j, list, high, pivot ->
         if j < high then
             when List.get list j is
@@ -86,7 +86,7 @@ fn roc_function<'a>(
     let config = helpers::llvm::HelperConfig {
         mode: LlvmBackendMode::GenTest,
         ignore_problems: false,
-        add_debug_info: true,
+        emit_debug_info: true,
         opt_level: OptLevel::Optimize,
     };
 

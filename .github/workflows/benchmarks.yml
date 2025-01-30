@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: Benchmarks
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 env:
   RUST_BACKTRACE: 1
@@ -19,7 +15,7 @@ jobs:
     env:
       FORCE_COLOR: 1
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           ref: "main"
           clean: "true"
@@ -27,7 +23,7 @@ jobs:
       - name: on main; prepare a self-contained benchmark folder
         run: nix develop -c ./ci/benchmarks/prep_folder.sh main
 
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           clean: "false" # we want to keep the benchmark folder
 

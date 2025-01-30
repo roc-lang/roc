@@ -1,24 +1,50 @@
-Expect(
-    @7-13 BinOps(
-        [
-            (
-                @7-8 Num(
-                    "1",
-                ),
-                @9-11 Equals,
+@0-16 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-13,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Expect {
+                    condition: @7-13 BinOps(
+                        [
+                            (
+                                @7-8 Num(
+                                    "1",
+                                ),
+                                @9-11 Equals,
+                            ),
+                        ],
+                        @12-13 Num(
+                            "1",
+                        ),
+                    ),
+                    preceding_comment: …,
+                },
+            ],
+        },
+        @15-16 SpaceBefore(
+            Num(
+                "4",
             ),
-        ],
-        @12-13 Num(
-            "1",
+            [
+                Newline,
+                Newline,
+            ],
         ),
     ),
-    @15-16 SpaceBefore(
-        Num(
-            "4",
-        ),
-        [
-            Newline,
-            Newline,
-        ],
-    ),
+    [
+        Newline,
+    ],
 )

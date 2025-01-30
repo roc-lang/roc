@@ -1,46 +1,51 @@
-When(
-    @5-6 Var {
-        module_name: "",
-        ident: "n",
-    },
-    [
-        WhenBranch {
-            patterns: [
-                @12-20 SpaceBefore(
-                    Apply(
-                        @12-16 OpaqueRef(
-                            "@Add",
+@0-29 SpaceAfter(
+    When(
+        @5-6 Var {
+            module_name: "",
+            ident: "n",
+        },
+        [
+            WhenBranch {
+                patterns: [
+                    @12-20 SpaceBefore(
+                        Apply(
+                            @12-16 OpaqueRef(
+                                "@Add",
+                            ),
+                            [
+                                @17-18 Identifier {
+                                    ident: "n",
+                                },
+                                @19-20 Identifier {
+                                    ident: "m",
+                                },
+                            ],
                         ),
                         [
-                            @17-18 Identifier(
-                                "n",
-                            ),
-                            @19-20 Identifier(
-                                "m",
-                            ),
+                            Newline,
                         ],
                     ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @24-29 BinOps(
-                [
-                    (
-                        @24-25 Var {
-                            module_name: "",
-                            ident: "n",
-                        },
-                        @26-27 Plus,
-                    ),
                 ],
-                @28-29 Var {
-                    module_name: "",
-                    ident: "m",
-                },
-            ),
-            guard: None,
-        },
+                value: @24-29 BinOps(
+                    [
+                        (
+                            @24-25 Var {
+                                module_name: "",
+                                ident: "n",
+                            },
+                            @26-27 Plus,
+                        ),
+                    ],
+                    @28-29 Var {
+                        module_name: "",
+                        ident: "m",
+                    },
+                ),
+                guard: None,
+            },
+        ],
+    ),
+    [
+        Newline,
     ],
 )

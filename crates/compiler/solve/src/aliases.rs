@@ -1,5 +1,5 @@
 use roc_can::abilities::AbilitiesStore;
-use roc_collections::{soa::Index, MutMap};
+use roc_collections::{soa::slice_extend_new, MutMap};
 use roc_error_macros::internal_error;
 use roc_module::symbol::Symbol;
 use roc_solve_problem::TypeError;
@@ -7,6 +7,7 @@ use roc_types::{
     subs::{AliasVariables, Content, FlatType, Rank, Subs, SubsSlice, TagExt, UnionTags, Variable},
     types::{Alias, AliasKind, OptAbleVar, Type, TypeTag, Types},
 };
+use soa::Index;
 
 use crate::to_var::type_to_var_help;
 use crate::{ability::ObligationCache, env::InferenceEnv};
@@ -131,7 +132,7 @@ impl Aliases {
         let ok_slice = SubsSlice::new(alias_variables.variables_start, 1);
 
         let variable_slices =
-            SubsSlice::extend_new(&mut env.subs.variable_slices, [err_slice, ok_slice]);
+            slice_extend_new(&mut env.subs.variable_slices, [err_slice, ok_slice]);
 
         let union_tags = UnionTags::from_slices(tag_names_slice, variable_slices);
         let ext_var = TagExt::Any(Variable::EMPTY_TAG_UNION);

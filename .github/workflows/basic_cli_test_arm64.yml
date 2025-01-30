@@ -11,12 +11,49 @@ jobs:
     runs-on: [self-hosted, Linux, ARM64]
     steps:
       - name: clone basic-cli repo
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           repository: roc-lang/basic-cli
           ref: main
-      
-      - name: Run all tests with latest roc nightly + latest basic-cli release
+
+      - name: get latest roc nightly
+        run: |
+          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
+
+      - name: rename nightly tar
+        run: mv $(ls | grep "roc_nightly.*tar\.gz") roc_nightly.tar.gz
+
+      - name: decompress the tar
+        run: tar -xzf roc_nightly.tar.gz
+
+      - run: rm roc_nightly.tar.gz
+
+      - name: simplify nightly folder name
+        run: mv roc_nightly* roc_nightly
+
+      - run: ./roc_nightly/roc version
+
+      - run: expect -v
+
+      # Run all tests
+      - run: ROC=./roc_nightly/roc EXAMPLES_DIR=./examples/ ./ci/all_tests.sh
+
+      ######
+      # Now test the latest basic-cli release, not the main branch
+      ######
+
+      - name: Remove roc_nightly folder to keep things simple (we'll download it again later)
+        run: rm -rf roc_nightly
+
+      - name: Get the repo of the latest basic-cli release
+        run: |
+          git clone --depth 1 https://github.com/roc-lang/basic-cli
+          cd basic-cli
+          git fetch --tags
+          latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
+          git checkout $latestTag
+
+      - name: Run all tests with latest roc nightly and latest basic-cli release
         run: |
           sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
-          ./ci/test_latest_release.sh
+          ROC=./roc_nightly/roc EXAMPLES_DIR=./basic-cli/examples/ ./ci/test_latest_release.sh

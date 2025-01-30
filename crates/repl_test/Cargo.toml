@@ -8,21 +8,22 @@ license.workspace = true
 version.workspace = true
 
 [build-dependencies]
-roc_cli = { path = "../cli" }
+roc_cli.workspace = true
 
 [dev-dependencies]
-roc_build = { path = "../compiler/build" }
-roc_repl_cli = { path = "../repl_cli" }
-roc_repl_ui = { path = "../repl_ui" }
-roc_test_utils = { path = "../test_utils" }
-roc_wasm_interp = { path = "../wasm_interp" }
-roc_reporting = { path = "../reporting" }
-roc_target = { path = "../compiler/roc_target" }
+roc_build.workspace = true
+roc_repl_cli.workspace = true
+roc_repl_ui.workspace = true
+roc_test_utils.workspace = true
+roc_wasm_interp.workspace = true
+roc_reporting.workspace = true
+roc_target.workspace = true
 
 bumpalo.workspace = true
 indoc.workspace = true
 strip-ansi-escapes.workspace = true
 target-lexicon.workspace = true
+regex.workspace = true
 rustyline.workspace = true
 
 [features]
@@ -34,7 +35,13 @@ target-x86 = ["roc_build/target-x86", "roc_repl_cli/target-x86"]
 target-x86_64 = ["roc_build/target-x86_64", "roc_repl_cli/target-x86_64"]
 wasm = ["target-wasm32"]
 
-target-all = ["target-aarch64", "target-arm", "target-x86", "target-x86_64", "target-wasm32"]
+target-all = [
+    "target-aarch64",
+    "target-arm",
+    "target-x86",
+    "target-x86_64",
+    "target-wasm32",
+]
 
 [package.metadata.cargo-udeps.ignore]
 development = ["roc_wasm_interp"]

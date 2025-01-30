@@ -2,18 +2,17 @@ app "test" provides [main] to "./platform"
 
 entry =
     {
-        toI8: Num.toI8,
-        toI16: Num.toI16,
-        toI32: Num.toI32,
-        toI64: Num.toI64,
-        toI128: Num.toI128,
-        toNat: Num.toNat,
-        toU8: Num.toU8,
-        toU16: Num.toU16,
-        toU32: Num.toU32,
-        toU64: Num.toU64,
-        toU128: Num.toU128,
+        to_i8: Num.to_i8,
+        to_i16: Num.to_i16,
+        to_i32: Num.to_i32,
+        to_i64: Num.to_i64,
+        to_i128: Num.to_i128,
+        to_u8: Num.to_u8,
+        to_u16: Num.to_u16,
+        to_u32: Num.to_u32,
+        to_u64: Num.to_u64,
+        to_u128: Num.to_u128,
     }
 
 main = entry
-#      ^^^^^ { toI128 : Int * -[[Num.toI128(125)]]-> I128, toI16 : Int w_a -[[Num.toI16(119)]]-> I16, toI32 : Int w_b -[[Num.toI32(121)]]-> I32, toI64 : Int w_c -[[Num.toI64(123)]]-> I64, toI8 : Int w_d -[[Num.toI8(117)]]-> I8, toNat : Int w_e -[[Num.toNat(137)]]-> Nat, toU128 : Int w_f -[[Num.toU128(135)]]-> U128, toU16 : Int w_g -[[Num.toU16(129)]]-> U16, toU32 : Int w_h -[[Num.toU32(131)]]-> U32, toU64 : Int w_i -[[Num.toU64(133)]]-> U64, toU8 : Int w_j -[[Num.toU8(127)]]-> U8 }
+#      ^^^^^ { to_i128 : Int * -[[Num.to_i128(125)]]-> I128, to_i16 : Int w_a -[[Num.to_i16(119)]]-> I16, to_i32 : Int w_b -[[Num.to_i32(121)]]-> I32, to_i64 : Int w_c -[[Num.to_i64(123)]]-> I64, to_i8 : Int w_d -[[Num.to_i8(117)]]-> I8, to_u128 : Int w_e -[[Num.to_u128(135)]]-> U128, to_u16 : Int w_f -[[Num.to_u16(129)]]-> U16, to_u32 : Int w_g -[[Num.to_u32(131)]]-> U32, to_u64 : Int w_h -[[Num.to_u64(133)]]-> U64, to_u8 : Int w_i -[[Num.to_u8(127)]]-> U8 }

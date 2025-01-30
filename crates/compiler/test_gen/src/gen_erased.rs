@@ -1,6 +1,7 @@
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to_erased;
 
+#[cfg(feature = "gen-llvm")]
 use indoc::indoc;
 
 #[test]
@@ -32,13 +33,13 @@ fn multi_branch_capturing() {
 
             f = \t, s ->
               if t
-              then \{} -> 15nat
-              else \{} -> Str.countGraphemes s
+              then \{} -> 15u64
+              else \{} -> Str.count_utf8_bytes s
 
             main = ((f Bool.true "abc") {}, (f Bool.false "abc") {})
             "#
         ),
         (15, 3),
-        (usize, usize)
+        (u64, u64)
     );
 }

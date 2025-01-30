@@ -1,0 +1,32 @@
+@0-13 SpaceAfter(
+    Closure(
+        [
+            @1-9 PncApply(
+                @1-2 Tag(
+                    "L",
+                ),
+                [
+                    @4-5 SpaceAfter(
+                        SpaceAfter(
+                            Identifier {
+                                ident: "z",
+                            },
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+            ),
+        ],
+        @11-13 Num(
+            "42",
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

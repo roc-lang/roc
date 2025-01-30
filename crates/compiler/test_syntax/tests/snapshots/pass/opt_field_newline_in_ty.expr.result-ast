@@ -1,0 +1,47 @@
+@0-10 Defs(
+    Defs {
+        tags: [
+            EitherIndex(2147483648),
+        ],
+        regions: [
+            @0-8,
+        ],
+        space_before: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        space_after: [
+            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+        ],
+        spaces: [],
+        type_defs: [],
+        value_defs: [
+            Annotation(
+                @0-1 NumLiteral(
+                    "0",
+                ),
+                @2-8 Record {
+                    fields: [
+                        @3-7 OptionalValue(
+                            @3-4 "i",
+                            [
+                                Newline,
+                            ],
+                            @6-7 BoundVariable(
+                                "d",
+                            ),
+                        ),
+                    ],
+                    ext: None,
+                },
+            ),
+        ],
+    },
+    @9-10 SpaceBefore(
+        Tag(
+            "O",
+        ),
+        [
+            Newline,
+        ],
+    ),
+)

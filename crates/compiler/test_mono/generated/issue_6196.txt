@@ -1,0 +1,49 @@
+procedure Num.20 (#Attr.2, #Attr.3):
+    let Num.283 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.283;
+
+procedure Test.1 (Bool.21, Bool.22):
+    joinpoint Test.12 Test.2 Test.3:
+        let Test.13 : {List Str, U64} = Struct {Test.2, Test.3};
+        let Test.31 : List Str = StructAtIndex 0 Test.13;
+        let Test.32 : U64 = lowlevel ListLenUsize Test.31;
+        let Test.33 : U64 = 1i64;
+        let Test.34 : Int1 = lowlevel NumGte Test.32 Test.33;
+        if Test.34 then
+            let Test.28 : U64 = StructAtIndex 1 Test.13;
+            let Test.29 : U64 = 0i64;
+            let Test.30 : Int1 = lowlevel Eq Test.29 Test.28;
+            if Test.30 then
+                let Test.21 : List Str = StructAtIndex 0 Test.13;
+                let Test.22 : U64 = 0i64;
+                let Test.6 : Str = lowlevel ListGetUnsafe Test.21 Test.22;
+                inc Test.6;
+                dec Test.21;
+                let Test.16 : [C {}, C Str] = TagId(1) Test.6;
+                ret Test.16;
+            else
+                let Test.23 : List Str = StructAtIndex 0 Test.13;
+                let Test.24 : U64 = 1i64;
+                let Test.25 : U64 = lowlevel ListLenU64 Test.23;
+                let Test.26 : U64 = lowlevel NumSub Test.25 Test.24;
+                let Test.27 : U64 = 1i64;
+                let Test.8 : List Str = lowlevel ListSublist Test.23 Test.27 Test.26;
+                let Test.19 : U64 = 1i64;
+                let Test.18 : U64 = CallByName Num.20 Test.3 Test.19;
+                jump Test.12 Test.8 Test.18;
+        else
+            dec Test.31;
+            let Test.15 : {} = Struct {};
+            let Test.14 : [C {}, C Str] = TagId(0) Test.15;
+            ret Test.14;
+    in
+    inc Bool.21;
+    jump Test.12 Bool.21 Bool.22;
+
+procedure Test.0 ():
+    let Test.35 : Str = "a";
+    let Test.10 : List Str = Array [Test.35];
+    let Test.11 : U64 = 0i64;
+    let Test.9 : [C {}, C Str] = CallByName Test.1 Test.10 Test.11;
+    dec Test.10;
+    ret Test.9;

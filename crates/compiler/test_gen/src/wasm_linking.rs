@@ -2,7 +2,7 @@
 
 use bumpalo::Bump;
 use roc_gen_wasm::Env;
-use roc_target::TargetInfo;
+use roc_target::Target;
 use std::fs;
 use std::process::Command;
 
@@ -66,7 +66,7 @@ fn build_app_mono<'a>(
 
     let or1_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([js_call_result, host_call_result]),
@@ -74,7 +74,7 @@ fn build_app_mono<'a>(
 
     let or2_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([or1, bitflag]),
@@ -254,12 +254,12 @@ fn get_native_result() -> i32 {
 fn test_help(
     eliminate_dead_code: bool,
     expected_host_import_names: &[&str],
-    expected_final_import_names: &[&str],
-    expected_name_section_start: &[(u32, &str)],
+    expected_linked_import_names: &[&str],
+    expected_eliminated_names: &[&str],
     dump_filename: &str,
 ) {
     let arena = Bump::new();
-    let mut layout_interner = STLayoutInterner::with_capacity(4, TargetInfo::default_wasm32());
+    let mut layout_interner = STLayoutInterner::with_capacity(4, Target::Wasm32);
 
     let BackendInputs {
         env,
@@ -268,12 +268,14 @@ fn test_help(
         procedures,
     } = BackendInputs::new(&arena);
 
-    let host_import_names = Vec::from_iter(host_module.import.imports.iter().map(|imp| imp.name));
+    let mut host_import_names =
+        Vec::from_iter(host_module.import.imports.iter().map(|imp| imp.name));
+    host_import_names.sort();
     assert_eq!(&host_import_names, expected_host_import_names);
 
     assert!(&host_module.names.function_names.is_empty());
 
-    let (mut final_module, called_fns, _roc_main_index) = roc_gen_wasm::build_app_module(
+    let (mut linked_module, called_fns, _roc_main_index) = roc_gen_wasm::build_app_module(
         &env,
         &mut layout_interner,
         &mut interns,
@@ -282,97 +284,89 @@ fn test_help(
     );
 
     if eliminate_dead_code {
-        final_module.eliminate_dead_code(env.arena, called_fns);
+        linked_module.eliminate_dead_code(env.arena, called_fns);
     }
 
     if std::env::var("DEBUG_WASM").is_ok() {
-        let mut buffer = Vec::with_capacity(final_module.size());
-        final_module.serialize(&mut buffer);
+        let mut buffer = Vec::with_capacity(linked_module.size());
+        linked_module.serialize(&mut buffer);
         fs::write(dump_filename, &buffer).unwrap();
     }
 
-    let final_import_names = Vec::from_iter(final_module.import.imports.iter().map(|i| i.name));
+    let mut linked_import_names =
+        Vec::from_iter(linked_module.import.imports.iter().map(|i| i.name));
+    linked_import_names.sort();
+    assert_eq!(&linked_import_names, expected_linked_import_names);
 
-    assert_eq!(&final_import_names, expected_final_import_names);
-
-    let name_count = expected_name_section_start.len();
-    assert_eq!(
-        &final_module.names.function_names[0..name_count],
-        expected_name_section_start
+    // eliminated imports appear after the non-eliminated ones in the name section
+    let import_count = linked_import_names.len();
+    let eliminated_count = expected_eliminated_names.len();
+    let mut eliminated_names = Vec::from_iter(
+        linked_module.names.function_names[import_count..][..eliminated_count]
+            .iter()
+            .map(|(_, name)| *name),
     );
+    eliminated_names.sort();
+    assert_eq!(&eliminated_names, expected_eliminated_names);
 
-    let wasm_result = execute_wasm_module(&arena, final_module).unwrap();
+    let wasm_result = execute_wasm_module(&arena, linked_module).unwrap();
     assert_eq!(wasm_result, get_native_result());
 }
 
-const EXPECTED_HOST_IMPORT_NAMES: [&'static str; 9] = [
-    "__linear_memory",
-    "__stack_pointer",
-    "js_called_indirectly_from_roc",
-    "js_unused",
-    "js_called_directly_from_roc",
-    "js_called_directly_from_main",
-    "roc__app_proc_1_exposed",
-    "js_called_indirectly_from_main",
-    "__indirect_function_table",
+const EXPECTED_HOST_IMPORT_NAMES: [&'static str; 8] = [
+    "__linear_memory",                // linked with the Roc app, not imported from JS
+    "__stack_pointer",                // linked with the Roc app, not imported from JS
+    "js_called_directly_from_main",   // imported from JS
+    "js_called_directly_from_roc",    // imported from JS
+    "js_called_indirectly_from_main", // imported from JS
+    "js_called_indirectly_from_roc",  // imported from JS
+    "js_unused",                      // Dead code. If DCE enabled, not imported from JS.
+    "roc__app_proc_1_exposed",        // linked with the Roc app, not imported from JS
 ];
 
 #[test]
 fn test_linking_without_dce() {
-    let expected_final_import_names = &[
-        "js_called_indirectly_from_roc",
-        "js_unused", // not eliminated
-        "js_called_directly_from_roc",
-        "js_called_directly_from_main",
-        "js_called_indirectly_from_main",
-    ];
-
-    let expected_name_section_start = &[
-        (0, "js_called_indirectly_from_roc"),
-        (1, "js_unused"), // not eliminated
-        (2, "js_called_directly_from_roc"),
-        (3, "js_called_directly_from_main"),
-        (4, "js_called_indirectly_from_main"),
-    ];
-
     let eliminate_dead_code = false;
     let dump_filename = "build/without_dce.wasm";
+
+    let expected_linked_import_names = &[
+        "js_called_directly_from_main",
+        "js_called_directly_from_roc",
+        "js_called_indirectly_from_main",
+        "js_called_indirectly_from_roc",
+        "js_unused",
+    ];
+
+    let expected_eliminated_names = &[];
 
     test_help(
         eliminate_dead_code,
         &EXPECTED_HOST_IMPORT_NAMES,
-        expected_final_import_names,
-        expected_name_section_start,
+        expected_linked_import_names,
+        expected_eliminated_names,
         dump_filename,
     );
 }
 
 #[test]
 fn test_linking_with_dce() {
-    let expected_final_import_names = &[
-        "js_called_indirectly_from_roc",
-        // "js_unused", // eliminated
-        "js_called_directly_from_roc",
-        "js_called_directly_from_main",
-        "js_called_indirectly_from_main",
-    ];
-
-    let expected_name_section_start = &[
-        (0, "js_called_indirectly_from_roc"),
-        (1, "js_called_directly_from_roc"),    // index changed
-        (2, "js_called_directly_from_main"),   // index changed
-        (3, "js_called_indirectly_from_main"), // index changed
-        (4, "js_unused"), // still exists, but now an internal dummy, with index changed
-    ];
-
     let eliminate_dead_code = true;
     let dump_filename = "build/with_dce.wasm";
+
+    let expected_final_import_names = &[
+        "js_called_directly_from_main",
+        "js_called_directly_from_roc",
+        "js_called_indirectly_from_main",
+        "js_called_indirectly_from_roc",
+    ];
+
+    let expected_eliminated_names = &["js_unused"];
 
     test_help(
         eliminate_dead_code,
         &EXPECTED_HOST_IMPORT_NAMES,
         expected_final_import_names,
-        expected_name_section_start,
+        expected_eliminated_names,
         dump_filename,
     );
 }

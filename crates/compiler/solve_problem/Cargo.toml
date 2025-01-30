@@ -8,10 +8,10 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
-roc_can = { path = "../can" }
-roc_collections = { path = "../collections" }
-roc_exhaustive = { path = "../exhaustive" }
-roc_module = { path = "../module" }
-roc_problem = { path = "../problem" }
-roc_region = { path = "../region" }
-roc_types = { path = "../types" }
+roc_can.workspace = true
+roc_collections.workspace = true
+roc_exhaustive.workspace = true
+roc_module.workspace = true
+roc_problem.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true

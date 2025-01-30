@@ -1,0 +1,50 @@
+@0-43 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-15 PncApply(
+                    @0-9 Var {
+                        module_name: "",
+                        ident: "fallible!",
+                    },
+                    [
+                        @10-14 Var {
+                            module_name: "",
+                            ident: "args",
+                        },
+                    ],
+                ),
+                @18-19 SingleQuestion,
+            ),
+        ],
+        @20-43 Closure(
+            [
+                @21-27 Identifier {
+                    ident: "my_err",
+                },
+            ],
+            @33-43 SpaceBefore(
+                BinOps(
+                    [
+                        (
+                            @33-39 Var {
+                                module_name: "",
+                                ident: "my_err",
+                            },
+                            @40-41 Star,
+                        ),
+                    ],
+                    @42-43 Num(
+                        "2",
+                    ),
+                ),
+                [
+                    Newline,
+                ],
+            ),
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -6,7 +6,7 @@ procedure Test.0 ():
         let Test.8 : Str = "E";
         ret Test.8;
     in
-    let Test.28 : U64 = lowlevel ListLen Test.1;
+    let Test.28 : U64 = lowlevel ListLenUsize Test.1;
     let Test.29 : U64 = 2i64;
     let Test.30 : Int1 = lowlevel NumGte Test.28 Test.29;
     if Test.30 then
@@ -30,7 +30,7 @@ procedure Test.0 ():
             dec Test.1;
             jump Test.9;
     else
-        let Test.25 : U64 = lowlevel ListLen Test.1;
+        let Test.25 : U64 = lowlevel ListLenUsize Test.1;
         let Test.26 : U64 = 1i64;
         let Test.27 : Int1 = lowlevel Eq Test.25 Test.26;
         if Test.27 then
@@ -45,7 +45,7 @@ procedure Test.0 ():
             else
                 jump Test.9;
         else
-            let Test.22 : U64 = lowlevel ListLen Test.1;
+            let Test.22 : U64 = lowlevel ListLenUsize Test.1;
             dec Test.1;
             let Test.23 : U64 = 1i64;
             let Test.24 : Int1 = lowlevel NumGte Test.22 Test.23;

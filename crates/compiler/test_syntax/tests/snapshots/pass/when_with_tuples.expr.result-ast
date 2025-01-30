@@ -1,72 +1,77 @@
-When(
-    @5-11 Tuple(
+@0-44 SpaceAfter(
+    When(
+        @5-11 Tuple(
+            [
+                @6-7 Num(
+                    "1",
+                ),
+                @9-10 Num(
+                    "2",
+                ),
+            ],
+        ),
         [
-            @6-7 Num(
-                "1",
-            ),
-            @9-10 Num(
-                "2",
-            ),
+            WhenBranch {
+                patterns: [
+                    @16-22 SpaceBefore(
+                        Tuple(
+                            [
+                                @17-18 NumLiteral(
+                                    "1",
+                                ),
+                                @20-21 Identifier {
+                                    ident: "x",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @26-27 Var {
+                    module_name: "",
+                    ident: "x",
+                },
+                guard: None,
+            },
+            WhenBranch {
+                patterns: [
+                    @29-35 SpaceBefore(
+                        Tuple(
+                            [
+                                @30-31 Underscore(
+                                    "",
+                                ),
+                                @33-34 Identifier {
+                                    ident: "b",
+                                },
+                            ],
+                        ),
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @39-44 BinOps(
+                    [
+                        (
+                            @39-40 Num(
+                                "3",
+                            ),
+                            @41-42 Plus,
+                        ),
+                    ],
+                    @43-44 Var {
+                        module_name: "",
+                        ident: "b",
+                    },
+                ),
+                guard: None,
+            },
         ],
     ),
     [
-        WhenBranch {
-            patterns: [
-                @16-22 SpaceBefore(
-                    Tuple(
-                        [
-                            @17-18 NumLiteral(
-                                "1",
-                            ),
-                            @20-21 Identifier(
-                                "x",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @26-27 Var {
-                module_name: "",
-                ident: "x",
-            },
-            guard: None,
-        },
-        WhenBranch {
-            patterns: [
-                @29-35 SpaceBefore(
-                    Tuple(
-                        [
-                            @30-31 Underscore(
-                                "",
-                            ),
-                            @33-34 Identifier(
-                                "b",
-                            ),
-                        ],
-                    ),
-                    [
-                        Newline,
-                    ],
-                ),
-            ],
-            value: @39-44 BinOps(
-                [
-                    (
-                        @39-40 Num(
-                            "3",
-                        ),
-                        @41-42 Plus,
-                    ),
-                ],
-                @43-44 Var {
-                    module_name: "",
-                    ident: "b",
-                },
-            ),
-            guard: None,
-        },
+        Newline,
     ],
 )

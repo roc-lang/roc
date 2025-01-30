@@ -1,0 +1,40 @@
+[package]
+name = "roc_specialize_types"
+description = "Convert a type-checked canonical IR to a monomorphized IR by creating specializations of all functions, such that they are monomorphic in types. We will specialize again later after computing lambda sets, which happens after this pass."
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+roc_can.workspace = true
+roc_region.workspace = true
+roc_types.workspace = true
+roc_collections.workspace = true
+roc_module.workspace = true
+roc_solve.workspace = true
+
+bitvec.workspace = true
+arrayvec.workspace = true
+bumpalo.workspace = true
+hashbrown.workspace = true
+parking_lot.workspace = true
+static_assertions.workspace = true
+indoc.workspace = true
+
+soa.workspace = true
+
+[dev-dependencies]
+roc_builtins.workspace = true
+roc_derive = { workspace = true, features = ["debug-derived-symbols"] }
+roc_load.workspace = true
+roc_parse.workspace = true
+roc_problem.workspace = true
+roc_reporting.workspace = true
+roc_target.workspace = true
+roc_solve.workspace = true
+test_solve_helpers.workspace = true
+
+test_compile.workspace = true
+pretty_assertions.workspace = true
