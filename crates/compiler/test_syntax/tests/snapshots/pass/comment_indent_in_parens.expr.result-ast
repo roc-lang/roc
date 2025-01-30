@@ -22,13 +22,19 @@
                     ),
                     [
                         @2-7 SpaceAfter(
-                            NumLiteral(
-                                "0",
+                            ParensAround(
+                                SpaceAfter(
+                                    NumLiteral(
+                                        "0",
+                                    ),
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
+                                ),
                             ),
                             [
-                                LineComment(
-                                    "",
-                                ),
                                 LineComment(
                                     "",
                                 ),

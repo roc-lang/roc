@@ -200,7 +200,7 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
             byte(b')', PInParens::End),
             Pattern::SpaceBefore,
         )),
-        move |_arena, state, _, loc_elements| {
+        move |arena, state, _, loc_elements| {
             let elements = loc_elements.value;
             let region = loc_elements.region;
 
@@ -213,10 +213,17 @@ fn loc_pattern_in_parens_help<'a>() -> impl Parser<'a, Loc<Pattern<'a>>, PInPare
             } else if elements.is_empty() {
                 Err((NoProgress, PInParens::Empty(state.pos())))
             } else {
-                // TODO: don't discard comments before/after
-                // (stored in the Collection)
-                // TODO: add Pattern::ParensAround to faithfully represent the input
-                Ok((MadeProgress, elements.items[0], state))
+                let inner = elements.items[0]
+                    .value
+                    .maybe_after(arena, elements.final_comments());
+                Ok((
+                    MadeProgress,
+                    Loc::at(
+                        elements.items[0].region,
+                        Pattern::ParensAround(arena.alloc(inner)),
+                    ),
+                    state,
+                ))
             }
         },
     )

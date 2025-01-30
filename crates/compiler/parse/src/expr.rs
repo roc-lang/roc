@@ -98,13 +98,14 @@ fn loc_expr_in_parens_help<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EInParens<'a>
             } else if elements.is_empty() {
                 Err((NoProgress, EInParens::Empty(state.pos())))
             } else {
-                // TODO: don't discard comments before/after
-                // (stored in the Collection)
+                let inner = elements.items[0]
+                    .value
+                    .maybe_after(arena, elements.final_comments());
                 Ok((
                     MadeProgress,
                     Loc::at(
                         elements.items[0].region,
-                        Expr::ParensAround(&elements.items[0].value),
+                        Expr::ParensAround(arena.alloc(inner)),
                     ),
                     state,
                 ))
@@ -2083,15 +2084,7 @@ pub fn merge_spaces<'a>(
 /// If the given Expr would parse the same way as a valid Pattern, convert it.
 /// Example: (foo) could be either an Expr::Var("foo") or Pattern::Identifier("foo")
 fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<'a>, ()> {
-    let mut expr = expr.extract_spaces();
-
-    while let Expr::ParensAround(loc_expr) = &expr.item {
-        let expr_inner = loc_expr.extract_spaces();
-
-        expr.before = merge_spaces(arena, expr.before, expr_inner.before);
-        expr.after = merge_spaces(arena, expr_inner.after, expr.after);
-        expr.item = expr_inner.item;
-    }
+    let expr = expr.extract_spaces();
 
     let mut pat = match expr.item {
         Expr::Var { module_name, ident } => {
@@ -2137,7 +2130,11 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
 
         Expr::Try => Pattern::Identifier { ident: "try" },
 
-        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) | Expr::ParensAround(..) => unreachable!(),
+        Expr::ParensAround(inner) => {
+            Pattern::ParensAround(arena.alloc(expr_to_pattern_help(arena, inner)?))
+        }
+
+        Expr::SpaceBefore(..) | Expr::SpaceAfter(..) => unreachable!(),
 
         Expr::Record(fields) => {
             let patterns = fields.map_items_result(arena, |loc_assigned_field| {
@@ -3385,6 +3382,8 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
         Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
         Pattern::SpaceBefore(_, _) => true,
         Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
+        // The parens may disappear during formatting, so we conservatively assume they might have
+        Pattern::ParensAround(inner) => starts_with_spaces_conservative(inner),
         Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => true,
     }
 }

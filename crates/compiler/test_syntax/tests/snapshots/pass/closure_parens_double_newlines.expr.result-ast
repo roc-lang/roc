@@ -7,13 +7,15 @@
                 ),
                 [
                     @4-5 SpaceAfter(
-                        SpaceAfter(
-                            Identifier {
-                                ident: "z",
-                            },
-                            [
-                                Newline,
-                            ],
+                        ParensAround(
+                            SpaceAfter(
+                                Identifier {
+                                    ident: "z",
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
                         ),
                         [
                             Newline,

@@ -47,7 +47,6 @@ impl<'a> Formattable for PatternAs<'a> {
 
 impl<'a> Formattable for Pattern<'a> {
     fn is_multiline(&self) -> bool {
-        // Theory: a pattern should only be multiline when it contains a comment
         match self {
             Pattern::SpaceBefore(pattern, spaces) | Pattern::SpaceAfter(pattern, spaces) => {
                 debug_assert!(
@@ -58,6 +57,7 @@ impl<'a> Formattable for Pattern<'a> {
 
                 spaces.iter().any(|s| s.is_comment()) || pattern.is_multiline()
             }
+            Pattern::ParensAround(inner) => inner.is_multiline(),
 
             Pattern::RecordDestructure(fields) => fields.iter().any(|f| f.is_multiline()),
             Pattern::RequiredField(_, subpattern) => subpattern.is_multiline(),
@@ -167,6 +167,9 @@ fn fmt_pattern_only(
         Pattern::Tag(name) | Pattern::OpaqueRef(name) => {
             buf.indent(indent);
             buf.push_str(name);
+        }
+        Pattern::ParensAround(inner) => {
+            fmt_pattern(buf, inner, indent, parens);
         }
         Pattern::PncApply(loc_pattern, loc_arg_patterns) => {
             pattern_fmt_apply(
@@ -664,6 +667,7 @@ fn pattern_prec(pat: Pattern<'_>) -> Prec {
         | Pattern::Tuple(..)
         | Pattern::List(..)
         | Pattern::ListRest(_)
+        | Pattern::ParensAround(_)
         | Pattern::PncApply(_, _) => Prec::Term,
         Pattern::Apply(_, _) | Pattern::As(_, _) => Prec::Apply,
         Pattern::SpaceBefore(inner, _) | Pattern::SpaceAfter(inner, _) => pattern_prec(*inner),
@@ -764,6 +768,7 @@ pub fn pattern_lift_spaces<'a, 'b: 'a>(
             inner.after = merge_spaces(arena, inner.after, spaces);
             inner
         }
+        Pattern::ParensAround(expr) => pattern_lift_spaces(arena, expr),
         _ => Spaces {
             before: &[],
             item: *pat,

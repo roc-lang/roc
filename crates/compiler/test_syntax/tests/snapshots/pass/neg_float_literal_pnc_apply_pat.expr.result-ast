@@ -18,8 +18,10 @@
             value_defs: [
                 Annotation(
                     @1-7 PncApply(
-                        @1-4 FloatLiteral(
-                            "-8.",
+                        @1-4 ParensAround(
+                            FloatLiteral(
+                                "-8.",
+                            ),
                         ),
                         [],
                     ),

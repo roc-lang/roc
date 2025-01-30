@@ -1464,6 +1464,7 @@ fn desugar_pattern<'a>(
         | MalformedIdent(_, _)
         | MalformedExpr(_)
         | QualifiedIdentifier { .. } => pattern,
+        ParensAround(inner) => desugar_pattern(env, scope, *inner),
 
         Apply(tag, arg_patterns) => {
             // Skip desugaring the tag, it should either be a Tag or OpaqueRef

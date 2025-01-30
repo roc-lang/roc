@@ -16,15 +16,19 @@
         type_defs: [],
         value_defs: [
             Annotation(
-                @1-5 Apply(
-                    @2-3 Tag(
-                        "J",
+                @1-5 ParensAround(
+                    Apply(
+                        @2-3 ParensAround(
+                            Tag(
+                                "J",
+                            ),
+                        ),
+                        [
+                            @4-5 Identifier {
+                                ident: "x",
+                            },
+                        ],
                     ),
-                    [
-                        @4-5 Identifier {
-                            ident: "x",
-                        },
-                    ],
                 ),
                 @7-8 BoundVariable(
                     "i",

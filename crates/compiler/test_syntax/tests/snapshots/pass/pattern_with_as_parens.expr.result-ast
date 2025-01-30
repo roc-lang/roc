@@ -13,14 +13,16 @@
                                 "Ok",
                             ),
                             [
-                                @18-25 As(
-                                    @18-20 RecordDestructure(
-                                        [],
+                                @18-25 ParensAround(
+                                    As(
+                                        @18-20 RecordDestructure(
+                                            [],
+                                        ),
+                                        PatternAs {
+                                            spaces_before: [],
+                                            identifier: @24-25 "d",
+                                        },
                                     ),
-                                    PatternAs {
-                                        spaces_before: [],
-                                        identifier: @24-25 "d",
-                                    },
                                 ),
                             ],
                         ),

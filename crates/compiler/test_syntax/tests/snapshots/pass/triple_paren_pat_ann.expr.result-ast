@@ -23,20 +23,22 @@
                                 "1",
                             ),
                             [
-                                @2-9 PncApply(
-                                    @3-4 NumLiteral(
-                                        "0",
-                                    ),
-                                    [
-                                        @5-6 SpaceAfter(
-                                            NumLiteral(
-                                                "0",
-                                            ),
-                                            [
-                                                Newline,
-                                            ],
+                                @2-9 ParensAround(
+                                    PncApply(
+                                        @3-4 NumLiteral(
+                                            "0",
                                         ),
-                                    ],
+                                        [
+                                            @5-6 SpaceAfter(
+                                                NumLiteral(
+                                                    "0",
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                    ),
                                 ),
                             ],
                         ),

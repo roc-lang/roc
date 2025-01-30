@@ -18,13 +18,15 @@
             value_defs: [
                 Annotation(
                     @2-6 PncApply(
-                        @2-3 SpaceBefore(
-                            NumLiteral(
-                                "3",
+                        @2-3 ParensAround(
+                            SpaceBefore(
+                                NumLiteral(
+                                    "3",
+                                ),
+                                [
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                            ],
                         ),
                         [],
                     ),

@@ -785,7 +785,8 @@ impl<'a> Normalize<'a> for Expr<'a> {
             },
             Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
             Expr::ParensAround(a) => {
-                // The formatter can remove redundant parentheses, so also remove these when normalizing for comparison.
+                // The formatter can remove redundant parentheses,
+                // so also remove these when normalizing for comparison.
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
@@ -937,6 +938,11 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             }
             Pattern::SpaceBefore(a, _) => a.normalize(arena),
             Pattern::SpaceAfter(a, _) => a.normalize(arena),
+            Pattern::ParensAround(a) => {
+                // The formatter can remove redundant parentheses,
+                // so also remove these when normalizing for comparison.
+                a.normalize(arena)
+            }
             Pattern::SingleQuote(a) => Pattern::SingleQuote(a),
             Pattern::List(pats) => Pattern::List(pats.normalize(arena)),
             Pattern::Tuple(pats) => Pattern::Tuple(pats.normalize(arena)),

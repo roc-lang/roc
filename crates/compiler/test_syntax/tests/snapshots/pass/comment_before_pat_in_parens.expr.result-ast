@@ -17,16 +17,18 @@
             type_defs: [],
             value_defs: [
                 Annotation(
-                    @4-5 SpaceBefore(
-                        NumLiteral(
-                            "6",
-                        ),
-                        [
-                            Newline,
-                            LineComment(
-                                "",
+                    @4-5 ParensAround(
+                        SpaceBefore(
+                            NumLiteral(
+                                "6",
                             ),
-                        ],
+                            [
+                                Newline,
+                                LineComment(
+                                    "",
+                                ),
+                            ],
+                        ),
                     ),
                     @7-8 BoundVariable(
                         "s",

@@ -22,17 +22,21 @@
                             ident: "u",
                         },
                         [
-                            @3-13 Apply(
-                                @3-9 StrLiteral(
-                                    Block(
-                                        [],
+                            @3-13 ParensAround(
+                                Apply(
+                                    @3-9 StrLiteral(
+                                        Block(
+                                            [],
+                                        ),
                                     ),
+                                    [
+                                        @11-12 ParensAround(
+                                            NumLiteral(
+                                                "0",
+                                            ),
+                                        ),
+                                    ],
                                 ),
-                                [
-                                    @11-12 NumLiteral(
-                                        "0",
-                                    ),
-                                ],
                             ),
                         ],
                     ),

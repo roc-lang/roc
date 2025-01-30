@@ -18,16 +18,28 @@
             value_defs: [
                 Annotation(
                     @1-11 Apply(
-                        @1-11 SpaceAfter(
-                            NumLiteral(
-                                "0",
-                            ),
-                            [
-                                Newline,
-                                LineComment(
-                                    "",
+                        @1-11 ParensAround(
+                            ParensAround(
+                                SpaceAfter(
+                                    ParensAround(
+                                        SpaceAfter(
+                                            ParensAround(
+                                                NumLiteral(
+                                                    "0",
+                                                ),
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ),
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
                                 ),
-                            ],
+                            ),
                         ),
                         [
                             @12-13 Identifier {
