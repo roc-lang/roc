@@ -98,7 +98,9 @@ fn format_expr_only(
                 region,
             },
             loc_args,
-        ) => {
+        ) if buf.flags().parens_and_commas => {
+            // TODO: the conversion we do here is _wrong_ and should be removed in the near future
+            // For now this is helpful to fix up code that was incorrectly partially migrated
             let arena = buf.text.bump();
             let apply = arena.alloc(Expr::PncApply(
                 arena.alloc(Loc {
