@@ -11,7 +11,7 @@ env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
   # Make a new basic-cli git tag and set it here before starting this workflow
-  RELEASE_TAG: 0.18.0
+  RELEASE_TAG: 0.19.0
 
 jobs:
   prepare:
@@ -86,6 +86,7 @@ jobs:
           CC_aarch64_unknown_linux_musl: clang-18
           AR_aarch64_unknown_linux_musl: llvm-ar-18
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
+          CFLAGS_aarch64_unknown_linux_musl: "-nostdinc -nostdlib -isystem/usr/include/aarch64-linux-musl/"
         run: ./ci/build_basic_cli.sh linux_arm64
 
       - name: Save .a file
