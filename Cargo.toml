@@ -156,7 +156,7 @@ strum_macros = "0.24.3"
 syn = { version = "1.0.109", features = ["full", "extra-traits"] }
 tar = "0.4.38"
 target-lexicon = "0.12.6"
-tempfile = "=3.2.0"
+tempfile = "3.16.0"
 tracing = { version = "0.1.40", features = ["release_max_level_off"] }
 tracing-appender = "0.2.2"
 tracing-subscriber = { version = "0.3.16", features = ["env-filter"] }
