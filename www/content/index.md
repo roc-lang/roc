@@ -5,8 +5,8 @@
 </svg>
 
 <p id="homepage-tagline">A fast, friendly, functional language.</p>
-<pre id="first-code-sample"><samp class="code-snippet">credits <span class="kw">=</span> List<span class="punctuation section">.</span>map songs <span class="kw">\</span>song <span class="kw">-></span>
-    <span class="string">"Performed by </span><span class="kw">$(</span>song<span class="punctuation section">.</span>artist<span class="kw">)</span><span class="string">"</span></samp></pre>
+<pre id="first-code-sample"><samp class="code-snippet">credits <span class="kw">=</span> List<span class="punctuation section">.</span>map<span class="punctuation section">(</span>songs<span class="punctuation section">,</span> <span class="kw">|</span>song<span class="kw">|</span>
+    <span class="string">"Performed by </span><span class="kw">${</span>song<span class="punctuation section">.</span>artist<span class="kw">}</span><span class="string">"</span><br><span class="punctuation section">)</span></samp></pre>
 </div>
 </div>
 
@@ -72,16 +72,16 @@ Here are some examples of how it can be used today.
 <div role="presentation" class="home-examples-container">
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Command-Line Interfaces</h3>
-    <pre><samp class="code-snippet">main <span class="kw">=</span>
-    Stdout<span class="punctuation section">.</span>line<span class="punctuation section">!</span> <span class="literal">"Hello!"</span></samp></pre>
+    <pre><samp class="code-snippet">main! <span class="kw">=</span> <span class="kw">|</span>args<span class="kw">|</span>
+    Stdout<span class="punctuation section">.</span>line<span class="punctuation section">!</span><span class="punctuation section">(</span><span class="literal">"Hello!"</span><span class="punctuation section">)</span></samp></pre>
         <p>You can use Roc to create scripts and command-line interfaces (CLIs). The compiler produces binary executables, so Roc programs can run on devices that don't have Roc itself installed.</p>
         <p>As an example, the HTML for this website is generated using a simple Roc script. You can see <a href="https://github.com/roc-lang/roc/blob/main/www/main.roc">the code for it</a> in the main Roc code repository.</p>
         <p>If you’re looking for a starting point for building a command-line program in Roc, <a href="https://github.com/roc-lang/basic-cli">basic-cli</a> is a popular <a href="/platforms">platform</a> to check out.</p>
     </div>
     <div role="presentation" class="home-examples-column">
         <h3 class="home-examples-title">Web Servers</h3>
-<pre><samp class="code-snippet">handleReq <span class="kw">=</span> <span class="kw">\</span>request <span class="kw">-&gt;</span>
-    Task<span class="punctuation section">.</span>ok <span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span></samp></pre>
+<pre><samp class="code-snippet">handle_req! <span class="kw">=</span> <span class="kw">|</span>request<span class="kw">|</span>
+    Ok<span class="punctuation section">(</span><span class="literal">{</span> body: <span class="comment">…</span> <span class="literal">}</span><span class="punctuation section">)</span></samp></pre>
         <p>You can also build web servers in Roc. <a href="https://github.com/roc-lang/basic-webserver">basic-webserver</a> is a <a href="/platforms">platform</a> with
         a simple interface: you write a function which takes a <code>Request</code>, does some I/O, and returns a <code>Response</code>.</p>
         <p>Behind the scenes, it uses Rust's high-performance <a href="https://docs.rs/hyper/latest/hyper/">hyper</a> and <a href="https://tokio.rs/">tokio</a> libraries to execute your Roc function on incoming requests.</p>
@@ -110,7 +110,7 @@ Here's a code sample that shows a few different aspects of Roc:
 - File I/O and HTTP requests
 - Pattern matching for error handling
 - JSON deserialization via type inference
-- Common syntax sugar: pipelines, the `!` operator, and string interpolation
+- Common syntax sugar: the `?` infix and postfix operators and string interpolation
 
 The [tutorial](/tutorial) introduces these gradually and in more depth, but this gives a brief overview.
 
@@ -132,6 +132,7 @@ If you would like your organization to become an official sponsor of Roc's devel
 We'd also like to express our gratitude to our generous [individual sponsors](https://github.com/sponsors/roc-lang/)! A special thanks to those sponsoring $25/month or more:
 
 <ul id="individual-sponsors">
+    <li><a href="https://github.com/gamebox">Anthony Bullard</a></li>
     <li><a href="https://github.com/pmarreck">Peter Marreck</a></li>
     <li><a href="https://github.com/chiroptical">Barry Moore</a></li>
     <li>Eric Andresen</li>
