@@ -42,7 +42,10 @@ use strum::IntoEnumIterator;
 use tempfile::TempDir;
 
 mod format;
-pub use format::{format_files, format_src, FormatMode};
+pub use format::{
+    annotate_file, annotation_edit, annotation_edits, format_files, format_src, AnnotationProblem,
+    FormatMode,
+};
 
 pub const CMD_BUILD: &str = "build";
 pub const CMD_RUN: &str = "run";
@@ -52,6 +55,7 @@ pub const CMD_DOCS: &str = "docs";
 pub const CMD_CHECK: &str = "check";
 pub const CMD_VERSION: &str = "version";
 pub const CMD_FORMAT: &str = "format";
+pub const CMD_FORMAT_ANNOTATE: &str = "annotate";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
@@ -380,6 +384,16 @@ pub fn build_app() -> Command {
                     .required(false),
             )
             .after_help("If DIRECTORY_OR_FILES is omitted, the .roc files in the current working\ndirectory are formatted.")
+            .subcommand(Command::new(CMD_FORMAT_ANNOTATE)
+                .about("Annotate all top level definitions from a .roc file")
+                .arg(
+                    Arg::new(ROC_FILE)
+                        .help("The .roc file ot annotate")
+                        .value_parser(value_parser!(PathBuf))
+                        .required(false)
+                        .default_value(DEFAULT_ROC_FILENAME),
+                )
+            )
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))

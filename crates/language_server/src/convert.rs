@@ -42,7 +42,7 @@ impl ToRegion for Range {
             },
             end: LineColumn {
                 line: self.end.line,
-                column: self.end.line,
+                column: self.end.character,
             },
         };
 

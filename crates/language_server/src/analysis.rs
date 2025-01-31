@@ -20,6 +20,7 @@ use roc_types::subs::{Subs, Variable};
 use tower_lsp::lsp_types::{Diagnostic, SemanticTokenType, Url};
 
 mod analysed_doc;
+mod annotation_visitor;
 mod completion;
 mod parse_ast;
 mod semantic_tokens;

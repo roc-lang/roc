@@ -3,15 +3,16 @@ use bumpalo::Bump;
 use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
-    build_app, default_linking_strategy, format_files, format_src, test, BuildConfig, FormatMode,
-    CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL,
-    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT,
-    FLAG_LIB, FLAG_MAIN, FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT,
-    FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME,
-    FLAG_VERBOSE, GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
+    annotate_file, build_app, default_linking_strategy, format_files, format_src, test,
+    AnnotationProblem, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS,
+    CMD_FORMAT, CMD_FORMAT_ANNOTATE, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT, FLAG_LIB, FLAG_MAIN,
+    FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
+    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_VERBOSE,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::MigrationFlags;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
@@ -345,6 +346,42 @@ fn main() -> io::Result<()> {
             );
 
             Ok(0)
+        }
+        Some((CMD_FORMAT, fmatches)) if Some(CMD_FORMAT_ANNOTATE) == fmatches.subcommand_name() => {
+            let matches = fmatches
+                .subcommand_matches(CMD_FORMAT_ANNOTATE)
+                .unwrap_or_else(|| internal_error!("No annotate subcommand present"));
+
+            let arena = Bump::new();
+            let roc_file_path = matches
+                .get_one::<PathBuf>(ROC_FILE)
+                .unwrap_or_else(|| internal_error!("No default for ROC_FILE"));
+
+            let annotate_exit_code = match annotate_file(&arena, roc_file_path.to_owned()) {
+                Ok(()) => 0,
+                Err(AnnotationProblem::Loading(LoadingProblem::FormattedReport(report, ..))) => {
+                    eprintln!("{report}");
+                    1
+                }
+                Err(AnnotationProblem::Type(type_problem)) => {
+                    eprintln!(
+                        "The type generated for `{}` on line {} contains an error",
+                        type_problem.name, type_problem.position.line,
+                    );
+                    eprintln!(
+                        "run `roc check \"{}\"` for a more detailed error",
+                        roc_file_path.to_str().unwrap_or_else(|| internal_error!(
+                            "File path is not a valid utf8 string"
+                        ))
+                    );
+                    1
+                }
+                Err(other) => {
+                    internal_error!("build_file failed with error:\n{other:?}");
+                }
+            };
+
+            Ok(annotate_exit_code)
         }
         Some((CMD_FORMAT, matches)) => {
             let from_stdin = matches.get_flag(FLAG_STDIN);

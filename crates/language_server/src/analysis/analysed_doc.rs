@@ -1,4 +1,6 @@
 use log::{debug, info};
+
+use roc_cli::{annotation_edit, annotation_edits};
 use roc_fmt::MigrationFlags;
 use std::collections::HashMap;
 
@@ -6,11 +8,12 @@ use bumpalo::Bump;
 
 use roc_module::symbol::{ModuleId, Symbol};
 
-use roc_region::all::LineInfo;
+use roc_region::all::{LineInfo, Position as RocPosition, Region};
 
 use tower_lsp::lsp_types::{
-    CompletionItem, Diagnostic, GotoDefinitionResponse, Hover, HoverContents, LanguageString,
-    Location, MarkedString, Position, Range, SemanticTokens, SemanticTokensResult, TextEdit, Url,
+    CodeAction, CodeActionKind, CompletionItem, Diagnostic, GotoDefinitionResponse, Hover,
+    HoverContents, LanguageString, Location, MarkedString, Position, Range, SemanticTokens,
+    SemanticTokensResult, TextEdit, Url, WorkspaceEdit,
 };
 
 use crate::{
@@ -18,10 +21,11 @@ use crate::{
         field_completion, get_completion_items, get_module_completion_items,
         get_tag_completion_items,
     },
-    convert::{ToRange, ToRocPosition},
+    convert::{ToRange, ToRegion, ToRocPosition},
 };
 
 use super::{
+    annotation_visitor::{find_declaration_at, FoundDeclaration, NotFound},
     parse_ast::Ast,
     semantic_tokens::arrange_semantic_tokens,
     utils::{format_var_type, is_roc_identifier_char},
@@ -323,5 +327,86 @@ impl AnalyzedDocument {
                 Some(completions)
             }
         }
+    }
+
+    pub fn annotate(&self, range: Range) -> Option<CodeAction> {
+        let region = range.to_region(self.line_info());
+
+        match find_declaration_at(region, &self.module()?.declarations) {
+            Ok(found_declaration) => self.annotate_declaration(found_declaration),
+            Err(NotFound::TopLevel) => self.annnotate_top_level(),
+            _ => None,
+        }
+    }
+
+    fn annnotate_top_level(&self) -> Option<CodeAction> {
+        let AnalyzedModule {
+            module_id,
+            interns,
+            subs,
+            abilities,
+            declarations,
+            ..
+        } = self.module()?;
+
+        let edits = annotation_edits(
+            declarations,
+            subs,
+            abilities,
+            &self.doc_info.source,
+            *module_id,
+            interns,
+        )
+        .ok()?
+        .into_iter()
+        .map(|(offset, new_text)| {
+            let pos = roc_region::all::Position::new(offset as u32);
+            let range = Region::new(pos, pos).to_range(self.line_info());
+
+            TextEdit { range, new_text }
+        })
+        .collect();
+
+        Some(CodeAction {
+            title: "Add top-level signatures".to_owned(),
+            edit: Some(WorkspaceEdit::new(HashMap::from([(
+                self.url().clone(),
+                edits,
+            )]))),
+            kind: Some(CodeActionKind::SOURCE),
+            ..Default::default()
+        })
+    }
+
+    fn annotate_declaration(&self, decl: FoundDeclaration) -> Option<CodeAction> {
+        let AnalyzedModule {
+            module_id,
+            interns,
+            subs,
+            ..
+        } = self.module()?;
+
+        let (offset, new_text) = annotation_edit(
+            &self.doc_info.source,
+            subs,
+            interns,
+            *module_id,
+            decl.var,
+            decl.range,
+        )
+        .ok()?;
+
+        let pos = RocPosition::new(offset as u32);
+        let range = Region::new(pos, pos).to_range(self.line_info());
+
+        let edit = TextEdit { range, new_text };
+        Some(CodeAction {
+            title: "Add signature".to_owned(),
+            edit: Some(WorkspaceEdit::new(HashMap::from([(
+                self.url().clone(),
+                vec![edit],
+            )]))),
+            ..Default::default()
+        })
     }
 }
