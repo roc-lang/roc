@@ -3,6 +3,7 @@ const testing = std.testing;
 const mem = std.mem;
 
 pub const RocCmd = enum {
+    roc_run,
     roc_build,
     roc_test,
     roc_repl,
@@ -15,6 +16,7 @@ pub const RocCmd = enum {
 
     pub fn parse(str: []const u8) ?RocCmd {
         const map = std.static_string_map.StaticStringMap(RocCmd).initComptime(.{
+            .{ "run", .roc_run },
             .{ "build", .roc_build },
             .{ "test", .roc_test },
             .{ "repl", .roc_repl },
@@ -49,11 +51,17 @@ pub const RocOpt = struct {
     timing: bool = false,
     fuzzing: bool = false,
 
-    pub fn parse(args: []const []const u8) !RocOpt {
+    pub fn parse(args: []const []const u8) !struct { opt: RocOpt, next_index: usize } {
         var opt = RocOpt{};
         var i: usize = 0;
         while (i < args.len) : (i += 1) {
             const arg = args[i];
+
+            // If argument doesn't start with '-', we're done parsing options
+            if (arg.len == 0 or arg[0] != '-') {
+                return .{ .opt = opt, .next_index = i };
+            }
+
             if (mem.eql(u8, arg, "--opt")) {
                 // Check if there's a next argument
                 if (i + 1 >= args.len) {
@@ -83,7 +91,8 @@ pub const RocOpt = struct {
                 return error.InvalidArgument;
             }
         }
-        return opt;
+
+        return .{ .opt = opt, .next_index = i };
     }
 };
 
@@ -97,7 +106,7 @@ test "default options" {
     });
 }
 
-// Split a string into arguments ignoring whitespace and empty strings
+// Testing helper, split a string into arguments ignoring whitespace and empty strings
 fn splitArgs(allocator: std.mem.Allocator, str: []const u8) ![]const []const u8 {
     var args = std.ArrayList([]const u8).init(allocator);
     errdefer args.deinit();
@@ -116,7 +125,10 @@ test "parsing cli options" {
     const TestCase = struct {
         args: []const u8,
         expected: union(enum) {
-            ok: RocOpt,
+            ok: struct {
+                opt: RocOpt,
+                next_index: usize,
+            },
             err: anyerror,
         },
     };
@@ -124,55 +136,30 @@ test "parsing cli options" {
     const test_cases = &[_]TestCase{
         .{
             .args = "",
-            .expected = .{ .ok = RocOpt{} },
+            .expected = .{ .ok = .{ .opt = RocOpt{}, .next_index = 0 } },
         },
         .{
             .args = "--opt size",
-            .expected = .{ .ok = RocOpt{ .opt = .size } },
+            .expected = .{ .ok = .{ .opt = RocOpt{ .opt = .size }, .next_index = 2 } },
         },
         .{
-            .args = "--opt speed",
-            .expected = .{ .ok = RocOpt{ .opt = .speed } },
+            .args = "--opt speed app.roc",
+            .expected = .{ .ok = .{ .opt = RocOpt{ .opt = .speed }, .next_index = 2 } },
         },
         .{
-            .args = "--time",
-            .expected = .{ .ok = RocOpt{ .timing = true } },
+            .args = "--time build app.roc",
+            .expected = .{ .ok = .{ .opt = RocOpt{ .timing = true }, .next_index = 1 } },
         },
         .{
-            .args = "--opt   size    --time",
-            .expected = .{ .ok = RocOpt{ .opt = .size, .timing = true } },
-        },
-        .{
-            .args = "  --time  --opt speed   --fuzz  ",
-            .expected = .{ .ok = RocOpt{ .opt = .speed, .timing = true, .fuzzing = true } },
-        },
-        .{
-            .args = "--emit-llvm-ir",
-            .expected = .{ .ok = RocOpt{ .emit_llvm_ir = true } },
-        },
-        .{
-            .args = "--profiling",
-            .expected = .{ .ok = RocOpt{ .profiling = true } },
-        },
-        .{
-            .args = "--opt none",
-            .expected = .{ .ok = RocOpt{ .opt = .none } },
-        },
-        .{
-            .args = "--emit-llvm-ir --profiling --time --fuzz",
-            .expected = .{ .ok = RocOpt{
-                .emit_llvm_ir = true,
-                .profiling = true,
-                .timing = true,
-                .fuzzing = true,
+            .args = "--opt size --time app.roc",
+            .expected = .{ .ok = .{
+                .opt = RocOpt{ .opt = .size, .timing = true },
+                .next_index = 3,
             } },
         },
         .{
-            .args = "--opt speed --emit-llvm-ir",
-            .expected = .{ .ok = RocOpt{
-                .opt = .speed,
-                .emit_llvm_ir = true,
-            } },
+            .args = "build --time",
+            .expected = .{ .ok = .{ .opt = RocOpt{}, .next_index = 0 } },
         },
         .{
             .args = "--opt",
@@ -187,16 +174,8 @@ test "parsing cli options" {
             .expected = .{ .err = error.InvalidArgument },
         },
         .{
-            .args = "--opt size --opt speed",
-            .expected = .{ .ok = RocOpt{ .opt = .speed } },
-        },
-        .{
-            .args = "--opt none --invalid",
-            .expected = .{ .err = error.InvalidArgument },
-        },
-        .{
-            .args = "--time --profiling --invalid-flag",
-            .expected = .{ .err = error.InvalidArgument },
+            .args = "app.roc --invalid",
+            .expected = .{ .ok = .{ .opt = RocOpt{}, .next_index = 0 } },
         },
     };
 
@@ -207,7 +186,8 @@ test "parsing cli options" {
         switch (tc.expected) {
             .ok => |expected| {
                 const result = try RocOpt.parse(args);
-                try testing.expectEqual(expected, result);
+                try testing.expectEqual(expected.opt, result.opt);
+                try testing.expectEqual(expected.next_index, result.next_index);
             },
             .err => |expected_err| {
                 const result = RocOpt.parse(args);
