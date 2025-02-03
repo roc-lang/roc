@@ -29,16 +29,42 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.process.exit(1);
 }
 
-pub fn log(
-    comptime level: std.log.Level,
-    comptime format: []const u8,
-    args: anytype,
-) void {
-    const prefix = comptime level.asText();
+const RocCmd = enum {
+    roc_build,
+    roc_test,
+    roc_repl,
+    roc_format,
+    roc_version,
+    roc_check,
+    roc_docs,
+    roc_glue,
+    roc_help,
 
-    // Print the message to stderr, silently ignoring any errors
-    std.debug.print(prefix ++ ": " ++ format ++ "\n", args);
-}
+    // Parse from string, return null if not found
+    pub fn fromString(str: []const u8) ?RocCmd {
+        inline for (std.meta.fields(RocCmd)) |field| {
+            if (mem.eql(u8, str, field.name)) {
+                return @enumFromInt(field.value);
+            }
+        }
+        return null;
+    }
+
+    // Define the function type for command handlers
+    const CommandFn = *const fn (allocator: Allocator, args: []const []const u8) anyerror!void;
+
+    const table = std.static_string_map.StaticStringMap(CommandFn).initComptime(.{
+        .{ "build", rocBuild },
+        .{ "test", rocTest },
+        .{ "repl", rocRepl },
+        .{ "format", rocFormat },
+        .{ "version", rocVersion },
+        .{ "check", rocCheck },
+        .{ "docs", rocDocs },
+        .{ "glue", rocGlue },
+        .{ "help", rocHelp },
+    });
+};
 
 pub fn main() !void {
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -58,7 +84,6 @@ pub fn main() !void {
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     _ = gpa;
-    _ = arena;
 
     if (args.len <= 1) {
         std.log.info("{s}", .{usage});
@@ -66,49 +91,80 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     }
 
     const cmd = args[1];
-    // const cmd_args = args[2..];
-    if (mem.eql(u8, cmd, "build")) {
-        fatal("TODO roc build", .{});
-    } else if (mem.eql(u8, cmd, "test")) {
-        fatal("TODO roc test", .{});
-    } else if (mem.eql(u8, cmd, "repl")) {
-        fatal("TODO roc repl", .{});
-    } else if (mem.eql(u8, cmd, "format")) {
-        fatal("TODO roc format", .{});
-    } else if (mem.eql(u8, cmd, "version")) {
-        fatal("TODO roc version", .{});
-    } else if (mem.eql(u8, cmd, "check")) {
-        fatal("TODO roc check", .{});
-    } else if (mem.eql(u8, cmd, "docs")) {
-        fatal("TODO roc docs", .{});
-    } else if (mem.eql(u8, cmd, "glue")) {
-        fatal("TODO roc glue", .{});
-    } else if (mem.eql(u8, cmd, "help")) {
-        try print_help();
-    } else if (std.mem.startsWith(u8, cmd, "-")) {
-        // Handle General Options
-        if (mem.eql(u8, cmd, "-h") or mem.eql(u8, cmd, "--help")) {
-            try print_help();
-        } else {
-            std.log.info("{s}", .{usage});
-            fatal("unknown option: {s}", .{cmd});
-        }
+    const cmd_args = args[2..];
+
+    if (RocCmd.table.get(cmd)) |handler| {
+        try handler(arena, cmd_args);
     } else if (std.fs.path.extension(cmd).len > 0) {
         if (!mem.eql(u8, std.fs.path.extension(cmd), ".roc")) {
-            fatal("expected .roc file to run, got: {s}", .{cmd});
+            fatal("expected .roc file, got: {s}", .{cmd});
         }
-
-        const roc_file = cmd;
-        const roc_args = args[2..];
-        _ = roc_args; // Remove when implemented
-        fatal("TODO: run the file {s}", .{roc_file});
+        // Handle .roc file execution
+        fatal("TODO: run .roc file: {s}", .{cmd});
+    } else if (mem.eql(u8, cmd, "-h") or mem.eql(u8, cmd, "--help")) {
+        try rocHelp(arena, cmd_args);
     } else {
         std.log.info("{s}", .{usage});
-        fatal("unknown command: {s}", .{args[1]});
+        fatal("unknown command: {s}", .{cmd});
     }
 }
 
 fn print_help() !void {
     try std.io.getStdOut().writeAll(usage);
     std.process.exit(0);
+}
+
+fn rocBuild(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc build", .{});
+}
+
+fn rocTest(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc test", .{});
+}
+
+fn rocRepl(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc repl", .{});
+}
+
+fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc format", .{});
+}
+
+fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc version", .{});
+}
+
+fn rocCheck(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc check", .{});
+}
+
+fn rocDocs(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc docs", .{});
+}
+
+fn rocGlue(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+    fatal("TODO roc glue", .{});
+}
+
+fn rocHelp(allocator: Allocator, args: []const []const u8) !void {
+    _ = allocator;
+    _ = args;
+
+    try std.io.getStdOut().writeAll(usage);
 }
