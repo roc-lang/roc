@@ -1,6 +1,7 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
+const command = @import("command.zig");
 
 const usage =
     \\Usage:
@@ -29,43 +30,6 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.process.exit(1);
 }
 
-const RocCmd = enum {
-    roc_build,
-    roc_test,
-    roc_repl,
-    roc_format,
-    roc_version,
-    roc_check,
-    roc_docs,
-    roc_glue,
-    roc_help,
-
-    // Parse from string, return null if not found
-    pub fn fromString(str: []const u8) ?RocCmd {
-        inline for (std.meta.fields(RocCmd)) |field| {
-            if (mem.eql(u8, str, field.name)) {
-                return @enumFromInt(field.value);
-            }
-        }
-        return null;
-    }
-
-    // Define the function type for command handlers
-    const CommandFn = *const fn (allocator: Allocator, args: []const []const u8) anyerror!void;
-
-    const table = std.static_string_map.StaticStringMap(CommandFn).initComptime(.{
-        .{ "build", rocBuild },
-        .{ "test", rocTest },
-        .{ "repl", rocRepl },
-        .{ "format", rocFormat },
-        .{ "version", rocVersion },
-        .{ "check", rocCheck },
-        .{ "docs", rocDocs },
-        .{ "glue", rocGlue },
-        .{ "help", rocHelp },
-    });
-};
-
 pub fn main() !void {
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer {
@@ -93,8 +57,18 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const cmd = args[1];
     const cmd_args = args[2..];
 
-    if (RocCmd.table.get(cmd)) |handler| {
-        try handler(arena, cmd_args);
+    if (command.RocCmd.parse(cmd)) |roc_command| {
+        switch (roc_command) {
+            .roc_build => try rocBuild(arena, cmd_args),
+            .roc_test => try rocTest(arena, cmd_args),
+            .roc_repl => try rocRepl(arena, cmd_args),
+            .roc_format => try rocFormat(arena, cmd_args),
+            .roc_version => try rocVersion(arena, cmd_args),
+            .roc_check => try rocCheck(arena, cmd_args),
+            .roc_docs => try rocDocs(arena, cmd_args),
+            .roc_glue => try rocGlue(arena, cmd_args),
+            .roc_help => try rocHelp(arena, cmd_args),
+        }
     } else if (std.fs.path.extension(cmd).len > 0) {
         if (!mem.eql(u8, std.fs.path.extension(cmd), ".roc")) {
             fatal("expected .roc file, got: {s}", .{cmd});
