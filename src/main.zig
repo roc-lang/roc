@@ -68,24 +68,47 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const cmd = args[1];
     // const cmd_args = args[2..];
     if (mem.eql(u8, cmd, "build")) {
-        log(.info, "TODO roc build", .{});
+        fatal("TODO roc build", .{});
     } else if (mem.eql(u8, cmd, "test")) {
-        log(.info, "TODO roc test", .{});
+        fatal("TODO roc test", .{});
     } else if (mem.eql(u8, cmd, "repl")) {
-        log(.info, "TODO roc repl", .{});
+        fatal("TODO roc repl", .{});
     } else if (mem.eql(u8, cmd, "format")) {
-        log(.info, "TODO roc format", .{});
+        fatal("TODO roc format", .{});
     } else if (mem.eql(u8, cmd, "version")) {
-        log(.info, "TODO roc version", .{});
+        fatal("TODO roc version", .{});
     } else if (mem.eql(u8, cmd, "check")) {
-        log(.info, "TODO roc check", .{});
+        fatal("TODO roc check", .{});
     } else if (mem.eql(u8, cmd, "docs")) {
-        log(.info, "TODO roc docs", .{});
+        fatal("TODO roc docs", .{});
     } else if (mem.eql(u8, cmd, "glue")) {
-        log(.info, "TODO roc glue", .{});
-    } else if (mem.eql(u8, cmd, "help") or mem.eql(u8, cmd, "-h") or mem.eql(u8, cmd, "--help")) {
-        return std.io.getStdOut().writeAll(usage);
-    }
+        fatal("TODO roc glue", .{});
+    } else if (mem.eql(u8, cmd, "help")) {
+        try print_help();
+    } else if (std.mem.startsWith(u8, cmd, "-")) {
+        // Handle General Options
+        if (mem.eql(u8, cmd, "-h") or mem.eql(u8, cmd, "--help")) {
+            try print_help();
+        } else {
+            std.log.info("{s}", .{usage});
+            fatal("unknown option: {s}", .{cmd});
+        }
+    } else if (std.fs.path.extension(cmd).len > 0) {
+        if (!mem.eql(u8, std.fs.path.extension(cmd), ".roc")) {
+            fatal("expected .roc file to run, got: {s}", .{cmd});
+        }
 
-    fatal("subcommand not yet implemented", .{});
+        const roc_file = cmd;
+        const roc_args = args[2..];
+        _ = roc_args; // Remove when implemented
+        fatal("TODO: run the file {s}", .{roc_file});
+    } else {
+        std.log.info("{s}", .{usage});
+        fatal("unknown command: {s}", .{args[1]});
+    }
+}
+
+fn print_help() !void {
+    try std.io.getStdOut().writeAll(usage);
+    std.process.exit(0);
 }
