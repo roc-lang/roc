@@ -1,0 +1,1 @@
+roc build --optimize --profiling main.roc
