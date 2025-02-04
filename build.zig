@@ -64,6 +64,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "cli", .module = b.createModule(.{ .root_source_file = b.path("src/cli.zig") }) },
         },
     );
+
+    const libroc = b.addStaticLibrary(.{
+        .name = "roc",
+        .root_source_file = b.path("src/lib.zig"),
+        .target = target,
+        // don't include a lot of extra symbols
+        .optimize = .ReleaseSmall,
+    });
+
+    b.installArtifact(libroc);
 }
 
 fn add_fuzz_target(
