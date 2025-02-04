@@ -18,8 +18,6 @@ jobs:
       - name: Clean up old nix shells
         run: rm -rf /private/tmp/nix-shell.*
 
-      - run: zig version
-
       - name: check formatting with rustfmt
         run: nix develop -c cargo fmt --all -- --check
 
