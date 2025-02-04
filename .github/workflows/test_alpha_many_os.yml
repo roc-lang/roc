@@ -1,5 +1,5 @@
 on:
-#  pull_request:
+  pull_request:
 #  workflow_dispatch:
 
 name: Test latest alpha releases for macOS and Linux
