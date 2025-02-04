@@ -2,11 +2,11 @@ on:
 #  pull_request:
 #  workflow_dispatch:
 
-name: Test latest nightly releases for macOS and Linux
+name: Test latest alpha releases for macOS and Linux
 
 jobs:
-  test-nightly:
-    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+  test-alpha:
+    name: test alpha macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
@@ -29,20 +29,20 @@ jobs:
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz -o roc_release.tar.gz
+          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
 
       - name: get the latest release archive for linux (arm64)
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz -o roc_release.tar.gz
+          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_arm64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
 
       - name: get the latest release archive for macos 13 (x86_64)
         if: matrix.os == 'macos-13'
-        run: curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz -o roc_release.tar.gz
+        run: curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-macos_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
 
       - name: get the latest release archive for macos 14 (aarch64)
         if: matrix.os == 'macos-14'
-        run: curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz -o roc_release.tar.gz
+        run: curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-macos_apple_silicon-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
 
       - run: zig version
 
@@ -53,11 +53,11 @@ jobs:
       - name: test with old linux release (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz -o roc_release.tar.gz
+          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-old_linux_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz
 
       - name: test with old linux release (arm64)
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_arm64-latest.tar.gz -o roc_release.tar.gz
+          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-old_linux_arm64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz
