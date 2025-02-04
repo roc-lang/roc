@@ -18,9 +18,7 @@ let
       cargoLock = {
         lockFile = ../Cargo.lock;
         outputHashes = {
-          "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
           "inkwell-0.4.0" = "sha256-J2mdwf167GhEadEL2XJ39FXeY8roV9aYdhOBfIwbPbE=";
-          "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
           "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
         };
       };
