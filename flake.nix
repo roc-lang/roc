@@ -152,6 +152,10 @@
           shellHook = ''
             export LLVM_SYS_180_PREFIX="${llvmPkgs.dev}"
             ${aliases}
+
+            # https://github.com/ziglang/zig/issues/18998
+            unset NIX_CFLAGS_COMPILE
+            unset NIX_LDFLAGS
           '';
         };
 
