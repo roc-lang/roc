@@ -19,6 +19,13 @@ jobs:
         with:
           version: 0.13.0
 
+      - name: Get latest release info
+        id: get_release
+        run: |
+          RELEASE_INFO=$(curl -s https://api.github.com/repos/roc-lang/roc/releases/latest)
+          echo "tag_name=$(echo "$RELEASE_INFO" | jq -r .tag_name)" >> $GITHUB_OUTPUT
+          echo "assets_url=$(echo "$RELEASE_INFO" | jq -r .assets_url)" >> $GITHUB_OUTPUT
+
       - name: Delete everything except ci folder to test the release like a real user would
         run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
 
@@ -29,20 +36,30 @@ jobs:
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-linux_x86_64-") and (contains("old") | not)) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
 
       - name: get the latest release archive for linux (arm64)
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_arm64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-linux_arm64-") and (contains("old") | not)) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
 
       - name: get the latest release archive for macos 13 (x86_64)
         if: matrix.os == 'macos-13'
-        run: curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-macos_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-macos_x86_64-")) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
 
       - name: get the latest release archive for macos 14 (aarch64)
         if: matrix.os == 'macos-14'
-        run: curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-macos_apple_silicon-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-macos_apple_silicon-")) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
 
       - run: zig version
 
@@ -53,11 +70,15 @@ jobs:
       - name: test with old linux release (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-old_linux_x86_64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_x86_64-")) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz
 
       - name: test with old linux release (arm64)
         if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
         run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-old_linux_arm64-0-alpha2-rolling.tar.gz -o roc_release.tar.gz
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -s "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_arm64-")) | .browser_download_url')
+          curl -fL "$DOWNLOAD_URL" -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz
