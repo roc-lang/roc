@@ -1,8 +1,8 @@
 const std = @import("std");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
-const RocCmd = @import("command.zig").RocCmd;
-const RocOpt = @import("command.zig").RocOpt;
+const RocCmd = @import("cli.zig").RocCmd;
+const RocOpt = @import("cli.zig").RocOpt;
 
 const usage =
     \\Usage:

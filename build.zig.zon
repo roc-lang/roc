@@ -2,7 +2,12 @@
     .name = "roc",
     .version = "0.0.0",
     .minimum_zig_version = "0.13.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .@"zig-afl-kit" = .{
+            .url = "git+https://github.com/kristoff-it/zig-afl-kit#88c6b71377767c1b8d26979b0adfa12a58d988dd",
+            .hash = "1220796f7d2d9a2d4d7f8339ee0b14aa4bf133a15ae9ba39c941cc68e08d5c5ce9a2",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",
