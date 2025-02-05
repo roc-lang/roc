@@ -63,7 +63,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             roc_cli::CMD_DEV,
-            file_from_root("crates/cli/tests/platform-switching", "roc_loves_Rust.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "roc_loves_rust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
