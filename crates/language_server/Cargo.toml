@@ -25,6 +25,7 @@ roc_solve_problem.workspace = true
 roc_target.workspace = true
 roc_types.workspace = true
 roc_packaging.workspace = true
+roc_cli.workspace = true
 
 bumpalo.workspace = true
 parking_lot.workspace = true
@@ -41,4 +42,3 @@ indoc.workspace = true
 env_logger = "0.10.1"
 futures.workspace = true
 roc_error_macros.workspace = true
-

@@ -85,10 +85,7 @@ clap = { version = "4.2.7", default-features = false, features = [
 ] }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
-    "html_reports",
-], rev = "30ea0c5" }
-criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events", rev = "0f38c3e" }
+criterion = { version = "0.5.1", features = ["html_reports"]}
 crossbeam = "0.8.2"
 dircpy = "0.3.14"
 distance = "0.4.0"

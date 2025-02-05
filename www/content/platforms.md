@@ -7,12 +7,12 @@ Something that sets Roc apart from other programming languages is its <span clas
 Here is a Roc application that prints `"Hello, World!"` to the command line:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
+app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
-import pf.Stdout
+import cli.Stdout
 
-main =
-    Stdout.line "Hello, World!"
+main! = |_args|
+    Stdout.line!("Hello, World!")
 ```
 
 Every Roc application, including this one, is built on a _platform_. This application happens to be built on a platform called [basic-cli](https://github.com/roc-lang/basic-cli), which is a platform for building command-line interfaces.

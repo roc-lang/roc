@@ -14,8 +14,8 @@ DIR="$(dirname "$0")"
 cd "$DIR" || exit
 
 rm -rf dist/
-cp -r build dist/
+mkdir -p dist
 cp -r public/* dist/
-roc main.roc --linker=legacy -- content/ dist/
+cargo run --bin roc -- main.roc --linker=legacy -- content/ dist/
 
 simple-http-server -p 8080 --nocache --cors --index -- dist/

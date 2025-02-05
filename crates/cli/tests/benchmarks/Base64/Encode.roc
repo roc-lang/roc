@@ -82,7 +82,7 @@ encode_characters = \a, b, c, d ->
             if c == equals then
                 n = Num.bitwise_or(Num.shift_left_by(x, 18), Num.shift_left_by(y, 12))
 
-                # masking higher bits is not needed, Encode.unsignedInt8 ignores higher bits
+                # masking higher bits is not needed; U8 ignores higher bits
                 b1 : U8
                 b1 = Num.int_cast(Num.shift_right_by(n, 16))
 

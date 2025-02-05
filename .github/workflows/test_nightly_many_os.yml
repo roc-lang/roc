@@ -2,15 +2,15 @@ on:
 #  pull_request:
   workflow_dispatch:
 
-name: Test latest nightly releases for macOS and Linux x86_64
+name: Test latest nightly releases for macOS and Linux
 
 jobs:
   test-nightly:
-    name: test nightly macos 13 (x64), ubuntu 20.04/22.04
+    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04]
+        os: [macos-13, macos-14, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -19,28 +19,45 @@ jobs:
         with:
           version: 0.13.0
 
-      - name: Install z3 on macOS-13
-        if: matrix.os == 'macos-13'
+      - name: Delete everything except ci folder to test the release like a real user would
+        run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
+
+      - name: install z3 on macOS
+        if: startsWith(matrix.os, 'macos')
         run: brew install z3
 
       - name: get the latest release archive for linux (x86_64)
-        if: startsWith(matrix.os, 'ubuntu')
+        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz
+          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz -o roc_release.tar.gz
 
-      - name: get the latest release archive for macos (x86_64)
-        if: startsWith(matrix.os, 'macos')
-        run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
+      - name: get the latest release archive for linux (arm64)
+        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
+        run: |
+          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz -o roc_release.tar.gz
+
+      - name: get the latest release archive for macos 13 (x86_64)
+        if: matrix.os == 'macos-13'
+        run: curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz -o roc_release.tar.gz
+
+      - name: get the latest release archive for macos 14 (aarch64)
+        if: matrix.os == 'macos-14'
+        run: curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz -o roc_release.tar.gz
 
       - run: zig version
 
       - name: prep and run basic tests
         run: |
-          ./ci/basic_nightly_test.sh
+          ./ci/basic_release_test.sh roc_release.tar.gz
 
-      - name: clean up, get old linux release (x86_64), run tests
-        if: startsWith(matrix.os, 'ubuntu')
+      - name: test with old linux release (x86_64)
+        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
-          rm -rf roc_nightly
-          curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz
-          ./ci/basic_nightly_test.sh
+          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz -o roc_release.tar.gz
+          ./ci/basic_release_test.sh roc_release.tar.gz
+
+      - name: test with old linux release (arm64)
+        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
+        run: |
+          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_arm64-latest.tar.gz -o roc_release.tar.gz
+          ./ci/basic_release_test.sh roc_release.tar.gz

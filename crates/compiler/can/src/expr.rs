@@ -2990,16 +2990,16 @@ impl Declarations {
     }
 
     pub fn iter_bottom_up(&self) -> impl Iterator<Item = (usize, DeclarationTag)> + '_ {
-        self.declarations
-            .iter()
-            .rev()
-            .scan(self.declarations.len() - 1, |state, e| {
+        self.declarations.iter().rev().scan(
+            self.declarations.len().saturating_sub(1),
+            |state, e| {
                 let length_so_far = *state;
 
                 *state = length_so_far.saturating_sub(e.len());
 
                 Some((length_so_far, *e))
-            })
+            },
+        )
     }
 
     pub fn expects(&self) -> ExpectCollector {
