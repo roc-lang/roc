@@ -597,8 +597,8 @@ expect (Str.from_utf8_lossy [82, 0xED, 0xA0, 0xBD, 99]) == "R�c"
 ## expect Str.from_utf16([0xd83d, 0xdc26]) == Ok("🐦")
 ## expect Str.from_utf16([]) == Ok("")
 ## # unpaired surrogates, first and second halves
-## expect Str.from_utf16([82, 0xd83d, 99]) |> Result.isErr
-## expect Str.from_utf16([82, 0xdc96, 99]) |> Result.isErr
+## expect Str.from_utf16([82, 0xd83d, 99]) |> Result.is_err
+## expect Str.from_utf16([82, 0xdc96, 99]) |> Result.is_err
 ## ```
 from_utf16 : List U16 -> Result Str [BadUtf16 { problem : Utf8Problem, index : U64 }]
 from_utf16 = |codeunits|
@@ -700,10 +700,10 @@ expect Str.from_utf16_lossy([82, 0xdc96, 99]) == "R�c"
 ## expect Str.from_utf32([0xb9a, 0xbbf]) == Ok("சி")
 ## expect Str.from_utf32([0x1f426]) == Ok("🐦")
 ## # unpaired surrogates, first and second halves
-## expect Str.from_utf32([82, 0xd83d, 99]) |> Result.isErr
-## expect Str.from_utf32([82, 0xdc96, 99]) |> Result.isErr
+## expect Str.from_utf32([82, 0xd83d, 99]) |> Result.is_err
+## expect Str.from_utf32([82, 0xdc96, 99]) |> Result.is_err
 ## # invalid codepoint
-## expect Str.from_utf32([82, 0x110000, 99]) |> Result.isErr
+## expect Str.from_utf32([82, 0x110000, 99]) |> Result.is_err
 ## ```
 
 from_utf32 : List U32 -> Result Str [BadUtf32 { problem : Utf8Problem, index : U64 }]

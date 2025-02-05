@@ -7,7 +7,7 @@ module [
     walk_friend_names,
 ]
 
-## Datatype representing a community for demonstration purposes in inspect-gui.roc and inspect-logging.roc
+## Datatype representing a community for demonstration purposes in inspect_logging.roc
 
 Community := {
     people : List Person,

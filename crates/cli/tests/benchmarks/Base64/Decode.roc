@@ -59,7 +59,7 @@ lowest6_bits_mask = 63
 bits_to_chars_help : U32, Int * -> List U8
 bits_to_chars_help = \bits, missing ->
     # The input is 24 bits, which we have to partition into 4 6-bit segments. We achieve this by
-    # shifting to the right by (a multiple of) 6 to remove unwanted bits on the right, then `Num.bitwiseAnd`
+    # shifting to the right by (a multiple of) 6 to remove unwanted bits on the right, then `Num.bitwise_and`
     # with `0b111111` (which is 2^6 - 1 or 63) (so, 6 1s) to remove unwanted bits on the left.
     # any 6-bit number is a valid base64 digit, so this is actually safe
     p =

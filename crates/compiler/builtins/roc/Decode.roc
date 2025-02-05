@@ -59,7 +59,7 @@ DecodeError : [TooShort]
 ## such as;
 ## ```roc
 ## expect
-##     input = "\"hello\", " |> Str.toUtf8
+##     input = "\"hello\", " |> Str.to_utf8
 ##     actual = Decode.from_bytes_partial(input, Json.json)
 ##     expected = Ok("hello")
 ##
@@ -132,7 +132,7 @@ decode_with = |bytes, @Decoder(decode), fmt| decode(bytes, fmt)
 ## Decode a `List U8` utf-8 bytes and return a [DecodeResult](#DecodeResult)
 ## ```roc
 ## expect
-##     input = "\"hello\", " |> Str.toUtf8
+##     input = "\"hello\", " |> Str.to_utf8
 ##     actual = Decode.from_bytes_partial(input Json.json)
 ##     expected = Ok("hello")
 ##
@@ -146,7 +146,7 @@ from_bytes_partial = |bytes, fmt| decode_with(bytes, decoder, fmt)
 ## remaining returns `Err Leftover (List U8)`.
 ## ```roc
 ## expect
-##     input = "\"hello\", " |> Str.toUtf8
+##     input = "\"hello\", " |> Str.to_utf8
 ##     actual = Decode.from_bytes(input, Json.json)
 ##     expected = Ok("hello")
 ##

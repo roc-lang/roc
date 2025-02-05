@@ -19,7 +19,7 @@ base_url =
 ## function def referencing params
 get_user : U32 -> Str
 get_user = \user_id ->
-    # purposefully not using baseUrl to test top-level fn referencing param
+    # purposefully not using base_url to test top-level fn referencing param
     protocol("api.example.com/${app_id}/users/${Num.to_str(user_id)}")
 
 ## function def referencing top-level value
