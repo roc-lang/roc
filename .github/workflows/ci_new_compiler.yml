@@ -1,0 +1,54 @@
+on:
+  pull_request:
+
+name: CI New Compiler
+
+# cancel current runs when a new commit is pushed
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+
+jobs:
+    check-zig-fmt:
+        runs-on: ubuntu-22.04
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - uses: goto-bus-stop/setup-zig@v2
+              with:
+                version: 0.13.0
+                
+            - run: zig fmt --check .
+
+    zig-tests:
+        needs: checks
+        runs-on: ${{ matrix.os }}
+        strategy:
+            matrix:
+                os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm]
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - uses: goto-bus-stop/setup-zig@v2
+              with:
+                version: 0.13.0
+                
+            - run: zig build
+            
+            - name: check roc executable output
+              run: |
+                ./zig-out/bin/roc 2> std_err.txt; exit 0
+                cat std_err.txt | grep -q "info: Usage:"
+            
+            - name: zig tests
+              run: ./zig-out/bin/test
+              
+            - name: check if statically linked (ubuntu)
+              if: startsWith(matrix.os, 'ubuntu')
+              run: |
+                file ./zig-out/bin/roc | grep "statically linked"
+
+            - name: check if statically linked (macOS)
+              if: startsWith(matrix.os, 'macos')
+              run: |
+                otool -L ./zig-out/bin/roc
