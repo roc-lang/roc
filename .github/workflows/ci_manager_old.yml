@@ -128,6 +128,16 @@ jobs:
         needs: check-changes
         if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/fuzzer.yml
+        
+    start-devtools-tests-linux:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/devtools_test_linux_x86_64.yml
+
+    start-devtools-tests-macos:
+        needs: check-changes 
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/devtools_test_macos_apple_silicon.yml
 
     ran-full:
         runs-on: ubuntu-22.04
@@ -141,7 +151,9 @@ jobs:
                 start-ubuntu-x86-64-nix-tests-debug,
                 start-windows-release-build-test,
                 start-windows-tests,
-                start-roc-benchmarks
+                start-roc-benchmarks,
+                start-devtools-tests-linux,
+                start-devtools-tests-macos,
             ]
         steps:
             - run: echo "all workflows succeeded!"

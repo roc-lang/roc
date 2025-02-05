@@ -1,5 +1,5 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: devtools nix files test - linux
 
