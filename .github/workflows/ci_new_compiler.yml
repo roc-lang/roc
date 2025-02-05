@@ -72,8 +72,10 @@ jobs:
             - name: check if statically linked (Windows)
               if: startsWith(matrix.os, 'windows')
               run: |
-                drmemory.exe -lib_blocklist "*" -- zig-out\bin\roc.exe -h > nul 2>&1
-                if ($LASTEXITCODE -ne 0) {
-                  echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
-                  exit 1
+                $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
+                if ($imports) {
+                    echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
+                    echo "Dynamic dependencies found:"
+                    $imports | ForEach-Object { echo "  $_" }
+                    exit 1
                 }
