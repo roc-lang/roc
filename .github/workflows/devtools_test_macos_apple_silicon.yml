@@ -3,10 +3,6 @@ on:
 
 name: devtools nix files test - macos
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
     devtools-test-macos:
         name: devtools-test-mac
