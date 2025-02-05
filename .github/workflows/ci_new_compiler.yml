@@ -21,7 +21,7 @@ jobs:
             - run: zig fmt --check .
 
     zig-tests:
-        needs: checks
+        needs: check-zig-fmt
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:
