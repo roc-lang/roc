@@ -25,23 +25,34 @@ jobs:
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:
-                os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm]
+                os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64 
         steps:
             - name: Checkout
               uses: actions/checkout@v4
             - uses: goto-bus-stop/setup-zig@v2
               with:
                 version: 0.13.0
-                
+
             - run: zig build
-            
-            - name: roc executable minimal check
+
+            - name: roc executable minimal check (Unix)
+              if: runner.os != 'Windows'
               run: |
                 ./zig-out/bin/roc -h | grep -q "Usage:"
-            
-            - name: zig tests
+
+            - name: roc executable minimal check (Windows)
+              if: runner.os == 'Windows'
+              run: |
+                zig-out\bin\roc.exe -h | findstr "Usage:"
+
+            - name: zig tests (Unix)
+              if: runner.os != 'Windows'
               run: ./zig-out/bin/test
-              
+
+            - name: zig tests (Windows)
+              if: runner.os == 'Windows'
+              run: zig-out\bin\test.exe
+
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
               run: |
@@ -57,3 +68,12 @@ jobs:
                   echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
                   exit 1
                 fi
+
+            - name: check if statically linked (Windows)
+              if: startsWith(matrix.os, 'windows')
+              run: |
+                drmemory.exe -lib_blocklist "*" -- zig-out\bin\roc.exe -h > nul 2>&1
+                if ($LASTEXITCODE -ne 0) {
+                  echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
+                  exit 1
+                }
