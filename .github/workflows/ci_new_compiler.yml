@@ -35,10 +35,9 @@ jobs:
                 
             - run: zig build
             
-            - name: check roc executable output
+            - name: roc executable minimal check
               run: |
-                ./zig-out/bin/roc 2> std_err.txt; exit 0
-                cat std_err.txt | grep -q "info: Usage:"
+                ./zig-out/bin/roc -h | grep -q "Usage:"
             
             - name: zig tests
               run: ./zig-out/bin/test
