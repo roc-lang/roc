@@ -50,4 +50,10 @@ jobs:
             - name: check if statically linked (macOS)
               if: startsWith(matrix.os, 'macos')
               run: |
-                otool -L ./zig-out/bin/roc
+                otool_out="$(otool -L ./zig-out/bin/roc)"
+                num_lines=$(echo "$otool_out" | wc -l)
+                if [ "$num_lines" -ne 2 ]; then
+                  echo "$otool_out"
+                  echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
+                  exit 1
+                fi
