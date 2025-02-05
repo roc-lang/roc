@@ -4,7 +4,7 @@ on:
   pull_request:
 
 jobs:
-  changes:
+  check-changes:
     runs-on: ubuntu-24.04
     permissions:
       pull-requests: read
@@ -22,17 +22,17 @@ jobs:
               - 'build.zig.zon'
 
   call-zig-workflow:
-    needs: changes
+    needs: check-changes
     if: needs.changes.outputs.zig == 'true'
     uses: ./.github/workflows/ci_zig.yml
 
   call-old-workflow:
-    needs: changes
+    needs: check-changes
     if: needs.changes.outputs.zig != 'true'
     uses: ./.github/workflows/ci_manager_old.yml
     
   finish:
-    needs: [changes, call-zig-workflow, call-old-workflow]
+    needs: [check-changes, call-zig-workflow, call-old-workflow]
     runs-on: ubuntu-latest
     if: always()
     steps:

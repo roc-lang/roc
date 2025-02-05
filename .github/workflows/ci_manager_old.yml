@@ -27,6 +27,16 @@ jobs:
                     echo "should_run_tests=n" >> $GITHUB_OUTPUT
                 fi
 
+            - name: Check if markdown files changed
+              id: check_md_changed
+              run: |
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qE '\.md$'; then
+                    echo "md_files_changed=y" >> $GITHUB_OUTPUT
+                else
+                    echo "md_files_changed=n" >> $GITHUB_OUTPUT
+                fi
+
             - name: Check if only comments changed in rust files
               id: check_rs_comments
               run: |
@@ -138,6 +148,11 @@ jobs:
         needs: check-changes 
         if: needs.check-changes.outputs.run_tests == 'full'
         uses: ./.github/workflows/devtools_test_macos_apple_silicon.yml
+        
+    start-md-files-check:
+        needs: check-changes
+        if: needs.check-changes.outputs.md_files_changed == 'y'
+        uses: ./.github/workflows/md_files_check.yml
 
     ran-full:
         runs-on: ubuntu-22.04
@@ -154,6 +169,7 @@ jobs:
                 start-roc-benchmarks,
                 start-devtools-tests-linux,
                 start-devtools-tests-macos,
+                start-md-files-check,
             ]
         steps:
             - run: echo "all workflows succeeded!"
