@@ -152,7 +152,7 @@ jobs:
     start-md-files-check:
         needs: check-changes
         if: needs.check-changes.outputs.md_files_changed == 'y'
-        uses: ./.github/workflows/markdown-link-check.yml
+        uses: ./.github/workflows/markdown_link_check.yml
 
     ran-full:
         runs-on: ubuntu-22.04
