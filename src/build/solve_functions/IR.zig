@@ -1,6 +1,7 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const cols = @import("../../collections.zig");
+const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 
 pub const IR = @This();
@@ -41,7 +42,7 @@ pub fn deinit(self: *IR) void {
 }
 
 pub const Type = union(enum) {
-    Primitive: base.Primitive,
+    Primitive: types.Primitive,
     Box: Type.Idx,
     List: Type.Idx,
     Struct: Type.NonEmptySlice,
@@ -61,7 +62,7 @@ pub const Type = union(enum) {
 pub const Expr = union(enum) {
     Let: Def,
     Str: cols.StringLiteral.Idx,
-    Number: base.NumberLiteral,
+    Number: base.Literal.Num,
     List: struct {
         elem_type: Type.Idx,
         elems: Expr.Slice,
@@ -160,10 +161,10 @@ pub const Pattern = union(enum) {
         ident: base.IdentIdx,
     },
     StrLiteral: cols.StringLiteral.Idx,
-    NumberLiteral: base.NumberLiteral,
+    NumberLiteral: base.Literal.Num,
     AppliedTag: struct {
         tag_union_type: Type.Idx,
-        tag_name: base.IdentIdx,
+        tag_name: base.Ident.Idx,
         args: Pattern.Slice,
     },
     StructDestructure: struct {
@@ -210,6 +211,9 @@ pub const StructDestruct = struct {
         Required,
         Guard: Pattern.Typed,
     };
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
 pub const TypedIdent = struct {

@@ -3,6 +3,7 @@ const cols = @import("../collections.zig");
 const ident = @import("Ident.zig");
 const region = @import("Region.zig");
 const problem = @import("../problem.zig");
+const ModuleIdent = @import("ModuleIdent.zig");
 
 pub const Module = @This();
 
@@ -13,12 +14,6 @@ ident_store: ident.Ident.Store,
 
 pub const List = cols.SafeMultiList(Module);
 pub const Idx = List.Idx;
-
-/// Index for a specific identifier and a specific module.
-pub const Ident = struct {
-    module_id: Idx,
-    ident_id: ident.Ident.Idx,
-};
 
 pub const Store = struct {
     modules: List,
@@ -104,21 +99,24 @@ pub const Store = struct {
         region_: region.Region,
         module_id: Idx,
         problems: *std.ArrayList(problem.Problem),
-    ) Ident {
+    ) ModuleIdent {
         const index = @as(usize, module_id.id);
         const ident_store = self.modules.items.items(.ident_store)[index];
         const ident_id = ident_store.insert(ident_, region_, problems);
 
-        return Ident{ .ident_id = ident_id, .module_id = module_id };
+        return ModuleIdent{
+            .ident_id = ident_id,
+            .module_id = module_id,
+        };
     }
 
-    pub fn getIdentText(self: *Store, module_ident: Ident) []u8 {
+    pub fn getIdentText(self: *Store, module_ident: ModuleIdent) []u8 {
         const index = @as(usize, module_ident.module_id.id);
         const ident_store = self.modules.items.items(.ident_store)[index];
         return ident_store.getText(module_ident.ident_id);
     }
 
-    pub fn getIdentRegion(self: *Store, module_ident: Ident) region.Region {
+    pub fn getIdentRegion(self: *Store, module_ident: ModuleIdent) region.Region {
         const index = @as(usize, module_ident.module_id.id);
         const ident_store = self.modules.items.items(.ident_store)[index];
         return ident_store.getRegion(module_ident.ident_id);

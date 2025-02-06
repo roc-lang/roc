@@ -1,6 +1,7 @@
 pub const Ident = @import("base/Ident.zig");
 pub const Module = @import("base/Module.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
+pub const ModuleIdent = @import("base/ModuleIdent.zig");
 pub const Package = @import("base/Package.zig");
 pub const Region = @import("base/Region.zig");
 
@@ -34,6 +35,7 @@ pub const Literal = union(enum) {
     Str: StringLiteral,
     Crash: StringLiteral,
 
+    /// An integer number literal
     pub const Int = union(enum) {
         I8: i8,
         U8: u8,
@@ -47,6 +49,7 @@ pub const Literal = union(enum) {
         U128: u128,
     };
 
+    /// A fractional number literal
     pub const Float = union(enum) {
         F32: f32,
         F64: f64,
@@ -55,6 +58,7 @@ pub const Literal = union(enum) {
         Dec: u128,
     };
 
+    /// A number literal
     pub const Num = union(enum) {
         Int: Int,
         Float: Float,

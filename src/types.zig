@@ -7,16 +7,16 @@ pub const Type = union(enum) {
     EmptyTagUnion,
     Function: Function,
     Record: Record,
-    Tuple: usize, //(VecMap<usize, Type>, TypeExtension),
-    TagUnion: usize, //(Vec<(TagName, Vec<Type>)>, TypeExtension),
-    FunctionOrTagUnion: usize, //(TagName, Symbol, TypeExtension),
-    DelayedAlias: AliasCommon,
+    Tuple: usize, //TODO (VecMap<usize, Type>, TypeExtension),
+    TagUnion: usize, //TODO (Vec<(TagName, Vec<Type>)>, TypeExtension),
+    FunctionOrTagUnion: usize, //TODO (TagName, Symbol, TypeExtension),
+    DelayedAlias: usize, //TODO AliasCommon,
     Alias: Alias,
-    RecursiveTagUnion: usize, //(Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
+    RecursiveTagUnion: usize, //TODO (Variable, Vec<(TagName, Vec<Type>)>, TypeExtension),
     /// Applying a type to some arguments (e.g. Dict.Dict String Int)
-    Apply: usize, //(Symbol, Vec<Loc<Type>>, Region),
-    Var: TypeVar,
-    RangedNumber: NumericRange,
+    Apply: usize, //TODO (Symbol, Vec<Loc<Type>>, Region),
+    Var: usize, //TODO TypeVar,
+    RangedNumber: usize, //TODO NumericRange,
     /// A function's fx type
     Pure,
     Effectful,
@@ -39,7 +39,7 @@ pub const Type = union(enum) {
 
     pub const Record = struct {
         fields: std.AutoHashMap(cols.FieldNameId, Field(Type)),
-        extension: TypeExtension,
+        extension: usize, //TODO TypeExtension,
 
         pub fn Field(comptime T: type) type {
             return struct {
@@ -62,13 +62,13 @@ pub const Type = union(enum) {
     };
 
     pub const Tuple = struct {
-        fields: std.AutoArrayHashMap(usize, TypeId),
-        extension: TypeExtension,
+        fields: std.AutoArrayHashMap(usize, Type.Idx),
+        extension: usize, //TODO TypeExtension,
     };
 
     pub const Alias = struct {
         symbol: base.Symbol,
-        type_arguments: Vec<OptAbleType>,
+        type_arguments: usize, //TODO Vec<OptAbleType>,
         infer_ext_in_output_types: Slice,
         actual: Idx,
         kind: Kind,

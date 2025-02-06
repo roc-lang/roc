@@ -5,7 +5,7 @@ const problem = @import("../../problem.zig");
 
 pub const IR = struct {
     env: *base.ModuleEnv,
-    procs: std.AutoHashMap(base.IdentId, Procedure),
+    procs: std.AutoHashMap(base.Ident.Idx, Procedure),
     exprs: cols.SafeList(Expr),
     layouts: cols.SafeList(Layout),
     stmts: cols.SafeList(Stmt),
@@ -13,7 +13,7 @@ pub const IR = struct {
     pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
         return IR{
             .env = env,
-            .procs = std.AutoHashMap(base.IdentId, Procedure).init(allocator),
+            .procs = std.AutoHashMap(base.Ident.Idx, Procedure).init(allocator),
             .exprs = cols.SafeList(Expr).init(allocator),
             .layouts = cols.SafeList(Layout).init(allocator),
             .stmts = cols.SafeList(Stmt).init(allocator),
@@ -30,35 +30,36 @@ pub const IR = struct {
 
 pub const Procedure = struct {
     arguments: cols.SafeMultiList(IdentWithLayout).Slice,
-    body: StmtId,
-    return_layout: LayoutId,
+    body: Stmt.Idx,
+    return_layout: Layout.Idx,
 };
 
 // TODO: is this necessary?
 pub const TagIdIntType = u16;
 
-pub const LayoutId = cols.SafeList(Layout).Id;
-pub const LayoutSlice = cols.SafeList(Layout).Slice;
-pub const LayoutNonEmptySlice = cols.SafeList(Layout).NonEmptySlice;
-
 pub const Layout = union(enum) {
     Primitive: base.Primitive,
-    Box: LayoutId,
-    List: LayoutId,
-    Struct: LayoutNonEmptySlice,
-    TagUnion: LayoutNonEmptySlice,
+    Box: Layout.Idx,
+    List: Layout.Idx,
+    Struct: Layout.NonEmptySlice,
+    TagUnion: Layout.NonEmptySlice,
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
     Unit,
+
+    pub const List = cols.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+    pub const NonEmptySlice = List.NonEmptySlice;
 };
 
-// pub const IdentWithLayout = struct {
-//     ident: base.IdentId,
-//     layout: LayoutId,
-// };
+pub const IdentWithLayout = struct {
+    ident: base.Ident.Idx,
+    layout: Layout.Idx,
+};
 
-pub const SymbolWithLayout = struct {
-    symbol: base.Symbol,
-    layout: LayoutId,
+pub const ModuleIdentWithLayout = struct {
+    ident: base.ModuleIdent,
+    layout: Layout.Idx,
 };
 
 // TODO: should these use `NonEmptySlice`s?
@@ -68,12 +69,6 @@ pub const SymbolWithLayout = struct {
 pub const UnionLayout = union(enum) {
     // TODO
 };
-
-pub const ExprId = cols.SafeList(Expr).Id;
-pub const ExprSlice = cols.SafeList(Expr).Slice;
-pub const ExprNonEmptySlice = cols.SafeList(Expr).NonEmptySlice;
-
-// TODO: which of `Expr` or `Stmt` should hold the CompilerBug: LowerIrProblem?
 
 pub const Expr = union(enum) {
     Literal: base.Literal,
@@ -91,7 +86,7 @@ pub const Expr = union(enum) {
     NullPointer,
     StructAtIndex: struct {
         index: u64,
-        field_layouts: []LayoutId,
+        field_layouts: []Layout.Idx,
         structure: base.IdentId,
     },
 
@@ -114,7 +109,7 @@ pub const Expr = union(enum) {
     },
 
     Array: struct {
-        elem_layout: LayoutId,
+        elem_layout: Layout.Idx,
         elems: cols.SafeList(ListLiteralElem).Slice,
     },
 
@@ -122,41 +117,48 @@ pub const Expr = union(enum) {
 
     /// Returns a pointer to the given function.
     FunctionPointer: struct {
-        symbol: usize, //Symbol,
+        symbol: base.ModuleIdent,
     },
 
     Alloca: struct {
-        element_layout: LayoutId,
-        initializer: ?usize, //?Symbol,
+        element_layout: Layout.Idx,
+        initializer: ?base.ModuleIdent,
     },
 
     Reset: struct {
-        symbol: usize, //Symbol,
+        symbol: base.ModuleIdent,
     },
 
     // Just like Reset, but does not recursively decrement the children.
     // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
     ResetRef: struct {
-        symbol: usize, //Symbol,
+        symbol: base.ModuleIdent,
     },
+
+    // CompilerTag: LowerIrProblem,
+
+    pub const List = cols.SafeList(@This());
+    pub const Idx = List.Id;
+    pub const ExprSlice = List.Slice;
+    pub const ExprNonEmptySlice = List.NonEmptySlice;
 };
 
 pub const ListLiteralElem = union(enum) {
     StringLiteralId: []const u8,
     Number: base.NumberLiteral,
-    Symbol: usize, //Symbol,
+    Symbol: base.ModuleIdent,
 };
 
 pub const CallType = union(enum) {
     ByName: struct {
-        symbol: usize, //Symbol,
-        ret_layout: LayoutId,
-        arg_layouts: []LayoutId,
+        symbol: base.ModuleIdent,
+        ret_layout: Layout.Idx,
+        arg_layouts: []Layout.Idx,
     },
     ByPointer: struct {
         pointer: usize, //Symbol,
-        ret_layout: LayoutId,
-        arg_layouts: []LayoutId,
+        ret_layout: Layout.Idx,
+        arg_layouts: []Layout.Idx,
     },
     // Foreign: struct {
     //     foreign_symbol: usize, //ForeignSymbolId,
@@ -175,64 +177,66 @@ pub const Call = struct {
     arguments: cols.SafeList(base.IdentId).Slice,
 };
 
-pub const StmtId = cols.SafeList(Stmt).Id;
-pub const StmtSlice = cols.SafeList(Stmt).Slice;
-pub const StmtNonEmptySlice = cols.SafeList(Stmt).NonEmptySlice;
-
 pub const Stmt = union(enum) {
     Let: struct {
-        ident: base.IdentId,
-        expr: ExprId,
-        layout: ExprId,
-        continuation: StmtId,
+        ident: base.Ident.Idx,
+        expr: Expr.Idx,
+        layout: Layout.Idx,
+        continuation: Stmt.Idx,
     },
     Switch: struct {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
-        cond_ident: base.IdentId,
+        cond_ident: base.Ident.Idx,
         // TODO: can we make this layout a number type?
-        cond_layout: LayoutId,
+        cond_layout: Layout.Idx,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
         branches: Branch,
         /// If no other branches pass, this default branch will be taken.
         default_branch: struct {
             info: Branch.Kind,
-            stmt: StmtId,
+            stmt: Stmt.Idx,
         },
         /// Each branch must return a value of this type.
-        ret_layout: LayoutId,
+        ret_layout: Layout.Idx,
     },
     Ret: base.IdentId,
     RefCount: struct {
-        symbol: base.Symbol,
+        symbol: base.ModuleIdent,
         change: ModifyRefCount,
     },
     /// a join point `join f <params> = <continuation> in remainder`
     Join: struct {
-        id: JoinPointId,
+        id: JoinPoint.Idx,
         parameters: cols.SafeList(Param).Slice,
         /// body of the join point
         /// what happens after _jumping to_ the join point
-        body: StmtId,
+        body: Stmt.Idx,
         /// what happens after _defining_ the join point
-        remainder: StmtId,
+        remainder: Stmt.Idx,
     },
     Jump: struct {
-        join_point: JoinPointId,
-        idents: cols.SafeList(base.IdentId).Slice,
+        join_point: JoinPoint.Idx,
+        idents: cols.SafeList(base.Ident.Idx).Slice,
     },
     Crash: struct {
-        ident: base.IdentId,
+        ident: base.Ident.Idx,
         tag: base.CrashOrigin,
     },
+
+    // CompilerTag: LowerIrProblem,
+
+    pub const Idx = cols.SafeList(Stmt).Idx;
+    pub const Slice = cols.SafeList(Stmt).Slice;
+    pub const NonEmptySlice = cols.SafeList(Stmt).NonEmptySlice;
 };
 
 pub const ModifyRefCount = union(enum) {
     /// Increment a reference count
-    Inc: usize, // (Symbol, u64),
+    Inc: .{ base.ModuleIdent, u64 },
 
     /// Decrement a reference count
-    Dec: usize, //(Symbol),
+    Dec: base.ModuleIdent,
 
     /// A DecRef is a non-recursive reference count decrement
     /// e.g. If we Dec a list of lists, then if the reference count of the outer list is one,
@@ -241,40 +245,42 @@ pub const ModifyRefCount = union(enum) {
     /// That is dangerous because you may not free the elements, but in our Zig builtins,
     /// sometimes we know we already dealt with the elements (e.g. by copying them all over
     /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
-    DecRef: usize, //(Symbol),
+    DecRef: base.ModuleIdent,
 
     /// Unconditionally deallocate the memory. For tag union that do pointer tagging (store the tag
     /// id in the pointer) the backend has to clear the tag id!
-    Free: usize, //(Symbol),
+    Free: base.ModuleIdent,
 };
 
 pub const Branch = struct {
     discriminant: u64,
     kind: Kind,
-    stmt: StmtId,
+    stmt: Stmt.Idx,
 
     /// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
     pub const Kind = union(enum) {
         None,
         Constructor: struct {
-            scrutinee: base.Symbol,
-            layout: LayoutId,
+            scrutinee: base.ModuleIdent,
+            layout: Layout.Idx,
             tag_id: TagIdIntType,
         },
         List: struct {
-            scrutinee: base.Symbol,
+            scrutinee: base.ModuleIdent,
             len: u64,
         },
         Unique: struct {
-            scrutinee: base.Symbol,
+            scrutinee: base.ModuleIdent,
             unique: bool,
         },
     };
 };
 
-pub const JoinPointId = base.IdentId;
+pub const JoinPoint = struct {
+    pub const Idx = base.Ident.Idx;
+};
 
 pub const Param = struct {
-    ident: base.IdentId,
-    layout: LayoutId,
+    ident: base.Ident.Idx,
+    layout: Layout.Idx,
 };

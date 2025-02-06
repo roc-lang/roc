@@ -55,7 +55,7 @@ pub const Type = union(enum) {
 
 pub const Expr = union(enum) {
     Let: Def,
-    Str: cols.LargeStringId,
+    Str: cols.StringLiteral.Idx,
     Number: base.NumberLiteral,
     List: struct {
         elem_type: Type.Idx,
