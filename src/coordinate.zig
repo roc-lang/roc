@@ -12,6 +12,16 @@ const ResolveIR = type_spec.ResolveIR;
 const TypeSpecIR = type_spec.TypeSpecIR;
 const RefCountIR = refcount.RefCountIR;
 
+// to compile:
+// load file, returning early on failure to load (e.g. missing file)
+// parse just header, taking out:
+// - exported idents
+// - packages as pairs of shorthands and URLs
+// - position to finish parsing rest of file from
+// - if we are trying to build on top of typechecking, fail if module is not an app/platform
+// for package in discovered packages, do the same as above recursively
+// assemble a directed graph of packages and modules with the loaded module as the root
+
 fn typecheck_module(filepath: []u8) std.AutoHashMap(base.ModuleId, ResolveIR) {
     const allocator = std.heap.GeneralPurposeAllocator(.{}){};
     defer allocator.deinit();
@@ -25,8 +35,6 @@ fn typecheck_module(filepath: []u8) std.AutoHashMap(base.ModuleId, ResolveIR) {
     // TODO: in order of dependencies before who depends on them, run each phase of the compiler
     return module_dep_adjacencies;
 }
-
-fn prepare_module_for_codegen() void {}
 
 /// Run the `build` phase of compiling Roc code except for codegen.
 ///

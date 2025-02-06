@@ -1,35 +1,10 @@
-const region = @import("base/region.zig");
-const symbol = @import("base/symbol.zig");
-const module = @import("base/module.zig");
-const package = @import("base/package.zig");
-const primitive = @import("base/primitive.zig");
-const env = @import("base/env.zig");
+pub const Ident = @import("base/Ident.zig");
+pub const Module = @import("base/Module.zig");
+pub const ModuleEnv = @import("base/ModuleEnv.zig");
+pub const Package = @import("base/Package.zig");
+pub const Region = @import("base/Region.zig");
 
-pub const Region = region.Region;
-pub const Position = region.Position;
-pub const LineAndColumn = region.LineAndColumn;
-
-pub const Ident = symbol.Ident;
-pub const IdentAttributes = symbol.IdentAttributes;
-pub const IdentProblems = symbol.IdentProblems;
-pub const IdentId = symbol.IdentId;
-pub const IdentStore = symbol.IdentStore;
-pub const Symbol = symbol.Symbol;
-pub const SymbolStore = symbol.SymbolStore;
-
-pub const Module = module.Module;
-pub const ModuleId = module.ModuleId;
-pub const ModuleStore = module.ModuleStore;
-
-pub const Package = package.Package;
-pub const PackageId = package.PackageId;
-pub const PackageStore = package.PackageStore;
-
-pub const Primitive = primitive.Primitive;
-pub const Literal = primitive.Literal;
-
-pub const ModuleEnv = env.ModuleEnv;
-pub const GlobalEnv = env.GlobalEnv;
+const StringLiteral = @import("collections/interner/StringLiteral.zig");
 
 pub const Recursive = enum {
     NotRecursive,
@@ -50,3 +25,38 @@ pub const LowLevel = .{};
 
 // TODO: move to relevant stages
 pub const TypeVar = struct { id: u32 };
+
+/// Represents a value
+pub const Literal = union(enum) {
+    Int: Int,
+    Float: Float,
+    Bool: bool,
+    Str: StringLiteral,
+    Crash: StringLiteral,
+
+    pub const Int = union(enum) {
+        I8: i8,
+        U8: u8,
+        I16: i16,
+        U16: u16,
+        I32: i32,
+        U32: u32,
+        I64: i64,
+        U64: u64,
+        I128: i128,
+        U128: u128,
+    };
+
+    pub const Float = union(enum) {
+        F32: f32,
+        F64: f64,
+        // We represent Dec as a large int divided by 10^18, which is the maximum
+        // number of decimal places that allows lossless conversion of U64 to Dec
+        Dec: u128,
+    };
+
+    pub const Num = union(enum) {
+        Int: Int,
+        Float: Float,
+    };
+};

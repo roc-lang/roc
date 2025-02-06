@@ -2,31 +2,32 @@ const std = @import("std");
 const base = @import("../../base.zig");
 const cols = @import("../../collections.zig");
 const problem = @import("../../problem.zig");
+const types = @import("../../types.zig");
 
-pub const IR = struct {
-    env: *base.ModuleEnv,
-    procs: std.AutoHashMap(base.IdentId, Procedure),
-    exprs: cols.SafeList(Expr),
-    layouts: cols.SafeList(Layout),
-    stmts: cols.SafeList(Stmt),
+pub const IR = @This();
 
-    pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
-        return IR{
-            .env = env,
-            .procs = std.AutoHashMap(base.IdentId, Procedure).init(allocator),
-            .exprs = cols.SafeList(Expr).init(allocator),
-            .layouts = cols.SafeList(Layout).init(allocator),
-            .stmts = cols.SafeList(Stmt).init(allocator),
-        };
-    }
+env: *base.ModuleEnv,
+procs: std.AutoHashMap(base.Ident.Id, Procedure),
+exprs: cols.SafeList(Expr),
+layouts: cols.SafeList(Layout),
+stmts: cols.SafeList(Stmt),
 
-    pub fn deinit(self: *IR) void {
-        self.procs.deinit();
-        self.exprs.deinit();
-        self.layouts.deinit();
-        self.stmts.deinit();
-    }
-};
+pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
+    return IR{
+        .env = env,
+        .procs = std.AutoHashMap(base.Ident.Id, Procedure).init(allocator),
+        .exprs = cols.SafeList(Expr).init(allocator),
+        .layouts = cols.SafeList(Layout).init(allocator),
+        .stmts = cols.SafeList(Stmt).init(allocator),
+    };
+}
+
+pub fn deinit(self: *IR) void {
+    self.procs.deinit();
+    self.exprs.deinit();
+    self.layouts.deinit();
+    self.stmts.deinit();
+}
 
 pub const Procedure = struct {
     arguments: cols.SafeMultiList(IdentWithLayout).Slice,
@@ -37,28 +38,29 @@ pub const Procedure = struct {
 // TODO: is this necessary?
 pub const TagIdIntType = u16;
 
-pub const LayoutId = cols.SafeList(Layout).Id;
-pub const LayoutSlice = cols.SafeList(Layout).Slice;
-pub const LayoutNonEmptySlice = cols.SafeList(Layout).NonEmptySlice;
-
 pub const Layout = union(enum) {
     Primitive: base.Primitive,
-    Box: LayoutId,
-    List: LayoutId,
-    Struct: LayoutNonEmptySlice,
-    TagUnion: LayoutNonEmptySlice,
+    Box: Layout.Idx,
+    List: Layout.Idx,
+    Struct: Layout.NonEmptySlice,
+    TagUnion: Layout.NonEmptySlice,
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
     Unit,
+
+    pub const List = cols.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+    pub const NonEmptySlice = List.NonEmptySlice;
 };
 
 // pub const IdentWithLayout = struct {
 //     ident: base.IdentId,
-//     layout: LayoutId,
+//     layout: Layout.Id,
 // };
 
 pub const SymbolWithLayout = struct {
     symbol: base.Symbol,
-    layout: LayoutId,
+    layout: Layout.Idx,
 };
 
 // TODO: should these use `NonEmptySlice`s?
@@ -68,10 +70,6 @@ pub const SymbolWithLayout = struct {
 pub const UnionLayout = union(enum) {
     // TODO
 };
-
-pub const ExprId = cols.SafeList(Expr).Id;
-pub const ExprSlice = cols.SafeList(Expr).Slice;
-pub const ExprNonEmptySlice = cols.SafeList(Expr).NonEmptySlice;
 
 // TODO: which of `Expr` or `Stmt` should hold the CompilerBug: LowerIrProblem?
 
@@ -91,8 +89,8 @@ pub const Expr = union(enum) {
     NullPointer,
     StructAtIndex: struct {
         index: u64,
-        field_layouts: []LayoutId,
-        structure: base.IdentId,
+        field_layouts: Layout.Slice,
+        structure: base.Ident.Id,
     },
 
     GetTagId: struct {
@@ -114,7 +112,7 @@ pub const Expr = union(enum) {
     },
 
     Array: struct {
-        elem_layout: LayoutId,
+        elem_layout: Layout.Idx,
         elems: cols.SafeList(ListLiteralElem).Slice,
     },
 
@@ -126,7 +124,7 @@ pub const Expr = union(enum) {
     },
 
     Alloca: struct {
-        element_layout: LayoutId,
+        element_layout: Layout.Idx,
         initializer: ?usize, //?Symbol,
     },
 
@@ -139,6 +137,11 @@ pub const Expr = union(enum) {
     ResetRef: struct {
         symbol: usize, //Symbol,
     },
+
+    pub const List = cols.SafeList(@This());
+    pub const Id = List.Id;
+    pub const Slice = List.Slice;
+    pub const NonEmptySlice = List.NonEmptySlice;
 };
 
 pub const ListLiteralElem = union(enum) {
@@ -149,14 +152,14 @@ pub const ListLiteralElem = union(enum) {
 
 pub const CallType = union(enum) {
     ByName: struct {
-        symbol: usize, //Symbol,
-        ret_layout: LayoutId,
-        arg_layouts: []LayoutId,
+        ident: base.Module.Ident,
+        ret_layout: Layout.Idx,
+        arg_layouts: Layout.Slice,
     },
     ByPointer: struct {
         pointer: usize, //Symbol,
-        ret_layout: LayoutId,
-        arg_layouts: []LayoutId,
+        ret_layout: Layout.Idx,
+        arg_layouts: []Layout.Idx,
     },
     // Foreign: struct {
     //     foreign_symbol: usize, //ForeignSymbolId,
@@ -182,15 +185,15 @@ pub const StmtNonEmptySlice = cols.SafeList(Stmt).NonEmptySlice;
 pub const Stmt = union(enum) {
     Let: struct {
         ident: base.IdentId,
-        expr: ExprId,
-        layout: ExprId,
+        expr: Expr.Id,
+        layout: Expr.Id,
         continuation: StmtId,
     },
     Switch: struct {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_ident: base.IdentId,
         // TODO: can we make this layout a number type?
-        cond_layout: LayoutId,
+        cond_layout: Layout.Idx,
         /// The u64 in the tuple will be compared directly to the condition Expr.
         /// If they are equal, this branch will be taken.
         branches: Branch,
@@ -200,7 +203,7 @@ pub const Stmt = union(enum) {
             stmt: StmtId,
         },
         /// Each branch must return a value of this type.
-        ret_layout: LayoutId,
+        ret_layout: Layout.Idx,
     },
     Ret: base.IdentId,
     /// a join point `join f <params> = <continuation> in remainder`
@@ -233,7 +236,7 @@ pub const Branch = struct {
         None,
         Constructor: struct {
             scrutinee: base.Symbol,
-            layout: LayoutId,
+            layout: Layout.Idx,
             tag_id: TagIdIntType,
         },
         List: struct {
@@ -251,5 +254,5 @@ pub const JoinPointId = base.IdentId;
 
 pub const Param = struct {
     ident: base.IdentId,
-    layout: LayoutId,
+    layout: Layout.Idx,
 };

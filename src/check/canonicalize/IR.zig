@@ -4,24 +4,22 @@ const cols = @import("../../collections.zig");
 
 const TypeVar = base.TypeVar;
 
-pub const IR = struct {
-    env: *base.SoloModuleEnv,
-    module_id: base.ModuleId,
-    // exposed_imports: std.AutoHashMap(comptime K: type, comptime V: type)
-    //  MutMap<Symbol, Region>,
-    // exposed_symbols: std.AutoHashMap(base.IdentId, .{}),
-    // referenced_values: VecSet<Symbol>,
-    /// all aliases. `bool` indicates whether it is exposed
-    // aliases: MutMap<Symbol, (bool, Alias)>,
-    rigid_variables: RigidVariables,
-    exprs: cols.SafeList(Expr),
-    exprs_at_regions: cols.SafeMultiList(ExprAtRegion),
-    typed_exprs_at_regions: cols.SafeMultiList(TypedExprAtRegion),
-};
+const IR = @This();
+
+env: *base.ModuleEnv,
+module_idx: base.Module.Idx,
+// exposed_imports: std.AutoHashMap(comptime K: type, comptime V: type)
+//  MutMap<Symbol, Region>,
+// exposed_symbols: std.AutoHashMap(base.IdentId, .{}),
+// referenced_values: VecSet<Symbol>,
+/// all aliases. `bool` indicates whether it is exposed
+// aliases: MutMap<Symbol, (bool, Alias)>,
+rigid_variables: RigidVariables,
+exprs: Expr.Idx,
+exprs_at_regions: ExprAtRegion.List,
+typed_exprs_at_regions: TypedExprAtRegion.List,
 
 // TODO: don't use symbol in this module, no imports really exist yet?
-
-const ExprId = cols.SafeList(Expr).Id;
 
 pub const Expr = union(enum) {
     // Literals
@@ -30,7 +28,7 @@ pub const Expr = union(enum) {
     // stored in Int and Float below, which is strictly for better error messages
     Num: struct {
         num_var: TypeVar,
-        literal: base.SmallStringId,
+        literal: cols.StringLiteral.Idx,
         value: IntValue,
         bound: NumBound,
     },
@@ -63,13 +61,11 @@ pub const Expr = union(enum) {
         loc_elems: ExprAtRegionSlice,
     },
 
-    // Lookups
     Var: struct {
         symbol: base.Symbol,
         type_var: TypeVar,
     },
 
-    // Branching
     When: WhenId,
     If: struct {
         cond_var: TypeVar,
@@ -78,8 +74,7 @@ pub const Expr = union(enum) {
         final_else: ExprAtRegionId,
     },
 
-    // Let
-    LetRec: struct {
+    Let: struct {
         defs: DefSlice,
         cont: ExprAtRegionId,
         cycle_mark: IllegalCycleMark,
@@ -90,7 +85,7 @@ pub const Expr = union(enum) {
     Call: struct {
         // TODO:
         // Box<(Variable, Loc<Expr>, Variable, Variable)>,
-        args: TypedExprAtRegionSlice,
+        args: TypedExprAtRegion.Slice,
         called_via: CalledVia,
     },
 
@@ -108,13 +103,13 @@ pub const Expr = union(enum) {
 
     Tuple: struct {
         tuple_var: TypeVar,
-        elems: TypedExprAtRegionSlice,
+        elems: TypedExprAtRegion.Slice,
     },
 
     /// The "crash" keyword
     Crash: struct {
-        msg: ExprAtRegionId,
-        ret_var: Variable,
+        msg: ExprAtRegion.Idx,
+        ret_var: TypeVar,
     },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
@@ -122,7 +117,7 @@ pub const Expr = union(enum) {
         record_var: TypeVar,
         ext_var: TypeVar,
         field_var: TypeVar,
-        loc_expr: ExprAtRegionId,
+        loc_expr: ExprAtRegion.Idx,
         field: Lowercase,
     },
 
@@ -130,7 +125,7 @@ pub const Expr = union(enum) {
     Tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
-        name: TagName,
+        name: cols.FieldName.Idx,
         arguments: TypedExprAtRegionSlice,
     },
 
@@ -143,6 +138,39 @@ pub const Expr = union(enum) {
 
     /// Compiles, but will crash if reached
     RuntimeError: RuntimeError,
+
+    pub const List = cols.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+    pub const NonEmptySlice = List.NonEmptySlice;
+};
+
+pub const Def = struct {
+    pattern: Pattern.Idx,
+    pattern_region: base.Region,
+    expr: Expr.Idx,
+    expr_region: base.Region,
+    expr_var: TypeVar,
+    // TODO:
+    // pattern_vars: SendMap<Symbol, Variable>,
+    annotation: ?Annotation,
+    kind: Kind,
+
+    const Kind = union(enum) {
+        /// A def that introduces identifiers
+        Let,
+        /// A standalone statement with an fx variable
+        Stmt(Variable),
+        /// Ignored result, must be effectful
+        Ignored(Variable),
+    };
+};
+
+pub const Annotation = struct {
+    signature: Type,
+    introduced_variables: IntroducedVariables,
+    // aliases: VecMap<Symbol, Alias>,
+    region: Region,
 };
 
 pub const IntValue = struct {
@@ -152,24 +180,26 @@ pub const IntValue = struct {
     pub const Kind = enum { I128, U128 };
 };
 
-pub const ExprAtRegionId = cols.SafeMultiList(ExprAtRegion).Id;
-pub const ExprAtRegionSlice = cols.SafeMultiList(ExprAtRegion).Slice;
-
 pub const ExprAtRegion = struct {
-    expr: ExprId,
+    expr: Expr.Id,
     region: base.Region,
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Id = List.Id;
+    pub const Slice = List.Slice;
 };
 
-pub const TypedExprAtRegionSlice = cols.SafeMultiList(TypedExprAtRegion).Slice;
-
 pub const TypedExprAtRegion = struct {
-    expr: ExprId,
+    expr: Expr.Id,
     type_var: TypeVar,
     region: base.Region,
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
 pub const PatternAtRegion = struct {
-    pattern: PatternId,
+    pattern: Pattern.Id,
     region: base.Region,
 };
 
@@ -181,14 +211,13 @@ pub const Function = struct {
     region: base.Region,
 };
 
-pub const IfBranchSlice = cols.SafeMultiList(IfBranch).Slice;
-
 pub const IfBranch = struct {
     cond: ExprAtRegion,
     body: ExprAtRegion,
-};
 
-pub const WhenId = cols.SafeMultiList(When).Id;
+    pub const List = cols.SafeMultiList(@This());
+    pub const Slice = List.Slice;
+};
 
 pub const When = struct {
     /// The actual condition of the when expression.
@@ -203,6 +232,9 @@ pub const When = struct {
     branches_cond_var: TypeVar,
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Idx = List.Idx;
 };
 
 pub const WhenBranchPatternSlice = cols.SafeMultiList(WhenBranchPattern).Slice;
@@ -225,82 +257,114 @@ pub const WhenBranch = struct {
     redundant: RedundantMark,
 };
 
-
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    Identifier: Symbol,
-    As(Box<Loc<Pattern>>, Symbol),
-    AppliedTag {
+    Identifier: base.Module.Ident,
+    As: struct {
+        pattern: Pattern.Idx,
+        region: base.Region,
+        symbol: base.Symbol,
+    },
+    AppliedTag: struct {
+        whole_var: TypeVar,
+        ext_var: TypeVar,
+        tag_name: base.IdentId,
+        arguments: TypedPatternAtRegionSlice,
+    },
+    RecordDestructure: struct {
         whole_var: Variable,
         ext_var: Variable,
-        tag_name: TagName,
-        arguments: Vec<(Variable, Loc<Pattern>)>,
+        destructs: RecordDestructSlice,
     },
-    UnwrappedOpaque {
-        whole_var: Variable,
-        opaque: Symbol,
-        argument: Box<(Variable, Loc<Pattern>)>,
-
-        // The following help us link this opaque reference to the type specified by its
-        // definition, which we then use during constraint generation. For example
-        // suppose we have
-        //
-        //   Id n := [Id U64 n]
-        //   strToBool : Str -> Bool
-        //
-        //   f = \@Id who -> strToBool who
-        //
-        // Then `opaque` is "Id", `argument` is "who", but this is not enough for us to
-        // infer the type of the expression as "Id Str" - we need to link the specialized type of
-        // the variable "n".
-        // That's what `specialized_def_type` and `type_arguments` are for; they are specialized
-        // for the expression from the opaque definition. `type_arguments` is something like
-        // [(n, fresh1)], and `specialized_def_type` becomes "[Id U64 fresh1]".
-        specialized_def_type: Box<Type>,
-        type_arguments: Vec<OptAbleVar>,
-        lambda_set_variables: Vec<LambdaSet>,
-    },
-    RecordDestructure {
+    TupleDestructure: struct {
         whole_var: Variable,
         ext_var: Variable,
-        destructs: Vec<Loc<RecordDestruct>>,
+        destructs: TupleDestructSlice,
     },
-    TupleDestructure {
-        whole_var: Variable,
-        ext_var: Variable,
-        destructs: Vec<Loc<TupleDestruct>>,
-    },
-    List {
-        list_var: Variable,
-        elem_var: Variable,
+    List: struct {
+        list_var: TypeVar,
+        elem_var: TypeVar,
         patterns: ListPatterns,
     },
-    NumLiteral(Variable, Box<str>, IntValue, NumBound),
-    IntLiteral(Variable, Variable, Box<str>, IntValue, IntBound),
-    FloatLiteral(Variable, Variable, Box<str>, f64, FloatBound),
-    StrLiteral(Box<str>),
-    SingleQuote(Variable, Variable, char, SingleQuoteBound),
+    NumLiteral: struct {
+        num_var: TypeVar,
+        literal: cols.LargeStringId,
+        value: IntValue,
+        bound: NumBound,
+    },
+    IntLiteral: struct {
+        num_var: TypeVar,
+        precision_var: TypeVar,
+        literal: cols.LargeStringId,
+        value: IntValue,
+        bound: IntBound,
+    },
+    FloatLiteral: struct {
+        num_var: TypeVar,
+        precision_var: TypeVar,
+        literal: cols.LargeStringId,
+        value: f64,
+        bound: FloatBound,
+    },
+    StrLiteral: cols.LargeStringId,
+    FloatLiteral: struct {
+        num_var: TypeVar,
+        precision_var: TypeVar,
+        value: u32,
+        bound: SingleQuoteBound,
+    },
     Underscore,
 
-    /// An identifier that marks a specialization of an ability member.
-    /// For example, given an ability member definition `hash : a -> U64 where a implements Hash`,
-    /// there may be the specialization `hash : Bool -> U64`. In this case we generate a
-    /// new symbol for the specialized "hash" identifier.
-    AbilityMemberSpecialization {
-        /// The symbol for this specialization.
-        ident: Symbol,
-        /// The ability name being specialized.
-        specializes: Symbol,
-    },
-
-    // Runtime Exceptions
-    Shadowed(Region, Loc<Ident>, Symbol),
-    OpaqueNotInScope(Loc<Ident>),
-    // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
-    UnsupportedPattern(Region),
+    // TODO: do we want these runtime exceptions here?
+    // // Runtime Exceptions
+    // Shadowed(Region, Loc<Ident>, Symbol),
+    // OpaqueNotInScope(Loc<Ident>),
+    // // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
+    // UnsupportedPattern(Region),
     // parse error patterns
     MalformedPattern(MalformedPatternProblem, Region),
+
+    pub const List = cols.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+};
+
+pub const TypedPatternAtRegion = struct {
+    pattern: Pattern.Idx,
+    region: base.Region,
+    type_var: TypeVar,
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+};
+
+pub const RecordDestruct = struct {
+    type_var: TypeVar,
+    region: base.Region,
+    label: base.IdentId,
+    symbol: Symbol,
+    typ: Type,
+
+    pub const Type = union(enum) {
+        Required,
+        Guard: TypedPatternAtRegion.Idx,
+    };
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Slice = List.Slice;
+};
+
+pub const TupleDestruct = struct {
+    type_var: TypeVar,
+    region: base.Region,
+    // TODO: should this be a smaller size?
+    destruct_index: usize,
+    type: TypedPatternAtRegion.Idx,
+
+    pub const List = cols.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
 /// Describes a bound on the width of an integer.
@@ -352,4 +416,3 @@ pub const RedundantMark = TypeVar;
 
 /// Marks whether a when expression is exhaustive using a variable.
 pub const ExhaustiveMark = TypeVar;
-

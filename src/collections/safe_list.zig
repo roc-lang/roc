@@ -1,14 +1,19 @@
 const std = @import("std");
 const testing = std.testing;
-const cols = @import("../collections.zig");
+const exit_on_oom = @import("exit_on_oom.zig").exit_on_oom;
 
-// a thing that you have to give the right type... no more "trust me bro!"
+/// Wraps a `std.ArrayList` to provide a type-safe interface.
 pub fn SafeList(comptime T: type) type {
     return struct {
         items: std.ArrayList(T),
 
-        pub const Id = struct { id: u32 };
+        /// Index of an item in the list.
+        pub const Idx = struct { id: u32 };
+
+        /// A typesafe Slice of the list.
         pub const Slice = std.ArrayList(T).Slice;
+
+        /// A typesafe NonEmptySlice, must have at least one element.
         pub const NonEmptySlice = struct {
             slice: std.ArrayList(T).Slice,
 
@@ -33,34 +38,40 @@ pub fn SafeList(comptime T: type) type {
             return self.items.items.len;
         }
 
-        pub fn append(self: *SafeList(T), item: T) Id {
+        pub fn append(self: *SafeList(T), item: T) Idx {
             const length = self.len();
-            self.items.append(item) catch cols.exit_on_oom;
+            self.items.append(item) catch exit_on_oom;
 
-            return Id{ .id = @as(u32, length) };
+            return Idx{ .id = @as(u32, length) };
         }
 
         pub fn appendSlice(self: *SafeList(T), items: []const T) Slice {
             const start_length = self.len();
-            self.items.appendSlice(items) catch cols.exit_on_oom;
+            self.items.appendSlice(items) catch exit_on_oom;
 
             return self.items.items[start_length..];
         }
 
-        pub fn get(self: *SafeList(T), id: Id) *T {
+        pub fn get(self: *SafeList(T), id: Idx) *T {
             return self.items.items[@as(usize, id.id)];
         }
     };
 }
 
+/// Wraps a `std.MultiArrayList` to provide a type-safe interface.
 pub fn SafeMultiList(comptime T: type) type {
     return struct {
         items: std.MultiArrayList(T),
         allocator: std.mem.Allocator,
 
-        pub const Id = struct { id: u32 };
+        /// Index of an item in the list.
+        pub const Idx = struct { id: u32 };
+
+        /// A typesafe Slice of the list.
         pub const Slice = std.MultiArrayList(T).Slice;
-        pub const X = std.MultiArrayList(T).Field;
+
+        /// TODO -- yo what is this?
+        pub const Field = std.MultiArrayList(T).Field;
 
         pub fn init(allocator: std.mem.Allocator) SafeList(T) {
             return SafeList{
@@ -77,11 +88,11 @@ pub fn SafeMultiList(comptime T: type) type {
             return self.items.items.len;
         }
 
-        pub fn append(self: *SafeMultiList(T), item: T) Id {
+        pub fn append(self: *SafeMultiList(T), item: T) Idx {
             const length = self.len();
-            self.items.append(item) catch cols.exit_on_oom;
+            self.items.append(item) catch exit_on_oom;
 
-            return Id{ .id = @as(u32, length) };
+            return Idx{ .id = @as(u32, length) };
         }
     };
 }
