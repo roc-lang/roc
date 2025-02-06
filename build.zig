@@ -9,12 +9,16 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    // Zig unicode library - https://codeberg.org/atman/zg
+    const zg = b.dependency("zg", .{});
+
     const exe = b.addExecutable(.{
         .name = "roc",
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
     });
+    exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     b.installArtifact(exe);
 
@@ -34,6 +38,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    all_tests.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     // Install the test binary so we can run separately
     // ```sh
