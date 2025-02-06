@@ -16,7 +16,7 @@ mv crates/cli/tests/platform-switching $1/examples
 mv examples/README.md $1/examples
 
 # temporary github.com/roc-lang/roc/pull/7231
-rm $1/examples/platform-switching/rocLovesRust.roc
+rm $1/examples/platform-switching/roc_loves_rust.roc
 rm -rf $1/examples/platform-switching/rust-platform
 
 # copy zig builtins

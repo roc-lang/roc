@@ -4,7 +4,7 @@
 To run, `cd` into this directory and run this in your terminal:
 
 ```bash
-roc --build-host --suppress-build-host-warning rocLovesC.roc
+roc --build-host --suppress-build-host-warning roc_loves_c.roc
 ```
 
 ## About these examples

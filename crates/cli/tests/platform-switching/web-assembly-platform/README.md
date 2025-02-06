@@ -4,20 +4,20 @@ To run this website, we first compile the app that uses the Wasm platform:
 
 - If you use the nightly roc release:
 ```bash
-./roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+./roc build --target=wasm32 examples/platform-switching/roc_loves_web_assembly.roc
 ```
 - If you start from the compiler source code:
 ```bash
 # Build roc compiler if you have not done so already
 cargo build
-target/debug/roc build --target=wasm32 examples/platform-switching/rocLovesWebAssembly.roc
+target/debug/roc build --target=wasm32 examples/platform-switching/roc_loves_web_assembly.roc
 ```
 We then move the file:
 ```bash
 # Go to the directory where index.html is
 cd examples/platform-switching/web-assembly-platform/
 # Move the .wasm file so that it's beside index.html
-mv ../rocLovesWebAssembly.wasm .
+mv ../roc_loves_web_assembly.wasm .
 ```
 
 In the directory where index.html is, run any web server on localhost.

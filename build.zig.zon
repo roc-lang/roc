@@ -7,6 +7,10 @@
             .url = "git+https://github.com/kristoff-it/zig-afl-kit#88c6b71377767c1b8d26979b0adfa12a58d988dd",
             .hash = "1220796f7d2d9a2d4d7f8339ee0b14aa4bf133a15ae9ba39c941cc68e08d5c5ce9a2",
         },
+        .zg = .{
+            .url = "https://codeberg.org/dude_the_builder/zg/archive/v0.13.2.tar.gz",
+            .hash = "122055beff332830a391e9895c044d33b15ea21063779557024b46169fb1984c6e40",
+        },
     },
     .paths = .{
         "build.zig",

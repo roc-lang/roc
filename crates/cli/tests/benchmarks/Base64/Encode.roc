@@ -40,7 +40,7 @@ folder = \{ output, accum }, char ->
                     { output, accum: None }
 
 #  SGVs bG8g V29y bGQ=
-# encodeResidual : { output : List ByteEncoder, accum : State } -> List ByteEncoder
+# encode_residual : { output : List ByteEncoder, accum : State } -> List ByteEncoder
 encode_residual = \{ output, accum } ->
     when accum is
         Unreachable(_) -> output

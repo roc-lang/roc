@@ -3,6 +3,7 @@ const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const RocCmd = @import("cli.zig").RocCmd;
 const RocOpt = @import("cli.zig").RocOpt;
+const syntax = @import("check/syntax.zig");
 
 const usage =
     \\Usage:
@@ -138,11 +139,20 @@ fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
 }
 
 fn rocCheck(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
+    var syn = try syntax.Syntax.init(allocator);
+    defer syn.deinit();
+    _ = opt;
 
-    std.debug.print("TODO roc check\n{}\n{s}\n\n", .{ opt, args });
+    // Temporary implementation for early testing
+    const dir_path = args[0];
+    const fs = std.fs.cwd();
+    var dir = try fs.openDir(dir_path, .{ .iterate = true });
+    defer dir.close();
 
-    fatal("not implemented", .{});
+    const success = try syn.tokenizeAndCheckSyntaxFiles(dir);
+    if (!success) {
+        fatal("syntax check failed", .{});
+    }
 }
 
 fn rocDocs(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {

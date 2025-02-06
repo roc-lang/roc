@@ -103,21 +103,21 @@ astar = \cost_fn, move_fn, goal, model ->
 
                 astar(cost_fn, move_fn, goal, model_with_costs)
 
-# takeStep = \moveFn, _goal, model, current ->
-#     modelPopped =
+# take_step = \move_fn, _goal, model, current ->
+#     model_popped =
 #         { model &
-#             openSet: Set.remove model.openSet current,
+#             open_set: Set.remove model.open_set current,
 #             evaluated: Set.insert model.evaluated current,
 #         }
 #
-#     neighbors = moveFn current
+#     neighbors = move_fn current
 #
-#     newNeighbors = Set.difference neighbors modelPopped.evaluated
+#     new_neighbors = Set.difference neighbors model_popped.evaluated
 #
-#     modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
+#     model_with_neighbors = { model_popped & open_set: Set.union model_popped.open_set new_neighbors }
 #
 #     # a lot goes wrong here
-#     modelWithCosts =
-#         Set.walk newNeighbors modelWithNeighbors (\n, m -> updateCost current n m)
+#     model_with_costs =
+#         Set.walk new_neighbors model_with_neighbors (\n, m -> update_cost current n m)
 #
-#     modelWithCosts
+#     model_with_costs
