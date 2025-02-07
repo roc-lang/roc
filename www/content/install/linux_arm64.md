@@ -1,4 +1,4 @@
-# Linux x86_64
+# Linux arm64
 
 ## How to install Roc
 
