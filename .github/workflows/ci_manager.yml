@@ -1,5 +1,10 @@
 name: CI Manager
 
+# cancel current runs when a new commit is pushed
+concurrency:
+    group: ${{ github.workflow }}-${{ github.ref }}
+    cancel-in-progress: true
+    
 on:
   pull_request:
 

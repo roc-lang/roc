@@ -3,11 +3,6 @@ on:
 
 name: Old CI manager
 
-# cancel current runs when a new commit is pushed
-concurrency:
-    group: ${{ github.workflow }}-${{ github.ref }}
-    cancel-in-progress: true
-
 jobs:
     check-changes:
         runs-on: ubuntu-22.04
