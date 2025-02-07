@@ -63,7 +63,7 @@ with! = \path, callback! ->
     File.with_open!(path, \handle ->
         # I cant define scope here and put it in the list in callback. It breaks alias anaysis.
         # Instead I have to inline this.
-        # root_scope = { data: Some handle, index: 0, buf: [], whileInfo: None }
+        # root_scope = { data: Some handle, index: 0, buf: [], while_info: None }
         callback!({ scopes: [{ data: Some(handle), index: 0, buf: [], while_info: None }], state: Executing, stack: [], vars: List.repeat(Number(0), Variable.total_count) }))
 
 # I am pretty sure there is a syntax to destructure and keep a reference to the whole, but Im not sure what it is.

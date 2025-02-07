@@ -278,7 +278,7 @@ step_exec_ctx! = \ctx, char ->
                 Ok(a) ->
                     Ok(a)
 
-                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.popStack
+                # Being explicit with error type is required to stop the need to propogate the error parameters to Context.pop_stack
                 Err(EmptyStack) ->
                     Err(EmptyStack)
 

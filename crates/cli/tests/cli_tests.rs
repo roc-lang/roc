@@ -63,7 +63,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             roc_cli::CMD_DEV,
-            file_from_root("crates/cli/tests/platform-switching", "rocLovesRust.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "roc_loves_rust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
@@ -80,7 +80,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             CMD_BUILD,
-            file_from_root("crates/cli/tests/platform-switching", "rocLovesZig.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "roc_loves_zig.roc"),
         )
         .arg(BUILD_HOST_FLAG)
         .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
@@ -106,7 +106,7 @@ mod cli_tests {
             CMD_CHECK,
             file_from_root(
                 "crates/cli/tests/platform-switching",
-                "rocLovesWebAssembly.roc",
+                "roc_loves_web_assembly.roc",
             ),
         );
 
@@ -382,7 +382,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
-                    "combine-tasks.roc",
+                    "combine_tasks.roc",
                 ),
             );
 
@@ -605,7 +605,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-one.roc",
+                    "direct_one.roc",
                 ),
             );
 
@@ -629,7 +629,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-one-and-two.roc",
+                    "direct_one_and_two.roc",
                 ),
             );
 
@@ -653,7 +653,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-zero.roc",
+                    "direct_zero.roc",
                 ),
             );
 
@@ -815,7 +815,7 @@ mod cli_tests {
                     CMD_BUILD,
                     file_from_root(
                         "crates/cli/tests/test-projects/test-platform-effects-zig/",
-                        "app-stub.roc",
+                        "app_stub.roc",
                     ),
                 )
                 .arg(BUILD_HOST_FLAG)
@@ -841,7 +841,7 @@ mod cli_tests {
 
             let cli_build = ExecCli::new(
                 CMD_BUILD,
-                file_from_root("crates/cli/tests/test-projects/effectful", "print-line.roc"),
+                file_from_root("crates/cli/tests/test-projects/effectful", "print_line.roc"),
             );
 
             let expected_output =
@@ -865,7 +865,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
-                    "inspect-logging.roc",
+                    "inspect_logging.roc",
                 ),
             );
 
@@ -1202,7 +1202,7 @@ mod cli_tests {
                 Please enter an integer
                 4
             "};
-            test_benchmark("nQueens.roc", expected_output, Some("6"), UseValgrind::Yes);
+            test_benchmark("n_queens.roc", expected_output, Some("6"), UseValgrind::Yes);
         }
 
         #[test]
@@ -1212,7 +1212,7 @@ mod cli_tests {
                 Please enter an integer
                 11 & 11
             "};
-            test_benchmark("cFold.roc", expected_output, Some("3"), UseValgrind::Yes);
+            test_benchmark("c_fold.roc", expected_output, Some("3"), UseValgrind::Yes);
         }
 
         #[test]
@@ -1234,7 +1234,7 @@ mod cli_tests {
                 10
             "};
             test_benchmark(
-                "rBTreeCk.roc",
+                "r_b_tree_ck.roc",
                 expected_output,
                 Some("100"),
                 UseValgrind::Yes,
@@ -1245,17 +1245,22 @@ mod cli_tests {
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             let expected_output = "Node Black 0 {} Empty Empty\n";
-            test_benchmark("rBTreeInsert.roc", expected_output, None, UseValgrind::Yes);
+            test_benchmark(
+                "r_b_tree_insert.roc",
+                expected_output,
+                None,
+                UseValgrind::Yes,
+            );
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
             if cfg!(feature = "wasm32-cli-run") {
-                eprintln!("WARNING: skipping testing benchmark testAStar.roc because it currently does not work on wasm32 due to dictionaries.");
+                eprintln!("WARNING: skipping testing benchmark test_a_star.roc because it currently does not work on wasm32 due to dictionaries.");
             } else {
                 let expected_output = "True\n";
-                test_benchmark("testAStar.roc", expected_output, None, UseValgrind::Yes);
+                test_benchmark("test_a_star.roc", expected_output, None, UseValgrind::Yes);
             }
         }
 
@@ -1266,7 +1271,7 @@ mod cli_tests {
                 encoded: SGVsbG8gV29ybGQ=
                 decoded: Hello World
             "};
-            test_benchmark("testBase64.roc", expected_output, None, UseValgrind::Yes);
+            test_benchmark("test_base64.roc", expected_output, None, UseValgrind::Yes);
         }
 
         #[test]
@@ -1288,7 +1293,7 @@ mod cli_tests {
         fn quicksort_app() {
             let expected_output = "Please enter an integer\n[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9]\n";
             test_benchmark(
-                "quicksortApp.roc",
+                "quicksort_app.roc",
                 expected_output,
                 Some("0"),
                 UseValgrind::Yes,
@@ -1423,7 +1428,7 @@ mod cli_tests {
             CMD_FORMAT,
             file_from_root(
                 "crates/cli/tests/test-projects/fixtures/format",
-                "not-formatted.roc",
+                "not_formatted.roc",
             ),
         )
         .arg(CHECK_FLAG)
@@ -1433,7 +1438,7 @@ mod cli_tests {
 
     #[test]
     fn format_check_folders() {
-        // This fails, because "not-formatted.roc" is present in this folder
+        // This fails, because "not_formatted.roc" is present in this folder
         ExecCli::new(
             CMD_FORMAT,
             dir_from_root("crates/cli/tests/test-projects/fixtures/format"),

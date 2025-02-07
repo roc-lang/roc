@@ -193,7 +193,7 @@ import Result exposing [Result]
 ## have the type `Num *` at first, but usually end up taking on
 ## a more specific type based on how they're used.
 ##
-## For example, in `1 + List.len(myList)`, the `1` has the type `Num *` at first,
+## For example, in `1 + List.len(my_list)`, the `1` has the type `Num *` at first,
 ## but because `List.len` returns a `U64`, the `1` ends up changing from
 ## `Num *` to the more specific `U64`, and the expression as a whole
 ## ends up having the type `U64`.
@@ -345,16 +345,16 @@ Int range : Num (Integer range)
 ## If you don't specify a type, Roc will default to using [Dec] because it's
 ## the least error-prone overall. For example, suppose you write this:
 ## ```roc
-## wasItPrecise = 0.1 + 0.2 == 0.3
+## was_it_precise = 0.1 + 0.2 == 0.3
 ## ```
-## The value of `wasItPrecise` here will be `Bool.true`, because Roc uses [Dec]
+## The value of `was_it_precise` here will be `Bool.true`, because Roc uses [Dec]
 ## by default when there are no types specified.
 ##
 ## In contrast, suppose we use `f32` or `f64` for one of these numbers:
 ## ```roc
-## wasItPrecise = 0.1f64 + 0.2 == 0.3
+## was_it_precise = 0.1f64 + 0.2 == 0.3
 ## ```
-## Here, `wasItPrecise` will be `Bool.false` because the entire calculation will have
+## Here, `was_it_precise` will be `Bool.false` because the entire calculation will have
 ## been done in a base-2 floating point calculation, which causes noticeable
 ## precision loss in this case.
 ##
@@ -726,7 +726,7 @@ abs_diff = |a, b|
 ## Num.neg(0.0)
 ## ```
 ## !! Num.neg is not completely implemented for all types in all contexts, see github.com/roc-lang/roc/issues/6959
-## You can use `\someNum -> 0 - someNum` as a workaround.
+## You can use `\some_num -> 0 - some_num` as a workaround.
 ##
 ## This is safe to use with any [Frac], but it can cause overflow when used with certain [Int] values.
 ##
@@ -904,7 +904,7 @@ log_checked = |x|
 ## > access to hardware-accelerated performance, Roc follows these rules exactly.
 ##
 ## To divide an [Int] and a [Frac], first convert the [Int] to a [Frac] using
-## one of the functions in this module like #toDec.
+## one of the functions in this module like #to_dec.
 ## ```roc
 ## 5.0 / 7.0
 ##
@@ -1125,7 +1125,7 @@ add_wrap : Int range, Int range -> Int range
 ##
 ## This is the same as [Num.add] except for the saturating behavior if the
 ## addition is to overflow.
-## For example, if `x : U8` is 200 and `y : U8` is 100, `addSaturated x y` will
+## For example, if `x : U8` is 200 and `y : U8` is 100, `add_saturated x y` will
 ## yield 255, the maximum value of a `U8`.
 add_saturated : Num a, Num a -> Num a
 

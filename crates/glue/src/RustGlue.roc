@@ -172,7 +172,7 @@ generate_entry_point = \buf, types, name, id ->
     extern_arguments =
         when Types.shape(types, id) is
             Function(roc_fn) ->
-                to_arg_str(roc_fn.args, types, \_argId, shape, index ->
+                to_arg_str(roc_fn.args, types, \_arg_id, shape, index ->
                     index_str = Num.to_str(index)
 
                     if can_derive_copy(types, shape) then
@@ -254,7 +254,7 @@ generate_function = \buf, types, roc_fn ->
 
     extern_call_arguments =
         without_unit =
-            to_arg_str(roc_fn.args, types, \_argId, _shape, index ->
+            to_arg_str(roc_fn.args, types, \_arg_id, _shape, index ->
                 index_str = Num.to_str(index)
 
                 "&arg${index_str}")
@@ -814,7 +814,7 @@ generate_non_recursive_tag_union = \buf, types, id, name, tags, discriminant_siz
             b
     |> generate_roc_refcounted(types, union_type, escaped_name)
 
-generate_non_nullable_unwrapped = \buf, types, name, tag_name, payload, discriminant_size, _discriminant_offset, _null_tagIndex ->
+generate_non_nullable_unwrapped = \buf, types, name, tag_name, payload, discriminant_size, _discriminant_offset, _null_tag_index ->
     escaped_name = escape_kw(name)
     discriminant_name = "discriminant_${escaped_name}"
 
@@ -879,7 +879,7 @@ generate_recursive_tag_union = \buf, types, id, tag_union_name, tags, discrimina
     discriminant_name = "discriminant_${escaped_name}"
     tag_names = List.map(tags, \{ name: n } -> n)
     # self = "(&*self.union_pointer())"
-    # selfMut = "(&mut *self.union_pointer())"
+    # self_mut = "(&mut *self.union_pointer())"
     # other = "(&*other.union_pointer())"
     union_name = "union_${escaped_name}"
 
@@ -1919,9 +1919,9 @@ has_float = \types, type ->
     has_float_help(types, type, Set.empty({}))
 
 has_float_help = \types, type, do_not_recurse ->
-    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # TODO: is do_not_recurse problematic? Do we need an updated do_not_recurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
-    # Otherwise we need to deal with threading through updates to doNotRecurse
+    # Otherwise we need to deal with threading through updates to do_not_recurse
     when type is
         Num(kind) ->
             when kind is
@@ -2145,9 +2145,9 @@ contains_refcounted = \types, type ->
     contains_refcounted_help(types, type, Set.empty({}))
 
 contains_refcounted_help = \types, type, do_not_recurse ->
-    # TODO: is doNotRecurse problematic? Do we need an updated doNotRecurse for calls up the tree?
+    # TODO: is do_not_recurse problematic? Do we need an updated do_not_recurse for calls up the tree?
     # I think there is a change it really only matters for RecursivePointer, so it may be fine.
-    # Otherwise we need to deal with threading through updates to doNotRecurse
+    # Otherwise we need to deal with threading through updates to do_not_recurse
     when type is
         RocStr | RocList(_) | RocSet(_) | RocDict(_, _) | RocBox(_) | RecursivePointer(_) ->
             Bool.true
