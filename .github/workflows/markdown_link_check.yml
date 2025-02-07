@@ -1,13 +1,9 @@
 on:
-  pull_request:
+  workflow_call:
   schedule:
     - cron: '0 9 * * *' # 9=9am utc+0
 
 name: Check Markdown links
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
   markdown-link-check:

@@ -1,11 +1,7 @@
 on:
-  pull_request:
+  workflow_call:
 
 name: devtools nix files test - macos
-
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
     devtools-test-macos:

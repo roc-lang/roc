@@ -1,0 +1,195 @@
+on:
+  workflow_call:
+
+name: Old CI manager
+
+jobs:
+    check-changes:
+        runs-on: ubuntu-22.04
+        outputs:
+            run_tests: ${{ steps.filecheck.outputs.run_tests }}
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+
+            - name: Check if only css, html or md files changed
+              id: check_ignored_files
+              run: |
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$)'; then
+                    echo "should_run_tests=y" >> $GITHUB_OUTPUT
+                else
+                    echo "should_run_tests=n" >> $GITHUB_OUTPUT
+                fi
+
+            - name: Check if markdown files changed
+              id: check_md_changed
+              run: |
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qE '\.md$'; then
+                    echo "md_files_changed=y" >> $GITHUB_OUTPUT
+                else
+                    echo "md_files_changed=n" >> $GITHUB_OUTPUT
+                fi
+
+            - name: Check if only comments changed in rust files
+              id: check_rs_comments
+              run: |
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$|\.rs|\.roc)'; then
+                    echo "should_run_tests=y" >> $GITHUB_OUTPUT
+                else
+                  if git diff --unified=0 origin/${{ github.base_ref }} HEAD '*.rs' | grep -E --color=never '^[+-]' | grep -qvE '^(\+\+\+|\-\-\-|[+-]\s*($|\/\/[^\/]|\/\*.*\*\/\s*$))'; then
+                      echo "should_run_tests=y" >> $GITHUB_OUTPUT
+                  else
+                      echo "should_run_tests=n" >> $GITHUB_OUTPUT
+                  fi
+                fi
+
+            - name: Check if only comments changed in roc files
+              id: check_roc_comments
+              run: |
+                git fetch origin ${{ github.base_ref }}
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$|\.rs|\.roc)'; then
+                    echo "should_run_tests=y" >> $GITHUB_OUTPUT
+                else
+                  if git diff --unified=0 origin/${{ github.base_ref }} HEAD '*.roc' | grep -E --color=never '^[+-]' | grep -qvE '^(\+\+\+|\-\-\-|[+-]\s*($|#))'; then
+                      echo "should_run_tests=y" >> $GITHUB_OUTPUT
+                  else
+                      echo "should_run_tests=n" >> $GITHUB_OUTPUT
+                  fi
+                fi
+
+            - name: Check if tests need to run based on earlier checks
+              id: filecheck
+              run: |
+                if [ ${{ steps.check_ignored_files.outputs.should_run_tests }} = "y" ]; then
+                  if [ ${{ steps.check_rs_comments.outputs.should_run_tests }} = "y" ]; then
+                      echo "run_tests=full" >> $GITHUB_OUTPUT
+                  else
+                    if [ ${{ steps.check_roc_comments.outputs.should_run_tests }} = "y" ]; then
+                      echo "run_tests=full" >> $GITHUB_OUTPUT
+                    else
+                      echo "run_tests=none" >> $GITHUB_OUTPUT
+                    fi
+                  fi
+                else
+                  echo "run_tests=none" >> $GITHUB_OUTPUT
+                fi
+
+            - run: echo "debug output ${{ steps.filecheck.outputs.run_tests }}"
+
+    start-nix-linux-x86-64-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/nix_linux_x86_64.yml
+
+    start-nix-linux-aarch64-build-default-test:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/nix_linux_arm64_default.yml
+
+    start-nix-linux-aarch64-cargo-build-test:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/nix_linux_arm64_cargo.yml
+
+    start-nix-macos-apple-silicon-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/nix_macos_apple_silicon.yml
+
+    start-macos-x86-64-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/macos_x86_64.yml
+
+    start-ubuntu-x86-64-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/ubuntu_x86_64.yml
+
+    start-ubuntu-x86-64-nix-tests-debug:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/ubuntu_x86_64_nix_debug.yml
+
+    start-windows-release-build-test:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/windows_release_build.yml
+
+    start-windows-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/windows_tests.yml
+
+    start-roc-benchmarks:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/benchmarks.yml
+
+    start-fuzzer-tests:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/fuzzer.yml
+        
+    start-devtools-tests-linux:
+        needs: check-changes
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/devtools_test_linux_x86_64.yml
+
+    start-devtools-tests-macos:
+        needs: check-changes 
+        if: needs.check-changes.outputs.run_tests == 'full'
+        uses: ./.github/workflows/devtools_test_macos_apple_silicon.yml
+        
+    start-md-files-check:
+        needs: check-changes
+        if: needs.check-changes.outputs.md_files_changed == 'y'
+        uses: ./.github/workflows/markdown_link_check.yml
+
+    ran-full:
+        runs-on: ubuntu-22.04
+        needs: [
+                start-nix-linux-x86-64-tests,
+                start-nix-linux-aarch64-build-default-test,
+                start-nix-linux-aarch64-cargo-build-test,
+                start-nix-macos-apple-silicon-tests,
+                start-macos-x86-64-tests,
+                start-ubuntu-x86-64-tests,
+                start-ubuntu-x86-64-nix-tests-debug,
+                start-windows-release-build-test,
+                start-windows-tests,
+                start-roc-benchmarks,
+                start-devtools-tests-linux,
+                start-devtools-tests-macos,
+                start-md-files-check,
+            ]
+        steps:
+            - run: echo "all workflows succeeded!"
+
+    ran-none:
+        runs-on: ubuntu-22.04
+        needs: [check-changes]
+        if: needs.check-changes.outputs.run_tests == 'none'
+        steps:
+            - run: echo "Only non-code files changed and/or rs and/or roc comment lines changed. CI manager did not run any workflows."
+
+    # we need a single end job for the required checks under branch protection rules
+    finish:
+      runs-on: ubuntu-22.04
+      needs: [ran-full, ran-none]
+      if: |
+        always()
+      steps:
+        - name: Check previous job results
+          run: |
+            if [ "${{ needs.ran-full.result }}" == "success" ] || [ "${{ needs.ran-full.result }}" == "skipped" ]; then
+              exit 0
+            else
+              echo "One or more jobs failed."
+              exit 1
+            fi
+
+        - run: echo "Workflow succeeded :)"
