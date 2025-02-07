@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const func_spec = @import("specialize_functions.zig");
 
 const lower_statements = @This();
-pub const IR = @import("lower_statements/ir.zig");
+pub const IR = @import("lower_statements/IR.zig");
 
 /// Convert expressions into statements for consumption by codegen.
 ///

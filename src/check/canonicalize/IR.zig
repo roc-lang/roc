@@ -1,23 +1,48 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const cols = @import("../../collections.zig");
+const collections = @import("../../collections.zig");
+const types = @import("../../types.zig");
 
-const TypeVar = base.TypeVar;
+const TypeVar = types.Type.Var;
 
 const IR = @This();
 
-env: *base.ModuleEnv,
-module_idx: base.Module.Idx,
-// exposed_imports: std.AutoHashMap(comptime K: type, comptime V: type)
-//  MutMap<Symbol, Region>,
-// exposed_symbols: std.AutoHashMap(base.IdentId, .{}),
+env: base.ModuleEnv,
 // referenced_values: VecSet<Symbol>,
 /// all aliases. `bool` indicates whether it is exposed
 // aliases: MutMap<Symbol, (bool, Alias)>,
-rigid_variables: RigidVariables,
-exprs: Expr.Idx,
+// rigid_variables: RigidVariables,
+exprs: Expr.List,
 exprs_at_regions: ExprAtRegion.List,
 typed_exprs_at_regions: TypedExprAtRegion.List,
+when_branches: WhenBranch.List,
+patterns: Pattern.List,
+patterns_at_regions: PatternAtRegion.List,
+typed_patterns_at_regions: TypedPatternAtRegion.List,
+
+pub fn init(allocator: std.mem.Allocator) IR {
+    return IR{
+        .env = base.ModuleEnv.init(allocator),
+        .exprs = Expr.List.init(allocator),
+        .exprs_at_regions = ExprAtRegion.List.init(allocator),
+        .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),
+        .when_branches = WhenBranch.List.init(allocator),
+        .patterns = Pattern.List.init(allocator),
+        .patterns_at_regions = PatternAtRegion.List.init(allocator),
+        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(allocator),
+    };
+}
+
+pub fn deinit(self: *IR) void {
+    self.env.deinit();
+    self.exprs.deinit();
+    self.exprs_at_regions.deinit();
+    self.typed_exprs_at_regions.deinit();
+    self.when_branches.deinit();
+    self.patterns.deinit();
+    self.patterns_at_regions.deinit();
+    self.typed_patterns_at_regions.deinit();
+}
 
 // TODO: don't use symbol in this module, no imports really exist yet?
 
@@ -28,7 +53,7 @@ pub const Expr = union(enum) {
     // stored in Int and Float below, which is strictly for better error messages
     Num: struct {
         num_var: TypeVar,
-        literal: cols.StringLiteral.Idx,
+        literal: collections.StringLiteral.Idx,
         value: IntValue,
         bound: NumBound,
     },
@@ -37,18 +62,18 @@ pub const Expr = union(enum) {
     Int: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: base.SmallStringId,
+        literal: collections.StringLiteral.Idx,
         value: IntValue,
         bound: IntBound,
     },
     Float: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: base.SmallStringId,
+        literal: collections.StringLiteral.Idx,
         value: f64,
         bound: FloatBound,
     },
-    Str: base.LargeStringId,
+    Str: collections.StringLiteral.Idx,
     // Number variable, precision variable, value, bound
     SingleQuote: struct {
         num_var: TypeVar,
@@ -58,7 +83,7 @@ pub const Expr = union(enum) {
     },
     List: struct {
         elem_var: TypeVar,
-        loc_elems: ExprAtRegionSlice,
+        loc_elems: ExprAtRegion.Slice,
     },
 
     Var: struct {
@@ -66,18 +91,18 @@ pub const Expr = union(enum) {
         type_var: TypeVar,
     },
 
-    When: WhenId,
+    When: When.Id,
     If: struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
-        branches: IfBranchSlice,
-        final_else: ExprAtRegionId,
+        branches: IfBranch.Slice,
+        final_else: ExprAtRegion.Idx,
     },
 
     Let: struct {
-        defs: DefSlice,
-        cont: ExprAtRegionId,
-        cycle_mark: IllegalCycleMark,
+        defs: Def.Slice,
+        cont: ExprAtRegion.Idx,
+        // cycle_mark: IllegalCycleMark,
     },
 
     /// This is *only* for calling functions, not for tag application.
@@ -86,25 +111,20 @@ pub const Expr = union(enum) {
         // TODO:
         // Box<(Variable, Loc<Expr>, Variable, Variable)>,
         args: TypedExprAtRegion.Slice,
-        called_via: CalledVia,
+        called_via: base.CalledVia,
     },
 
-    Closure: ClosureData,
+    // Closure: ClosureData,
 
     // Product Types
     Record: struct {
-        record_var: Variable,
+        record_var: TypeVar,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
     },
 
     /// Empty record constant
     EmptyRecord,
-
-    Tuple: struct {
-        tuple_var: TypeVar,
-        elems: TypedExprAtRegion.Slice,
-    },
 
     /// The "crash" keyword
     Crash: struct {
@@ -118,28 +138,28 @@ pub const Expr = union(enum) {
         ext_var: TypeVar,
         field_var: TypeVar,
         loc_expr: ExprAtRegion.Idx,
-        field: Lowercase,
+        field: base.Ident.Idx,
     },
 
     // Sum Types
     Tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
-        name: cols.FieldName.Idx,
-        arguments: TypedExprAtRegionSlice,
+        name: collections.FieldName.Idx,
+        arguments: TypedExprAtRegion.Slice,
     },
 
     ZeroArgumentTag: struct {
-        closure_name: Symbol,
+        closure_name: base.Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
-        name: TagName,
+        name: base.Ident.Idx,
     },
 
     /// Compiles, but will crash if reached
-    RuntimeError: RuntimeError,
+    // RuntimeError: RuntimeError,
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
@@ -160,17 +180,17 @@ pub const Def = struct {
         /// A def that introduces identifiers
         Let,
         /// A standalone statement with an fx variable
-        Stmt(Variable),
+        Stmt: TypeVar,
         /// Ignored result, must be effectful
-        Ignored(Variable),
+        Ignored: TypeVar,
     };
 };
 
 pub const Annotation = struct {
-    signature: Type,
-    introduced_variables: IntroducedVariables,
+    signature: types.Type,
+    // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
-    region: Region,
+    region: base.Region,
 };
 
 pub const IntValue = struct {
@@ -181,33 +201,28 @@ pub const IntValue = struct {
 };
 
 pub const ExprAtRegion = struct {
-    expr: Expr.Id,
+    expr: Expr.Idx,
     region: base.Region,
 
-    pub const List = cols.SafeMultiList(@This());
-    pub const Id = List.Id;
+    pub const List = collections.SafeMultiList(@This());
+    pub const Idx = List.Idx;
     pub const Slice = List.Slice;
 };
 
 pub const TypedExprAtRegion = struct {
-    expr: Expr.Id,
+    expr: Expr.Idx,
     type_var: TypeVar,
     region: base.Region,
 
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
-};
-
-pub const PatternAtRegion = struct {
-    pattern: Pattern.Id,
-    region: base.Region,
 };
 
 pub const Function = struct {
     return_var: TypeVar,
     fx_var: TypeVar,
     function_var: TypeVar,
-    expr: ExprId,
+    expr: Expr.Idx,
     region: base.Region,
 };
 
@@ -215,29 +230,29 @@ pub const IfBranch = struct {
     cond: ExprAtRegion,
     body: ExprAtRegion,
 
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
 };
 
 pub const When = struct {
     /// The actual condition of the when expression.
-    loc_cond: ExprAtRegionId,
+    loc_cond: ExprAtRegion.Idx,
     cond_var: TypeVar,
     /// Type of each branch (and therefore the type of the entire `when` expression)
     expr_var: TypeVar,
     region: base.Region,
     /// The branches of the when, and the type of the condition that they expect to be matched
     /// against.
-    branches: WhenBranchSlice,
+    branches: WhenBranch.Slice,
     branches_cond_var: TypeVar,
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
 
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
 };
 
-pub const WhenBranchPatternSlice = cols.SafeMultiList(WhenBranchPattern).Slice;
+pub const WhenBranchPatternSlice = collections.SafeMultiList(WhenBranchPattern).Slice;
 
 pub const WhenBranchPattern = struct {
     pattern: PatternAtRegion,
@@ -247,14 +262,17 @@ pub const WhenBranchPattern = struct {
     degenerate: bool,
 };
 
-pub const WhenBranchSlice = cols.SafeMultiList(WhenBranch).Slice;
+pub const WhenBranchSlice = collections.SafeMultiList(WhenBranch).Slice;
 
 pub const WhenBranch = struct {
     patterns: WhenBranchPatternSlice,
-    value: ExprAtRegionId,
-    guard: ?ExprAtRegionId,
+    value: ExprAtRegion.Idx,
+    guard: ?ExprAtRegion.Idx,
     /// Whether this branch is redundant in the `when` it appears in
     redundant: RedundantMark,
+
+    pub const List = collections.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -270,45 +288,40 @@ pub const Pattern = union(enum) {
         whole_var: TypeVar,
         ext_var: TypeVar,
         tag_name: base.IdentId,
-        arguments: TypedPatternAtRegionSlice,
+        arguments: TypedPatternAtRegion.Slice,
     },
     RecordDestructure: struct {
-        whole_var: Variable,
-        ext_var: Variable,
-        destructs: RecordDestructSlice,
-    },
-    TupleDestructure: struct {
-        whole_var: Variable,
-        ext_var: Variable,
-        destructs: TupleDestructSlice,
+        whole_var: TypeVar,
+        ext_var: TypeVar,
+        destructs: RecordDestruct.Slice,
     },
     List: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
-        patterns: ListPatterns,
+        patterns: Pattern.List,
     },
     NumLiteral: struct {
         num_var: TypeVar,
-        literal: cols.LargeStringId,
+        literal: collections.LargeStringId,
         value: IntValue,
         bound: NumBound,
     },
     IntLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: cols.LargeStringId,
+        literal: collections.LargeStringId,
         value: IntValue,
         bound: IntBound,
     },
     FloatLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: cols.LargeStringId,
+        literal: collections.LargeStringId,
         value: f64,
         bound: FloatBound,
     },
-    StrLiteral: cols.LargeStringId,
-    FloatLiteral: struct {
+    StrLiteral: collections.LargeStringId,
+    CharLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
@@ -323,9 +336,18 @@ pub const Pattern = union(enum) {
     // // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     // UnsupportedPattern(Region),
     // parse error patterns
-    MalformedPattern(MalformedPatternProblem, Region),
+    // MalformedPattern: .{ MalformedPatternProblem, Region },
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+};
+
+pub const PatternAtRegion = struct {
+    pattern: Pattern.Idx,
+    region: base.Region,
+
+    pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
 };
@@ -335,7 +357,7 @@ pub const TypedPatternAtRegion = struct {
     region: base.Region,
     type_var: TypeVar,
 
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
 };
@@ -343,27 +365,16 @@ pub const TypedPatternAtRegion = struct {
 pub const RecordDestruct = struct {
     type_var: TypeVar,
     region: base.Region,
-    label: base.IdentId,
-    symbol: Symbol,
-    typ: Type,
+    label: base.Ident.Idx,
+    module_ident: base.ModuleIdent,
+    kind: Kind,
 
-    pub const Type = union(enum) {
+    pub const Kind = union(enum) {
         Required,
         Guard: TypedPatternAtRegion.Idx,
     };
 
-    pub const List = cols.SafeMultiList(@This());
-    pub const Slice = List.Slice;
-};
-
-pub const TupleDestruct = struct {
-    type_var: TypeVar,
-    region: base.Region,
-    // TODO: should this be a smaller size?
-    destruct_index: usize,
-    type: TypedPatternAtRegion.Idx,
-
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
 };
 

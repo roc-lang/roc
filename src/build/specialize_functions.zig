@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const func_solve = @import("solve_functions.zig");
 
 const specialize_functions = @This();
-pub const IR = @import("specialize_functions/ir.zig");
+pub const IR = @import("specialize_functions/IR.zig");
 
 /// Make each generic function concrete by representing each set of potential captures using a tag union as an argument.
 ///

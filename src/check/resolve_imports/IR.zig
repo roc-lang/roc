@@ -2,34 +2,32 @@
 //! which is roughly the artifacts of today's `roc_can` compiler stage.
 
 const std = @import("std");
-const base = @import("../base.zig");
-const cols = @import("../collections.zig");
-const problem = @import("../problem.zig");
+const base = @import("../../base.zig");
+const cols = @import("../../collections.zig");
+const problem = @import("../../problem.zig");
 
 const TypeVar = base.TypeVar;
 const Region = base.Region;
 
 // created from `Declarations`
-pub const IR = struct {
-    env: base.ModuleEnv,
-    declarations: cols.SafeList(DeclarationTag),
-    regions: cols.SafeList(base.Region),
+env: base.ModuleEnv,
+declarations: cols.SafeList(DeclarationTag),
+regions: cols.SafeList(base.Region),
 
-    // utable: UnificationTable,
-    // pub type_var_slices: Vec<TypeVarSubsSlice>,
-    type_vars: []TypeVar,
-    idents: base.IdentStore,
-    // symbols: Vec<Symbol>,
-    // symbol_regions: Vec<Region>,
+// utable: UnificationTable,
+// pub type_var_slices: Vec<TypeVarSubsSlice>,
+type_vars: []TypeVar,
+idents: base.IdentStore,
+// symbols: Vec<Symbol>,
+// symbol_regions: Vec<Region>,
 
-    host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
+host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
 
-    function_bodies: cols.SafeList(FunctionDef),
-    function_regions: cols.SafeList(Region),
-    expressions: []Expr,
-    expression_regions: []Region,
-    destructs: []DestructureDef,
-};
+function_bodies: cols.SafeList(FunctionDef),
+function_regions: cols.SafeList(Region),
+expressions: []Expr,
+expression_regions: []Region,
+destructs: []DestructureDef,
 
 // pub const TypeVar =
 

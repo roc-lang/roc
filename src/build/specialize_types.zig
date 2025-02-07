@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const resolve = @import("../check/resolve_imports.zig");
 
 const specialize_types = @This();
-pub const IR = @import("specialize_types/ir.zig").IR;
+pub const IR = @import("specialize_types/IR.zig").IR;
 
 /// Create a copy of every function in the program, by walking from the entrypoint down the tree, replacing type variables with concrete types.
 ///

@@ -1,8 +1,10 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const cols = @import("../../collections.zig");
-const Problem = @import("../../Problem.zig");
+const problem = @import("../../problem.zig");
 const types = @import("../../types.zig");
+
+const Problem = problem.Problem;
 
 pub const IR = @This();
 

@@ -1,16 +1,18 @@
 const std = @import("std");
-const base = @import("base/main.zig");
+const base = @import("base.zig");
 const resolve = @import("check/resolve_imports.zig");
 const type_spec = @import("build/specialize_types.zig");
 const func_lift = @import("build/lift_functions.zig");
 const func_spec = @import("build/specialize_types.zig");
 const func_solve = @import("build/lift_functions.zig");
-const lower = @import("build/lower_ir.zig");
+const lower = @import("build/lower_statements.zig");
 const refcount = @import("build/reference_count.zig");
 
 const ResolveIR = type_spec.ResolveIR;
 const TypeSpecIR = type_spec.TypeSpecIR;
 const RefCountIR = refcount.RefCountIR;
+
+const Package = base.Package;
 
 // to compile:
 // load file, returning early on failure to load (e.g. missing file)
@@ -18,9 +20,24 @@ const RefCountIR = refcount.RefCountIR;
 // - exported idents
 // - packages as pairs of shorthands and URLs
 // - position to finish parsing rest of file from
-// - if we are trying to build on top of typechecking, fail if module is not an app/platform
+// - if we are trying to build on top of typechecking, fail if module is not an app/platform/package
 // for package in discovered packages, do the same as above recursively
 // assemble a directed graph of packages and modules with the loaded module as the root
+
+// we have a map where the key is the package "key" (pending what key we use)
+// a package has these attributes
+// - download URL
+// - content hash
+// - version string
+// - a root file path
+// - a collection of files with paths relative to the root file of the package (AKA `main.roc`)
+//
+// we have many external packages with the above qualities, and we also have a single "current" package
+// it only has these attributes
+// - a root file path
+// - a collection of files with paths relative to the root file of the package (AKA `main.roc`)
+//
+//
 
 fn typecheck_module(filepath: []u8) std.AutoHashMap(base.ModuleId, ResolveIR) {
     const allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -28,12 +45,21 @@ fn typecheck_module(filepath: []u8) std.AutoHashMap(base.ModuleId, ResolveIR) {
 
     _ = filepath;
 
+    const packages = Package.Store.init(filepath, allocator);
+    const reverse_adjacency_list = std.AutoHashMap([]u8, []u8).init(allocator);
+
     // const main_module = .{};
     // const dep_modules: [_][]u8 = [_].{};
     const module_dep_adjacencies = std.AutoHashMap(base.ModuleId, base.ModuleId).init(allocator);
 
     // TODO: in order of dependencies before who depends on them, run each phase of the compiler
     return module_dep_adjacencies;
+}
+
+fn build_adjacency_list_for_all_modules(starting_module_path: []u8) std.AutoHashMap([]u8, []u8) {
+    _ = starting_module_path;
+
+    @panic("not implemented");
 }
 
 /// Run the `build` phase of compiling Roc code except for codegen.

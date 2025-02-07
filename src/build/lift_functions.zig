@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const type_spec = @import("specialize_types.zig");
 
 const lift_functions = @This();
-pub const IR = @import("lift_functions/ir.zig");
+pub const IR = @import("lift_functions/IR.zig");
 
 /// Lift all closures to the top-level and leave behind closure captures
 ///

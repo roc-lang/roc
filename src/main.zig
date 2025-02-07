@@ -4,6 +4,8 @@ const Allocator = std.mem.Allocator;
 const RocCmd = @import("cli.zig").RocCmd;
 const RocOpt = @import("cli.zig").RocOpt;
 
+const coordinate = @import("coordinate.zig");
+
 const usage =
     \\Usage:
     \\

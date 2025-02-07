@@ -3,7 +3,7 @@ const base = @import("../base.zig");
 const func_lift = @import("lift_functions.zig");
 
 const solve_functions = @This();
-pub const IR = @import("solve_functions/ir.zig");
+pub const IR = @import("solve_functions/IR.zig");
 
 /// Annotate the generic-ness of each function at the top-level
 ///

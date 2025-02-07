@@ -5,6 +5,13 @@ pub const Region = @This();
 start: Position,
 end: Position,
 
+pub fn zero() Region {
+    return Region{
+        .start = Position.zero(),
+        .end = Position.zero(),
+    };
+}
+
 pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);
