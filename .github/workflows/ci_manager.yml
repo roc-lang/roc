@@ -20,6 +20,11 @@ jobs:
               - 'src/**'
               - 'build.zig'
               - 'build.zig.zon'
+            other_than_zig:
+              - '**/*'
+              - '!src/**'
+              - '!build.zig'
+              - '!build.zig.zon'
 
   call-zig-workflow:
     needs: check-changes
@@ -28,7 +33,7 @@ jobs:
 
   call-old-workflow:
     needs: check-changes
-    if: needs.changes.outputs.zig != 'true'
+    if: needs.changes.outputs.other_than_zig == 'true'
     uses: ./.github/workflows/ci_manager_old.yml
     
   finish:
