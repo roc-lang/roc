@@ -28,12 +28,12 @@ jobs:
 
   call-zig-workflow:
     needs: check-changes
-    if: needs.changes.outputs.zig == 'true'
+    if: needs.check-changes.outputs.zig == 'true'
     uses: ./.github/workflows/ci_zig.yml
 
   call-old-workflow:
     needs: check-changes
-    if: needs.changes.outputs.other_than_zig == 'true'
+    if: needs.check-changes.outputs.other_than_zig == 'true'
     uses: ./.github/workflows/ci_manager_old.yml
     
   finish:
@@ -43,7 +43,7 @@ jobs:
     steps:
       - name: Check workflow results
         run: |
-          if [[ "${{ needs.changes.outputs.zig }}" == "true" ]]; then
+          if [[ "${{ needs.check-changes.outputs.zig }}" == "true" ]]; then
             if [[ "${{ needs.call-zig-workflow.result }}" != "success" ]]; then
               echo "ci_zig.yml failed."
               exit 1
