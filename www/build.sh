@@ -84,14 +84,9 @@ else
   echo 'Fetching latest roc nightly...'
 
   # get roc release archive
-  # check if testing archive is available
-  TESTING_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz"
   LATEST_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz"
-  if curl --output /dev/null --silent --head --fail "$TESTING_URL"; then 
-    curl -fOL "$TESTING_URL"
-  else
-    curl -fOL "$LATEST_URL"
-  fi
+  curl -fOL "$LATEST_URL"
+  
   # extract archive
   ls | grep "roc_nightly" | xargs tar -xzvf
   # delete archive

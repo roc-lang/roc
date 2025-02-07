@@ -1,4 +1,4 @@
-# Linux x86_64
+# Linux arm64
 
 ## How to install Roc
 
@@ -8,20 +8,20 @@ which includes the Roc compiler and some helpful utilities.
 1. Download the latest roc alpha release using the terminal:
 
     ```sh
-    curl -OL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_x86_64-0-alpha2-rolling.tar.gz
+    curl -OL https://github.com/roc-lang/roc/releases/download/0.0.0-alpha2-rolling/roc-linux_arm64-0-alpha2-rolling.tar.gz
     ```
 
 1. Untar the archive:
 
     ```sh
-    tar -xf roc_nightly-linux_x86_64-latest.tar.gz
+    tar -xf roc_nightly-linux_arm64-latest.tar.gz
     cd roc_night<TAB TO AUTOCOMPLETE>
     ```
 
 1. To be able to run the `roc` command anywhere on your system; add the line below to your shell startup script (.profile, .zshrc, ...):
 
     ```sh
-    export PATH=$PATH:~/path/to/roc_nightly-linux_x86_64-<VERSION>
+    export PATH=$PATH:~/path/to/roc_nightly-linux_arm64-<VERSION>
     ```
 
 1. Check everything worked by executing `roc version`

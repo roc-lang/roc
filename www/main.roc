@@ -49,6 +49,7 @@ page_data =
     |> Dict.insert("/examples/index.html", { title: "Examples | Roc", description: "All kinds of examples implemented in the Roc programming language." })
     |> Dict.insert("/install/other.html", { title: "Getting started on other systems | Roc", description: "Roc installation guide for other systems" })
     |> Dict.insert("/install/linux_x86_64.html", { title: "Getting started on Linux x86_64 | Roc", description: "Roc installation guide for Linux x86_64" })
+    |> Dict.insert("/install/linux_arm64.html", { title: "Getting started on Linux arm64 | Roc", description: "Roc installation guide for Linux arm64" })
     |> Dict.insert("/install/macos_apple_silicon.html", { title: "Getting started on MacOS Apple Silicon | Roc", description: "Roc installation guide for MacOS Apple Silicon" })
     |> Dict.insert("/install/macos_x86_64.html", { title: "Getting started on MacOS x86_64 | Roc", description: "Roc installation guide for MacOS x86_64" })
     |> Dict.insert("/install/windows.html", { title: "Getting started on Windows | Roc", description: "Roc installation guide for Windows" })

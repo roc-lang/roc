@@ -18,6 +18,7 @@ Here are some Getting Started guides for different operating systems:
 <!-- TODO detect current OS with browser and only show link for that, provide other button for others  -->
 
 - [Linux x86-64](/install/linux_x86_64)
+- [Linux arm64](/install/linux_arm64)
 - [Nix Linux/MacOS](/install/nix)
 - [MacOS Apple Silicon](/install/macos_apple_silicon)
 - [MacOS x86-64](/install/macos_x86_64)
