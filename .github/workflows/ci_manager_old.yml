@@ -190,7 +190,9 @@ jobs:
       steps:
         - name: Check previous job results
           run: |
-            if [ "${{ needs.ran-full.result }}" != "success" ] && [ "${{ needs.ran-none.result }}" != "success" ]; then
+            if [ "${{ needs.ran-full.result }}" == "success" ] || [ "${{ needs.ran-full.result }}" == "skipped" ]; then
+              exit 0
+            else
               echo "One or more jobs failed."
               exit 1
             fi
