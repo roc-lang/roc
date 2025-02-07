@@ -54,7 +54,8 @@ jobs:
               echo "ci_zig.yml failed."
               exit 1
             fi
-          else
+          fi
+          if [[ "${{ needs.check-changes.outputs.other_than_zig }}" == "true" ]]; then
             if [[ "${{ needs.call-old-workflow.result }}" != "success" ]]; then
               echo "ci_manager_old.yml failed."
               exit 1
