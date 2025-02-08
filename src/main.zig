@@ -32,11 +32,7 @@ pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
 }
 
 pub fn main() !void {
-    var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
-    defer {
-        _ = general_purpose_allocator.deinit();
-    }
-    const gpa = general_purpose_allocator.allocator();
+    const gpa = std.heap.c_allocator;
 
     var arena_instance = std.heap.ArenaAllocator.init(gpa);
     defer arena_instance.deinit();
