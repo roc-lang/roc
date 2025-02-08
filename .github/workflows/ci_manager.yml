@@ -27,12 +27,6 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
-            other_than_zig:
-              - '**/*'
-              - '!src/**'
-              - '!build.zig'
-              - '!build.zig.zon'
-              - '!.github/workflows/ci_zig.yml'
 
   call-zig-workflow:
     needs: check-changes
@@ -41,7 +35,7 @@ jobs:
 
   call-old-workflow:
     needs: check-changes
-    if: needs.check-changes.outputs.other_than_zig == 'true'
+    if: needs.check-changes.outputs.zig == 'false'
     uses: ./.github/workflows/ci_manager_old.yml
     
   finish:
@@ -57,7 +51,7 @@ jobs:
               exit 1
             fi
           fi
-          if [[ "${{ needs.check-changes.outputs.other_than_zig }}" == "true" ]]; then
+          if [[ "${{ needs.check-changes.outputs.zig }}" == "false" ]]; then
             if [[ "${{ needs.call-old-workflow.result }}" != "success" ]]; then
               echo "ci_manager_old.yml failed."
               exit 1
