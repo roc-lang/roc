@@ -26,11 +26,13 @@ jobs:
               - 'src/**'
               - 'build.zig'
               - 'build.zig.zon'
+              - '.github/workflows/ci_zig.yml'
             other_than_zig:
               - '**/*'
               - '!src/**'
               - '!build.zig'
               - '!build.zig.zon'
+              - '!.github/workflows/ci_zig.yml'
 
   call-zig-workflow:
     needs: check-changes

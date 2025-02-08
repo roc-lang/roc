@@ -40,13 +40,8 @@ jobs:
               run: |
                 zig-out\bin\roc.exe -h | findstr "Usage:"
 
-            - name: zig tests (Unix)
-              if: runner.os != 'Windows'
-              run: ./zig-out/bin/test
-
-            - name: zig tests (Windows)
-              if: runner.os == 'Windows'
-              run: zig-out\bin\test.exe
+            - name: zig tests
+              run: zig build test
 
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')

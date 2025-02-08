@@ -1,6 +1,8 @@
 /// This is just a silly fuzz test to start getting the infra setup.
 /// It shows the basic that other fuzz tests likely should build off of.
 ///
+/// Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
+///
 /// To run:
 ///  1. zig build fuzz-cli
 ///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/cli-corpus/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli

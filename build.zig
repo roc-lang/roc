@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const afl = @import("zig-afl-kit");
 const LazyPath = std.Build.LazyPath;
 const ResolvedTarget = std.Build.ResolvedTarget;
@@ -6,7 +7,9 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const Import = std.Build.Module.Import;
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .abi = if (builtin.target.os.tag == .linux) .musl else null,
+    } });
     const optimize = b.standardOptimizeOption(.{});
 
     // Zig unicode library - https://codeberg.org/atman/zg
@@ -17,13 +20,12 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     b.installArtifact(exe);
-
     const run_cmd = b.addRunArtifact(exe);
-
     run_cmd.step.dependOn(b.getInstallStep());
 
     if (b.args) |args| {
@@ -37,6 +39,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
+        .link_libc = true,
     });
     all_tests.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
@@ -47,9 +50,7 @@ pub fn build(b: *std.Build) void {
     b.installArtifact(all_tests);
 
     const run_tests = b.addRunArtifact(all_tests);
-
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
-
     test_step.dependOn(&run_tests.step);
 
     // Fuzz targets
@@ -62,7 +63,6 @@ pub fn build(b: *std.Build) void {
         b,
         fuzz,
         target,
-        optimize,
         "cli",
         b.path("src/fuzz/cli.zig"),
         &[_]Import{
@@ -75,7 +75,6 @@ fn add_fuzz_target(
     b: *std.Build,
     fuzz: *std.Build.Step,
     target: ResolvedTarget,
-    optimize: OptimizeMode,
     name: []const u8,
     root_source_file: LazyPath,
     imports: []const Import,
@@ -96,7 +95,7 @@ fn add_fuzz_target(
         .name = name_obj.items,
         .root_source_file = root_source_file,
         .target = target,
-        .optimize = .Debug,
+        .optimize = .ReleaseSafe,
     });
 
     for (imports) |import| {
@@ -108,7 +107,7 @@ fn add_fuzz_target(
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
-    const fuzz_exe = afl.addInstrumentedExe(b, target, optimize, fuzz_obj);
+    const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, fuzz_obj);
     const fuzz_step = b.step(name_exe.items, step_msg.items);
     fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe.items).step);
 
