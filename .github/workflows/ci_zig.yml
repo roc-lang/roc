@@ -43,12 +43,12 @@ jobs:
             - name: zig tests
               run: zig build test
 
-            - name: check if statically linked (ubuntu)
+            - name: check if roc is statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
               run: |
                 file ./zig-out/bin/roc | grep "statically linked"
 
-            - name: check if statically linked (macOS)
+            - name: check if roc is statically linked (macOS)
               if: startsWith(matrix.os, 'macos')
               run: |
                 otool_out="$(otool -L ./zig-out/bin/roc)"
@@ -59,7 +59,7 @@ jobs:
                   exit 1
                 fi
 
-            - name: check if statically linked (Windows)
+            - name: check if roc is statically linked (Windows)
               if: startsWith(matrix.os, 'windows')
               run: |
                 $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
