@@ -1,6 +1,8 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const afl = @import("zig-afl-kit");
+const InstallDir = std.Build.InstallDir;
+const Step = std.Build.Step;
 const LazyPath = std.Build.LazyPath;
 const ResolvedTarget = std.Build.ResolvedTarget;
 const OptimizeMode = std.builtin.OptimizeMode;
@@ -73,7 +75,7 @@ pub fn build(b: *std.Build) void {
 
 fn add_fuzz_target(
     b: *std.Build,
-    fuzz: *std.Build.Step,
+    fuzz: *Step,
     target: ResolvedTarget,
     name: []const u8,
     root_source_file: LazyPath,
@@ -86,6 +88,10 @@ fn add_fuzz_target(
     var name_exe = std.ArrayList(u8).init(b.allocator);
     defer name_exe.deinit();
     name_exe.writer().print("fuzz-{s}", .{name}) catch unreachable;
+
+    var name_repro = std.ArrayList(u8).init(b.allocator);
+    defer name_repro.deinit();
+    name_repro.writer().print("repro-{s}", .{name}) catch unreachable;
 
     var step_msg = std.ArrayList(u8).init(b.allocator);
     defer step_msg.deinit();
@@ -108,8 +114,19 @@ fn add_fuzz_target(
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
     const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, fuzz_obj);
+
+    const repro = b.addExecutable(.{
+        .name = name_repro.items,
+        .root_source_file = b.path("src/fuzz/repro.zig"),
+        .target = target,
+        .optimize = .ReleaseSafe,
+        .link_libc = true,
+    });
+    repro.addObject(fuzz_obj);
+
     const fuzz_step = b.step(name_exe.items, step_msg.items);
     fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe.items).step);
+    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro.items).step);
 
     fuzz.dependOn(fuzz_step);
 }
