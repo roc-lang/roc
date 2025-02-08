@@ -18,7 +18,7 @@ jobs:
       other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
     steps:
       - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         id: filter
         with:
           filters: |
@@ -27,7 +27,7 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
-      - uses: dorny/paths-filter@v2
+      - uses: dorny/paths-filter@v3
         id: other_filter
         with:
           predicate-quantifier: 'every'
