@@ -7,7 +7,9 @@ const OptimizeMode = std.builtin.OptimizeMode;
 const Import = std.Build.Module.Import;
 
 pub fn build(b: *std.Build) void {
-    const target = if (builtin.target.os.tag == .linux) b.standardTargetOptions(.{ .default = .{ .abi = .musl } }) else b.standardTargetOptions(.{});
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .abi = if (builtin.target.os.tag == .linux) .musl else null,
+    } });
     const optimize = b.standardOptimizeOption(.{});
 
     // Zig unicode library - https://codeberg.org/atman/zg
