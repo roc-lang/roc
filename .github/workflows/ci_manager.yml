@@ -15,7 +15,7 @@ jobs:
       pull-requests: read
     outputs:
       zig: ${{ steps.filter.outputs.zig }}
-      other_than_zig: ${{ steps.filter.outputs.other_than_zig }}
+      other_than_zig: ${{ steps.other_filter.outputs.other_than_zig }}
     steps:
       - uses: actions/checkout@v4
       - uses: dorny/paths-filter@v2
