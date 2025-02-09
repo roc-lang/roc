@@ -13,7 +13,7 @@ jobs:
               with:
                 version: 0.13.0
                 
-            - run: zig fmt --check .
+            - run: zig fmt --check --ast-check src build.zig
 
     zig-tests:
         needs: check-zig-fmt
