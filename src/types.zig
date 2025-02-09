@@ -1,8 +1,4 @@
-const std = @import("std");
-const base = @import("base.zig");
-const cols = @import("collections.zig");
-const num = @import("types/num.zig");
-const primitive = @import("types/primitive.zig");
+pub const num = @import("types/num.zig");
 
 /// A type variable unique to an entity in Roc code, used
 /// for type unification.

@@ -7,7 +7,7 @@ const RocOpt = @import("cli.zig").RocOpt;
 const coordinate = @import("coordinate.zig");
 
 const usage =
-    \\Usage:
+    \\Usage:    
     \\
     \\  roc [command] [options] [roc_file] [args]
     \\

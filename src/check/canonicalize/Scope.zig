@@ -12,31 +12,19 @@ const exitOnOom = collections.exitOnOom;
 const Scope = @This();
 
 env: *base.ModuleEnv,
-/// The type aliases currently in scope
-custom_alias: ?Ident.Idx,
-/// Identifiers that are in scope, and defined in the current module
+// Enable when these are implemented:
+//
+// /// The custom alias for this file if one has been defined.
+// custom_alias: ?Ident.Idx,
+//
+/// Identifiers/aliases that are in scope, and defined in the current module
 levels: Level.List,
-early_returns: ?EarlyReturn.List,
 allocator: std.mem.Allocator,
-
-pub const EarlyReturn = struct {
-    type_var: base.TypeVar,
-    region: base.Region,
-    kind: Kind,
-
-    pub const Kind = enum {
-        Return,
-        Try,
-    };
-
-    pub const List = collections.SafeList(@This());
-    pub const Idx = List.Idx;
-};
 
 pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []Alias,
-    imported_module_idents: []base.ModuleIdent,
+    imported_module_idents: []ModuleIdent,
     allocator: std.mem.Allocator,
 ) Scope {
     const scope = Scope{
@@ -44,7 +32,6 @@ pub fn init(
         .aliases = builtin_aliases.cloneWithAllocator(allocator) catch exitOnOom(),
         .custom_alias = null,
         .levels = Level.List.init(allocator),
-        .early_returns = EarlyReturn.List.init(allocator),
         .allocator = allocator,
     };
 

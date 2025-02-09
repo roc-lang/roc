@@ -1,17 +1,17 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const collections = @import("../../collections.zig");
 const types = @import("../../types.zig");
+const collections = @import("../../collections.zig");
 
+const Ident = base.Ident;
+const Region = base.Region;
 const TypeVar = types.Type.Var;
+const TagName = collections.TagName;
 
 const IR = @This();
 
 env: base.ModuleEnv,
-// referenced_values: VecSet<Symbol>,
-/// all aliases. `bool` indicates whether it is exposed
-// aliases: MutMap<Symbol, (bool, Alias)>,
-// rigid_variables: RigidVariables,
+aliases: std.AutoHashMap(Ident.Idx, Alias.WithVisibility),
 exprs: Expr.List,
 exprs_at_regions: ExprAtRegion.List,
 typed_exprs_at_regions: TypedExprAtRegion.List,
@@ -19,6 +19,7 @@ when_branches: WhenBranch.List,
 patterns: Pattern.List,
 patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
+type_vars: collections.SafeList(TypeVar),
 
 pub fn init(allocator: std.mem.Allocator) IR {
     return IR{
@@ -30,6 +31,7 @@ pub fn init(allocator: std.mem.Allocator) IR {
         .patterns = Pattern.List.init(allocator),
         .patterns_at_regions = PatternAtRegion.List.init(allocator),
         .typed_patterns_at_regions = TypedPatternAtRegion.List.init(allocator),
+        .type_vars = collections.SafeList(TypeVar).init(allocator),
     };
 }
 
@@ -42,7 +44,57 @@ pub fn deinit(self: *IR) void {
     self.patterns.deinit();
     self.patterns_at_regions.deinit();
     self.typed_patterns_at_regions.deinit();
+    self.type_vars.deinit();
 }
+
+pub const RigidVariables = struct {
+    named: std.AutoHashMap(TypeVar, Ident.Idx),
+    // with_methods: std.AutoHashMap(TypeVar, WithMethods),
+
+    // pub const WithMethods = struct {
+    //     name: Ident.Idx,
+    //     methods: MethodSet,
+    // };
+};
+
+pub const Alias = struct {
+    name: Ident.Idx,
+    region: Region,
+    type_variables: Alias.Var.Slice,
+    /// Extension variables that should be inferred in output positions, and closed in input
+    /// positions.
+    infer_ext_in_output_variables: collections.SafeList(TypeVar).Slice,
+    recursion_variables: std.AutoHashMap(TypeVar, .{}),
+
+    //     pub typ: Type,
+    kind: Kind,
+
+    pub const Kind = enum {
+        Structural,
+        /// Aliases for types that are defined in Zig instead of Roc,
+        /// like List and Box.
+        Builtin,
+        // Enable custom types in the future
+        //
+        // Custom,
+    };
+
+    pub const Var = struct {
+        name: Ident.Idx,
+        region: Region,
+        type_var: TypeVar,
+        // /// `Some` if this variable is bound to abilities; `None` otherwise.
+        // pub opt_bound_abilities: Option<AbilitySet>,
+
+        pub const List = collections.SafeMultiList(@This());
+        pub const Slice = List.Slice;
+    };
+
+    pub const WithVisibility = struct {
+        visible: bool,
+        alias: Alias,
+    };
+};
 
 // TODO: don't use symbol in this module, no imports really exist yet?
 
@@ -55,7 +107,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: collections.StringLiteral.Idx,
         value: IntValue,
-        bound: NumBound,
+        bound: types.num.Bound.Num,
     },
 
     // Int and Float store a variable to generate better error messages
@@ -64,14 +116,14 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: collections.StringLiteral.Idx,
         value: IntValue,
-        bound: IntBound,
+        bound: types.num.Bound.Int,
     },
     Float: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: collections.StringLiteral.Idx,
         value: f64,
-        bound: FloatBound,
+        bound: types.num.Bound.Float,
     },
     Str: collections.StringLiteral.Idx,
     // Number variable, precision variable, value, bound
@@ -79,11 +131,11 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: SingleQuoteBound,
+        bound: types.num.Bound.SingleQuote,
     },
     List: struct {
         elem_var: TypeVar,
-        loc_elems: ExprAtRegion.Slice,
+        elems: ExprAtRegion.Slice,
     },
 
     Var: struct {
@@ -304,28 +356,28 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: collections.LargeStringId,
         value: IntValue,
-        bound: NumBound,
+        bound: types.num.Bound.Num,
     },
     IntLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: collections.LargeStringId,
         value: IntValue,
-        bound: IntBound,
+        bound: types.num.Bound.Int,
     },
     FloatLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: collections.LargeStringId,
         value: f64,
-        bound: FloatBound,
+        bound: types.num.Bound.Float,
     },
     StrLiteral: collections.LargeStringId,
     CharLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: SingleQuoteBound,
+        bound: types.num.Bound.SingleQuote,
     },
     Underscore,
 
@@ -378,52 +430,106 @@ pub const RecordDestruct = struct {
     pub const Slice = List.Slice;
 };
 
-/// Describes a bound on the width of an integer.
-pub const IntBound = union(enum) {
-    /// There is no bound on the width.
-    None,
-    /// Must have an exact width.
-    Exact: base.Primitive.Num,
-    /// Must have a certain sign and a minimum width.
-    AtLeast: struct {
-        sign: SignDemand,
-        width: base.Primitive.Num,
-    },
-};
-
-pub const FloatBound = union(enum) {
-    None,
-    Exact: FloatWidth,
-};
-
-pub const NumBound = union(enum) {
-    None,
-    /// Must be an integer of a certain size, or any float.
-    AtLeastIntOrFloat: struct {
-        sign: SignDemand,
-        width: base.Primitive.Num,
-    },
-};
-
-pub const SingleQuoteBound = union(enum) {
-    AtLeast: struct { width: base.Primitive.Num },
-};
-
-pub const FloatWidth = enum {
-    Dec,
-    F32,
-    F64,
-};
-
-pub const SignDemand = enum {
-    /// Can be signed or unsigned.
-    NoDemand,
-    /// Must be signed.
-    Signed,
-};
-
 /// Marks whether a when branch is redundant using a variable.
 pub const RedundantMark = TypeVar;
 
 /// Marks whether a when expression is exhaustive using a variable.
 pub const ExhaustiveMark = TypeVar;
+
+pub const Content = union(enum) {
+    /// A type variable which the user did not name in an annotation,
+    ///
+    /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
+    /// change the Option in here from None to Some.
+    FlexVar: ?Ident.Idx,
+    /// name given in a user-written annotation
+    RigidVar: Ident.Idx,
+    /// name given to a recursion variable
+    RecursionVar: struct {
+        structure: TypeVar,
+        opt_name: ?Ident.Idx,
+    },
+    Structure: FlatType,
+    Alias: struct {
+        ident: Ident.Idx,
+        // vars: AliasVariables,
+        type_var: TypeVar,
+        kind: Alias.Kind,
+    },
+    RangedNumber: types.num.NumericRange,
+    Error,
+    /// The fx type variable for a given function
+    Pure,
+    Effectful,
+};
+
+pub const FlatType = union(enum) {
+    Apply: struct {
+        ident: Ident.Idx,
+        vars: collections.SafeList(TypeVar).Slice,
+    },
+    Func: struct {
+        arg_vars: collections.SafeList(TypeVar).Slice,
+        ret_var: TypeVar,
+        fx: TypeVar,
+    },
+    /// A function that we know nothing about yet except that it's effectful
+    EffectfulFunc,
+    Record: struct {
+        whole_var: TypeVar,
+        fields: RecordField.Slice,
+    },
+    // TagUnion: struct {
+    //     union_tags: UnionTags,
+    //     ext: TagExt,
+    // },
+
+    // /// `A` might either be a function
+    // ///   x -> A x : a -> [A a, B a, C a]
+    // /// or a tag `[A, B, C]`
+    // FunctionOrTagUnion: struct {
+    //     name: TagName.Idx,
+    //     ident: Ident.Idx,
+    //     ext: TagExt,
+    // },
+
+    // RecursiveTagUnion: struct {
+    //     type_var: TypeVar,
+    //     union_tags: UnionTags,
+    //     ext: TagExt,
+    // },
+
+    EmptyRecord,
+    EmptyTagUnion,
+
+    pub const RecordField = struct {
+        name: Ident.Idx,
+        type_var: TypeVar,
+        // type: Reco,
+
+        pub const List = collections.SafeMultiList(@This());
+        pub const Slice = List.Slice;
+    };
+};
+
+pub const TagExt = union(enum) {
+    /// This tag extension variable measures polymorphism in the openness of the tag,
+    /// or the lack thereof. It can only be unified with
+    ///   - an empty tag union, or
+    ///   - a rigid extension variable
+    ///
+    /// Openness extensions are used when tag annotations are introduced, since tag union
+    /// annotations may contain hidden extension variables which we want to reflect openness,
+    /// but not growth in the monomorphic size of the tag. For example, openness extensions enable
+    /// catching
+    ///
+    /// ```ignore
+    /// f : [A]
+    /// f = if Bool.true then A else B
+    /// ```
+    ///
+    /// as an error rather than resolving as [A][B].
+    Openness: TypeVar,
+    /// This tag extension can grow unboundedly.
+    Any: TypeVar,
+};

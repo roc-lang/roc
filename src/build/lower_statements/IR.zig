@@ -1,35 +1,47 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const cols = @import("../../collections.zig");
-const problem = @import("../../problem.zig");
 const types = @import("../../types.zig");
+const problem = @import("../../problem.zig");
+const collections = @import("../../collections.zig");
+
+const Ident = base.Ident;
+const ModuleIdent = base.ModuleIdent;
+const TagName = collections.TagName;
+const FieldName = collections.FieldName;
+const StringLiteral = collections.StringLiteral;
 
 pub const IR = @This();
 
 env: *base.ModuleEnv,
-procs: std.AutoHashMap(base.Ident.Id, Procedure),
+procedures: std.AutoHashMap(Ident.Idx, Procedure),
+constants: std.AutoHashMap(Ident.Idx, StmtWithLayout),
 exprs: Expr.List,
 layouts: Layout.List,
 stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
+list_literal_elems: ListLiteralElem.List,
 
 pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     return IR{
         .env = env,
-        .procs = std.AutoHashMap(base.Ident.Id, Procedure).init(allocator),
+        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(allocator),
+        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(allocator),
         .exprs = Expr.List.init(allocator),
         .layouts = Layout.List.init(allocator),
         .stmts = Stmt.List.init(allocator),
         .idents_with_layouts = IdentWithLayout.List.init(allocator),
+        .list_literal_elems = ListLiteralElem.List.init(allocator),
     };
 }
 
 pub fn deinit(self: *IR) void {
-    self.procs.deinit();
+    self.procedures.deinit();
+    self.constants.deinit();
     self.exprs.deinit();
     self.layouts.deinit();
     self.stmts.deinit();
     self.idents_with_layouts.deinit();
+    self.list_literal_elems.deinit();
 }
 
 pub const Procedure = struct {
@@ -50,19 +62,23 @@ pub const Layout = union(enum) {
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
     Unit,
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
 pub const IdentWithLayout = struct {
-    ident: base.Ident.Idx,
+    ident: Ident.Idx,
     layout: Layout.Idx,
+
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
 };
 
-pub const SymbolWithLayout = struct {
-    module_ident: base.ModuleIdent,
+pub const StmtWithLayout = struct {
+    stmt: Stmt.Idx,
     layout: Layout.Idx,
 };
 
@@ -87,62 +103,62 @@ pub const Expr = union(enum) {
         // TODO: should this be an index instead?
         tag_layout: UnionLayout,
         tag_id: TagIdIntType,
-        arguments: cols.SafeList(base.Ident.Idx).Slice,
+        arguments: collections.SafeList(Ident.Idx).Slice,
     },
-    Struct: cols.SafeList(base.Ident.Idx).NonEmptySlice,
+    Struct: collections.SafeList(Ident.Idx).NonEmptySlice,
     NullPointer,
     StructAtIndex: struct {
         index: u64,
         field_layouts: Layout.Slice,
-        structure: base.Ident.Idx,
+        structure: Ident.Idx,
     },
 
     GetTagId: struct {
-        structure: base.ModuleIdent,
+        structure: ModuleIdent,
         union_layout: UnionLayout,
     },
 
     UnionAtIndex: struct {
-        structure: base.ModuleIdent,
+        structure: ModuleIdent,
         tag_id: TagIdIntType,
         union_layout: UnionLayout,
         index: u64,
     },
 
     GetElementPointer: struct {
-        structure: base.ModuleIdent,
+        structure: ModuleIdent,
         union_layout: UnionLayout,
         indices: []u64,
     },
 
     Array: struct {
         elem_layout: Layout.Idx,
-        elems: cols.SafeList(ListLiteralElem).Slice,
+        elems: ListLiteralElem.Slice,
     },
 
     EmptyArray,
 
     /// Returns a pointer to the given function.
     FunctionPointer: struct {
-        module_ident: base.ModuleIdent,
+        module_ident: ModuleIdent,
     },
 
     Alloca: struct {
         element_layout: Layout.Idx,
-        initializer: ?base.ModuleIdent,
+        initializer: ?ModuleIdent,
     },
 
     Reset: struct {
-        module_ident: base.ModuleIdent,
+        module_ident: ModuleIdent,
     },
 
     // Just like Reset, but does not recursively decrement the children.
     // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
     ResetRef: struct {
-        module_ident: base.ModuleIdent,
+        module_ident: ModuleIdent,
     },
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Id = List.Id;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
@@ -151,47 +167,49 @@ pub const Expr = union(enum) {
 pub const ListLiteralElem = union(enum) {
     StringLiteralId: []const u8,
     Number: base.NumberLiteral,
-    Ident: base.ModuleIdent,
-};
+    Ident: ModuleIdent,
 
-pub const CallType = union(enum) {
-    ByName: struct {
-        ident: base.ModuleIdent,
-        ret_layout: Layout.Idx,
-        arg_layouts: Layout.Slice,
-    },
-    ByPointer: struct {
-        pointer: base.ModuleIdent,
-        ret_layout: Layout.Idx,
-        arg_layouts: []Layout.Idx,
-    },
-    // Foreign: struct {
-    //     foreign_symbol: usize, //ForeignSymbolId,
-    //     ret_layout: LayoutId,
-    // },
-    // LowLevel: struct {
-    //     op: usize, //LowLevel,
-    // },
-    // TODO: presumably these should be removed in an earlier stage
-    // HigherOrder(&'a HigherOrderLowLevel<'a>),
+    pub const List = collections.SafeList(@This());
+    pub const Slice = List.Slice;
 };
 
 pub const Call = struct {
-    // TODO: consider putting `call_type` in a `Vec` in `IR`
-    call_type: CallType,
-    arguments: cols.SafeList(base.Ident.Idx).Slice,
+    kind: Kind,
+    arguments: IdentWithLayout.Slice,
+
+    pub const Kind = union(enum) {
+        ByName: struct {
+            ident: ModuleIdent,
+            ret_layout: Layout.Idx,
+            arg_layouts: Layout.Slice,
+        },
+        ByPointer: struct {
+            pointer: ModuleIdent,
+            ret_layout: Layout.Idx,
+            arg_layouts: []Layout.Idx,
+        },
+        // Foreign: struct {
+        //     foreign_symbol: usize, //ForeignSymbol.Idx,
+        //     ret_layout: Layout.Idx,
+        // },
+        // LowLevel: struct {
+        //     op: usize, //LowLevel,
+        // },
+        // TODO: presumably these should be removed in an earlier stage
+        // HigherOrder(&'a HigherOrderLowLevel<'a>),
+    };
 };
 
 pub const Stmt = union(enum) {
     Let: struct {
-        ident: base.Ident.Idx,
+        ident: Ident.Idx,
         expr: Expr.Idx,
         layout: Expr.Idx,
         continuation: Stmt.Idx,
     },
     Switch: struct {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
-        cond_ident: base.Ident.Idx,
+        cond_ident: Ident.Idx,
         // TODO: can we make this layout a number type?
         cond_layout: Layout.Idx,
         /// The u64 in the tuple will be compared directly to the condition Expr.
@@ -205,11 +223,11 @@ pub const Stmt = union(enum) {
         /// Each branch must return a value of this type.
         ret_layout: Layout.Idx,
     },
-    Ret: base.Ident.Idx,
+    Ret: Ident.Idx,
     /// a join point `join f <params> = <continuation> in remainder`
     Join: struct {
-        id: JoinPointId,
-        parameters: cols.SafeList(Param).Slice,
+        id: JoinPoint.Idx,
+        parameters: IdentWithLayout.Slice,
         /// body of the join point
         /// what happens after _jumping to_ the join point
         body: Stmt.Idx,
@@ -217,15 +235,14 @@ pub const Stmt = union(enum) {
         remainder: Stmt.Idx,
     },
     Jump: struct {
-        join_point: JoinPointId,
-        idents: cols.SafeList(base.IdentId).Slice,
+        join_point: JoinPoint.Idx,
+        idents: collections.SafeList(Ident.Idx).Slice,
     },
     Crash: struct {
-        ident: base.Ident.Idx,
-        tag: base.CrashOrigin,
+        message: Ident.Idx,
     },
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
@@ -240,24 +257,21 @@ pub const Branch = struct {
     pub const Kind = union(enum) {
         None,
         Constructor: struct {
-            scrutinee: base.ModuleIdent,
+            scrutinee: ModuleIdent,
             layout: Layout.Idx,
             tag_id: TagIdIntType,
         },
         List: struct {
-            scrutinee: base.ModuleIdent,
+            scrutinee: ModuleIdent,
             len: u64,
         },
         Unique: struct {
-            scrutinee: base.ModuleIdent,
+            scrutinee: ModuleIdent,
             unique: bool,
         },
     };
 };
 
-pub const JoinPointId = base.Ident.Idx;
-
-pub const Param = struct {
-    ident: base.Ident.Idx,
-    layout: Layout.Idx,
+pub const JoinPoint = struct {
+    pub const Idx = base.Ident.Idx;
 };

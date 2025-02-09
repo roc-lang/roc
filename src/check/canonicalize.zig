@@ -1,13 +1,14 @@
 const std = @import("std");
 const base = @import("../base.zig");
 const parse = @import("parse.zig");
-const cols = @import("../collections.zig");
 const problem = @import("../problem.zig");
+const collections = @import("../collections.zig");
+
+const Problem = problem.Problem;
+const Scope = @import("canonicalize/Scope.zig");
 
 const can = @This();
 pub const IR = @import("canonicalize/IR.zig");
-const Scope = @import("canonicalize/Scope.zig");
-const Problem = problem.Problem;
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.

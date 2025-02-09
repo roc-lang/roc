@@ -1,17 +1,22 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const cols = @import("../../collections.zig");
-const problem = @import("../../problem.zig");
 const types = @import("../../types.zig");
+const problem = @import("../../problem.zig");
+const collections = @import("../../collections.zig");
 
-const IR = @This();
+const Ident = base.Ident;
+const ModuleIdent = base.ModuleIdent;
+const Problem = problem.Problem;
+const FieldName = collections.FieldName;
+const StringLiteral = collections.StringLiteral;
 
-/// All IR data representing a single module that has
-/// had its functions lifted.
+pub const IR = @This();
+
 env: *base.ModuleEnv,
+exposed_values: std.AutoHashMap(Ident.Idx, Expr.Idx),
+exposed_functions: std.AutoHashMap(Ident.Idx, Function),
 types: Type.List,
 exprs: Expr.List,
-expr_regions: cols.SafeList(base.Region),
 typed_exprs: Expr.Typed.List,
 patterns: Pattern.List,
 typed_patterns: Pattern.Typed.List,
@@ -21,9 +26,10 @@ when_branches: WhenBranch.List,
 pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     return IR{
         .env = env,
+        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(allocator),
+        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(allocator),
         .types = Type.List.init(allocator),
         .exprs = Expr.List.init(allocator),
-        .expr_regions = cols.SafeList(base.Region).init(allocator),
         .typed_exprs = Expr.Typed.List.init(allocator),
         .patterns = Pattern.List.init(allocator),
         .typed_patterns = Pattern.Typed.List.init(allocator),
@@ -33,9 +39,10 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
 }
 
 pub fn deinit(self: *IR) void {
+    self.exposed_values.deinit();
+    self.exposed_functions.deinit();
     self.types.deinit();
     self.exprs.deinit();
-    self.expr_regions.deinit();
     self.typed_exprs.deinit();
     self.patterns.deinit();
     self.typed_patterns.deinit();
@@ -47,35 +54,31 @@ pub const Type = union(enum) {
     Primitive: types.Primitive,
     Box: Type.Idx,
     List: Type.Idx,
-    /// Slice of field types, ordered alphabetically by field name (or by tuple elem index).
     Struct: Type.NonEmptySlice,
     TagUnion: Type.NonEmptySlice,
-    FunctionPack: struct {
-        /// zero fields means no captures
-        opt_fields: Type.Slice,
+    Func: struct {
+        ret_then_args: Type.NonEmptySlice,
     },
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
-const Expr = union(enum) {
+pub const Expr = union(enum) {
     Let: Def,
-    Str: cols.StringLiteral.Idx,
-    Number: base.Number,
+    Str: StringLiteral,
+    Number: base.Literal.Num,
     List: struct {
         elem_type: Type.Idx,
         elems: Expr.Slice,
     },
     Lookup: struct {
-        ident: base.ModuleIdent,
+        ident: ModuleIdent,
         type: Type.Idx,
     },
 
-    /// This is *only* for calling functions, not for tag application.
-    /// The Tag variant contains any applied values inside it.
     Call: struct {
         fn_type: Type.Idx,
         fn_expr: Expr.Idx,
@@ -83,11 +86,21 @@ const Expr = union(enum) {
     },
 
     FunctionPack: struct {
-        fn_ident: base.Ident.Idx,
-        captures: Pattern.Typed.Slice,
+        ident: Ident.Idx,
+        // empty slice means no captures
+        captures: Expr.Slice,
     },
 
     Unit,
+
+    Struct: Expr.NonEmptySlice,
+
+    StructAccess: struct {
+        record_expr: Expr.Idx,
+        record_type: Type.Idx,
+        field_type: Type.Idx,
+        field_id: FieldName.Idx,
+    },
 
     Tag: struct {
         discriminant: u16,
@@ -103,34 +116,38 @@ const Expr = union(enum) {
         /// The return type of all branches and thus the whole when expression
         branch_type: Type.Idx,
         /// The branches of the when expression
-        branches: WhenBranch.List.NonEmptySlice,
+        branches: WhenBranch.NonEmptySlice,
     },
 
-    CompilerBug: problem.LiftFunctionsProblem,
+    CompilerBug: Problem.SpecializeTypes,
 
-    pub const List = cols.SafeList(@This());
-    pub const Id = List.Id;
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
 
     pub const Typed = struct {
-        type: Type.Idx,
         expr: Expr.Idx,
+        type: Type.Idx,
 
-        pub const List = cols.SafeMultiList(@This());
+        pub const List = collections.SafeMultiList(@This());
         pub const Slice = Typed.List.Slice;
     };
 };
 
-const Def = struct {
+/// A definition, e.g. `x = foo`
+pub const Def = struct {
     pattern: Pattern.Idx,
     /// Named variables in the pattern, e.g. `a` in `Ok a ->`
     pattern_vars: TypedIdent.Slice,
     expr: Expr.Idx,
     expr_type: Type.Idx,
+
+    pub const List = collections.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
-const WhenBranch = struct {
+pub const WhenBranch = struct {
     /// The pattern(s) to match the value against
     patterns: Pattern.NonEmptySlice,
     /// A boolean expression that must be true for this branch to be taken
@@ -138,45 +155,61 @@ const WhenBranch = struct {
     /// The expression to produce if the pattern matches
     value: Expr.Idx,
 
-    pub const List = cols.SafeList(@This());
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const List = collections.SafeMultiList(@This());
+    pub const Slice = List.Slice;
+};
+
+pub const Function = struct {
+    args: Pattern.Slice,
+    return_type: Type.Idx,
+    expr: Expr.Idx,
+};
+
+pub const StructDestruct = struct {
+    ident: Ident.Idx,
+    field: FieldName.Idx,
+    kind: Kind,
+
+    pub const Kind = union(enum) {
+        Required,
+        Guard: Pattern.Typed,
+    };
+
+    pub const List = collections.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
 pub const Pattern = union(enum) {
-    Identifier: base.Ident.Idx,
+    Identifier: Ident.Idx,
     As: struct {
-        inner_pattern: Pattern.Idx,
-        ident: base.Ident.Idx,
+        pattern: Pattern.Idx,
+        ident: Ident.Idx,
     },
-    StrLiteral: cols.LargeString.Idx,
-    NumberLiteral: base.NumberLiteral,
+    StrLiteral: StringLiteral.Idx,
+    NumberLiteral: base.Literal.Num,
     AppliedTag: struct {
         tag_union_type: Type.Idx,
-        tag_name: cols.TagName.Idx,
+        tag_name: Ident.Idx,
         args: Pattern.Slice,
     },
     StructDestructure: struct {
         struct_type: Type.Idx,
-        destructs: RecordDestruct.Slice,
+        destructs: StructDestruct.Slice,
         opt_spread: ?Pattern.Typed,
     },
     List: struct {
         elem_type: Type.Idx,
         patterns: Pattern.Slice,
 
-        /// Where a rest pattern splits patterns before and after it, if it does at all.
-        /// If present, patterns at index >= the rest index appear after the rest pattern.
-        /// For example:
-        ///   [ .., A, B ] -> patterns = [A, B], rest = 0
-        ///   [ A, .., B ] -> patterns = [A, B], rest = 1
-        ///   [ A, B, .. ] -> patterns = [A, B], rest = 2
-        /// Optionally, the rest pattern can be named - e.g. `[ A, B, ..others ]`
-        opt_rest: ?.{ u16, ?base.IdentId },
+        opt_rest: ?struct {
+            offset: u16,
+            name: ?Ident.Idx,
+        },
     },
     Underscore,
-    CompilerBug: problem.LiftFunctionsProblem,
+    CompilerBug: Problem.SpecializeTypes,
 
-    pub const List = cols.SafeList(@This());
+    pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
@@ -185,29 +218,15 @@ pub const Pattern = union(enum) {
         pattern: Pattern.Idx,
         type: Type.Idx,
 
-        pub const List = cols.SafeMultiList(@This());
+        pub const List = collections.SafeMultiList(@This());
         pub const Slice = Typed.List.Slice;
     };
 };
 
-pub const RecordDestruct = struct {
-    ident: base.Ident.Idx,
-    field: cols.FieldName.Idx,
-    Kind: Kind,
-
-    pub const Kind = union(enum) {
-        Required,
-        Guard: Pattern.Typed,
-    };
-
-    pub const List = cols.SafeMultiList(@This());
-    pub const Slice = List.Slice;
-};
-
-const TypedIdent = struct {
-    ident: base.Ident.Idx,
+pub const TypedIdent = struct {
+    pattern: Pattern.Idx,
     type: Type.Idx,
 
-    pub const List = cols.SafeMultiList(@This());
+    pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
 };

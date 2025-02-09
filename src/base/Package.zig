@@ -22,9 +22,12 @@ version_string: []u8,
 /// Other code will default this to main.roc, but this module isn't concerned with that default.
 root_module_filename: ?[]u8,
 
+/// All files in this package, relative to the packages root.
+relative_file_paths: [][]u8,
+
 dependencies: std.AutoHashMap([]u8, Dependency),
 
-pub const List = collections.SafeMultiList(@This());
+const List = collections.SafeMultiList(@This());
 pub const Idx = List.Idx;
 
 pub const Dependency = struct {
@@ -43,13 +46,18 @@ pub const Store = struct {
     packages: List,
     allocator: std.mem.Allocator,
 
-    pub fn init(root_filename: []u8, allocator: std.mem.Allocator) Store {
+    pub fn init(
+        primary_filename: []u8,
+        all_primary_relative_paths: [][]u8,
+        allocator: std.mem.Allocator,
+    ) Store {
         const packages = List.init(allocator);
         packages.append(Package{
             .content_hash = &.{},
             .cache_subdir = &.{},
             .version_string = &.{},
-            .root_module_filename = root_filename,
+            .root_module_filename = primary_filename,
+            .relative_file_paths = all_primary_relative_paths,
             .dependencies = std.AutoHashMap([]u8, Dependency).init(allocator),
         });
 
