@@ -35,13 +35,10 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     // Initial tokenization.
     var messages: [32]tokenize.Diagnostic = undefined;
-    var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa) catch @panic("OOM");
-    tokenizer.tokenize() catch {
-        defer tokenizer.deinit();
-        @panic("OOM");
-    };
+    var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa);
+    tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
-    defer output.tokens.deinit();
+    defer output.tokens.deinit(gpa);
 
     if (debug) {
         std.debug.print("Before:\n", .{});
@@ -126,6 +123,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                     buf_slice[token.offset + token.length - 1] = '"';
                 }
             },
+            .StringEnd => {
+                for (1..token.length) |i| {
+                    buf_slice[token.offset + i] = '~';
+                }
+                buf_slice[token.offset] = '"';
+            },
             .SingleQuoteBegin => {
                 buf_slice[token.offset] = '\'';
                 for (1..token.length) |i| {
@@ -142,6 +145,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                     // No following interpolation, end the string.
                     buf_slice[token.offset + token.length - 1] = '\'';
                 }
+            },
+            .SingleQuoteEnd => {
+                for (1..token.length) |i| {
+                    buf_slice[token.offset + i] = '~';
+                }
+                buf_slice[token.offset] = '\'';
             },
 
             .UpperIdent => {
@@ -196,6 +205,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                 for (2..token.length) |i| {
                     buf_slice[token.offset + i] = 'z';
                 }
+            },
+            .NoSpaceOpenRound => {
+                buf_slice[token.offset] = '(';
             },
 
             .NamedUnderscore => {
@@ -484,13 +496,10 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Second tokenization.
-    tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa) catch @panic("OOM");
-    tokenizer.tokenize() catch {
-        defer tokenizer.deinit();
-        @panic("OOM");
-    };
+    tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa);
+    tokenizer.tokenize();
     var output2 = tokenizer.finish_and_deinit();
-    defer output2.tokens.deinit();
+    defer output2.tokens.deinit(gpa);
 
     if (debug) {
         std.debug.print("After:\n", .{});

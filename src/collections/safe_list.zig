@@ -123,6 +123,18 @@ pub fn SafeMultiList(comptime T: type) type {
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
+
+        pub fn set(self: *SafeMultiList(T), idx: Idx, value: T) void {
+            self.items.set(@intFromEnum(idx), value);
+        }
+
+        pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
+            return self.items.get(@intFromEnum(idx));
+        }
+
+        pub fn ensureTotalCapacity(self: *SafeMultiList(T), capacity: usize) void {
+            self.items.ensureTotalCapacity(self.allocator, capacity) catch exitOnOom();
+        }
     };
 }
 

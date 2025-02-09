@@ -16,6 +16,7 @@ test {
     testing.refAllDeclsRecursive(@import("base/Region.zig"));
     testing.refAllDeclsRecursive(@import("base.zig"));
     testing.refAllDeclsRecursive(@import("coordinate.zig"));
+    testing.refAllDeclsRecursive(@import("fmt.zig"));
     testing.refAllDeclsRecursive(@import("check/parse.zig"));
     testing.refAllDeclsRecursive(@import("check/resolve_imports.zig"));
     testing.refAllDeclsRecursive(@import("check/typecheck.zig"));

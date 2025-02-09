@@ -28,7 +28,7 @@ pub const IR = @import("./canonicalize/IR.zig");
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
 pub fn canonicalize(
     can_ir: IR,
-    parse_ir: parse.IR,
+    parse_ir: *parse.IR,
     allocator: std.mem.Allocator,
 ) void {
     var env = can_ir.env;
@@ -37,29 +37,29 @@ pub fn canonicalize(
     const scope = Scope.init(&env, &builtin_aliases, &imported_idents, allocator);
     _ = scope;
 
-    for (parse_ir.defs.items.items) |stmt| {
+    const file = parse_ir.store.getFile(parse.IR.NodeStore.FileIdx{ .id = 0 });
+
+    for (file.statements) |stmt_id| {
+        const stmt = parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
-            .Import => |import| {
-                const res = env.modules.getOrInsert(
-                    import.name,
-                    import.package_shorthand,
-                );
+            .import => |import| {
+                const name = parse_ir.resolve(import.module_name_tok);
+                const name_region = parse_ir.tokens.resolve(import.module_name_tok);
+                const res = env.modules.getOrInsert(name, "todo_shorthand");
 
                 if (res.was_present) {
                     _ = env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
-                        .duplicate_import_region = import.name_region,
+                        .duplicate_import_region = name_region,
                     } }));
                 }
 
-                for (import.exposing.items.items) |exposed| {
-                    const exposed_ident = switch (exposed) {
-                        .Value => |ident| ident,
-                        .Type => |ident| ident,
-                        .CustomTagUnion => |custom| custom.name,
-                    };
-                    env.addExposedIdentForModule(exposed_ident, res.module_idx);
-                }
+                // TODO: need to intern the strings; not sure how that works currently?
+                // for (import.exposes) |exposed| {
+                //     const value_name = parse_ir.resolve(exposed);
+                //     env.addExposedIdentForModule(value_name, res.module_idx);
+                // }
             },
+            else => std.debug.panic("Unhandled statement type: {}", .{stmt}),
         }
     }
 
