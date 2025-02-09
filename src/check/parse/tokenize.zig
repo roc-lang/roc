@@ -5,12 +5,16 @@ const GenCatData = @import("GenCatData");
 
 pub const Token = struct {
     tag: Tag,
-    offset: u32,
-    length: u32,
+    offset: Index,
+    length: Index,
+
+    pub const Index = u32;
 
     pub const Tag = enum(u8) {
         EndOfFile,
+        // Whitespace
         Newline,
+        Comment,
 
         // primitives
         Float,
@@ -46,6 +50,8 @@ pub const Token = struct {
         CloseSquare,
         OpenCurly,
         CloseCurly,
+        NoSpaceOpenRound,
+        // NoSpaceOpenCurly,
 
         OpPlus,
         OpStar,
@@ -191,6 +197,8 @@ pub const Token = struct {
     }
 };
 
+pub const TokenIndex = Token.Index;
+
 /// The buffer that accumulates tokens.
 pub const TokenizedBuffer = struct {
     allocator: std.mem.Allocator,
@@ -208,7 +216,7 @@ pub const TokenizedBuffer = struct {
     }
 
     /// Pushes a token with the given tag, token offset, and length.
-    pub fn pushToken(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, tok_length: u32) !void {
+    pub fn pushToken(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: TokenIndex, tok_length: TokenIndex) !void {
         try self.tokens.append(self.allocator, .{
             .tag = tag,
             .offset = tok_offset,
@@ -225,7 +233,7 @@ pub const TokenizedBuffer = struct {
     }
 
     /// Returns the offset of the token at index `idx`.
-    pub fn offset(self: *TokenizedBuffer, idx: u32) u32 {
+    pub fn offset(self: *TokenizedBuffer, idx: TokenIndex) TokenIndex {
         // newline tokens don't have offsets - that field is used to store the indent.
         std.debug.assert(self.tokens.items(.tag) != .Newline);
         return self.tokens.items(.offset)[@intCast(idx)];
@@ -233,8 +241,8 @@ pub const TokenizedBuffer = struct {
 };
 
 pub const Comment = struct {
-    begin: usize,
-    end: usize,
+    begin: TokenIndex,
+    end: TokenIndex,
 };
 
 const Unicode = struct {
@@ -252,8 +260,8 @@ const Unicode = struct {
 
 pub const Diagnostic = struct {
     tag: Tag,
-    begin: u32,
-    end: u32,
+    begin: TokenIndex,
+    end: TokenIndex,
 
     pub const Tag = enum {
         MisplacedCarriageReturn,
@@ -280,9 +288,9 @@ pub const Diagnostic = struct {
 /// allocate a larger slice and tokenize again.
 pub const Cursor = struct {
     buf: []const u8,
-    pos: u32,
+    pos: TokenIndex,
     messages: []Diagnostic,
-    message_count: usize,
+    message_count: u32,
     gc: *GenCatData,
     tab_width: u8 = 4, // TODO: make this configurable
 
@@ -301,7 +309,7 @@ pub const Cursor = struct {
         self.pushMessage(tag, self.pos, self.pos);
     }
 
-    fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: u32, end: u32) void {
+    fn pushMessage(self: *Cursor, tag: Diagnostic.Tag, begin: TokenIndex, end: TokenIndex) void {
         if (self.message_count < self.messages.len) {
             self.messages[self.message_count] = .{
                 .tag = tag,
@@ -321,14 +329,14 @@ pub const Cursor = struct {
     }
 
     /// Returns the byte at the given lookahead offset.
-    pub fn peekAt(self: *Cursor, lookahead: usize) ?u8 {
+    pub fn peekAt(self: *Cursor, lookahead: TokenIndex) ?u8 {
         if (self.pos + lookahead < self.buf.len) {
             return self.buf[self.pos + lookahead];
         }
         return null;
     }
 
-    pub fn isPeekedCharInRange(self: *Cursor, lookahead: usize, start: u8, end: u8) bool {
+    pub fn isPeekedCharInRange(self: *Cursor, lookahead: TokenIndex, start: u8, end: u8) bool {
         const c = self.peekAt(lookahead);
         return c != null and c >= start and c <= end;
     }
@@ -375,7 +383,7 @@ pub const Cursor = struct {
                 }
             } else if (b == '#') {
                 self.pos += 1;
-                while (self.pos < self.buf.len and self.buf[self.pos] != '\n') {
+                while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
             } else if (b >= 0 and b <= 31) {
@@ -385,7 +393,9 @@ pub const Cursor = struct {
                 break;
             }
         }
-        if (sawNewline) return indent;
+        if (sawNewline) {
+            return indent;
+        }
         return null;
     }
 
@@ -594,7 +604,7 @@ pub const Cursor = struct {
     pub fn chompIdentGeneral(self: *Cursor) void {
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') {
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
                 self.pos += 1;
             } else {
                 const info = self.decodeUnicode(c);
@@ -669,7 +679,7 @@ pub const Tokenizer = struct {
         };
     }
 
-    fn pushToken(self: *Tokenizer, tag: Token.Tag, start: u32) !void {
+    fn pushToken(self: *Tokenizer, tag: Token.Tag, start: TokenIndex) !void {
         const len = self.cursor.pos - start;
         try self.output.pushToken(tag, start, len);
     }
@@ -696,12 +706,12 @@ pub const Tokenizer = struct {
                 .SingleQuoteInterpolation, .SingleQuoteInterpolationMultiline => '\'',
                 else => return,
             };
-            const kind: StringKind = switch (brace_kind) {
-                .StringInterpolationMultiline, .SingleQuoteInterpolationMultiline => .multi_line,
-                else => .single_line,
+            const multiline = switch (brace_kind) {
+                .StringInterpolationMultiline, .SingleQuoteInterpolationMultiline => true,
+                else => false,
             };
             _ = self.stack.pop();
-            const tok = try self.tokenizeStringLikeLiteralBody(.after_interpolation, kind, term, start);
+            const tok = try self.tokenizeStringLikeLiteralBody(true, term, start, multiline);
             try self.output.pushToken(tok, start, self.cursor.pos - start);
         }
     }
@@ -950,7 +960,7 @@ pub const Tokenizer = struct {
                 '(' => {
                     self.cursor.pos += 1;
                     try self.stack.append(.Round);
-                    try self.output.pushToken(.OpenRound, start, 1);
+                    try self.output.pushToken(if (sp) .NoSpaceOpenRound else .OpenRound, start, 1);
                 },
                 '[' => {
                     self.cursor.pos += 1;
@@ -1023,15 +1033,13 @@ pub const Tokenizer = struct {
 
                 // Lowercase identifiers
                 'a'...'z' => {
-                    self.cursor.pos += 1;
-                    _ = self.cursor.chompIdentLower();
+                    const tok = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.LowerIdent, start, len);
+                    try self.output.pushToken(tok, start, len);
                 },
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    self.cursor.pos += 1;
                     _ = self.cursor.chompIdentGeneral();
                     const len = self.cursor.pos - start;
                     try self.output.pushToken(.UpperIdent, start, len);
@@ -1083,25 +1091,15 @@ pub const Tokenizer = struct {
         const start = self.cursor.pos;
         // Skip the initial quote.
         self.cursor.pos += 1;
-        var kind: StringKind = .single_line;
+        var multiline: bool = false;
         if (self.cursor.peek() == term and self.cursor.peekAt(1) == term) {
             self.cursor.pos += 2;
-            kind = .multi_line;
+            multiline = true;
         }
-        return try self.tokenizeStringLikeLiteralBody(.start, kind, term, start);
+        return try self.tokenizeStringLikeLiteralBody(false, term, start, multiline);
     }
 
-    const StringState = enum {
-        start,
-        after_interpolation,
-    };
-
-    const StringKind = enum {
-        single_line,
-        multi_line,
-    };
-
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, state: StringState, kind: StringKind, term: u8, start: u32) !Token.Tag {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, already_started: bool, term: u8, start: TokenIndex, multiline: bool) !Token.Tag {
         var escape: bool = false;
         while (self.cursor.pos < self.cursor.buf.len) {
             const c = self.cursor.buf[self.cursor.pos];
@@ -1149,45 +1147,45 @@ pub const Tokenizer = struct {
                     self.cursor.pos += 1;
                     var brace: BraceKind = undefined;
                     if (term == '"') {
-                        switch (kind) {
-                            .multi_line => brace = .StringInterpolationMultiline,
-                            .single_line => brace = .StringInterpolation,
+                        if (multiline) {
+                            brace = .StringInterpolationMultiline;
+                        } else {
+                            brace = .StringInterpolation;
                         }
                     } else {
-                        switch (kind) {
-                            .multi_line => brace = .SingleQuoteInterpolationMultiline,
-                            .single_line => brace = .SingleQuoteInterpolation,
+                        if (multiline) {
+                            brace = .SingleQuoteInterpolationMultiline;
+                        } else {
+                            brace = .SingleQuoteInterpolation;
                         }
                     }
                     try self.stack.append(brace);
-                    switch (term) {
-                        '"' => {
-                            switch (state) {
-                                .start => return .StringBegin,
-                                .after_interpolation => return .StringPart,
-                            }
-                        },
-                        '\'' => {
-                            std.debug.assert(term == '\'');
-                            switch (state) {
-                                .start => return .SingleQuoteBegin,
-                                .after_interpolation => return .SingleQuotePart,
-                            }
-                        },
-                        else => std.debug.assert(false),
+                    if (term == '"') {
+                        if (already_started) {
+                            return .StringPart;
+                        } else {
+                            return .StringBegin;
+                        }
+                    } else {
+                        std.debug.assert(term == '\'');
+                        if (already_started) {
+                            return .SingleQuotePart;
+                        } else {
+                            return .SingleQuoteBegin;
+                        }
                     }
                 } else if (c == '\n') {
-                    if (kind == .single_line) {
+                    if (!multiline) {
                         self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
                         return .String;
                     } else {
                         self.cursor.pos += 1;
                     }
                 } else {
-                    if (kind == .single_line and c == term) {
+                    if (!multiline and c == term) {
                         self.cursor.pos += 1;
                         return .String;
-                    } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
+                    } else if (multiline and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
                         self.cursor.pos += 3;
                         return .String;
                     }
@@ -1197,7 +1195,7 @@ pub const Tokenizer = struct {
         }
         const diag: Diagnostic.Tag = if (term == '"') .UnclosedString else .UnclosedSingleQuote;
         self.cursor.pushMessage(diag, start, self.cursor.pos);
-        if (state == .after_interpolation) {
+        if (already_started) {
             return if (term == '"') .StringPart else .SingleQuotePart;
         } else {
             return if (term == '"') .String else .SingleQuote;
