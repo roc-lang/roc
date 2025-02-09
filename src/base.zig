@@ -13,29 +13,20 @@ pub const Recursive = enum {
     TailRecursive,
 };
 
-// TODO: can this be smaller than u32?
-/// Source of crash, and its runtime representation to roc_panic.
-pub const CrashOrigin = enum(u32) {
-    /// The crash is due to Roc, either via a builtin or type error.
-    Roc = 0,
-    /// The crash is user-defined.
-    User = 1,
-};
-
 pub const LowLevel = .{};
 
-// TODO: move to relevant stages
-pub const TypeVar = struct { id: u32 };
+pub const CalledVia = enum {};
 
-/// Represents a value
+/// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {
     Int: Int,
     Float: Float,
     Bool: bool,
     Str: StringLiteral,
+    /// A crash with a textual message describing why a crash occurred.
     Crash: StringLiteral,
 
-    /// An integer number literal
+    /// An integer number literal.
     pub const Int = union(enum) {
         I8: i8,
         U8: u8,
@@ -49,16 +40,16 @@ pub const Literal = union(enum) {
         U128: u128,
     };
 
-    /// A fractional number literal
+    /// A fractional number literal.
     pub const Float = union(enum) {
         F32: f32,
         F64: f64,
-        // We represent Dec as a large int divided by 10^18, which is the maximum
-        // number of decimal places that allows lossless conversion of U64 to Dec
+        // We represent Dec as a large integer divided by 10^18, which is the maximum
+        // number of decimal places that allow lossless conversion of U64 to Dec.
         Dec: u128,
     };
 
-    /// A number literal
+    /// An integer or fractional number literal.
     pub const Num = union(enum) {
         Int: Int,
         Float: Float,

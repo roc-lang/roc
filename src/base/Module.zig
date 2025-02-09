@@ -1,37 +1,57 @@
+//! A potentially-imported module from the perspective of some siloed module.
+//!
+//! During early compiler stages, we only know about the contents of
+//! a single module at a time, and this type represents a module import
+//! that hasn't been resolved to a separate file yet.
 const std = @import("std");
-const cols = @import("../collections.zig");
-const ident = @import("Ident.zig");
-const region = @import("Region.zig");
 const problem = @import("../problem.zig");
+const collections = @import("../collections.zig");
+
+const Ident = @import("Ident.zig");
+const Region = @import("Region.zig");
 const ModuleIdent = @import("ModuleIdent.zig");
+const Problem = problem.Problem;
 
-pub const Module = @This();
+const Module = @This();
 
+/// The full name of a module, e.g. `Foo.Bar`.
 name: []u8,
+/// The shorthand for the package this module is imported from
+/// if it is not from the current package, e.g. `json` in `json.Json`.
 package_shorthand: ?[]u8,
+/// Whether the module is a builtin module.
 is_builtin: bool,
-ident_store: ident.Ident.Store,
+/// The list of all idents exposed by this module.
+exposed_idents: collections.SafeList(Ident.Idx),
 
-pub const List = cols.SafeMultiList(Module);
+pub const List = collections.SafeMultiList(@This());
 pub const Idx = List.Idx;
 
+/// A store of all modules visible to a siloed module, including the
+/// module itself and builtin modules.
 pub const Store = struct {
     modules: List,
     allocator: std.mem.Allocator,
 
+    pub const LookupResult = struct {
+        module_idx: Idx,
+        was_present: bool,
+    };
+
     pub fn init(allocator: std.mem.Allocator) Store {
-        const modules = cols.SafeMultiList(Module).init(allocator);
+        const modules = collections.SafeMultiList(Module).init(allocator);
         modules.append(Module{
             .name = &.{},
             .package_shorthand = null,
             .is_builtin = false,
-            .ident_store = ident.Ident.Store.init(allocator),
+            .exposed_idents = collections.SafeList(Ident.Idx).init(allocator),
         });
 
         // TODO: insert builtins automatically?
 
         return Store{
             .modules = modules,
+            .ident_store = Ident.Store.init(allocator),
             .allocator = allocator,
         };
     }
@@ -44,13 +64,15 @@ pub const Store = struct {
         self.modules.deinit();
     }
 
+    /// Search for a module that's visible to the main module.
+    ///
+    /// NOTE: This only works for modules in this package, so callers must
+    /// first ensure that they are looking within the right package.
     pub fn lookup(
         self: *Store,
         name: []const u8,
         package_shorthand: ?[]const u8,
     ) ?Idx {
-        // TODO: this doesn't handle multiple packages with the same shorthand yet,
-        // e.g. my app with json: "..." depends also on yaml: "..." which depends on json: "..."
         const items = self.modules.items;
 
         for (0..self.modules.len()) |index| {
@@ -58,7 +80,7 @@ pub const Store = struct {
             if (name == other_name) {
                 const other_package_shorthand = items.items(.package_shorthand)[index];
                 if (other_package_shorthand == package_shorthand) {
-                    return Idx{ .id = @as(u32, index) };
+                    return @enumFromInt(@as(u32, index));
                 }
             }
         }
@@ -66,59 +88,57 @@ pub const Store = struct {
         return null;
     }
 
+    /// Look up a module by name and package shorthand and return an [Idx],
+    /// reusing an existing [Idx] if the module was already imported.
     pub fn getOrInsert(
         self: *Store,
         name: []const u8,
         package_shorthand: ?[]const u8,
-    ) Idx {
-        if (self.lookup(name, package_shorthand)) |id| {
-            return id;
+    ) LookupResult {
+        if (self.lookup(name, package_shorthand)) |idx| {
+            return LookupResult{ .module_idx = idx, .was_present = true };
         } else {
-            const new_id = self.modules.insert(Module{
+            const idx = self.modules.append(Module{
                 .name = name,
                 .package_shorthand = package_shorthand,
                 .is_builtin = false,
-                .ident_store = ident.Ident.Store.init(self.allocator),
+                .exposed_idents = collections.SafeList(Ident.Idx).init(self.allocator),
             });
 
-            return Idx{ .id = new_id.id };
+            return LookupResult{ .module_idx = idx, .was_present = false };
         }
     }
 
-    pub fn getName(self: *Store, id: Idx) []u8 {
-        return self.modules.items.items(.name)[@as(usize, id.id)];
+    pub fn getName(self: *Store, idx: Idx) []u8 {
+        return self.modules.items.items(.name)[@as(usize, @intFromEnum(idx))];
     }
 
-    pub fn getPackageShorthand(self: *Store, id: Idx) ?[]u8 {
-        return self.modules.items.items(.package_shorthand)[@as(usize, id.id)];
+    pub fn getPackageShorthand(self: *Store, idx: Idx) ?[]u8 {
+        return self.modules.items.items(.package_shorthand)[@as(usize, @intFromEnum(idx))];
     }
 
-    pub fn insertIdent(
+    /// Add an ident to this modules list of exposed idents, reporting a problem
+    /// if a duplicate is found.
+    ///
+    /// NOTE: This should not be called directly, but rather the [ModuleEnv.addExposedIdentForModule]
+    /// method that will also set the ident's exposing module.
+    pub fn addExposedIdent(
         self: *Store,
-        ident_: ident.Ident,
-        region_: region.Region,
-        module_id: Idx,
-        problems: *std.ArrayList(problem.Problem),
-    ) ModuleIdent {
-        const index = @as(usize, module_id.id);
-        const ident_store = self.modules.items.items(.ident_store)[index];
-        const ident_id = ident_store.insert(ident_, region_, problems);
+        module_ident: ModuleIdent,
+        problems: *collections.SafeList(problem.Problem),
+    ) void {
+        const module_index = @intFromEnum(module_ident.module_id);
+        const module_exposed_idents = self.modules.items.items(.exposed_idents)[module_index];
+        for (module_exposed_idents) |exposed_ident| {
+            if (exposed_ident == module_ident.ident_id) {
+                problems.append(Problem.Canonicalize.make(.DuplicateExposes{
+                    .first_exposes = exposed_ident,
+                    .duplicate_exposes = module_ident.ident_id,
+                }));
+                return;
+            }
+        }
 
-        return ModuleIdent{
-            .ident_id = ident_id,
-            .module_id = module_id,
-        };
-    }
-
-    pub fn getIdentText(self: *Store, module_ident: ModuleIdent) []u8 {
-        const index = @as(usize, module_ident.module_id.id);
-        const ident_store = self.modules.items.items(.ident_store)[index];
-        return ident_store.getText(module_ident.ident_id);
-    }
-
-    pub fn getIdentRegion(self: *Store, module_ident: ModuleIdent) region.Region {
-        const index = @as(usize, module_ident.module_id.id);
-        const ident_store = self.modules.items.items(.ident_store)[index];
-        return ident_store.getRegion(module_ident.ident_id);
+        module_exposed_idents.append(module_ident.ident_id);
     }
 };

@@ -3,7 +3,7 @@ const Module = @import("Module.zig");
 const Ident = @import("Ident.zig");
 
 /// The module index.
-module_id: Module.Idx,
+module_idx: Module.Idx,
 
 /// The identifier index.
-ident_id: Ident.Idx,
+ident_idx: Ident.Idx,

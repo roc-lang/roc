@@ -2,6 +2,8 @@ const std = @import("std");
 const tokenize = @import("parse/tokenize.zig");
 const Region = @import("../base/Region.zig");
 
+pub const IR = @import("parse/IR.zig");
+
 pub const Node = struct {
     tag: Tag,
     data: Data,

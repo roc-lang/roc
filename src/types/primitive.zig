@@ -1,5 +1,3 @@
-const cols = @import("../collections.zig");
-
 // TODO: figure out how to combine enums and union(enum)s at comptime
 // to avoid them being multilevel
 
