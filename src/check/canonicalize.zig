@@ -49,12 +49,7 @@ pub fn canonicalize(
                 }
 
                 for (import.exposing.items.items) |exposed_ident| {
-                    const module_ident = base.ModuleIdent{
-                        .module_idx = res.module_idx,
-                        .ident_idx = exposed_ident,
-                    };
-
-                    env.addExposedIdentForModule(module_ident);
+                    env.addExposedIdentForModule(exposed_ident, res.module_idx);
                 }
             },
         }

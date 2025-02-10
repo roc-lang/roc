@@ -5,7 +5,6 @@ const collections = @import("../../collections.zig");
 const Region = base.Region;
 const Ident = base.Ident;
 const Module = base.Module;
-const ModuleIdent = base.ModuleIdent;
 const Problem = @import("../../problem.zig").Problem;
 const exitOnOom = collections.exitOnOom;
 
@@ -24,7 +23,7 @@ allocator: std.mem.Allocator,
 pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []Alias,
-    imported_module_idents: []ModuleIdent,
+    imported_idents: []Ident.Idx,
     allocator: std.mem.Allocator,
 ) Scope {
     const scope = Scope{
@@ -38,7 +37,7 @@ pub fn init(
     scope.enterLevel();
 
     const base_level_idents = scope.levels.items.items(.idents)[0];
-    for (imported_module_idents) |imported| {
+    for (imported_idents) |imported| {
         base_level_idents.append(imported);
     }
 
@@ -63,13 +62,13 @@ pub fn exitLevel(self: *Scope) void {
 }
 
 const ContainsIdent = union(enum) {
-    InScope: ModuleIdent,
+    InScope: Ident.Idx,
     NotInScope: Ident.Idx,
     NotPresent,
 };
 
 pub const LookupResult = union(enum) {
-    InScope: ModuleIdent,
+    InScope: Ident.Idx,
     Problem: Problem,
 };
 
@@ -78,7 +77,7 @@ pub fn lookup(self: *Scope, ident: Ident.Idx) ContainsIdent {
         return ContainsIdent{ .InScope = ident_in_scope };
     }
 
-    var options_in_scope = collections.SafeList(ModuleIdent);
+    var options_in_scope = collections.SafeList(Ident).init(self.allocator);
     var all_idents_in_scope = self.iterIdentsInScope();
     while (all_idents_in_scope.next()) |ident_in_scope| {
         options_in_scope.append(ident_in_scope);
@@ -93,7 +92,7 @@ pub fn lookup(self: *Scope, ident: Ident.Idx) ContainsIdent {
     return LookupResult{ .Problem = problem };
 }
 
-pub fn containsIdent(self: *Scope, ident: Ident.Idx) ?ModuleIdent {
+pub fn containsIdent(self: *Scope, ident: Ident.Idx) ?Ident.Idx {
     var idents_in_scope = self.iterIdentsInScope();
     while (idents_in_scope.next()) |ident_in_scope| {
         if (self.env.idents.identsHaveSameText(ident, ident_in_scope)) {
@@ -104,7 +103,7 @@ pub fn containsIdent(self: *Scope, ident: Ident.Idx) ?ModuleIdent {
     return null;
 }
 
-pub fn introduce(self: *Scope, ident: Ident.Idx) ModuleIdent {
+pub fn introduce(self: *Scope, ident: Ident.Idx) Ident.Idx {
     if (self.containsIdent(ident)) |ident_in_scope| {
         const problem = Problem.Canonicalize.make(.UnqualifiedAlreadyInScope{
             .original_ident = ident_in_scope,
@@ -113,21 +112,21 @@ pub fn introduce(self: *Scope, ident: Ident.Idx) ModuleIdent {
 
         self.env.problems.append(problem);
         // TODO: is this correct for shadows?
-        return ident.in_home_module();
+        return ident;
     }
 
     const last_level = self.levels.getLast();
-    last_level.append(ident.in_home_module());
+    last_level.append(ident);
 
-    return ident.in_home_module();
+    return ident;
 }
 
 /// Generates a unique ident like "1" or "5" in the home module.
 ///
 /// This is used, for example, during canonicalization of an Expr::Closure
 /// to generate a unique ident to refer to that closure.
-pub fn genUnique(self: *Scope) ModuleIdent {
-    const unique_idx = self.env.idents.genUnique(Region.zero()).in_home_module();
+pub fn genUnique(self: *Scope) Ident.Idx {
+    const unique_idx = self.env.idents.genUnique(Region.zero());
 
     // There is always at least one level in
     const last_level = self.levels.getLast();
@@ -149,7 +148,7 @@ const IdentsInScopeIterator = struct {
         };
     }
 
-    pub fn next(self: *IdentsInScopeIterator) ?ModuleIdent {
+    pub fn next(self: *IdentsInScopeIterator) ?Ident.Idx {
         if (self.prior_ident_index == 0) {
             return null;
         }
@@ -193,12 +192,12 @@ fn iterIdentsInScope(self: *Scope) IdentsInScopeIterator {
 }
 
 pub const Level = struct {
-    idents: std.ArrayList(ModuleIdent),
+    idents: std.ArrayList(Ident.Idx),
     aliases: std.ArrayList(Alias),
 
     pub fn init(allocator: std.mem.Allocator) Level {
         return Level{
-            .idents = std.ArrayList(ModuleIdent).init(allocator),
+            .idents = std.ArrayList(Ident.Idx).init(allocator),
             .aliases = std.ArrayList(Alias).init(allocator),
         };
     }
@@ -212,7 +211,7 @@ pub const Level = struct {
 };
 
 pub const Alias = struct {
-    name: ModuleIdent,
+    name: Ident.Idx,
     kind: Kind,
 
     pub const Kind = enum {

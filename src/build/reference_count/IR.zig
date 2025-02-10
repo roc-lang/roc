@@ -5,7 +5,6 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
-const ModuleIdent = base.ModuleIdent;
 const TagName = collections.TagName;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
@@ -114,19 +113,19 @@ pub const Expr = union(enum) {
     },
 
     GetTagId: struct {
-        structure: ModuleIdent,
+        structure: Ident.Idx,
         union_layout: UnionLayout,
     },
 
     UnionAtIndex: struct {
-        structure: ModuleIdent,
+        structure: Ident.Idx,
         tag_id: TagIdIntType,
         union_layout: UnionLayout,
         index: u64,
     },
 
     GetElementPointer: struct {
-        structure: ModuleIdent,
+        structure: Ident.Idx,
         union_layout: UnionLayout,
         indices: []u64,
     },
@@ -140,22 +139,22 @@ pub const Expr = union(enum) {
 
     /// Returns a pointer to the given function.
     FunctionPointer: struct {
-        module_ident: ModuleIdent,
+        module_ident: Ident.Idx,
     },
 
     Alloca: struct {
         element_layout: Layout.Idx,
-        initializer: ?ModuleIdent,
+        initializer: ?Ident.Idx,
     },
 
     Reset: struct {
-        module_ident: ModuleIdent,
+        module_ident: Ident.Idx,
     },
 
     // Just like Reset, but does not recursively decrement the children.
     // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
     ResetRef: struct {
-        module_ident: ModuleIdent,
+        module_ident: Ident.Idx,
     },
 
     pub const List = collections.SafeList(@This());
@@ -167,7 +166,7 @@ pub const Expr = union(enum) {
 pub const ListLiteralElem = union(enum) {
     StringLiteralId: []const u8,
     Number: base.NumberLiteral,
-    Ident: ModuleIdent,
+    Ident: Ident.Idx,
 
     pub const List = collections.SafeList(@This());
     pub const Slice = List.Slice;
@@ -179,12 +178,12 @@ pub const Call = struct {
 
     pub const Kind = union(enum) {
         ByName: struct {
-            ident: ModuleIdent,
+            ident: Ident.Idx,
             ret_layout: Layout.Idx,
             arg_layouts: Layout.Slice,
         },
         ByPointer: struct {
-            pointer: ModuleIdent,
+            pointer: Ident.Idx,
             ret_layout: Layout.Idx,
             arg_layouts: []Layout.Idx,
         },
@@ -225,7 +224,7 @@ pub const Stmt = union(enum) {
     },
     Ret: Ident.Idx,
     RefCount: struct {
-        symbol: base.ModuleIdent,
+        symbol: Ident.Idx,
         change: ModifyRefCount,
     },
     /// a join point `join f <params> = <continuation> in remainder`
@@ -261,16 +260,16 @@ pub const Branch = struct {
     pub const Kind = union(enum) {
         None,
         Constructor: struct {
-            scrutinee: ModuleIdent,
+            scrutinee: Ident.Idx,
             layout: Layout.Idx,
             tag_id: TagIdIntType,
         },
         List: struct {
-            scrutinee: ModuleIdent,
+            scrutinee: Ident.Idx,
             len: u64,
         },
         Unique: struct {
-            scrutinee: ModuleIdent,
+            scrutinee: Ident.Idx,
             unique: bool,
         },
     };
@@ -279,12 +278,12 @@ pub const Branch = struct {
 pub const ModifyRefCount = union(enum) {
     /// Increment a reference count
     Inc: struct {
-        target: base.ModuleIdent,
+        target: Ident.Idx,
         count: u64,
     },
 
     /// Decrement a reference count
-    Dec: base.ModuleIdent,
+    Dec: Ident.Idx,
 
     /// A DecRef is a non-recursive reference count decrement
     /// e.g. If we Dec a list of lists, then if the reference count of the outer list is one,
@@ -293,13 +292,13 @@ pub const ModifyRefCount = union(enum) {
     /// That is dangerous because you may not free the elements, but in our Zig builtins,
     /// sometimes we know we already dealt with the elements (e.g. by copying them all over
     /// to a new list) and so we can just do a DecRef, which is much cheaper in such a case.
-    DecRef: base.ModuleIdent,
+    DecRef: Ident.Idx,
 
     /// Unconditionally deallocate the memory. For tag union that do pointer tagging (store the tag
     /// id in the pointer) the backend has to clear the tag id!
-    Free: base.ModuleIdent,
+    Free: Ident.Idx,
 };
 
 pub const JoinPoint = struct {
-    pub const Idx = base.Ident.Idx;
+    pub const Idx = Ident.Idx;
 };

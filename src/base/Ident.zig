@@ -7,7 +7,6 @@ const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
 
 const Problem = problem.Problem;
-const ModuleIdent = @import("ModuleIdent.zig");
 const exitOnOom = utils.exitOnOom;
 
 const Ident = @This();
@@ -39,13 +38,6 @@ pub fn for_text(text: []u8) Ident {
 pub const Idx = packed struct(u32) {
     attributes: Attributes,
     id: u29,
-
-    pub fn in_home_module(self: *Idx) ModuleIdent {
-        return ModuleIdent{
-            .ident_id = self,
-            .module_id = @enumFromInt(0),
-        };
-    }
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable packed into 3-bits.

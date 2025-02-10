@@ -5,7 +5,6 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
-const ModuleIdent = base.ModuleIdent;
 const Problem = problem.Problem;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
@@ -75,7 +74,7 @@ pub const Expr = union(enum) {
         elems: Expr.Slice,
     },
     Lookup: struct {
-        ident: ModuleIdent,
+        ident: Ident.Idx,
         type: Type.Idx,
     },
 

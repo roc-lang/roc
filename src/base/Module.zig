@@ -9,7 +9,6 @@ const collections = @import("../collections.zig");
 
 const Ident = @import("Ident.zig");
 const Region = @import("Region.zig");
-const ModuleIdent = @import("ModuleIdent.zig");
 const Problem = problem.Problem;
 
 const Module = @This();
@@ -124,21 +123,22 @@ pub const Store = struct {
     /// method that will also set the ident's exposing module.
     pub fn addExposedIdent(
         self: *Store,
-        module_ident: ModuleIdent,
+        module: Module.Idx,
+        ident: Ident.Idx,
         problems: *collections.SafeList(problem.Problem),
     ) void {
-        const module_index = @intFromEnum(module_ident.module_id);
+        const module_index = @intFromEnum(module);
         const module_exposed_idents = self.modules.items.items(.exposed_idents)[module_index];
         for (module_exposed_idents) |exposed_ident| {
-            if (exposed_ident == module_ident.ident_id) {
+            if (exposed_ident == ident) {
                 problems.append(Problem.Canonicalize.make(.DuplicateExposes{
                     .first_exposes = exposed_ident,
-                    .duplicate_exposes = module_ident.ident_id,
+                    .duplicate_exposes = ident,
                 }));
                 return;
             }
         }
 
-        module_exposed_idents.append(module_ident.ident_id);
+        module_exposed_idents.append(ident);
     }
 };
