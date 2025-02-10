@@ -7,6 +7,8 @@ const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
 
+const Ident = base.Ident;
+const Module = base.Module;
 const Problem = problem.Problem;
 
 const ModuleEnv = @This();
@@ -61,7 +63,7 @@ pub fn addFieldNameSlice(
     return self.field_ids_for_slicing.appendSlice(names);
 }
 
-pub fn addExposedIdentForModule(self: *ModuleEnv, module_ident: base.ModuleIdent) void {
-    self.modules.addExposedIdent(module_ident, self.problems);
-    self.idents.setExposingModule(module_ident.ident_idx, module_ident.module_idx);
+pub fn addExposedIdentForModule(self: *ModuleEnv, ident: Ident.Idx, module: Module.Idx) void {
+    self.modules.addExposedIdent(module, ident, self.problems);
+    self.idents.setExposingModule(ident, module);
 }

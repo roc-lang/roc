@@ -7,6 +7,8 @@ const Ident = base.Ident;
 const Region = base.Region;
 const TypeVar = types.Type.Var;
 const TagName = collections.TagName;
+const FieldName = collections.FieldName;
+const StringLiteral = collections.StringLiteral;
 
 const IR = @This();
 
@@ -105,7 +107,7 @@ pub const Expr = union(enum) {
     // stored in Int and Float below, which is strictly for better error messages
     Num: struct {
         num_var: TypeVar,
-        literal: collections.StringLiteral.Idx,
+        literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Num,
     },
@@ -114,14 +116,14 @@ pub const Expr = union(enum) {
     Int: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: collections.StringLiteral.Idx,
+        literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
     Float: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: collections.StringLiteral.Idx,
+        literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
     },
@@ -139,7 +141,7 @@ pub const Expr = union(enum) {
     },
 
     Var: struct {
-        symbol: base.Symbol,
+        ident: Ident.Idx,
         type_var: TypeVar,
     },
 
@@ -190,22 +192,22 @@ pub const Expr = union(enum) {
         ext_var: TypeVar,
         field_var: TypeVar,
         loc_expr: ExprAtRegion.Idx,
-        field: base.Ident.Idx,
+        field: Ident.Idx,
     },
 
     // Sum Types
     Tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
-        name: collections.FieldName.Idx,
+        name: FieldName.Idx,
         arguments: TypedExprAtRegion.Slice,
     },
 
     ZeroArgumentTag: struct {
-        closure_name: base.Ident.Idx,
+        closure_name: Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
-        name: base.Ident.Idx,
+        name: Ident.Idx,
     },
 
     /// Compiles, but will crash if reached
@@ -219,9 +221,9 @@ pub const Expr = union(enum) {
 
 pub const Def = struct {
     pattern: Pattern.Idx,
-    pattern_region: base.Region,
+    pattern_region: Region,
     expr: Expr.Idx,
-    expr_region: base.Region,
+    expr_region: Region,
     expr_var: TypeVar,
     // TODO:
     // pattern_vars: SendMap<Symbol, Variable>,
@@ -242,7 +244,7 @@ pub const Annotation = struct {
     signature: types.Type,
     // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
-    region: base.Region,
+    region: Region,
 };
 
 pub const IntValue = struct {
@@ -254,7 +256,7 @@ pub const IntValue = struct {
 
 pub const ExprAtRegion = struct {
     expr: Expr.Idx,
-    region: base.Region,
+    region: Region,
 
     pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
@@ -264,7 +266,7 @@ pub const ExprAtRegion = struct {
 pub const TypedExprAtRegion = struct {
     expr: Expr.Idx,
     type_var: TypeVar,
-    region: base.Region,
+    region: Region,
 
     pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
@@ -275,7 +277,7 @@ pub const Function = struct {
     fx_var: TypeVar,
     function_var: TypeVar,
     expr: Expr.Idx,
-    region: base.Region,
+    region: Region,
 };
 
 pub const IfBranch = struct {
@@ -292,7 +294,7 @@ pub const When = struct {
     cond_var: TypeVar,
     /// Type of each branch (and therefore the type of the entire `when` expression)
     expr_var: TypeVar,
-    region: base.Region,
+    region: Region,
     /// The branches of the when, and the type of the condition that they expect to be matched
     /// against.
     branches: WhenBranch.Slice,
@@ -304,20 +306,19 @@ pub const When = struct {
     pub const Idx = List.Idx;
 };
 
-pub const WhenBranchPatternSlice = collections.SafeMultiList(WhenBranchPattern).Slice;
-
 pub const WhenBranchPattern = struct {
     pattern: PatternAtRegion,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
     /// needs. For example, in `A x | B y -> x`, the `B y` pattern is degenerate.
     /// Degenerate patterns emit a runtime error if reached in a program.
     degenerate: bool,
+
+    pub const List = collections.SafeMultiList(@This());
+    pub const Slice = List.Slice;
 };
 
-pub const WhenBranchSlice = collections.SafeMultiList(WhenBranch).Slice;
-
 pub const WhenBranch = struct {
-    patterns: WhenBranchPatternSlice,
+    patterns: WhenBranchPattern.Slice,
     value: ExprAtRegion.Idx,
     guard: ?ExprAtRegion.Idx,
     /// Whether this branch is redundant in the `when` it appears in
@@ -333,13 +334,13 @@ pub const Pattern = union(enum) {
     Identifier: base.Module.Ident,
     As: struct {
         pattern: Pattern.Idx,
-        region: base.Region,
-        symbol: base.Symbol,
+        region: Region,
+        ident: Ident.Idx,
     },
     AppliedTag: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
-        tag_name: base.IdentId,
+        tag_name: Ident.Idx,
         arguments: TypedPatternAtRegion.Slice,
     },
     RecordDestructure: struct {
@@ -354,25 +355,25 @@ pub const Pattern = union(enum) {
     },
     NumLiteral: struct {
         num_var: TypeVar,
-        literal: collections.LargeStringId,
+        literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Num,
     },
     IntLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: collections.LargeStringId,
+        literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
     FloatLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
-        literal: collections.LargeStringId,
+        literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
     },
-    StrLiteral: collections.LargeStringId,
+    StrLiteral: StringLiteral.Idx,
     CharLiteral: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
@@ -397,7 +398,7 @@ pub const Pattern = union(enum) {
 
 pub const PatternAtRegion = struct {
     pattern: Pattern.Idx,
-    region: base.Region,
+    region: Region,
 
     pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
@@ -406,7 +407,7 @@ pub const PatternAtRegion = struct {
 
 pub const TypedPatternAtRegion = struct {
     pattern: Pattern.Idx,
-    region: base.Region,
+    region: Region,
     type_var: TypeVar,
 
     pub const List = collections.SafeMultiList(@This());
@@ -416,9 +417,9 @@ pub const TypedPatternAtRegion = struct {
 
 pub const RecordDestruct = struct {
     type_var: TypeVar,
-    region: base.Region,
-    label: base.Ident.Idx,
-    module_ident: base.ModuleIdent,
+    region: Region,
+    label: Ident.Idx,
+    ident: Ident.Idx,
     kind: Kind,
 
     pub const Kind = union(enum) {

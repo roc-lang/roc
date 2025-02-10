@@ -1,7 +1,6 @@
 pub const Ident = @import("base/Ident.zig");
 pub const Module = @import("base/Module.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
-pub const ModuleIdent = @import("base/ModuleIdent.zig");
 pub const Package = @import("base/Package.zig");
 pub const Region = @import("base/Region.zig");
 
