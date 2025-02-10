@@ -6,7 +6,7 @@ const resolve = @import("check/resolve_imports.zig");
 const type_spec = @import("build/specialize_types.zig");
 const func_lift = @import("build/lift_functions.zig");
 const func_spec = @import("build/specialize_types.zig");
-const func_solve = @import("build/lift_functions.zig");
+const func_solve = @import("build/solve_functions.zig");
 const lower = @import("build/lower_statements.zig");
 const refcount = @import("build/reference_count.zig");
 const tokenize = @import("check/parse/tokenize.zig");
@@ -65,6 +65,7 @@ const RefCountIR = refcount.IR;
 // Afterwards, in reverse order of the dependencies of each module (AKA dependencies first):
 // - specialize types
 // - lift functions
+// - solve functions
 // - specialize functions
 // - lower statements
 // - reference count
