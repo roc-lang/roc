@@ -15,7 +15,7 @@ env: *base.ModuleEnv,
 // Enable when these are implemented:
 //
 // /// The custom alias for this file if one has been defined.
-// custom_alias: ?Ident.Idx,
+custom_aliases: collections.SafeList(Ident.Idx).Idx,
 //
 /// Identifiers/aliases that are in scope, and defined in the current module
 levels: Level.List,
