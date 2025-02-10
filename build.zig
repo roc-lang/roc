@@ -14,6 +14,9 @@ pub fn build(b: *std.Build) void {
     } });
     const optimize = b.standardOptimizeOption(.{});
 
+    const download_deps_step = b.step("download-deps", "Download all dependencies needed to compile roc");
+    const llvm_config_paths = downloadDeps(b, download_deps_step, target);
+
     // Zig unicode library - https://codeberg.org/atman/zg
     const zg = b.dependency("zg", .{});
 
@@ -61,15 +64,18 @@ pub fn build(b: *std.Build) void {
     fmt_step.dependOn(&fmt.step);
 
     // Fuzz targets
-    const fuzz = b.step("fuzz", "Generate all fuzz executables");
+    const fuzz_step = b.step("fuzz", "Generate all fuzz executables");
+    fuzz_step.dependOn(download_deps_step);
 
     // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
     // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
     // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
-    add_fuzz_target(
+    addFuzzTarget(
         b,
-        fuzz,
+        fuzz_step,
         target,
+        download_deps_step,
+        llvm_config_paths,
         "cli",
         b.path("src/fuzz/cli.zig"),
         &[_]Import{
@@ -78,36 +84,62 @@ pub fn build(b: *std.Build) void {
     );
 }
 
-fn add_fuzz_target(
+fn downloadDeps(
+    b: *std.Build,
+    download_deps: *Step,
+    target: ResolvedTarget,
+) []const []const u8 {
+    const llvm_config_paths: ?[]const []const u8 = b.option(
+        []const []const u8,
+        "llvm-config-paths",
+        "Paths to search for llvm-config (if not set, will download vendored llvm)",
+    );
+    if (llvm_config_paths) |paths| {
+        return b.dupeStrings(paths);
+    }
+
+    const target_str = target.result.linuxTriple(b.allocator) catch @panic("OOM");
+
+    const download_deps_exe = b.addExecutable(.{
+        .name = "download_deps",
+        .root_source_file = b.path("src/download_deps.zig"),
+        .target = b.host,
+        .optimize = .Debug,
+    });
+    const run_download_deps = b.addRunArtifact(download_deps_exe);
+    run_download_deps.addArgs(&.{target_str});
+    const deps_path = "zig-out/build-deps";
+    run_download_deps.addDirectoryArg(b.path(deps_path));
+
+    download_deps.dependOn(&run_download_deps.step);
+
+    var out = b.allocator.alloc([]const u8, 1) catch @panic("OOM");
+    out[0] = b.fmt("{s}/{s}/bin", .{ deps_path, target_str });
+    return out;
+}
+
+fn addFuzzTarget(
     b: *std.Build,
     fuzz: *Step,
     target: ResolvedTarget,
+    download_deps: *Step,
+    llvm_config_paths: []const []const u8,
     name: []const u8,
     root_source_file: LazyPath,
     imports: []const Import,
 ) void {
-    var name_obj = std.ArrayList(u8).init(b.allocator);
-    defer name_obj.deinit();
-    name_obj.writer().print("{s}_obj", .{name}) catch unreachable;
-
-    var name_exe = std.ArrayList(u8).init(b.allocator);
-    defer name_exe.deinit();
-    name_exe.writer().print("fuzz-{s}", .{name}) catch unreachable;
-
-    var name_repro = std.ArrayList(u8).init(b.allocator);
-    defer name_repro.deinit();
-    name_repro.writer().print("repro-{s}", .{name}) catch unreachable;
-
-    var step_msg = std.ArrayList(u8).init(b.allocator);
-    defer step_msg.deinit();
-    step_msg.writer().print("Generate fuzz executable for {s}", .{name}) catch unreachable;
+    const name_obj = b.fmt("{s}_obj", .{name});
+    const name_exe = b.fmt("fuzz-{s}", .{name});
+    const name_repro = b.fmt("repro-{s}", .{name});
+    const step_msg = b.fmt("Generate fuzz executable for {s}", .{name});
 
     const fuzz_obj = b.addObject(.{
-        .name = name_obj.items,
+        .name = name_obj,
         .root_source_file = root_source_file,
         .target = target,
         .optimize = .ReleaseSafe,
     });
+    fuzz_obj.step.dependOn(download_deps);
 
     for (imports) |import| {
         fuzz_obj.root_module.addImport(import.name, import.module);
@@ -118,10 +150,10 @@ fn add_fuzz_target(
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
-    const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, fuzz_obj);
+    const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, llvm_config_paths, fuzz_obj);
 
     const repro = b.addExecutable(.{
-        .name = name_repro.items,
+        .name = name_repro,
         .root_source_file = b.path("src/fuzz/repro.zig"),
         .target = target,
         .optimize = .ReleaseSafe,
@@ -129,9 +161,9 @@ fn add_fuzz_target(
     });
     repro.addObject(fuzz_obj);
 
-    const fuzz_step = b.step(name_exe.items, step_msg.items);
-    fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe.items).step);
-    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro.items).step);
+    const fuzz_step = b.step(name_exe, step_msg);
+    fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
+    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro).step);
 
     fuzz.dependOn(fuzz_step);
 }
