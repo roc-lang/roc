@@ -1,19 +1,23 @@
-//! Interner for a string literal
+//! Strings written in-line in Roc code, e.g. `x = "abc"`.
 const std = @import("std");
-const exit_on_oom = @import("../utils.zig").exit_on_oom;
+const exitOnOom = @import("../utils.zig").exitOnOom;
 
-/// Index this value is stored in an interner
-pub const Idx = struct { id: u32 };
+/// The index of this string in a StringLiteral.Interner.
+pub const Idx = enum(u32) { _ };
 
-/// Interner for a string literal
+/// An interner for string literals.
+///
+/// As opposed to the [IdentName.Interner], this interner does not
+/// deduplicate its values because they are expected to be almost all unique,
+/// and also larger, meaning more expensive to do equality checking on.
 pub const Interner = struct {
-    // these are not deduped because equality checking on large strings becomes expensive
-    // and they are pretty likely unique anyway
     strings: std.ArrayList([]u8),
+    allocator: std.mem.Allocator,
 
     pub fn init(allocator: std.mem.Allocator) Interner {
         return Interner{
             .strings = std.ArrayList([]u8).init(allocator),
+            .allocator = allocator,
         };
     }
 
@@ -24,15 +28,15 @@ pub const Interner = struct {
     pub fn insert(self: *Interner, string: []u8) Idx {
         const len = self.strings.items.len;
 
-        const copied_string = self.strings.allocator.alloc(u8, string.len) catch exit_on_oom;
+        const copied_string = self.allocator.alloc(u8, string.len) catch exitOnOom();
         std.mem.copyForwards(u8, copied_string, string);
 
-        self.strings.append(copied_string) catch exit_on_oom;
+        self.strings.append(copied_string) catch exitOnOom();
 
-        return Idx{ .id = @as(u32, len) };
+        return @enumFromInt(@as(u32, len));
     }
 
-    pub fn get(self: *Interner, id: Idx) []u8 {
-        return self.strings.items[@as(usize, id.id)];
+    pub fn get(self: *Interner, idx: Idx) []u8 {
+        return self.strings.items[@as(usize, @intFromEnum(idx))];
     }
 };

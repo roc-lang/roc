@@ -55,6 +55,11 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     test_step.dependOn(&run_tests.step);
 
+    // Fmt zig code.
+    const fmt = b.addFmt(.{ .paths = &.{ "src", "build.zig" } });
+    const fmt_step = b.step("fmt", "Format all zig code");
+    fmt_step.dependOn(&fmt.step);
+
     // Fuzz targets
     const fuzz = b.step("fuzz", "Generate all fuzz executables");
 

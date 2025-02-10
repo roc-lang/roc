@@ -1,9 +1,22 @@
 const std = @import("std");
+const collections = @import("../collections.zig");
 
 pub const Region = @This();
 
 start: Position,
 end: Position,
+
+// Okay to use a non-multi list because both fields are the same size
+pub const List = collections.SafeList(@This());
+pub const Idx = List.Idx;
+pub const Slice = List.Slice;
+
+pub fn zero() Region {
+    return Region{
+        .start = Position.zero(),
+        .end = Position.zero(),
+    };
+}
 
 pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
     if (fmt.len != 0) {

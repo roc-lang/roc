@@ -1,10 +1,12 @@
-//! Interner for a tag name string.
+//! The name of a tag, e.g. `Foo` in `Foo("abc", 123)`.
 const std = @import("std");
 const IdentName = @import("IdentName.zig");
 
-/// Index this value is stored in an interner
-pub const Idx = struct { id: u32 };
+/// The index for a tag name in a TagName.Interner.
+pub const Idx = enum(u32) { _ };
 
+/// An interner for a tag name.
+///
 /// A thin wrapper around a small string interner that
 /// allows for typed IDs of tag names which can't be
 /// interchanged with other interned string IDs.
@@ -20,10 +22,10 @@ pub const Interner = struct {
     }
 
     pub fn insert(self: *Interner, name: []u8) Idx {
-        return Idx{ .id = self.names.insert(name).id };
+        return @enumFromInt(self.names.insert(name).id);
     }
 
     pub fn get(self: *Interner, id: Idx) []u8 {
-        return self.names.get(IdentName.Idx{ .id = id.id });
+        return self.names.get(@intFromEnum(id));
     }
 };
