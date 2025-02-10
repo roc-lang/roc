@@ -23,13 +23,13 @@ pub fn SafeList(comptime T: type) type {
     return struct {
         items: std.ArrayList(T),
 
-        /// An index of an item in the list.
+        /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
 
         /// A type-safe slice of the list.
         pub const Slice = std.ArrayList(T).Slice;
 
-        /// A type-safe non-empty slice which must have at least one element.
+        /// A type-safe slice which must have at least one element.
         pub const NonEmptySlice = struct {
             slice: std.ArrayList(T).Slice,
 
