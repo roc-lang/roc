@@ -17,13 +17,15 @@
                         ),
                         [
                             @15-16 SpaceBefore(
-                                SpaceAfter(
-                                    Tag(
-                                        "H",
+                                ParensAround(
+                                    SpaceAfter(
+                                        Tag(
+                                            "H",
+                                        ),
+                                        [
+                                            Newline,
+                                        ],
                                     ),
-                                    [
-                                        Newline,
-                                    ],
                                 ),
                                 [
                                     LineComment(

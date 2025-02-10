@@ -24,15 +24,17 @@
                             ),
                             [
                                 @2-8 Apply(
-                                    @3-4 SpaceAfter(
-                                        NumLiteral(
-                                            "0",
-                                        ),
-                                        [
-                                            LineComment(
-                                                "",
+                                    @3-4 ParensAround(
+                                        SpaceAfter(
+                                            NumLiteral(
+                                                "0",
                                             ),
-                                        ],
+                                            [
+                                                LineComment(
+                                                    "",
+                                                ),
+                                            ],
+                                        ),
                                     ),
                                     [
                                         @7-8 Identifier {
@@ -44,15 +46,17 @@
                         ),
                         [
                             @10-16 Apply(
-                                @11-12 SpaceAfter(
-                                    NumLiteral(
-                                        "0",
-                                    ),
-                                    [
-                                        LineComment(
-                                            "",
+                                @11-12 ParensAround(
+                                    SpaceAfter(
+                                        NumLiteral(
+                                            "0",
                                         ),
-                                    ],
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
                                 ),
                                 [
                                     @15-16 Identifier {

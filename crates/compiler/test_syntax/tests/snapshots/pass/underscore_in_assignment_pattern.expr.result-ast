@@ -149,31 +149,35 @@
                             "Pair",
                         ),
                         [
-                            @79-87 Apply(
-                                @79-83 Tag(
-                                    "Pair",
-                                ),
-                                [
-                                    @84-85 Identifier {
-                                        ident: "x",
-                                    },
-                                    @86-87 Underscore(
-                                        "",
+                            @79-87 ParensAround(
+                                Apply(
+                                    @79-83 Tag(
+                                        "Pair",
                                     ),
-                                ],
+                                    [
+                                        @84-85 Identifier {
+                                            ident: "x",
+                                        },
+                                        @86-87 Underscore(
+                                            "",
+                                        ),
+                                    ],
+                                ),
                             ),
-                            @90-98 Apply(
-                                @90-94 Tag(
-                                    "Pair",
-                                ),
-                                [
-                                    @95-96 Underscore(
-                                        "",
+                            @90-98 ParensAround(
+                                Apply(
+                                    @90-94 Tag(
+                                        "Pair",
                                     ),
-                                    @97-98 Identifier {
-                                        ident: "y",
-                                    },
-                                ],
+                                    [
+                                        @95-96 Underscore(
+                                            "",
+                                        ),
+                                        @97-98 Identifier {
+                                            ident: "y",
+                                        },
+                                    ],
+                                ),
                             ),
                         ],
                     ),

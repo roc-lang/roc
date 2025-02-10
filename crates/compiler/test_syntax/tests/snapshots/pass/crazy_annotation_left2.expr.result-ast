@@ -29,11 +29,17 @@
                                     },
                                     [
                                         @5-9 SpaceAfter(
-                                            NumLiteral(
-                                                "0",
+                                            ParensAround(
+                                                SpaceAfter(
+                                                    NumLiteral(
+                                                        "0",
+                                                    ),
+                                                    [
+                                                        Newline,
+                                                    ],
+                                                ),
                                             ),
                                             [
-                                                Newline,
                                                 Newline,
                                                 LineComment(
                                                     "",

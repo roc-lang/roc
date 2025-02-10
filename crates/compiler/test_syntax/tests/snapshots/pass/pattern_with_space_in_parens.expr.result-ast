@@ -34,15 +34,17 @@
                                 "Delmin",
                             ),
                             [
-                                @38-44 Apply(
-                                    @38-41 Tag(
-                                        "Del",
+                                @38-44 ParensAround(
+                                    Apply(
+                                        @38-41 Tag(
+                                            "Del",
+                                        ),
+                                        [
+                                            @42-44 Identifier {
+                                                ident: "ry",
+                                            },
+                                        ],
                                     ),
-                                    [
-                                        @42-44 Identifier {
-                                            ident: "ry",
-                                        },
-                                    ],
                                 ),
                                 @47-48 Underscore(
                                     "",

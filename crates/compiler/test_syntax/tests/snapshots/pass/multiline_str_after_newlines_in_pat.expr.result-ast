@@ -18,14 +18,16 @@
             value_defs: [
                 Annotation(
                     @1-2 Apply(
-                        @1-2 SpaceAfter(
-                            NumLiteral(
-                                "4",
+                        @1-2 ParensAround(
+                            SpaceAfter(
+                                NumLiteral(
+                                    "4",
+                                ),
+                                [
+                                    Newline,
+                                    Newline,
+                                ],
                             ),
-                            [
-                                Newline,
-                                Newline,
-                            ],
                         ),
                         [
                             @5-11 StrLiteral(

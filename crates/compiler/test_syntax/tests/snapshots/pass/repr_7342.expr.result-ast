@@ -19,15 +19,17 @@
                 value_defs: [
                     Annotation(
                         @2-3 Apply(
-                            @2-3 SpaceAfter(
-                                NumLiteral(
-                                    "1",
-                                ),
-                                [
-                                    LineComment(
-                                        "",
+                            @2-3 ParensAround(
+                                SpaceAfter(
+                                    NumLiteral(
+                                        "1",
                                     ),
-                                ],
+                                    [
+                                        LineComment(
+                                            "",
+                                        ),
+                                    ],
+                                ),
                             ),
                             [
                                 @6-7 Tag(

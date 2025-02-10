@@ -29,19 +29,21 @@
                 ),
                 Annotation(
                     @3-11 Apply(
-                        @3-11 Apply(
-                            @3-9 StrLiteral(
-                                Block(
-                                    [],
-                                ),
-                            ),
-                            [
-                                @9-11 StrLiteral(
-                                    PlainLine(
-                                        "",
+                        @3-11 ParensAround(
+                            Apply(
+                                @3-9 StrLiteral(
+                                    Block(
+                                        [],
                                     ),
                                 ),
-                            ],
+                                [
+                                    @9-11 StrLiteral(
+                                        PlainLine(
+                                            "",
+                                        ),
+                                    ),
+                                ],
+                            ),
                         ),
                         [
                             @12-13 Identifier {

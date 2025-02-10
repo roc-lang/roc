@@ -20,15 +20,17 @@
                     @0-15 Tuple(
                         [
                             @1-7 Apply(
-                                @2-3 SpaceAfter(
-                                    NumLiteral(
-                                        "0",
-                                    ),
-                                    [
-                                        LineComment(
-                                            "",
+                                @2-3 ParensAround(
+                                    SpaceAfter(
+                                        NumLiteral(
+                                            "0",
                                         ),
-                                    ],
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
                                 ),
                                 [
                                     @6-7 Identifier {
@@ -37,15 +39,17 @@
                                 ],
                             ),
                             @8-14 Apply(
-                                @9-10 SpaceAfter(
-                                    NumLiteral(
-                                        "0",
-                                    ),
-                                    [
-                                        LineComment(
-                                            "",
+                                @9-10 ParensAround(
+                                    SpaceAfter(
+                                        NumLiteral(
+                                            "0",
                                         ),
-                                    ],
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
+                                    ),
                                 ),
                                 [
                                     @13-14 Identifier {

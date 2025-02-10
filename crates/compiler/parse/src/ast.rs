@@ -1656,6 +1656,7 @@ pub enum Pattern<'a> {
     // Space
     SpaceBefore(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
     SpaceAfter(&'a Pattern<'a>, &'a [CommentOrNewline<'a>]),
+    ParensAround(&'a Pattern<'a>),
 
     // Malformed
     Malformed(&'a str),
@@ -1804,8 +1805,8 @@ impl<'a> Pattern<'a> {
                     false
                 }
             }
-            SpaceBefore(x, _) | SpaceAfter(x, _) => match other {
-                SpaceBefore(y, _) | SpaceAfter(y, _) => x.equivalent(y),
+            SpaceBefore(x, _) | SpaceAfter(x, _) | ParensAround(x) => match other {
+                SpaceBefore(y, _) | SpaceAfter(y, _) | ParensAround(y) => x.equivalent(y),
                 y => x.equivalent(y),
             },
             Malformed(x) => {
@@ -2581,7 +2582,8 @@ impl<'a> Malformed for Pattern<'a> {
             ListRest(_) =>false,
             As(pat, _) => pat.is_malformed(),
             SpaceBefore(pat, _) |
-            SpaceAfter(pat, _) => pat.is_malformed(),
+            SpaceAfter(pat, _) |
+            ParensAround(pat) => pat.is_malformed(),
 
             Malformed(_) |
             MalformedIdent(_, _) |

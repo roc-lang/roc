@@ -33,15 +33,17 @@
             ],
             value_defs: [
                 Body(
-                    @7-8 SpaceBefore(
-                        Identifier {
-                            ident: "s",
-                        },
-                        [
-                            LineComment(
-                                "",
-                            ),
-                        ],
+                    @7-8 ParensAround(
+                        SpaceBefore(
+                            Identifier {
+                                ident: "s",
+                            },
+                            [
+                                LineComment(
+                                    "",
+                                ),
+                            ],
+                        ),
                     ),
                     @10-11 Var {
                         module_name: "",

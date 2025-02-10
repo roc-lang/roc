@@ -624,7 +624,7 @@ pub fn canonicalize_pattern<'a>(
             }
         }
 
-        SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
+        ParensAround(sub_pattern) | SpaceBefore(sub_pattern, _) | SpaceAfter(sub_pattern, _) => {
             return canonicalize_pattern(
                 env,
                 var_store,
