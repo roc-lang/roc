@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const afl = @import("zig-afl-kit");
 const InstallDir = std.Build.InstallDir;
 const Step = std.Build.Step;
 const LazyPath = std.Build.LazyPath;
@@ -60,50 +59,39 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     fmt_step.dependOn(&fmt.step);
 
-    // Fuzz targets
-    const fuzz = b.step("fuzz", "Generate all fuzz executables");
+    const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
+    const valid_fuzz_target = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl()) and target.result.os.tag != .windows;
+    if (fuzz and valid_fuzz_target) {
+        const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
 
-    // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
-    // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
-    // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
-    add_fuzz_target(
-        b,
-        fuzz,
-        target,
-        "cli",
-        b.path("src/fuzz/cli.zig"),
-        &[_]Import{
-            .{ .name = "cli", .module = b.createModule(.{ .root_source_file = b.path("src/cli.zig") }) },
-        },
-    );
+        // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
+        // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
+        // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
+        add_fuzz_target(
+            b,
+            afl,
+            test_step,
+            target,
+            "cli",
+            b.path("src/fuzz/cli.zig"),
+            &[_]Import{
+                .{ .name = "cli", .module = b.createModule(.{ .root_source_file = b.path("src/cli.zig") }) },
+            },
+        );
+    }
 }
 
 fn add_fuzz_target(
     b: *std.Build,
-    fuzz: *Step,
+    afl: type,
+    parent_step: *Step,
     target: ResolvedTarget,
     name: []const u8,
     root_source_file: LazyPath,
     imports: []const Import,
 ) void {
-    var name_obj = std.ArrayList(u8).init(b.allocator);
-    defer name_obj.deinit();
-    name_obj.writer().print("{s}_obj", .{name}) catch unreachable;
-
-    var name_exe = std.ArrayList(u8).init(b.allocator);
-    defer name_exe.deinit();
-    name_exe.writer().print("fuzz-{s}", .{name}) catch unreachable;
-
-    var name_repro = std.ArrayList(u8).init(b.allocator);
-    defer name_repro.deinit();
-    name_repro.writer().print("repro-{s}", .{name}) catch unreachable;
-
-    var step_msg = std.ArrayList(u8).init(b.allocator);
-    defer step_msg.deinit();
-    step_msg.writer().print("Generate fuzz executable for {s}", .{name}) catch unreachable;
-
     const fuzz_obj = b.addObject(.{
-        .name = name_obj.items,
+        .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
         .target = target,
         .optimize = .ReleaseSafe,
@@ -114,14 +102,17 @@ fn add_fuzz_target(
     }
 
     // TODO: Once 0.14.0 is released, uncomment this. Will make fuzzing work better.
+    // Until then, to get the best fuzzing result modify the std library as specified here:
+    // https://github.com/kristoff-it/zig-afl-kit?tab=readme-ov-file#-------important-------
     // fuzz_obj.root_module.fuzz = true;
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
     const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, fuzz_obj);
 
+    const name_repro = b.fmt("repro-{s}", .{name});
     const repro = b.addExecutable(.{
-        .name = name_repro.items,
+        .name = name_repro,
         .root_source_file = b.path("src/fuzz/repro.zig"),
         .target = target,
         .optimize = .ReleaseSafe,
@@ -129,9 +120,10 @@ fn add_fuzz_target(
     });
     repro.addObject(fuzz_obj);
 
-    const fuzz_step = b.step(name_exe.items, step_msg.items);
-    fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe.items).step);
-    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro.items).step);
+    const name_exe = b.fmt("fuzz-{s}", .{name});
+    const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
+    fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
+    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro).step);
 
-    fuzz.dependOn(fuzz_step);
+    parent_step.dependOn(fuzz_step);
 }

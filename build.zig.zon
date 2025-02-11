@@ -6,6 +6,7 @@
         .@"zig-afl-kit" = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit#78ffdb150f893ee101525c78d4dc67684d163169",
             .hash = "1220f7ceaf0867b5a5769b6d8d1e44e190cff690ac34ddc00824ff8bd291cd2abf40",
+            .lazy = true,
         },
         .zg = .{
             .url = "https://codeberg.org/dude_the_builder/zg/archive/v0.13.2.tar.gz",
