@@ -1,10 +1,11 @@
 //! Stores attributes for an identifier like the raw_text, is it effectful, ignored, or reassignable.
 //! An example of an identifier is the name of a top-level function like `main!` or a variable like `x_`.
 const std = @import("std");
-const base = @import("../base.zig");
 const utils = @import("../collections/utils.zig");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
+const Region = @import("./Region.zig");
+const Module = @import("./Module.zig");
 
 const Problem = problem.Problem;
 const exitOnOom = utils.exitOnOom;
@@ -66,20 +67,20 @@ pub const Problems = packed struct {
 pub const Store = struct {
     interner: collections.IdentName.Interner,
     next_unique_name: u32,
-    regions: std.ArrayList(base.Region),
+    regions: std.ArrayList(Region),
     /// The index of the local module import that this ident comes from.
     ///
     /// By default, this is set to index 0, the primary module being compiled.
     /// This needs to be set when the ident is first seen during canonicalization
     /// before doing anything else.
-    exposing_modules: std.ArrayList(base.Module.Idx),
+    exposing_modules: std.ArrayList(Module.Idx),
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return Store{
             .interner = collections.IdentName.Interner.init(allocator),
             .next_unique_name = 0,
-            .regions = std.ArrayList(base.Region).init(allocator),
-            .exposing_modules = std.ArrayList(base.Module.Idx).init(allocator),
+            .regions = std.ArrayList(Region).init(allocator),
+            .exposing_modules = std.ArrayList(Module.Idx).init(allocator),
         };
     }
 
@@ -89,7 +90,7 @@ pub const Store = struct {
         self.exposing_modules.deinit();
     }
 
-    pub fn insert(self: *Store, ident: Ident, region: base.Region, problems: *Problem.List) !Idx {
+    pub fn insert(self: *Store, ident: Ident, region: Region, problems: *Problem.List) !Idx {
         if (ident.problems.has_problems()) {
             _ = problems.append(Problem.Parse.make(Problem.Parse{ .IdentIssue = .{
                 .problems = ident.problems,
@@ -107,7 +108,7 @@ pub const Store = struct {
         };
     }
 
-    pub fn genUnique(self: *Store, region: base.Region) !Idx {
+    pub fn genUnique(self: *Store, region: Region) !Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
@@ -160,11 +161,11 @@ pub const Store = struct {
         return self.interner.strings.items[@as(usize, string_index)];
     }
 
-    pub fn getRegion(self: *Store, idx: Idx) base.Region {
+    pub fn getRegion(self: *Store, idx: Idx) Region {
         return self.regions.items[@as(usize, idx.id)];
     }
 
-    pub fn getExposingModule(self: *Store, idx: Idx) base.Module.Idx {
+    pub fn getExposingModule(self: *Store, idx: Idx) Module.Idx {
         return self.exposing_modules.items[@as(usize, idx.id)];
     }
 
@@ -172,7 +173,7 @@ pub const Store = struct {
     ///
     /// NOTE: This should be called as soon as an ident is encountered during
     /// canonicalization to make sure that we don't
-    pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: base.Module.Idx) void {
+    pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: Module.Idx) void {
         self.exposing_modules.items[@as(usize, idx.id)] = exposing_module;
     }
 };

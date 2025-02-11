@@ -1,7 +1,7 @@
 //! A package imported at the root of a Roc application/platform/package.
 const std = @import("std");
-const base = @import("../base.zig");
 const collections = @import("../collections.zig");
+const Region = @import("./Region.zig");
 
 // TODO: this is half-baked, we should finish it when we get to saving/loading packages
 
@@ -32,8 +32,8 @@ pub const Idx = List.Idx;
 
 pub const Dependency = struct {
     package: Idx,
-    shorthand_region: base.Region,
-    url_region: base.Region,
+    shorthand_region: Region,
+    url_region: Region,
 
     pub const AddResult = union(enum) {
         Success,
