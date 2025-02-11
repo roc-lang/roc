@@ -32,7 +32,7 @@ pub const Interner = struct {
             .strings = std.ArrayList([]u8).init(allocator),
             .string_indices_per_hash = std.AutoHashMap(u32, std.ArrayList(u32)).init(allocator),
             .outer_ids_per_string_index = std.AutoHashMap(u32, std.ArrayList(Idx)).init(allocator),
-            .outer_indices = std.ArrayList(Idx).init(allocator),
+            .outer_indices = std.ArrayList(u32).init(allocator),
             .allocator = allocator,
         };
     }

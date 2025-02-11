@@ -33,17 +33,17 @@ pub fn SafeList(comptime T: type) type {
         pub const NonEmptySlice = struct {
             slice: std.ArrayList(T).Slice,
 
-            pub fn makeUnchecked(items: []T) NonEmptySlice(T) {
-                return NonEmptySlice(T){ .slice = items };
+            pub fn makeUnchecked(items: []T) NonEmptySlice {
+                return NonEmptySlice{ .slice = items };
             }
 
-            pub fn first(slice: *NonEmptySlice(T)) *T {
+            pub fn first(slice: *NonEmptySlice) T {
                 return slice.slice[0];
             }
         };
 
         pub fn init(allocator: std.mem.Allocator) SafeList(T) {
-            return SafeList{ .items = std.ArrayList(T).init(allocator) };
+            return SafeList(T){ .items = std.ArrayList(T).init(allocator) };
         }
 
         pub fn deinit(self: *SafeList(T)) void {
@@ -58,7 +58,7 @@ pub fn SafeList(comptime T: type) type {
             const length = self.len();
             self.items.append(item) catch exitOnOom();
 
-            return @enumFromInt(@as(u32, length));
+            return @enumFromInt(@as(u32, @intCast(length)));
         }
 
         pub fn appendSlice(self: *SafeList(T), items: []const T) Slice {
@@ -68,7 +68,7 @@ pub fn SafeList(comptime T: type) type {
             return self.items.items[start_length..];
         }
 
-        pub fn get(self: *SafeList(T), id: Idx) *T {
+        pub fn get(self: *SafeList(T), id: Idx) T {
             return self.items.items[@as(usize, @intFromEnum(id))];
         }
     };
@@ -132,11 +132,11 @@ test "safe list_u32 inserting and getting" {
 
     try testing.expectEqual(list_u32.len(), 0);
 
-    const id = list_u32.insert(1);
+    const id = list_u32.append(1);
 
     try testing.expectEqual(list_u32.len(), 1);
 
     const item = list_u32.get(id);
 
-    try testing.expectEqual(item.* == 1);
+    try testing.expectEqual(item, 1);
 }

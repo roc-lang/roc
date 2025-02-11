@@ -73,6 +73,7 @@ pub const Store = struct {
     pub fn init(allocator: std.mem.Allocator) Store {
         return Store{
             .interner = collections.IdentName.Interner.init(allocator),
+            .next_unique_name = 0,
             .regions = std.ArrayList(base.Region).init(allocator),
             .exposing_modules = std.ArrayList(base.Module.Idx).init(allocator),
         };

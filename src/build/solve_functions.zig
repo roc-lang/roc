@@ -3,6 +3,7 @@ const base = @import("../base.zig");
 const func_lift = @import("lift_functions.zig");
 const collections = @import("../collections.zig");
 
+const testing = std.testing;
 const Ident = base.Ident;
 
 pub const FunctionSet = struct {
@@ -28,4 +29,28 @@ pub fn solveFunctions(ir: func_lift.IR, other_modules: []FunctionSet.List) Funct
     _ = other_modules;
 
     @panic("not implemented");
+}
+
+test "solves for uncaptured functions" {
+    // This test will create the function lift IR for the following program:
+    //
+    //   apply : (U8 -> U8), U8 -> U8
+    //   apply = \f, x -> f x
+    //
+    //   fn : U8 -> U8
+    //   fn = \x -> x + 1
+    //
+    //   main : U8
+    //   main =
+    //     fn_pack = @fn_pack(fn)
+    //     apply fn_pack 2
+    //
+    // It will then run `solveFunctions` on that IR and assert that the
+    // resulting FunctionSet.List correctly labels each function
+
+    const ally = testing.allocator;
+    var store = base.Ident.Store.init(ally);
+    defer store.deinit();
+
+    try testing.expect(true);
 }

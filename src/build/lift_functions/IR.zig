@@ -118,7 +118,7 @@ pub const Expr = union(enum) {
         branches: WhenBranch.NonEmptySlice,
     },
 
-    CompilerBug: Problem.SpecializeTypes,
+    CompilerBug: Problem.Compiler.LiftFunctions,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
@@ -154,8 +154,8 @@ pub const WhenBranch = struct {
     /// The expression to produce if the pattern matches
     value: Expr.Idx,
 
-    pub const List = collections.SafeMultiList(@This());
-    pub const Slice = List.Slice;
+    pub const List = collections.SafeList(@This());
+    pub const NonEmptySlice = List.NonEmptySlice;
 };
 
 pub const Function = struct {
@@ -206,7 +206,7 @@ pub const Pattern = union(enum) {
         },
     },
     Underscore,
-    CompilerBug: Problem.SpecializeTypes,
+    CompilerBug: Problem.Compiler.LiftFunctions,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
