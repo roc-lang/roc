@@ -216,7 +216,7 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 
 ### LLVM installation on Windows
 
-**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, and many tests will not work on windows.
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see [issue #2608](https://github.com/roc-lang/roc/issues/2608). This also means the repl, and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
 1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z).
