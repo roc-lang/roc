@@ -22,8 +22,8 @@ pub const Diagnostic = struct {
 
 /// The first and last token consumed by a Node
 pub const Region = struct {
-    start: TokenIndex,
-    end: TokenIndex,
+    start: TokenIdx,
+    end: TokenIdx,
 };
 
 /// Unstructured information about a Node.  These
@@ -34,8 +34,8 @@ pub const Region = struct {
 /// The conventions should be documented for each Node
 /// Tag.
 pub const Data = struct {
-    lhs: Node.Index,
-    rhs: Node.Index,
+    lhs: u32,
+    rhs: u32,
 };
 
 /// A single meaningful node in the Abstract Syntax Tree.
@@ -47,11 +47,13 @@ pub const Data = struct {
 pub const Node = struct {
     tag: Tag,
     data: Data,
-    main_token: TokenIndex,
+    main_token: TokenIdx,
+
+    pub const List = collections.SafeMultiList(Node);
 
     /// Internal representation for where a node is stored
     /// in the tree.
-    pub const Index = u32;
+    pub const Idx = List.Idx;
 
     /// This is the tag associated with a raw Node in the list
     pub const Tag = enum {
@@ -380,45 +382,45 @@ pub const Node = struct {
 /// be the only way that other modules interact with
 /// the IR (AST).
 pub const NodeStore = struct {
-    nodes: NodeList,
-    extra_data: std.ArrayList(Node.Index),
+    nodes: Node.List,
+    extra_data: std.ArrayList(u32),
     gpa: std.mem.Allocator,
-    scratch_statements: std.ArrayList(StatementIndex),
-    scratch_tokens: std.ArrayList(TokenIndex),
-    scratch_exprs: std.ArrayList(ExprIndex),
-    scratch_patterns: std.ArrayList(PatternIndex),
-    scratch_record_fields: std.ArrayList(RecordFieldIndex),
-    scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIndex),
+    scratch_statements: std.ArrayList(StatementIdx),
+    scratch_tokens: std.ArrayList(TokenIdx),
+    scratch_exprs: std.ArrayList(ExprIdx),
+    scratch_patterns: std.ArrayList(PatternIdx),
+    scratch_record_fields: std.ArrayList(RecordFieldIdx),
+    scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
-    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: u64) !NodeStore {
+    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: u64) NodeStore {
         var store: NodeStore = .{
-            .nodes = .{},
-            .extra_data = std.ArrayList(Node.Index).init(gpa),
+            .nodes = collections.SafeMultiList(Node).init(gpa),
+            .extra_data = std.ArrayList(u32).init(gpa),
             .gpa = gpa,
-            .scratch_statements = std.ArrayList(StatementIndex).init(gpa),
-            .scratch_tokens = std.ArrayList(TokenIndex).init(gpa),
-            .scratch_exprs = std.ArrayList(ExprIndex).init(gpa),
-            .scratch_patterns = std.ArrayList(PatternIndex).init(gpa),
-            .scratch_record_fields = std.ArrayList(RecordFieldIndex).init(gpa),
-            .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIndex).init(gpa),
+            .scratch_statements = std.ArrayList(StatementIdx).init(gpa),
+            .scratch_tokens = std.ArrayList(TokenIdx).init(gpa),
+            .scratch_exprs = std.ArrayList(ExprIdx).init(gpa),
+            .scratch_patterns = std.ArrayList(PatternIdx).init(gpa),
+            .scratch_record_fields = std.ArrayList(RecordFieldIdx).init(gpa),
+            .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIdx).init(gpa),
         };
 
-        try store.nodes.ensureTotalCapacity(gpa, capacity);
-        try store.nodes.append(gpa, .{
+        store.nodes.ensureTotalCapacity(capacity);
+        _ = store.nodes.append(.{
             .tag = .root,
-            .main_token = TokenIndex{ .id = 0 },
+            .main_token = TokenIdx{ .id = 0 },
             .data = .{ .lhs = 0, .rhs = 0 },
         });
-        try store.extra_data.ensureTotalCapacity(capacity / 2);
-        try store.scratch_statements.ensureTotalCapacity(10);
-        try store.scratch_tokens.ensureTotalCapacity(10);
-        try store.scratch_exprs.ensureTotalCapacity(10);
-        try store.scratch_patterns.ensureTotalCapacity(10);
-        try store.scratch_record_fields.ensureTotalCapacity(10);
-        try store.scratch_pattern_record_fields.ensureTotalCapacity(10);
+        store.extra_data.ensureTotalCapacity(capacity / 2) catch exit_on_oom();
+        store.scratch_statements.ensureTotalCapacity(10) catch exit_on_oom();
+        store.scratch_tokens.ensureTotalCapacity(10) catch exit_on_oom();
+        store.scratch_exprs.ensureTotalCapacity(10) catch exit_on_oom();
+        store.scratch_patterns.ensureTotalCapacity(10) catch exit_on_oom();
+        store.scratch_record_fields.ensureTotalCapacity(10) catch exit_on_oom();
+        store.scratch_pattern_record_fields.ensureTotalCapacity(10) catch exit_on_oom();
 
         return store;
     }
@@ -428,7 +430,7 @@ pub const NodeStore = struct {
     /// ownership of all Node data before calling this
     /// method.
     pub fn deinit(store: *NodeStore) void {
-        store.nodes.deinit(store.gpa);
+        store.nodes.deinit();
         store.extra_data.deinit();
         store.scratch_statements.deinit();
         store.scratch_tokens.deinit();
@@ -449,41 +451,41 @@ pub const NodeStore = struct {
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
     }
 
-    // Index types
+    // Idx types
 
     /// An index for a File node.  Should not be constructed externally.
-    pub const FileIndex = struct { file: u32 };
+    pub const FileIdx = struct { id: u32 };
     /// An index for a Body node.  Should not be constructed externally.
-    pub const BodyIndex = struct { body: u32 };
+    pub const BodyIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
-    pub const HeaderIndex = struct { header: u32 };
+    pub const HeaderIdx = struct { id: u32 };
     /// An index for a Statement node.  Should not be constructed externally.
-    pub const StatementIndex = struct { statement: u32 };
+    pub const StatementIdx = struct { id: u32 };
     /// An index for a Pattern node.  Should not be constructed externally.
-    pub const PatternIndex = struct { pattern: u32 };
+    pub const PatternIdx = struct { id: u32 };
     /// An index for a Expr node.  Should not be constructed externally.
-    pub const ExprIndex = struct { expr: u32 };
+    pub const ExprIdx = struct { id: u32 };
     /// An index for a IfElse node.  Should not be constructed externally.
-    pub const IfElseIndex = struct { id: u32 };
+    pub const IfElseIdx = struct { id: u32 };
     /// An index for a WhenBranch node.  Should not be constructed externally.
-    pub const WhenBranchIndex = struct { id: u32 };
+    pub const WhenBranchIdx = struct { id: u32 };
     /// An index for a RecordField node.  Should not be constructed externally.
-    pub const RecordFieldIndex = struct { id: u32 };
+    pub const RecordFieldIdx = struct { id: u32 };
     /// An index for a PatternRecordField node.  Should not be constructed externally.
-    pub const PatternRecordFieldIndex = struct { id: u32 };
+    pub const PatternRecordFieldIdx = struct { id: u32 };
 
     // ------------------------------------------------------------------------
     // Creation API - All nodes should be added using these functions
     // ------------------------------------------------------------------------
 
-    pub fn addFile(store: *NodeStore, file: File) !FileIndex {
+    pub fn addFile(store: *NodeStore, file: File) FileIdx {
         const start = store.extra_data.items.len;
-        try store.extra_data.append(file.header.header);
+        store.extra_data.append(file.header.id) catch exit_on_oom();
         for (file.statements) |statement| {
-            try store.extra_data.append(statement.statement);
+            store.extra_data.append(statement.id) catch exit_on_oom();
         }
 
-        store.nodes.set(0, .{
+        store.nodes.set(.{ .id = 0 }, .{
             .tag = .root,
             .main_token = .{ .id = 0 },
             .data = .{
@@ -492,37 +494,35 @@ pub const NodeStore = struct {
             },
         });
 
-        return .{ .file = 0 };
+        return .{ .id = 0 };
     }
 
-    pub fn addBody(store: *NodeStore, body: Body) !BodyIndex {
+    pub fn addBody(store: *NodeStore, body: Body) BodyIdx {
         const start = store.extra_data.items.len;
         const len = @as(u31, @intCast(body.statements.len));
         if (body.whitespace) |ws| {
-            try store.extra_data.append(ws.id);
+            store.extra_data.append(ws.id) catch exit_on_oom();
         }
         for (body.statements) |statement| {
-            try store.extra_data.append(statement.statement);
+            store.extra_data.append(statement.id) catch exit_on_oom();
         }
 
-        const idx = @as(u32, @intCast(store.nodes.len));
         const rhs = BodyRhs{
             .has_whitespace = if (body.whitespace != null) 1 else 0,
             .num_statements = @as(u31, len),
         };
-        try store.nodes.append(store.gpa, .{
+        const nid = store.nodes.append(.{
             .tag = .block,
             .main_token = .{ .id = 0 },
             .data = .{
-                .lhs = @as(Node.Index, @intCast(start)),
-                .rhs = @as(Node.Index, @bitCast(rhs)),
+                .lhs = @as(u32, @intCast(start)),
+                .rhs = @as(u32, @bitCast(rhs)),
             },
         });
-        return .{ .body = idx };
+        return .{ .id = nid.id };
     }
 
-    pub fn addHeader(store: *NodeStore, header: Header) !HeaderIndex {
-        const idx = @as(u32, @intCast(store.nodes.len));
+    pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
         var node = Node{
             .tag = .statement,
             .main_token = .{ .id = 0 },
@@ -534,37 +534,36 @@ pub const NodeStore = struct {
         switch (header) {
             .app => |app| {
                 // struct {
-                //    provides: []const TokenIndex, // This should probably be a Interned Ident token
-                //    platform: TokenIndex,
-                //    platform_name: TokenIndex,
-                //    packages: []const RecordFieldIndex,
+                //    provides: []const TokenIdx, // This should probably be a Interned Ident token
+                //    platform: TokenIdx,
+                //    platform_name: TokenIdx,
+                //    packages: []const RecordFieldIdx,
                 //    region: Region,
                 // }
                 node.tag = .app_header;
                 node.main_token = app.platform_name;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @bitCast(Header.AppHeaderRhs{
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @bitCast(Header.AppHeaderRhs{
                     .num_packages = @as(u10, @intCast(app.packages.len)),
                     .num_provides = @as(u22, @intCast(app.provides.len)),
                 }));
-                // node.data.rhs = @as(Node.Index, @intCast((app.provides.len + app.packages.len))) + app.platform;
-                try store.extra_data.append(app.platform.id);
+
+                store.extra_data.append(app.platform.id) catch exit_on_oom();
 
                 for (app.packages) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p.id)));
+                    store.extra_data.append(p.id) catch exit_on_oom();
                 }
                 for (app.provides) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p.id)));
+                    store.extra_data.append(p.id) catch exit_on_oom();
                 }
             },
             else => {},
         }
-        try store.nodes.append(store.gpa, node);
-        return .{ .header = idx };
+        const nid = store.nodes.append(node);
+        return .{ .id = nid.id };
     }
 
-    pub fn addStatement(store: *NodeStore, statement: Statement) !StatementIndex {
-        const idx = @as(u32, @intCast(store.nodes.len));
+    pub fn addStatement(store: *NodeStore, statement: Statement) StatementIdx {
         var node = Node{
             .tag = .statement,
             .main_token = .{ .id = 0 },
@@ -576,24 +575,24 @@ pub const NodeStore = struct {
         switch (statement) {
             .decl => |d| {
                 node.tag = .decl;
-                node.data.lhs = @as(Node.Index, @intCast(d.pattern.pattern));
-                node.data.rhs = @as(Node.Index, @intCast(d.body.body));
+                node.data.lhs = d.pattern.id;
+                node.data.rhs = d.body.id;
             },
             .expr => |expr| {
                 node.tag = .expr;
-                node.data.lhs = @as(Node.Index, @intCast(expr.expr.expr));
+                node.data.lhs = expr.expr.id;
             },
             .crash => |c| {
                 node.tag = .crash;
-                node.data.lhs = @as(Node.Index, @intCast(c.expr.expr));
+                node.data.lhs = c.expr.id;
             },
             .expect => |e| {
                 node.tag = .expect;
-                node.data.lhs = @as(Node.Index, @intCast(e.body.body));
+                node.data.lhs = e.body.id;
             },
             .@"return" => |r| {
                 node.tag = .@"return";
-                node.data.lhs = @as(Node.Index, @intCast(r.expr.expr));
+                node.data.lhs = r.expr.id;
             },
             .import => |i| {
                 node.tag = .import;
@@ -603,32 +602,31 @@ pub const NodeStore = struct {
                     .qualified = 0,
                     .num_exposes = @as(u30, @intCast(i.exposes.len)),
                 };
-                const extra_data_start = @as(Node.Index, @intCast(store.extra_data.items.len));
+                const extra_data_start = store.extra_data.items.len;
                 if (i.qualifier_tok) |tok| {
                     lhs.qualified = 1;
-                    try store.extra_data.append(@as(Node.Index, @intCast(tok.id)));
+                    store.extra_data.append(tok.id) catch exit_on_oom();
                 }
                 if (i.alias_tok) |tok| {
                     lhs.aliased = 1;
-                    try store.extra_data.append(@as(Node.Index, @intCast(tok.id)));
+                    store.extra_data.append(tok.id) catch exit_on_oom();
                 }
-                node.data.lhs = @as(Node.Index, @bitCast(lhs));
+                node.data.lhs = @as(u32, @bitCast(lhs));
                 if (node.data.lhs > 0) {
-                    node.data.rhs = extra_data_start;
+                    node.data.rhs = @as(u32, @intCast(extra_data_start));
                 }
                 for (i.exposes) |e| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(e.id)));
+                    store.extra_data.append(@as(u32, @intCast(e.id))) catch exit_on_oom();
                 }
             },
             .type_decl => |_| {},
             .type_anno => |_| {},
         }
-        try store.nodes.append(store.gpa, node);
-        return .{ .statement = idx };
+        const nid = store.nodes.append(node);
+        return .{ .id = nid.id };
     }
 
-    pub fn addPattern(store: *NodeStore, pattern: Pattern) !PatternIndex {
-        const idx = @as(u32, @intCast(store.nodes.len));
+    pub fn addPattern(store: *NodeStore, pattern: Pattern) PatternIdx {
         var node = Node{
             .tag = .statement,
             .main_token = .{ .id = 0 },
@@ -657,21 +655,21 @@ pub const NodeStore = struct {
             .record => |r| {
                 std.debug.assert(r.fields.len > 1);
                 node.tag = .list_patt;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(r.fields.len));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(r.fields.len));
 
                 for (r.fields) |f| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(f.id)));
+                    store.extra_data.append(f.id) catch exit_on_oom();
                 }
             },
             .list => |l| {
                 std.debug.assert(l.patterns.len > 1);
                 node.tag = .list_patt;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(l.patterns.len));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(l.patterns.len));
 
                 for (l.patterns) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p.pattern)));
+                    store.extra_data.append(p.id) catch exit_on_oom();
                 }
             },
             .list_rest => |_| {
@@ -680,11 +678,11 @@ pub const NodeStore = struct {
             .tuple => |t| {
                 std.debug.assert(t.patterns.len > 1);
                 node.tag = .tuple_patt;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(t.patterns.len));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.patterns.len));
 
                 for (t.patterns) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p.pattern)));
+                    store.extra_data.append(p.id) catch exit_on_oom();
                 }
             },
             .underscore => |_| {
@@ -693,24 +691,23 @@ pub const NodeStore = struct {
             .alternatives => |a| {
                 std.debug.assert(a.patterns.len > 1);
                 node.tag = .alternatives_patt;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(a.patterns.len));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(a.patterns.len));
 
                 for (a.patterns) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p.pattern)));
+                    store.extra_data.append(p.id) catch exit_on_oom();
                 }
             },
             .as => |a| {
                 node.tag = .as_patt;
-                node.data.lhs = @as(Node.Index, @intCast(a.pattern.pattern));
+                node.data.lhs = a.pattern.id;
             },
         }
-        try store.nodes.append(store.gpa, node);
-        return .{ .pattern = idx };
+        const nid = store.nodes.append(node);
+        return .{ .id = nid.id };
     }
 
-    pub fn addExpr(store: *NodeStore, expr: Expr) !ExprIndex {
-        const idx = @as(u32, @intCast(store.nodes.len));
+    pub fn addExpr(store: *NodeStore, expr: Expr) ExprIdx {
         var node = Node{
             .tag = .statement,
             .main_token = .{ .id = 0 },
@@ -740,63 +737,63 @@ pub const NodeStore = struct {
                 node.main_token = e.token;
             },
             .lambda => |l| {
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(l.args.len));
-                try store.extra_data.append(@as(Node.Index, @intCast(l.body.body)));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(l.args.len));
+                store.extra_data.append(l.body.id) catch exit_on_oom();
                 for (l.args) |arg| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(arg.pattern)));
+                    store.extra_data.append(arg.id) catch exit_on_oom();
                 }
             },
             .apply => |app| {
                 node.tag = .apply;
-                node.data.lhs = @as(Node.Index, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(Node.Index, @intCast(app.args.len + 1));
-                try store.extra_data.append(@as(Node.Index, @intCast(app.@"fn".expr)));
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(app.args.len + 1));
+                store.extra_data.append(app.@"fn".id) catch exit_on_oom();
                 for (app.args) |arg| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(arg.expr)));
+                    store.extra_data.append(arg.id) catch exit_on_oom();
                 }
             },
             .record_updater => |_| {},
             .field_access => |_| {},
             .bin_op_add => |op| {
                 node.tag = .bin_op_add;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_sub => |op| {
                 node.tag = .bin_op_sub;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_div => |op| {
                 node.tag = .bin_op_div;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_mul => |op| {
                 node.tag = .bin_op_mul;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_or => |op| {
                 node.tag = .bin_op_or;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_and => |op| {
                 node.tag = .bin_op_and;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_dbl_question => |op| {
                 node.tag = .bin_op_dbl_question;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .bin_op_single_question => |op| {
                 node.tag = .bin_op_single_question;
-                node.data.lhs = @as(Node.Index, @intCast(op.left.expr));
-                node.data.rhs = @as(Node.Index, @intCast(op.right.expr));
+                node.data.lhs = op.left.id;
+                node.data.rhs = op.right.id;
             },
             .suffix_single_question => |_| {},
             .unary_neg => |_| {},
@@ -814,12 +811,11 @@ pub const NodeStore = struct {
             .dbg => |_| {},
             .record_builder => |_| {},
         }
-        try store.nodes.append(store.gpa, node);
-        return .{ .expr = idx };
+        const nid = store.nodes.append(node);
+        return .{ .id = nid.id };
     }
 
-    pub fn addRecordField(store: *NodeStore, field: RecordField) !RecordFieldIndex {
-        const idx = @as(u32, @intCast(store.nodes.len));
+    pub fn addRecordField(store: *NodeStore, field: RecordField) RecordFieldIdx {
         var node = Node{
             .tag = .statement,
             .main_token = .{ .id = 0 },
@@ -831,60 +827,60 @@ pub const NodeStore = struct {
         node.tag = .record_field;
         node.main_token = field.name;
         if (field.value) |v| {
-            node.data.lhs = v.expr;
+            node.data.lhs = v.id;
         }
         if (field.optional) {
             node.data.rhs = 1;
         }
 
-        try store.nodes.append(store.gpa, node);
-        return .{ .id = idx };
+        const nid = store.nodes.append(node);
+        return .{ .id = nid.id };
     }
 
     // ------------------------------------------------------------------------
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
 
-    pub fn getFile(store: *NodeStore, file: FileIndex) !File {
-        const node = store.nodes.get(file.file);
+    pub fn getFile(store: *NodeStore, file: FileIdx) File {
+        const node = store.nodes.get(.{ .id = file.id });
         const header = store.extra_data.items[node.data.lhs];
         const stmt_idxs = store.extra_data.items[(node.data.lhs + 1)..(node.data.lhs + node.data.rhs)];
         std.debug.assert(store.scratch_statements.items.len == 0);
         const scratch_top = store.scratch_statements.items.len;
         for (stmt_idxs) |idx| {
-            try store.scratch_statements.append(StatementIndex{ .statement = idx });
+            store.scratch_statements.append(StatementIdx{ .id = idx }) catch exit_on_oom();
         }
         const statements = store.scratch_statements.items[scratch_top..];
         store.scratch_statements.shrinkRetainingCapacity(scratch_top);
 
         return .{
-            .header = .{ .header = header },
+            .header = .{ .id = header },
             .statements = statements,
             .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
         };
     }
-    pub fn getHeader(store: *NodeStore, header: HeaderIndex) !Header {
-        const node = store.nodes.get(header.header);
+    pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
+        const node = store.nodes.get(.{ .id = header.id });
         switch (node.tag) {
             .app_header => {
                 const extra_data_start = node.data.lhs;
                 const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
                 const data = store.extra_data.items[extra_data_start..(extra_data_start + rhs.num_packages + rhs.num_provides + 1)];
                 var position: u32 = 0;
-                const platform = TokenIndex{ .id = @as(u32, @intCast(data[0])) };
+                const platform = TokenIdx{ .id = @as(u32, @intCast(data[0])) };
                 position += 1;
                 std.debug.assert(store.scratch_statements.items.len == 0);
                 const scratch_rf_top = store.scratch_record_fields.items.len;
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (position < (rhs.num_packages + 1)) {
-                    try store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(data[position])) });
-                    try store.scratch_tokens.append(.{ .id = @as(u32, data[position]) });
+                    store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(data[position])) }) catch exit_on_oom();
+                    store.scratch_tokens.append(.{ .id = @as(u32, data[position]) }) catch exit_on_oom();
                     position += 1;
                 }
                 const packages = store.scratch_record_fields.items[scratch_rf_top..];
                 store.scratch_record_fields.shrinkRetainingCapacity(scratch_rf_top);
                 while (position < (rhs.num_provides + rhs.num_packages + 1)) {
-                    try store.scratch_tokens.append(.{ .id = @as(u32, data[position]) });
+                    store.scratch_tokens.append(.{ .id = @as(u32, data[position]) }) catch exit_on_oom();
                     position += 1;
                 }
                 const provides = store.scratch_tokens.items[scratch_tok_top..];
@@ -909,19 +905,19 @@ pub const NodeStore = struct {
         return .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } };
     }
 
-    pub fn getStatement(store: *NodeStore, statement: StatementIndex) !Statement {
-        const node = store.nodes.get(statement.statement);
+    pub fn getStatement(store: *NodeStore, statement: StatementIdx) Statement {
+        const node = store.nodes.get(.{ .id = statement.id });
         switch (node.tag) {
             .decl => {
                 return .{ .decl = .{
-                    .pattern = .{ .pattern = node.data.lhs },
-                    .body = .{ .body = node.data.rhs },
+                    .pattern = .{ .id = node.data.lhs },
+                    .body = .{ .id = node.data.rhs },
                     .region = emptyRegion(),
                 } };
             },
             .expr => {
                 return .{ .expr = .{
-                    .expr = .{ .expr = node.data.lhs },
+                    .expr = .{ .id = node.data.lhs },
                     .region = emptyRegion(),
                 } };
             },
@@ -932,8 +928,8 @@ pub const NodeStore = struct {
                 const optional_fields_len = @as(usize, @intCast(lhs.qualified + lhs.aliased));
                 const num_exposes_len = @as(usize, @intCast(lhs.num_exposes));
                 const extra_data_end = start + optional_fields_len + num_exposes_len;
-                var qualifier_tok: ?TokenIndex = null;
-                var alias_tok: ?TokenIndex = null;
+                var qualifier_tok: ?TokenIdx = null;
+                var alias_tok: ?TokenIdx = null;
                 if (lhs.qualified == 1) {
                     qualifier_tok = .{ .id = @intCast(store.extra_data.items[extra_data_pos]) };
                     extra_data_pos += 1;
@@ -944,7 +940,7 @@ pub const NodeStore = struct {
                 }
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (extra_data_pos < extra_data_end) {
-                    try store.scratch_tokens.append(.{ .id = @intCast(store.extra_data.items[extra_data_pos]) });
+                    store.scratch_tokens.append(.{ .id = @intCast(store.extra_data.items[extra_data_pos]) }) catch exit_on_oom();
                 }
                 const exposes = store.scratch_tokens.items[scratch_tok_top..];
                 store.scratch_tokens.shrinkRetainingCapacity(scratch_tok_top);
@@ -962,8 +958,8 @@ pub const NodeStore = struct {
         }
     }
 
-    pub fn getPattern(store: *NodeStore, pattern: PatternIndex) !Pattern {
-        const node = store.nodes.get(pattern.pattern);
+    pub fn getPattern(store: *NodeStore, pattern: PatternIdx) Pattern {
+        const node = store.nodes.get(.{ .id = pattern.id });
         switch (node.tag) {
             .ident_patt => {
                 return .{ .ident = .{
@@ -977,11 +973,11 @@ pub const NodeStore = struct {
         }
     }
 
-    pub fn getExpr(store: *NodeStore, expr: ExprIndex) !Expr {
-        const node = store.nodes.get(expr.expr);
+    pub fn getExpr(store: *NodeStore, expr: ExprIdx) Expr {
+        const node = store.nodes.get(.{ .id = expr.id });
         switch (node.tag) {
             .ident => {
-                var qualifier: ?TokenIndex = null;
+                var qualifier: ?TokenIdx = null;
                 if (node.data.rhs == 1) {
                     qualifier = .{ .id = node.data.lhs };
                 }
@@ -1002,16 +998,16 @@ pub const NodeStore = struct {
                 const body_len = 1;
                 const args_len = @as(usize, @intCast(node.data.rhs));
                 const extra_data_end = extra_data_pos + args_len + body_len;
-                const body = BodyIndex{
-                    .body = @as(u32, @intCast(store.extra_data.items[extra_data_pos])),
+                const body = BodyIdx{
+                    .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])),
                 };
                 extra_data_pos += 1;
                 while (extra_data_pos < extra_data_end) {
-                    try store.scratch_patterns.append(.{ .pattern = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) });
+                    store.scratch_patterns.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exit_on_oom();
                 }
                 return .{ .lambda = .{
                     .body = body,
-                    .args = try store.scratch_patterns.toOwnedSlice(),
+                    .args = store.scratch_patterns.toOwnedSlice() catch exit_on_oom(),
                     .region = emptyRegion(),
                 } };
             },
@@ -1022,12 +1018,12 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_exprs.items.len;
                 const data = store.extra_data.items[(extra_data_start + 1)..(extra_data_start + extra_data_len)];
                 for (data) |arg| {
-                    try store.scratch_exprs.append(.{ .expr = arg });
+                    store.scratch_exprs.append(.{ .id = arg }) catch exit_on_oom();
                 }
                 const args = store.scratch_exprs.items[scratch_top..];
                 store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
                 return .{ .apply = .{
-                    .@"fn" = .{ .expr = function },
+                    .@"fn" = .{ .id = function },
                     .args = args,
                     .region = emptyRegion(),
                 } };
@@ -1038,15 +1034,15 @@ pub const NodeStore = struct {
         }
     }
 
-    pub fn getBody(store: *NodeStore, body: BodyIndex) !Body {
-        const node = store.nodes.get(body.body);
+    pub fn getBody(store: *NodeStore, body: BodyIdx) Body {
+        const node = store.nodes.get(.{ .id = body.id });
         const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
         const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
-        const whitespace: ?TokenIndex = if (rhs.has_whitespace == 1) .{ .id = store.extra_data.items[node.data.lhs] } else null;
+        const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) .{ .id = store.extra_data.items[node.data.lhs] } else null;
         const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
         const scratch_top = store.scratch_statements.items.len;
         for (statement_data) |i| {
-            try store.scratch_statements.append(.{ .statement = i });
+            store.scratch_statements.append(.{ .id = i }) catch exit_on_oom();
         }
         const statements = store.scratch_statements.items[scratch_top..];
         store.scratch_statements.shrinkRetainingCapacity(scratch_top);
@@ -1062,35 +1058,35 @@ pub const NodeStore = struct {
 
     /// Represents a Roc file.
     pub const File = struct {
-        header: HeaderIndex,
-        statements: []const StatementIndex,
+        header: HeaderIdx,
+        statements: []const StatementIdx,
         region: Region,
     };
 
     /// Represents a Body, or a block of statements.
     pub const Body = struct {
         /// The statements that constitute the block
-        statements: []const StatementIndex,
+        statements: []const StatementIdx,
         /// The token that represents the newline preceeding this block, if any
-        whitespace: ?TokenIndex,
+        whitespace: ?TokenIdx,
     };
 
     /// Represents a module header.
     pub const Header = union(enum) {
         app: struct {
-            provides: []const TokenIndex, // This should probably be a Interned Ident token
-            platform: TokenIndex,
-            platform_name: TokenIndex,
-            packages: []const RecordFieldIndex,
+            provides: []const TokenIdx, // This should probably be a Interned Ident token
+            platform: TokenIdx,
+            platform_name: TokenIdx,
+            packages: []const RecordFieldIdx,
             region: Region,
         },
         module: struct {
-            exposes: []const TokenIndex,
+            exposes: []const TokenIdx,
             region: Region,
         },
         package: struct {
-            provides: []const TokenIndex,
-            packages: []const RecordFieldIndex,
+            provides: []const TokenIdx,
+            packages: []const RecordFieldIdx,
             region: Region,
         },
         platform: struct {
@@ -1108,31 +1104,31 @@ pub const NodeStore = struct {
     /// Represents a statement.  Not all statements are valid in all positions.
     pub const Statement = union(enum) {
         decl: struct {
-            pattern: PatternIndex,
-            body: BodyIndex,
+            pattern: PatternIdx,
+            body: BodyIdx,
             region: Region,
         },
         expr: struct {
-            expr: ExprIndex,
+            expr: ExprIdx,
             region: Region,
         },
         crash: struct {
-            expr: ExprIndex,
+            expr: ExprIdx,
             region: Region,
         },
         expect: struct {
-            body: BodyIndex,
+            body: BodyIdx,
             region: Region,
         },
         @"return": struct {
-            expr: ExprIndex,
+            expr: ExprIdx,
             region: Region,
         },
         import: struct {
-            module_name_tok: TokenIndex,
-            qualifier_tok: ?TokenIndex,
-            alias_tok: ?TokenIndex,
-            exposes: []const TokenIndex,
+            module_name_tok: TokenIdx,
+            qualifier_tok: ?TokenIdx,
+            alias_tok: ?TokenIdx,
+            exposes: []const TokenIdx,
             region: Region,
         },
         type_decl: struct {
@@ -1148,44 +1144,44 @@ pub const NodeStore = struct {
     /// Represents a Pattern used in pattern matching.
     pub const Pattern = union(enum) {
         ident: struct {
-            ident_tok: TokenIndex,
+            ident_tok: TokenIdx,
             region: Region,
         },
         tag: struct {
-            tag_tok: TokenIndex,
+            tag_tok: TokenIdx,
             region: Region,
         },
         number: struct {
-            number_tok: TokenIndex,
+            number_tok: TokenIdx,
             region: Region,
         },
         string: struct {
-            string_tok: TokenIndex,
+            string_tok: TokenIdx,
             region: Region,
         },
         record: struct {
-            fields: []const PatternRecordFieldIndex,
+            fields: []const PatternRecordFieldIdx,
         },
         list: struct {
-            patterns: []const PatternIndex,
+            patterns: []const PatternIdx,
             region: Region,
         },
         list_rest: struct {
             region: Region,
         },
         tuple: struct {
-            patterns: []const PatternIndex,
+            patterns: []const PatternIdx,
             region: Region,
         },
         underscore: struct {
             region: Region,
         },
         alternatives: struct {
-            patterns: []const PatternIndex,
+            patterns: []const PatternIdx,
             region: Region,
         },
         as: struct {
-            pattern: PatternIndex,
+            pattern: PatternIdx,
             region: Region,
         },
     };
@@ -1193,49 +1189,49 @@ pub const NodeStore = struct {
     /// Represents an expression.
     pub const Expr = union(enum) {
         int: struct {
-            token: TokenIndex,
+            token: TokenIdx,
             region: Region,
         },
         float: struct {
-            token: TokenIndex,
+            token: TokenIdx,
             region: Region,
         },
         string: struct {
-            token: TokenIndex,
+            token: TokenIdx,
             region: Region,
         },
         list: struct {
-            items: []const ExprIndex,
+            items: []const ExprIdx,
             region: Region,
         },
         tuple: struct {
-            items: []const ExprIndex,
+            items: []const ExprIdx,
             region: Region,
         },
         record: struct {
-            fields: []const RecordFieldIndex,
+            fields: []const RecordFieldIdx,
         },
         tag: struct {
-            token: TokenIndex,
+            token: TokenIdx,
             region: Region,
         },
         lambda: struct {
-            args: []const PatternIndex,
-            body: BodyIndex,
+            args: []const PatternIdx,
+            body: BodyIdx,
             region: Region,
         },
         apply: struct {
-            args: []const ExprIndex,
-            @"fn": ExprIndex,
+            args: []const ExprIdx,
+            @"fn": ExprIdx,
             region: Region,
         },
         record_updater: struct {
-            token: TokenIndex,
+            token: TokenIdx,
             region: Region,
         },
         field_access: struct {
-            ident_tok: TokenIndex,
-            @"struct": ExprIndex,
+            ident_tok: TokenIdx,
+            @"struct": ExprIdx,
             region: Region,
         },
         bin_op_add: BinOp,
@@ -1250,65 +1246,63 @@ pub const NodeStore = struct {
         unary_neg: Unary,
         unary_not: Unary,
         if_then_else: struct {
-            condition: ExprIndex,
-            then: BodyIndex,
-            @"else": BodyIndex,
-            ifelses: []const IfElseIndex,
+            condition: ExprIdx,
+            then: BodyIdx,
+            @"else": BodyIdx,
+            ifelses: []const IfElseIdx,
             region: Region,
         },
         when: struct {
-            expr: ExprIndex,
-            branches: []const WhenBranchIndex,
+            expr: ExprIdx,
+            branches: []const WhenBranchIdx,
             region: Region,
         },
         ident: struct {
-            token: TokenIndex,
-            qualifier: ?TokenIndex,
+            token: TokenIdx,
+            qualifier: ?TokenIdx,
             region: Region,
         },
         dbg: struct {
-            expr: ExprIndex,
+            expr: ExprIdx,
             region: Region,
         },
         record_builder: struct {
-            mapper: ExprIndex,
-            fields: RecordFieldIndex,
+            mapper: ExprIdx,
+            fields: RecordFieldIdx,
         },
     };
 
     pub const PatternRecordField = struct {
-        name: TokenIndex,
-        value: ?PatternIndex,
+        name: TokenIdx,
+        value: ?PatternIdx,
         optional: bool,
     };
     pub const RecordField = struct {
-        name: TokenIndex,
-        value: ?ExprIndex,
+        name: TokenIdx,
+        value: ?ExprIdx,
         optional: bool,
     };
 
     pub const IfElse = struct {
-        condition: ExprIndex,
-        body: BodyIndex,
+        condition: ExprIdx,
+        body: BodyIdx,
         region: Region,
     };
     pub const WhenBranch = struct {
-        pattern: PatternIndex,
+        pattern: PatternIdx,
         region: Region,
     };
 
     pub const BinOp = struct {
-        left: ExprIndex,
-        right: ExprIndex,
+        left: ExprIdx,
+        right: ExprIdx,
         region: Region,
     };
     pub const Unary = struct {
-        expr: ExprIndex,
+        expr: ExprIdx,
         region: Region,
     };
 };
-
-pub const NodeList = std.MultiArrayList(Node);
 
 pub const ImportLhs = packed struct { aliased: u1, qualified: u1, num_exposes: u30 };
 pub const BodyRhs = packed struct { has_whitespace: u1, num_statements: u31 };
@@ -1327,4 +1321,6 @@ test {
 
 const std = @import("std");
 const TokenizedBuffer = @import("tokenize.zig").TokenizedBuffer;
-const TokenIndex = @import("tokenize.zig").Token.List.Idx;
+const TokenIdx = @import("tokenize.zig").Token.List.Idx;
+const collections = @import("../../collections.zig");
+const exit_on_oom = @import("../../collections/exit_on_oom.zig").exit_on_oom;

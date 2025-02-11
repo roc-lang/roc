@@ -6,27 +6,29 @@ const NodeList = IR.NodeList;
 const tokenize = @import("tokenize.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
-const TokenIndex = Token.List.Idx;
+const TokenIdx = Token.List.Idx;
+
+const exit_on_oom = @import("../../collections/exit_on_oom.zig").exit_on_oom;
 
 pub const Parser = @This();
 
 allocator: std.mem.Allocator,
-pos: TokenIndex,
+pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: IR.NodeStore,
-scratch_nodes: std.ArrayList(IR.Node.Index),
+scratch_nodes: std.ArrayList(IR.Node.Idx),
 diagnostics: std.ArrayList(IR.Diagnostic),
 
-pub fn init(gpa: std.mem.Allocator, tokens: TokenizedBuffer) !Parser {
+pub fn init(gpa: std.mem.Allocator, tokens: TokenizedBuffer) Parser {
     const estimated_node_count = (tokens.tokens.items.len + 2) / 2;
-    const store = try IR.NodeStore.initWithCapacity(gpa, estimated_node_count);
+    const store = IR.NodeStore.initWithCapacity(gpa, estimated_node_count);
 
     return Parser{
         .allocator = gpa,
         .pos = .{ .id = 0 },
         .tok_buf = tokens,
         .store = store,
-        .scratch_nodes = std.ArrayList(IR.Node.Index).init(gpa),
+        .scratch_nodes = std.ArrayList(IR.Node.Idx).init(gpa),
         .diagnostics = std.ArrayList(IR.Diagnostic).init(gpa),
     };
 }
@@ -36,22 +38,16 @@ pub fn deinit(parser: *Parser) void {
     parser.diagnostics.deinit();
 }
 
-fn test_parser(source: []const u8, run: fn (parser: Parser) std.mem.AllocatorError!void) !void {
+const TestError = error{TestError};
+fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
     const gc = try @import("GenCatData").GenCatData.init(std.testing.allocator);
     defer gc.deinit();
     const messages = [128]tokenize.Diagnostic;
-    const tokenizer = try tokenize.Tokenizer.init(source, messages[0..], gc, std.testing.allocator);
-    try tokenizer.tokenize();
-    const tok_result = try tokenizer.finalize_and_deinit();
+    const tokenizer = tokenize.Tokenizer.init(source, messages[0..], gc, std.testing.allocator);
+    tokenizer.tokenize();
+    const tok_result = tokenizer.finalize_and_deinit();
     defer tok_result.tokens.deinit();
-    const parser = Parser{
-        .allocator = std.testing.allocator,
-        .pos = .{ .id = 0 },
-        .tok_buf = tok_result.tokens,
-        .store = IR.NodeStore.initWithCapacity(std.testing.allocator, source.len),
-        .scratch_nodes = std.ArrayList(IR.Node.Index).init(std.testing.allocator),
-        .diagnostics = std.ArrayList(IR.Diagnostic).init(std.testing.allocator),
-    };
+    const parser = Parser.init(std.testing.allocaor, tok_result.tokens);
     defer parser.store.deinit();
     defer parser.scratch_nodes.deinit();
     defer parser.diagnostics.deinit();
@@ -102,15 +98,15 @@ pub fn peekNewline(self: *Parser) ?u16 {
     return @intCast(indent);
 }
 
-pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
+pub fn parseFile(self: *Parser) void {
     self.store.emptyScratch();
-    _ = try self.store.addFile(.{
-        .header = .{ .header = 0 },
-        .statements = &[0]IR.NodeStore.StatementIndex{},
+    _ = self.store.addFile(.{
+        .header = .{ .id = 0 },
+        .statements = &[0]IR.NodeStore.StatementIdx{},
         .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
     });
 
-    const header = try self.parseHeader();
+    const header = self.parseHeader();
 
     while (self.peek() != .EndOfFile) {
         if (self.consumeNewline()) |indent| {
@@ -120,12 +116,12 @@ pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
             break;
         }
         const scratch_top = self.store.scratch_statements.items.len;
-        if (try self.parseStmt(0)) |idx| {
+        if (self.parseStmt(0)) |idx| {
             if (self.store.scratch_statements.items.len > scratch_top) {
                 self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
             }
             // ddd
-            try self.store.scratch_statements.append(idx);
+            self.store.scratch_statements.append(idx) catch exit_on_oom();
         } else {
             if (self.store.scratch_statements.items.len > scratch_top) {
                 self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
@@ -136,14 +132,14 @@ pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
 
     std.debug.assert(self.store.scratch_statements.items.len > 0);
 
-    _ = try self.store.addFile(.{
+    _ = self.store.addFile(.{
         .header = header,
         .statements = self.store.scratch_statements.items[0..],
         .region = .{ .start = .{ .id = 0 }, .end = .{ .id = @as(u32, @intCast(self.tok_buf.tokens.len() - 1)) } },
     });
 }
 
-fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser: fn () std.mem.Allocator.Error!T) !void {
+fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser: fn (*Parser) T) void {
     _ = self;
     _ = end_token;
     _ = parser;
@@ -154,14 +150,14 @@ fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser
 /// provides_entry :: [LowerIdent|UpperIdent] Comma Newline*
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
-pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
+pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     if (self.peek() != .KwApp) {
         std.debug.panic("TODO: Support other headers besides app", .{});
     }
-    var provides: []TokenIndex = &.{};
-    var packages: []IR.NodeStore.RecordFieldIndex = &.{};
-    var platform: ?TokenIndex = null;
-    var platform_name: ?TokenIndex = null;
+    var provides: []TokenIdx = &.{};
+    var packages: []IR.NodeStore.RecordFieldIdx = &.{};
+    var platform: ?TokenIdx = null;
+    var platform_name: ?TokenIdx = null;
 
     self.advance();
     const start_indent = 0;
@@ -179,7 +175,7 @@ pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
             std.debug.panic("TODO: Handler header bad provides contents: {s}", .{@tagName(self.peek())});
         }
 
-        try self.store.scratch_tokens.append(self.pos);
+        self.store.scratch_tokens.append(self.pos) catch exit_on_oom();
         self.advance();
 
         if (self.peek() != .Comma) {
@@ -234,15 +230,15 @@ pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
             if (self.peek() != .String) {
                 std.debug.panic("TODO: Handle bad package URI in app header: {s}", .{@tagName(self.peek())});
             }
-            const value = try self.store.addExpr(.{ .string = .{
+            const value = self.store.addExpr(.{ .string = .{
                 .token = self.pos,
                 .region = .{ .start = self.pos, .end = self.pos },
             } });
-            try self.store.scratch_record_fields.append(try self.store.addRecordField(.{
+            self.store.scratch_record_fields.append(self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
                 .optional = false,
-            }));
+            })) catch exit_on_oom();
         }
         self.advance();
         if (self.peek() != .Comma) {
@@ -274,25 +270,25 @@ pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
                     .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
                 },
             };
-            const idx = try self.store.addHeader(header);
+            const idx = self.store.addHeader(header);
             return idx;
         }
     }
     std.debug.panic("TODO: Handle header with no platform: {s}", .{@tagName(self.peek())});
 }
 
-pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.NodeStore.StatementIndex {
+pub fn parseStmt(self: *Parser, base_indent: u16) ?IR.NodeStore.StatementIdx {
     switch (self.peek()) {
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {
                 self.advance();
-                if (try self.finishParseAssign(base_indent)) |idx| {
-                    const patt_idx = try self.store.addPattern(.{ .ident = .{
+                if (self.finishParseAssign(base_indent)) |idx| {
+                    const patt_idx = self.store.addPattern(.{ .ident = .{
                         .ident_tok = start,
                         .region = .{ .start = start, .end = start },
                     } });
-                    const statement_idx = try self.store.addStatement(.{ .decl = .{
+                    const statement_idx = self.store.addStatement(.{ .decl = .{
                         .pattern = patt_idx,
                         .body = idx,
                         .region = .{ .start = start, .end = self.pos },
@@ -302,12 +298,12 @@ pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.No
                 return null;
             } else {
                 // If not a decl
-                const expr = try self.store.addExpr(.{ .ident = .{
+                const expr = self.store.addExpr(.{ .ident = .{
                     .token = start,
                     .qualifier = null,
                     .region = .{ .start = start, .end = start },
                 } });
-                const statement_idx = try self.store.addStatement(.{ .expr = .{
+                const statement_idx = self.store.addStatement(.{ .expr = .{
                     .expr = expr,
                     .region = .{ .start = start, .end = start },
                 } });
@@ -317,17 +313,17 @@ pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.No
         .KwImport => {
             const start = self.pos;
             self.advance();
-            var qualifier: ?TokenIndex = null;
+            var qualifier: ?TokenIdx = null;
             if (self.peek() == .LowerIdent) {
                 qualifier = self.pos;
                 self.advance();
             }
             if (self.peek() == .UpperIdent or (qualifier != null and self.peek() == .NoSpaceDotUpperIdent)) {
-                const statement_idx = try self.store.addStatement(.{ .import = .{
+                const statement_idx = self.store.addStatement(.{ .import = .{
                     .module_name_tok = self.pos,
                     .qualifier_tok = qualifier,
                     .alias_tok = null,
-                    .exposes = &[0]TokenIndex{},
+                    .exposes = &[0]TokenIdx{},
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 self.advance();
@@ -350,8 +346,8 @@ pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.No
         },
         .UpperIdent => {
             const start = self.pos;
-            const expr = try self.parseExpr(base_indent);
-            const statement_idx = try self.store.addStatement(.{ .expr = .{
+            const expr = self.parseExpr(base_indent);
+            const statement_idx = self.store.addStatement(.{ .expr = .{
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -365,9 +361,9 @@ pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.No
     }
 }
 
-pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.NodeStore.ExprIndex {
+pub fn parseExpr(self: *Parser, min_indent: u16) IR.NodeStore.ExprIdx {
     const start = self.pos;
-    var expr: ?IR.NodeStore.ExprIndex = null;
+    var expr: ?IR.NodeStore.ExprIdx = null;
     switch (self.peek()) {
         .UpperIdent => {
             self.advance();
@@ -376,7 +372,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
                 // This is a qualified lowercase ident
                 const id = self.pos;
                 self.advance();
-                const ident = try self.store.addExpr(.{ .ident = .{
+                const ident = self.store.addExpr(.{ .ident = .{
                     .token = id,
                     .qualifier = start,
                     .region = .{ .start = start, .end = id },
@@ -385,7 +381,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
                 expr = ident;
             } else {
                 // This is a Tag
-                const tag = try self.store.addExpr(.{ .tag = .{
+                const tag = self.store.addExpr(.{ .tag = .{
                     .token = start,
                     .region = .{ .start = start, .end = start },
                 } });
@@ -395,7 +391,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
         },
         .LowerIdent => {
             self.advance();
-            const ident = try self.store.addExpr(.{ .ident = .{
+            const ident = self.store.addExpr(.{ .ident = .{
                 .token = start,
                 .qualifier = null,
                 .region = .{ .start = start, .end = start },
@@ -405,14 +401,14 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
         },
         .Int => {
             self.advance();
-            expr = try self.store.addExpr(.{ .int = .{
+            expr = self.store.addExpr(.{ .int = .{
                 .token = start,
                 .region = .{ .start = start, .end = start },
             } });
         },
         .String => {
             self.advance();
-            expr = try self.store.addExpr(.{ .string = .{
+            expr = self.store.addExpr(.{ .string = .{
                 .token = start,
                 .region = .{ .start = start, .end = start },
             } });
@@ -436,12 +432,12 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
                         indent = i;
                     }
                 }
-                const arg_expression = try self.parseExpr(indent);
-                try self.store.scratch_exprs.append(arg_expression);
+                const arg_expression = self.parseExpr(indent);
+                self.store.scratch_exprs.append(arg_expression) catch exit_on_oom();
             }
             self.advance();
             const args = self.store.scratch_exprs.items[scratch_top..];
-            expression = try self.store.addExpr(.{ .apply = .{
+            expression = self.store.addExpr(.{ .apply = .{
                 .args = args,
                 .@"fn" = e,
                 .region = .{ .start = start, .end = self.pos },
@@ -453,7 +449,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
     std.debug.panic("todo: Malformed Expr", .{});
 }
 
-pub fn finishParseAssign(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.NodeStore.BodyIndex {
+pub fn finishParseAssign(self: *Parser, base_indent: u16) ?IR.NodeStore.BodyIdx {
     self.advance();
     if (self.consumeNewline()) |indent| {
         if (indent <= base_indent) {
@@ -464,8 +460,8 @@ pub fn finishParseAssign(self: *Parser, base_indent: u16) std.mem.Allocator.Erro
         defer self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
 
         while (true) {
-            const statement = try self.parseStmt(indent) orelse break;
-            try self.store.scratch_statements.append(statement);
+            const statement = self.parseStmt(indent) orelse break;
+            self.store.scratch_statements.append(statement) catch exit_on_oom();
             if (self.peekNewline()) |i| {
                 if (i <= base_indent) {
                     break;
@@ -478,16 +474,16 @@ pub fn finishParseAssign(self: *Parser, base_indent: u16) std.mem.Allocator.Erro
 
         const statements = self.store.scratch_statements.items[scratch_top..];
 
-        const body = try self.store.addBody(.{ .statements = statements, .whitespace = .{ .id = self.pos.id - 1 } });
+        const body = self.store.addBody(.{ .statements = statements, .whitespace = .{ .id = self.pos.id - 1 } });
         return body;
     } else {
         const start = self.pos;
-        const expr = try self.parseExpr(base_indent);
-        const statement = try self.store.addStatement(.{ .expr = .{
+        const expr = self.parseExpr(base_indent);
+        const statement = self.store.addStatement(.{ .expr = .{
             .expr = expr,
             .region = .{ .start = start, .end = self.pos },
         } });
-        const body = try self.store.addBody(.{ .statements = &.{statement}, .whitespace = null });
+        const body = self.store.addBody(.{ .statements = &.{statement}, .whitespace = null });
         return body;
     }
 }

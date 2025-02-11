@@ -1,4 +1,4 @@
-pub fn exit_on_oom() void {
+pub fn exit_on_oom() noreturn {
     // TOOD:  This should be a real message that is helpful.
     //        I don't know how anything is compiling right
     //        now without this file existing.

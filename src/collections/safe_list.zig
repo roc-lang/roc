@@ -80,6 +80,10 @@ pub fn SafeMultiList(comptime T: type) type {
             };
         }
 
+        pub fn ensureTotalCapacity(self: *SafeMultiList(T), capacity: usize) void {
+            self.items.ensureTotalCapacity(self.allocator, capacity) catch exit_on_oom();
+        }
+
         pub fn deinit(self: *SafeMultiList(T)) void {
             self.items.deinit(self.allocator);
         }
@@ -93,6 +97,10 @@ pub fn SafeMultiList(comptime T: type) type {
             self.items.append(self.allocator, item) catch exit_on_oom();
 
             return Idx{ .id = @as(u32, @intCast(length)) };
+        }
+
+        pub fn set(self: *SafeMultiList(T), idx: Idx, value: T) void {
+            self.items.set(idx.id, value);
         }
 
         pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
