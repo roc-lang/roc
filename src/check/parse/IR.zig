@@ -409,7 +409,7 @@ pub const NodeStore = struct {
         try store.nodes.ensureTotalCapacity(gpa, capacity);
         try store.nodes.append(gpa, .{
             .tag = .root,
-            .main_token = 0,
+            .main_token = TokenIndex{ .id = 0 },
             .data = .{ .lhs = 0, .rhs = 0 },
         });
         try store.extra_data.ensureTotalCapacity(capacity / 2);
@@ -485,7 +485,7 @@ pub const NodeStore = struct {
 
         store.nodes.set(0, .{
             .tag = .root,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = @as(u32, @intCast(start)),
                 .rhs = @as(u32, @intCast(file.statements.len + 1)),
@@ -499,7 +499,7 @@ pub const NodeStore = struct {
         const start = store.extra_data.items.len;
         const len = @as(u31, @intCast(body.statements.len));
         if (body.whitespace) |ws| {
-            try store.extra_data.append(ws);
+            try store.extra_data.append(ws.id);
         }
         for (body.statements) |statement| {
             try store.extra_data.append(statement.statement);
@@ -512,7 +512,7 @@ pub const NodeStore = struct {
         };
         try store.nodes.append(store.gpa, .{
             .tag = .block,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = @as(Node.Index, @intCast(start)),
                 .rhs = @as(Node.Index, @bitCast(rhs)),
@@ -525,7 +525,7 @@ pub const NodeStore = struct {
         const idx = @as(u32, @intCast(store.nodes.len));
         var node = Node{
             .tag = .statement,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = 0,
                 .rhs = 0,
@@ -548,13 +548,13 @@ pub const NodeStore = struct {
                     .num_provides = @as(u22, @intCast(app.provides.len)),
                 }));
                 // node.data.rhs = @as(Node.Index, @intCast((app.provides.len + app.packages.len))) + app.platform;
-                try store.extra_data.append(app.platform);
+                try store.extra_data.append(app.platform.id);
 
                 for (app.packages) |p| {
                     try store.extra_data.append(@as(Node.Index, @intCast(p.id)));
                 }
                 for (app.provides) |p| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(p)));
+                    try store.extra_data.append(@as(Node.Index, @intCast(p.id)));
                 }
             },
             else => {},
@@ -567,7 +567,7 @@ pub const NodeStore = struct {
         const idx = @as(u32, @intCast(store.nodes.len));
         var node = Node{
             .tag = .statement,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = 0,
                 .rhs = 0,
@@ -606,18 +606,18 @@ pub const NodeStore = struct {
                 const extra_data_start = @as(Node.Index, @intCast(store.extra_data.items.len));
                 if (i.qualifier_tok) |tok| {
                     lhs.qualified = 1;
-                    try store.extra_data.append(@as(Node.Index, @intCast(tok)));
+                    try store.extra_data.append(@as(Node.Index, @intCast(tok.id)));
                 }
                 if (i.alias_tok) |tok| {
                     lhs.aliased = 1;
-                    try store.extra_data.append(@as(Node.Index, @intCast(tok)));
+                    try store.extra_data.append(@as(Node.Index, @intCast(tok.id)));
                 }
                 node.data.lhs = @as(Node.Index, @bitCast(lhs));
                 if (node.data.lhs > 0) {
                     node.data.rhs = extra_data_start;
                 }
                 for (i.exposes) |e| {
-                    try store.extra_data.append(@as(Node.Index, @intCast(e)));
+                    try store.extra_data.append(@as(Node.Index, @intCast(e.id)));
                 }
             },
             .type_decl => |_| {},
@@ -631,7 +631,7 @@ pub const NodeStore = struct {
         const idx = @as(u32, @intCast(store.nodes.len));
         var node = Node{
             .tag = .statement,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = 0,
                 .rhs = 0,
@@ -713,7 +713,7 @@ pub const NodeStore = struct {
         const idx = @as(u32, @intCast(store.nodes.len));
         var node = Node{
             .tag = .statement,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = 0,
                 .rhs = 0,
@@ -807,7 +807,7 @@ pub const NodeStore = struct {
                 node.tag = .ident;
                 node.main_token = id.token;
                 if (id.qualifier) |qualifier| {
-                    node.data.lhs = qualifier;
+                    node.data.lhs = qualifier.id;
                     node.data.rhs = 1;
                 }
             },
@@ -822,7 +822,7 @@ pub const NodeStore = struct {
         const idx = @as(u32, @intCast(store.nodes.len));
         var node = Node{
             .tag = .statement,
-            .main_token = 0,
+            .main_token = .{ .id = 0 },
             .data = .{
                 .lhs = 0,
                 .rhs = 0,
@@ -860,7 +860,7 @@ pub const NodeStore = struct {
         return .{
             .header = .{ .header = header },
             .statements = statements,
-            .region = .{ .start = 0, .end = 0 },
+            .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
         };
     }
     pub fn getHeader(store: *NodeStore, header: HeaderIndex) !Header {
@@ -871,20 +871,20 @@ pub const NodeStore = struct {
                 const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
                 const data = store.extra_data.items[extra_data_start..(extra_data_start + rhs.num_packages + rhs.num_provides + 1)];
                 var position: u32 = 0;
-                const platform = @as(TokenIndex, @intCast(data[0]));
+                const platform = TokenIndex{ .id = @as(u32, @intCast(data[0])) };
                 position += 1;
                 std.debug.assert(store.scratch_statements.items.len == 0);
                 const scratch_rf_top = store.scratch_record_fields.items.len;
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (position < (rhs.num_packages + 1)) {
                     try store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(data[position])) });
-                    try store.scratch_tokens.append(@as(TokenIndex, @intCast(data[position])));
+                    try store.scratch_tokens.append(.{ .id = @as(u32, data[position]) });
                     position += 1;
                 }
                 const packages = store.scratch_record_fields.items[scratch_rf_top..];
                 store.scratch_record_fields.shrinkRetainingCapacity(scratch_rf_top);
                 while (position < (rhs.num_provides + rhs.num_packages + 1)) {
-                    try store.scratch_tokens.append(@as(TokenIndex, @intCast(data[position])));
+                    try store.scratch_tokens.append(.{ .id = @as(u32, data[position]) });
                     position += 1;
                 }
                 const provides = store.scratch_tokens.items[scratch_tok_top..];
@@ -895,7 +895,7 @@ pub const NodeStore = struct {
                         .platform_name = node.main_token,
                         .packages = packages,
                         .provides = provides,
-                        .region = .{ .start = 0, .end = 0 },
+                        .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
                     },
                 };
             },
@@ -905,6 +905,10 @@ pub const NodeStore = struct {
         }
     }
 
+    pub fn emptyRegion() Region {
+        return .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } };
+    }
+
     pub fn getStatement(store: *NodeStore, statement: StatementIndex) !Statement {
         const node = store.nodes.get(statement.statement);
         switch (node.tag) {
@@ -912,13 +916,13 @@ pub const NodeStore = struct {
                 return .{ .decl = .{
                     .pattern = .{ .pattern = node.data.lhs },
                     .body = .{ .body = node.data.rhs },
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             .expr => {
                 return .{ .expr = .{
                     .expr = .{ .expr = node.data.lhs },
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             .import => {
@@ -931,16 +935,16 @@ pub const NodeStore = struct {
                 var qualifier_tok: ?TokenIndex = null;
                 var alias_tok: ?TokenIndex = null;
                 if (lhs.qualified == 1) {
-                    qualifier_tok = @as(TokenIndex, @intCast(store.extra_data.items[extra_data_pos]));
+                    qualifier_tok = .{ .id = @intCast(store.extra_data.items[extra_data_pos]) };
                     extra_data_pos += 1;
                 }
                 if (lhs.aliased == 1) {
-                    alias_tok = @as(TokenIndex, @intCast(store.extra_data.items[extra_data_pos]));
+                    alias_tok = .{ .id = @intCast(store.extra_data.items[extra_data_pos]) };
                     extra_data_pos += 1;
                 }
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (extra_data_pos < extra_data_end) {
-                    try store.scratch_tokens.append(@as(TokenIndex, @intCast(store.extra_data.items[extra_data_pos])));
+                    try store.scratch_tokens.append(.{ .id = @intCast(store.extra_data.items[extra_data_pos]) });
                 }
                 const exposes = store.scratch_tokens.items[scratch_tok_top..];
                 store.scratch_tokens.shrinkRetainingCapacity(scratch_tok_top);
@@ -949,7 +953,7 @@ pub const NodeStore = struct {
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
                     .exposes = exposes,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             else => {
@@ -964,7 +968,7 @@ pub const NodeStore = struct {
             .ident_patt => {
                 return .{ .ident = .{
                     .ident_tok = node.main_token,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             else => {
@@ -979,18 +983,18 @@ pub const NodeStore = struct {
             .ident => {
                 var qualifier: ?TokenIndex = null;
                 if (node.data.rhs == 1) {
-                    qualifier = node.data.lhs;
+                    qualifier = .{ .id = node.data.lhs };
                 }
                 return .{ .ident = .{
                     .token = node.main_token,
                     .qualifier = qualifier,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             .string => {
                 return .{ .string = .{
                     .token = node.main_token,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             .lambda => {
@@ -1008,7 +1012,7 @@ pub const NodeStore = struct {
                 return .{ .lambda = .{
                     .body = body,
                     .args = try store.scratch_patterns.toOwnedSlice(),
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             .apply => {
@@ -1025,7 +1029,7 @@ pub const NodeStore = struct {
                 return .{ .apply = .{
                     .@"fn" = .{ .expr = function },
                     .args = args,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = emptyRegion(),
                 } };
             },
             else => {
@@ -1038,7 +1042,7 @@ pub const NodeStore = struct {
         const node = store.nodes.get(body.body);
         const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
         const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
-        const whitespace: ?TokenIndex = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
+        const whitespace: ?TokenIndex = if (rhs.has_whitespace == 1) .{ .id = store.extra_data.items[node.data.lhs] } else null;
         const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
         const scratch_top = store.scratch_statements.items.len;
         for (statement_data) |i| {
@@ -1322,5 +1326,5 @@ test {
 }
 
 const std = @import("std");
-const TokenIndex = @import("tokenize.zig").TokenIndex;
 const TokenizedBuffer = @import("tokenize.zig").TokenizedBuffer;
+const TokenIndex = @import("tokenize.zig").Token.List.Idx;

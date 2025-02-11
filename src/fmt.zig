@@ -1,9 +1,9 @@
 const std = @import("std");
-const IR = @import("check/parse/ir.zig");
+const IR = @import("check/parse/IR.zig");
 const Node = IR.Node;
 const tokenizer = @import("check/parse/tokenize.zig");
 const TokenizedBuffer = tokenizer.TokenizedBuffer;
-const TokenIndex = tokenizer.TokenIndex;
+const TokenIndex = tokenizer.Token.List.Idx;
 
 const NodeStore = IR.NodeStore;
 const ExprIndex = NodeStore.ExprIndex;
@@ -189,7 +189,6 @@ fn newline(fmt: *Formatter) !void {
 const indent = "    ";
 
 fn pushIndent(fmt: *Formatter) !void {
-    // std.debug.print("push_indent {d}\n", .{fmt.curr_indent});
     if (fmt.curr_indent == 0) {
         return;
     }

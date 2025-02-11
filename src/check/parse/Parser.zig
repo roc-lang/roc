@@ -1,38 +1,38 @@
 const std = @import("std");
 
-const IR = @import("ir.zig");
+const IR = @import("IR.zig");
 const NodeList = IR.NodeList;
 
 const tokenize = @import("tokenize.zig");
-const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
+const TokenIndex = Token.List.Idx;
 
 pub const Parser = @This();
 
 allocator: std.mem.Allocator,
 pos: TokenIndex,
-tokens: TokenizedBuffer,
+tok_buf: TokenizedBuffer,
 store: IR.NodeStore,
-scratch: std.ArrayList(IR.Node.Index),
+scratch_nodes: std.ArrayList(IR.Node.Index),
 diagnostics: std.ArrayList(IR.Diagnostic),
 
 pub fn init(gpa: std.mem.Allocator, tokens: TokenizedBuffer) !Parser {
-    const estimated_node_count = (tokens.tokens.len + 2) / 2;
+    const estimated_node_count = (tokens.tokens.items.len + 2) / 2;
     const store = try IR.NodeStore.initWithCapacity(gpa, estimated_node_count);
 
     return Parser{
         .allocator = gpa,
-        .pos = 0,
-        .tokens = tokens,
+        .pos = .{ .id = 0 },
+        .tok_buf = tokens,
         .store = store,
-        .scratch = std.ArrayList(IR.Node.Index).init(gpa),
+        .scratch_nodes = std.ArrayList(IR.Node.Index).init(gpa),
         .diagnostics = std.ArrayList(IR.Diagnostic).init(gpa),
     };
 }
 
 pub fn deinit(parser: *Parser) void {
-    parser.scratch.deinit();
+    parser.scratch_nodes.deinit();
     parser.diagnostics.deinit();
 }
 
@@ -46,38 +46,38 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) std.mem.AllocatorErr
     defer tok_result.tokens.deinit();
     const parser = Parser{
         .allocator = std.testing.allocator,
-        .pos = 0,
-        .tokens = tok_result.tokens,
+        .pos = .{ .id = 0 },
+        .tok_buf = tok_result.tokens,
         .store = IR.NodeStore.initWithCapacity(std.testing.allocator, source.len),
-        .scratch = std.ArrayList(IR.Node.Index).init(std.testing.allocator),
+        .scratch_nodes = std.ArrayList(IR.Node.Index).init(std.testing.allocator),
         .diagnostics = std.ArrayList(IR.Diagnostic).init(std.testing.allocator),
     };
     defer parser.store.deinit();
-    defer parser.scratch.deinit();
+    defer parser.scratch_nodes.deinit();
     defer parser.diagnostics.deinit();
     try run(parser);
 }
 
 pub fn advance(self: *Parser) void {
-    if (self.pos >= self.tokens.tokens.len) {
+    if (self.pos.id >= self.tok_buf.tokens.len()) {
         return;
     }
-    self.pos += 1;
+    self.pos = .{ .id = self.pos.id + 1 };
 }
 
 pub fn peek(self: *Parser) Token.Tag {
-    if (self.pos >= self.tokens.tokens.len) {
+    if (self.pos.id >= self.tok_buf.tokens.len()) {
         return .EndOfFile;
     }
-    return self.tokens.tokens.items(.tag)[self.pos];
+    return self.tok_buf.tokens.items.items(.tag)[self.pos.id];
 }
 
 pub fn peekNext(self: Parser) Token.Tag {
-    const next = self.pos + 1;
-    if (next >= self.tokens.tokens.len) {
+    const next = .{ .id = self.pos.id + 1 };
+    if (next.id >= self.tok_buf.tokens.len()) {
         return .EndOfFile;
     }
-    return self.tokens.tokens.items(.tag)[next];
+    return self.tok_buf.tokens.items.items(.tag)[next.id];
 }
 
 // If the next token is a newline, consume it
@@ -87,7 +87,7 @@ pub fn consumeNewline(self: *Parser) ?u16 {
         return null;
     }
     var indent: u32 = 0;
-    const t = self.tokens.tokens.get(self.pos);
+    const t = self.tok_buf.tokens.get(self.pos);
     indent = t.offset;
     self.advance();
     return @intCast(indent);
@@ -95,13 +95,10 @@ pub fn consumeNewline(self: *Parser) ?u16 {
 
 // Returns the indent level of the next line if the next token is a newline, otherwise null
 pub fn peekNewline(self: *Parser) ?u16 {
-    if (self.peek() == .Comment) {
-        self.advance();
-    }
     if (self.peek() != .Newline) {
         return null;
     }
-    const indent = self.tokens.tokens.items(.offset)[self.pos];
+    const indent = self.tok_buf.tokens.items.items(.offset)[self.pos.id];
     return @intCast(indent);
 }
 
@@ -110,7 +107,7 @@ pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
     _ = try self.store.addFile(.{
         .header = .{ .header = 0 },
         .statements = &[0]IR.NodeStore.StatementIndex{},
-        .region = .{ .start = 0, .end = 0 },
+        .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
     });
 
     const header = try self.parseHeader();
@@ -142,9 +139,16 @@ pub fn parseFile(self: *Parser) std.mem.Allocator.Error!void {
     _ = try self.store.addFile(.{
         .header = header,
         .statements = self.store.scratch_statements.items[0..],
-        .region = .{ .start = 0, .end = @as(u32, @intCast(self.tokens.tokens.len - 1)) },
+        .region = .{ .start = .{ .id = 0 }, .end = .{ .id = @as(u32, @intCast(self.tok_buf.tokens.len() - 1)) } },
     });
 }
+
+fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser: fn () std.mem.Allocator.Error!T) !void {
+    _ = self;
+    _ = end_token;
+    _ = parser;
+}
+
 /// Parses a module header using the following grammar:
 ///
 /// provides_entry :: [LowerIdent|UpperIdent] Comma Newline*
@@ -169,18 +173,18 @@ pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
     }
     self.advance();
     indent = self.consumeNewline() orelse indent;
-    const scratch_top = self.scratch.items.len;
+    const scratch_top = self.store.scratch_tokens.items.len;
     while (self.peek() != .CloseSquare) {
         if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
             std.debug.panic("TODO: Handler header bad provides contents: {s}", .{@tagName(self.peek())});
         }
 
-        try self.scratch.append(self.pos);
+        try self.store.scratch_tokens.append(self.pos);
         self.advance();
 
         if (self.peek() != .Comma) {
-            provides = self.scratch.items[scratch_top..];
-            self.scratch.shrinkRetainingCapacity(scratch_top);
+            provides = self.store.scratch_tokens.items[scratch_top..];
+            self.store.scratch_tokens.shrinkRetainingCapacity(scratch_top);
             break;
         } else if (self.consumeNewline()) |i| {
             if (i <= indent) {
@@ -267,7 +271,7 @@ pub fn parseHeader(self: *Parser) !IR.NodeStore.HeaderIndex {
                     .platform_name = pn,
                     .provides = provides,
                     .packages = packages,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = .{ .start = .{ .id = 0 }, .end = .{ .id = 0 } },
                 },
             };
             const idx = try self.store.addHeader(header);
@@ -354,7 +358,7 @@ pub fn parseStmt(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.No
             return statement_idx;
         },
         else => {
-            std.debug.print("Tokens:\n{any}", .{self.tokens.tokens.items(.tag)});
+            std.debug.print("Tokens:\n{any}", .{self.tok_buf.tokens.items.items(.tag)});
             std.debug.panic("todo: emit error, unexpected token {s}", .{@tagName(self.peek())});
             return null;
         },
@@ -402,8 +406,8 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
         .Int => {
             self.advance();
             expr = try self.store.addExpr(.{ .int = .{
-                .token = self.pos - 1,
-                .region = .{ .start = self.pos - 1, .end = self.pos - 1 },
+                .token = start,
+                .region = .{ .start = start, .end = start },
             } });
         },
         .String => {
@@ -414,7 +418,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
             } });
         },
         else => {
-            std.debug.print("Tokens:\n{any}", .{self.tokens.tokens.items(.tag)});
+            std.debug.print("Tokens:\n{any}", .{self.tok_buf.tokens.items.items(.tag)});
             std.debug.panic("todo: emit error - {s}", .{@tagName(self.peek())});
         },
     }
@@ -450,7 +454,6 @@ pub fn parseExpr(self: *Parser, min_indent: u16) std.mem.Allocator.Error!IR.Node
 }
 
 pub fn finishParseAssign(self: *Parser, base_indent: u16) std.mem.Allocator.Error!?IR.NodeStore.BodyIndex {
-    std.debug.assert(self.peek() == .OpAssign);
     self.advance();
     if (self.consumeNewline()) |indent| {
         if (indent <= base_indent) {
@@ -475,7 +478,7 @@ pub fn finishParseAssign(self: *Parser, base_indent: u16) std.mem.Allocator.Erro
 
         const statements = self.store.scratch_statements.items[scratch_top..];
 
-        const body = try self.store.addBody(.{ .statements = statements, .whitespace = self.pos - 1 });
+        const body = try self.store.addBody(.{ .statements = statements, .whitespace = .{ .id = self.pos.id - 1 } });
         return body;
     } else {
         const start = self.pos;

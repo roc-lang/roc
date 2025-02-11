@@ -3,11 +3,11 @@ const std = @import("std");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-const IR = @import("parse/ir.zig");
+pub const IR = @import("parse/IR.zig");
 const NodeList = IR.NodeList;
 const Diagnostic = IR.Diagnostic;
 const GenCatData = @import("GenCatData");
-const Parser = @import("parse/parser.zig");
+const Parser = @import("parse/Parser.zig");
 
 source: []const u8,
 tokens: TokenizedBuffer,
@@ -21,8 +21,8 @@ pub fn parse(allocator: std.mem.Allocator, source: []const u8) !IR {
     const msg_slice = messages[0..];
     var gc = try GenCatData.init(allocator);
     defer gc.deinit();
-    var tokenizer = try tokenize.Tokenizer.init(source, msg_slice, &gc, allocator);
-    try tokenizer.tokenize();
+    var tokenizer = tokenize.Tokenizer.init(source, msg_slice, &gc, allocator);
+    tokenizer.tokenize();
     const result = tokenizer.finish_and_deinit();
 
     if (result.messages.len > 0) {
