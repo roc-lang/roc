@@ -93,8 +93,10 @@
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
-          zls # zig language server
           # cargo-udeps # to find unused dependencies
+           
+          zls # zig language server
+          watchexec
         ]);
 
         aliases = ''

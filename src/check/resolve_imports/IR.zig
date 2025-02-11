@@ -65,10 +65,10 @@ pub const DestructureDef = union(enum) {
 
 pub const DeclarationTag = union(enum) {
     Value,
-    Function: collections.SafeList(FunctionDef).Id,
-    Recursive: collections.SafeList(FunctionDef).Id,
-    TailRecursive: collections.SafeList(FunctionDef).Id,
-    Destructure: collections.SafeList(DestructureDef).Id,
+    Function: collections.SafeList(FunctionDef).Idx,
+    Recursive: collections.SafeList(FunctionDef).Idx,
+    TailRecursive: collections.SafeList(FunctionDef).Idx,
+    Destructure: collections.SafeList(DestructureDef).Idx,
     MutualRecursion: struct {
         length: u16,
         cycle_mark: IllegalCycleMark,

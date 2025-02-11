@@ -158,14 +158,14 @@ pub const Expr = union(enum) {
     },
 
     pub const List = collections.SafeList(@This());
-    pub const Id = List.Id;
+    pub const Idx = List.Idx;
     pub const Slice = List.Slice;
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
 pub const ListLiteralElem = union(enum) {
     StringLiteralId: []const u8,
-    Number: base.NumberLiteral,
+    Number: base.Literal.Num,
     Ident: Ident.Idx,
 
     pub const List = collections.SafeList(@This());

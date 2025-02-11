@@ -5,7 +5,7 @@ const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
-const TypeVar = types.Type.Var;
+const TypeVar = types.TypeVar;
 const TagName = collections.TagName;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
@@ -66,7 +66,7 @@ pub const Alias = struct {
     /// Extension variables that should be inferred in output positions, and closed in input
     /// positions.
     infer_ext_in_output_variables: collections.SafeList(TypeVar).Slice,
-    recursion_variables: std.AutoHashMap(TypeVar, .{}),
+    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
 
     //     pub typ: Type,
     kind: Kind,
@@ -145,7 +145,7 @@ pub const Expr = union(enum) {
         type_var: TypeVar,
     },
 
-    When: When.Id,
+    When: When.Idx,
     If: struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
@@ -238,10 +238,14 @@ pub const Def = struct {
         /// Ignored result, must be effectful
         Ignored: TypeVar,
     };
+
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
 };
 
 pub const Annotation = struct {
-    signature: types.Type,
+    signature: types.TypeVar,
     // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
     region: Region,
@@ -331,7 +335,7 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    Identifier: base.Module.Ident,
+    Identifier: base.Module.Idx,
     As: struct {
         pattern: Pattern.Idx,
         region: Region,
