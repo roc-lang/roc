@@ -27,8 +27,12 @@ pub fn for_text(text: []u8) Ident {
     // TODO: parse idents and their attributes/problems
     return Ident{
         .raw_text = text,
-        .attributes = Attributes{},
-        .problems = Problems{},
+        .attributes = Attributes{
+            .effectful = false,
+            .ignored = false,
+            .reassignable = false,
+        },
+        .problems = Problems{ .subsequent_underscores = false },
     };
 }
 
@@ -53,7 +57,7 @@ pub const Problems = packed struct {
     // TODO: add more problem cases
     subsequent_underscores: bool,
 
-    pub fn has_problems(self: *Problems) bool {
+    pub fn has_problems(self: Problems) bool {
         return self.subsequent_underscores;
     }
 };
@@ -85,37 +89,37 @@ pub const Store = struct {
         self.exposing_modules.deinit();
     }
 
-    pub fn insert(self: *Store, ident: Ident, region: base.Region, problems: *Problem.List) Idx {
+    pub fn insert(self: *Store, ident: Ident, region: base.Region, problems: *Problem.List) !Idx {
         if (ident.problems.has_problems()) {
-            problems.append(Problem.Parse.make(.{.IdentIssue{
+            _ = problems.append(Problem.Parse.make(Problem.Parse{ .IdentIssue = .{
                 .problems = ident.problems,
                 .region = region,
-            }}));
+            } }));
         }
 
-        const idx = self.interner.insert(ident.raw_text);
+        const idx = try self.interner.insert(ident.raw_text);
         self.regions.append(region) catch exitOnOom();
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
         return Idx{
             .attributes = ident.attributes,
-            .id = @as(u29, @intFromEnum(idx)),
+            .id = @as(u29, @intCast(@intFromEnum(idx))),
         };
     }
 
-    pub fn genUnique(self: *Store, region: base.Region) Idx {
+    pub fn genUnique(self: *Store, region: base.Region) !Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
         // Manually render the text into a buffer to avoid allocating
         // a string as the string interner will copy the text anyway.
 
-        var digit_index = 9;
+        var digit_index: u8 = 9;
         // The max u32 value is 4294967295 which is 10 digits
-        var str_buffer = "0000000000";
+        var str_buffer = [_]u8{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 };
         while (id > 0) {
             const digit = id % 10;
-            str_buffer[digit_index] = @as(u8, digit) + '0';
+            str_buffer[digit_index] = @as(u8, @intCast(digit)) + '0';
 
             id = (id - digit) / 10;
             digit_index -= 1;
@@ -124,7 +128,7 @@ pub const Store = struct {
         // const name_length = if (id < 10) 1 else ;
         const name = str_buffer[digit_index..];
 
-        const idx = self.interner.insert(name);
+        const idx = try self.interner.insert(name);
         self.regions.append(region) catch exitOnOom();
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
@@ -134,7 +138,7 @@ pub const Store = struct {
                 .ignored = false,
                 .reassignable = false,
             },
-            .id = @as(u29, @intFromEnum(idx)),
+            .id = @as(u29, @intCast(@intFromEnum(idx))),
         };
     }
 
@@ -143,24 +147,25 @@ pub const Store = struct {
         first_idx: Idx,
         second_idx: Idx,
     ) bool {
-        return self.interner.identsHaveSameText(first_idx, second_idx);
+        return self.interner.identsHaveSameText(@enumFromInt(@as(u32, first_idx.id)), @enumFromInt(@as(u32, second_idx.id)));
     }
 
-    pub fn lookup(self: *Store, string: []u8) std.ArrayList(Idx).Slice {
+    // TODO: Should this return Idx instead of collections.interner.IdentName.Idx
+    pub fn lookup(self: *Store, string: []u8) []collections.IdentName.Idx {
         return self.interner.lookup(string);
     }
 
     pub fn getText(self: *Store, idx: Idx) []u8 {
-        const string_index = self.outer_indices.items[@as(usize, @intFromEnum(idx))];
-        return self.strings.items[@as(usize, string_index)];
+        const string_index = self.interner.outer_indices.items[@as(usize, idx.id)];
+        return self.interner.strings.items[@as(usize, string_index)];
     }
 
     pub fn getRegion(self: *Store, idx: Idx) base.Region {
-        return self.regions.items[@as(usize, @intFromEnum(idx))];
+        return self.regions.items[@as(usize, idx.id)];
     }
 
     pub fn getExposingModule(self: *Store, idx: Idx) base.Module.Idx {
-        return self.exposing_modules.items[@as(usize, @intFromEnum(idx))];
+        return self.exposing_modules.items[@as(usize, idx.id)];
     }
 
     /// Set the module that exposes this ident.
@@ -168,6 +173,6 @@ pub const Store = struct {
     /// NOTE: This should be called as soon as an ident is encountered during
     /// canonicalization to make sure that we don't
     pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: base.Module.Idx) void {
-        self.exposing_modules.items[@as(usize, @intFromEnum(idx))] = exposing_module;
+        self.exposing_modules.items[@as(usize, idx.id)] = exposing_module;
     }
 };

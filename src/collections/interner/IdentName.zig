@@ -55,21 +55,21 @@ pub const Interner = struct {
     }
 
     /// Add an ident name to this interner, returning a unique, serial index.
-    pub fn insert(self: *Interner, string: []u8) Idx {
+    pub fn insert(self: *Interner, string: []u8) !Idx {
         const hash = fnvStringHash(string);
 
         const string_indices = self.stringIndicesForHash(hash);
         for (string_indices.items) |string_index| {
             const interned = self.strings.items[string_index];
-            if (string == interned) {
+            if (std.mem.eql(u8, string, interned)) {
                 return self.addOuterIdForStringIndex(string_index);
             }
         }
 
-        const copied_string = self.strings.allocator.alloc(u8, string.len);
+        const copied_string = try self.strings.allocator.alloc(u8, string.len);
         std.mem.copyForwards(u8, copied_string, string);
 
-        const strings_len = @as(u32, self.strings.items.len);
+        const strings_len = @as(u32, @intCast(self.strings.items.len));
         self.strings.append(copied_string) catch exitOnOom();
 
         return self.addOuterIdForStringIndex(strings_len);
@@ -78,19 +78,19 @@ pub const Interner = struct {
     fn stringIndicesForHash(self: *Interner, hash: u32) *std.ArrayList(u32) {
         const res = self.string_indices_per_hash.getOrPut(hash) catch exitOnOom();
         if (!res.found_existing) {
-            res.value_ptr = std.ArrayList(u32).init(self.allocator);
+            res.value_ptr.* = std.ArrayList(u32).init(self.allocator);
         }
 
-        return res.value_ptr.*;
+        return res.value_ptr;
     }
 
     fn addOuterIdForStringIndex(self: *Interner, string_index: u32) Idx {
-        const len: Idx = @enumFromInt(@as(u32, self.outer_indices.items.len));
+        const len: Idx = @enumFromInt(@as(u32, @intCast(self.outer_indices.items.len)));
         self.outer_indices.append(string_index) catch exitOnOom();
 
         const res = self.outer_ids_per_string_index.getOrPut(string_index) catch exitOnOom();
         if (!res.found_existing) {
-            res.value_ptr = std.ArrayList(u32).init(self.allocator);
+            res.value_ptr.* = std.ArrayList(Idx).init(self.allocator);
         }
 
         res.value_ptr.append(len) catch exitOnOom();
@@ -115,9 +115,9 @@ pub const Interner = struct {
         const hash = fnvStringHash(string);
         const indices_for_hash = self.string_indices_per_hash.get(hash) orelse return &.{};
 
-        for (indices_for_hash) |string_index| {
-            if (self.strings.items[string_index] == string) {
-                return self.outer_ids_per_string_index.get(string_index).?;
+        for (indices_for_hash.items) |string_index| {
+            if (std.mem.eql(u8, self.strings.items[string_index], string)) {
+                return self.outer_ids_per_string_index.get(string_index).?.items;
             }
         }
 

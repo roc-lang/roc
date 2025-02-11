@@ -30,6 +30,7 @@ problems: problem.Problem.List,
 pub fn init(allocator: std.mem.Allocator) ModuleEnv {
     return ModuleEnv{
         .modules = base.Module.Store.init(allocator),
+        .idents = base.Ident.Store.init(allocator),
         .strings = collections.StringLiteral.Interner.init(allocator),
         .tag_names = collections.TagName.Interner.init(allocator),
         .tag_ids_for_slicing = collections.SafeList(collections.TagName.Idx).init(allocator),
@@ -64,6 +65,6 @@ pub fn addFieldNameSlice(
 }
 
 pub fn addExposedIdentForModule(self: *ModuleEnv, ident: Ident.Idx, module: Module.Idx) void {
-    self.modules.addExposedIdent(module, ident, self.problems);
+    self.modules.addExposedIdent(module, ident, &self.problems);
     self.idents.setExposingModule(ident, module);
 }

@@ -50,10 +50,11 @@ pub const Store = struct {
         primary_filename: []u8,
         all_primary_relative_paths: [][]u8,
         allocator: std.mem.Allocator,
-    ) Store {
-        const packages = List.init(allocator);
-        packages.append(Package{
+    ) !Store {
+        var packages = List.init(allocator);
+        try packages.items.append(allocator, Package{
             .content_hash = &.{},
+            .download_url = &.{},
             .cache_subdir = &.{},
             .version_string = &.{},
             .root_module_filename = primary_filename,
@@ -68,8 +69,8 @@ pub const Store = struct {
         self.packages.deinit();
     }
 
-    pub fn insert(self: *Store, package: Package) void {
-        self.packages.append(package);
+    pub fn insert(self: *Store, package: Package) !void {
+        try self.packages.items.append(self.allocator, package);
     }
 
     pub fn addDependencyToPackage(
@@ -78,12 +79,10 @@ pub const Store = struct {
         dependency: Dependency,
     ) Dependency.AddResult {
         const idx = @intFromEnum(package_idx);
-        const download_url = self.packages.items.items(.download_url)[idx];
-        const package_deps = self.packages.items.items(.dependencies)[idx];
-
-        var dep_iter = package_deps.iterator();
+        const pkg = self.packages.items.get(idx);
+        var dep_iter = pkg.dependencies.iterator();
         while (dep_iter.next()) |entry| {
-            if (entry.key_ptr == dependency.shorthand_region) {
+            if (std.meta.eql(entry.value_ptr.shorthand_region, dependency.shorthand_region)) {
                 return Dependency.AddResult{
                     .DuplicateShorthand = entry.value_ptr.*,
                 };
@@ -91,15 +90,17 @@ pub const Store = struct {
 
             const dep_idx = @intFromEnum(entry.value_ptr.package);
             const dep_download_url = self.packages.items.items(.download_url)[dep_idx];
-            if (download_url == dep_download_url) {
+            if (std.mem.eql(u8, pkg.download_url, dep_download_url)) {
                 return Dependency.AddResult{
                     .DuplicateUrl = entry.value_ptr.*,
                 };
             }
         }
 
-        package_deps.append(dependency);
+        // TODO: Insert the new dependency into the hashmap
+        // Not sure what the dependency idx should be here
+        // pkg.dependencies.put(dep_idx, dependency);
 
-        return Dependency.AddResult{.Success};
+        return Dependency.AddResult.Success;
     }
 };
