@@ -2,9 +2,8 @@ const std = @import("std");
 const base = @import("../base.zig");
 const func_lift = @import("./lift_functions.zig");
 const func_solve = @import("./solve_functions.zig");
-const func_spec = @import("./specialize_functions.zig");
 
-const specialize_functions = @This();
+const Self = @This();
 pub const IR = @import("./specialize_functions/IR.zig");
 
 /// For every function that takes a function as an argument:
@@ -15,8 +14,8 @@ pub const IR = @import("./specialize_functions/IR.zig");
 pub fn specializeFunctions(
     ir: func_lift.IR,
     function_sets: func_solve.FunctionSet.List,
-    other_modules: []specialize_functions.IR,
-) specialize_functions.IR {
+    other_modules: []Self.IR,
+) Self.IR {
     _ = ir;
     _ = function_sets;
     _ = other_modules;

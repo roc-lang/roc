@@ -8,7 +8,7 @@ const Problem = problem.Problem;
 const Ident = base.Ident;
 const Scope = @import("./canonicalize/Scope.zig");
 
-const can = @This();
+const Self = @This();
 pub const IR = @import("./canonicalize/IR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
