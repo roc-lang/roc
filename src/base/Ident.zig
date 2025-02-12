@@ -92,7 +92,7 @@ pub const Store = struct {
 
     pub fn insert(self: *Store, ident: Ident, region: Region, problems: *Problem.List) !Idx {
         if (ident.problems.has_problems()) {
-            _ = problems.append(Problem.Parse.make(Problem.Parse{ .IdentIssue = .{
+            _ = problems.append(Problem.Parse.make(.{ .IdentIssue = .{
                 .problems = ident.problems,
                 .region = region,
             } }));

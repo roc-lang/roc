@@ -1,12 +1,12 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
+const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
 const Region = base.Region;
 const Ident = base.Ident;
 const Module = base.Module;
 const Problem = @import("../../problem.zig").Problem;
-const exitOnOom = collections.exitOnOom;
 
 const Scope = @This();
 
@@ -14,7 +14,7 @@ env: *base.ModuleEnv,
 // Enable when these are implemented:
 //
 // /// The custom alias for this file if one has been defined.
-custom_aliases: collections.SafeList(Ident.Idx).Idx,
+custom_alias: ?collections.SafeList(Ident.Idx).Idx,
 //
 /// Identifiers/aliases that are in scope, and defined in the current module
 levels: Level.List,
@@ -26,9 +26,9 @@ pub fn init(
     imported_idents: []Ident.Idx,
     allocator: std.mem.Allocator,
 ) Scope {
-    const scope = Scope{
+    var scope = Scope{
         .env = env,
-        .aliases = builtin_aliases.cloneWithAllocator(allocator) catch exitOnOom(),
+        // .aliases = builtin_aliases.cloneWithAllocator(allocator) catch exitOnOom(),
         .custom_alias = null,
         .levels = Level.List.init(allocator),
         .allocator = allocator,
@@ -36,21 +36,21 @@ pub fn init(
 
     scope.enterLevel();
 
-    const base_level_idents = scope.levels.items.items(.idents)[0];
+    var base_level_idents = scope.levels.items.items(.idents)[0];
     for (imported_idents) |imported| {
-        base_level_idents.append(imported);
+        base_level_idents.append(imported) catch exitOnOom();
     }
 
-    const base_level_aliases = scope.levels.items.items(.aliases)[0];
+    var base_level_aliases = scope.levels.items.items(.aliases)[0];
     for (builtin_aliases) |builtin_alias| {
-        base_level_aliases.append(builtin_alias);
+        base_level_aliases.append(builtin_alias) catch exitOnOom();
     }
 
     return scope;
 }
 
 pub fn enterLevel(self: *Scope) void {
-    self.levels.append(Level.init(self.allocator));
+    _ = self.levels.append(Level.init(self.allocator));
 }
 
 pub fn exitLevel(self: *Scope) void {
@@ -83,10 +83,10 @@ pub fn lookup(self: *Scope, ident: Ident.Idx) ContainsIdent {
         options_in_scope.append(ident_in_scope);
     }
 
-    const problem = Problem.Canonicalize.make(.LookupNotInScope{
+    const problem = Problem.Canonicalize.make(.{ .LookupNotInScope = .{
         .ident = ident,
         .options_in_scope = options_in_scope,
-    });
+    } });
     self.env.problems.append(problem);
 
     return LookupResult{ .Problem = problem };
@@ -105,10 +105,10 @@ pub fn containsIdent(self: *Scope, ident: Ident.Idx) ?Ident.Idx {
 
 pub fn introduce(self: *Scope, ident: Ident.Idx) Ident.Idx {
     if (self.containsIdent(ident)) |ident_in_scope| {
-        const problem = Problem.Canonicalize.make(.UnqualifiedAlreadyInScope{
+        const problem = Problem.Canonicalize.make(.{ .UnqualifiedAlreadyInScope = .{
             .original_ident = ident_in_scope,
             .shadow = ident,
-        });
+        } });
 
         self.env.problems.append(problem);
         // TODO: is this correct for shadows?

@@ -36,9 +36,11 @@ pub const Stmt = union(enum) {
     Import: Import,
 
     pub const Import = struct {
-        name: base.Ident.Idx,
+        // TODO: this will all be changed when the 1st draft of the parser MR is merged
+        // Changing to get test working for now
+        name: []u8,
         name_region: base.Region,
-        package_shorthand: ?base.Ident.Idx,
+        package_shorthand: ?[]u8,
         exposing: collections.SafeList(Exposing),
 
         pub const Exposing = union(enum) {

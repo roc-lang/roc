@@ -26,6 +26,7 @@ type_vars: collections.SafeList(TypeVar),
 pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .env = base.ModuleEnv.init(allocator),
+        .aliases = std.AutoHashMap(Ident.Idx, Alias.WithVisibility).init(allocator),
         .exprs = Expr.List.init(allocator),
         .exprs_at_regions = ExprAtRegion.List.init(allocator),
         .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),

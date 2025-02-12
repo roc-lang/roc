@@ -135,7 +135,7 @@ pub const Store = struct {
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident)) {
-                _ = problems.append(Problem.Canonicalize.make(Problem.Canonicalize{ .DuplicateExposes = .{
+                _ = problems.append(Problem.Canonicalize.make(.{ .DuplicateExposes = .{
                     .first_exposes = exposed_ident,
                     .duplicate_exposes = ident,
                 } }));
