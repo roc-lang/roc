@@ -42,7 +42,7 @@ pub fn for_text(text: []u8) Ident {
 /// With 29-bits for the ID we can store up to 536,870,912 identifiers.
 pub const Idx = packed struct(u32) {
     attributes: Attributes,
-    id: u29,
+    idx: u29,
 };
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable packed into 3-bits.
@@ -90,7 +90,7 @@ pub const Store = struct {
         self.exposing_modules.deinit();
     }
 
-    pub fn insert(self: *Store, ident: Ident, region: Region, problems: *Problem.List) !Idx {
+    pub fn insert(self: *Store, ident: Ident, region: Region, problems: *Problem.List) Idx {
         if (ident.problems.has_problems()) {
             _ = problems.append(Problem.Parse.make(.{ .IdentIssue = .{
                 .problems = ident.problems,
@@ -98,17 +98,17 @@ pub const Store = struct {
             } }));
         }
 
-        const idx = try self.interner.insert(ident.raw_text);
+        const idx = self.interner.insert(ident.raw_text);
         self.regions.append(region) catch exitOnOom();
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
         return Idx{
             .attributes = ident.attributes,
-            .id = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @as(u29, @intCast(@intFromEnum(idx))),
         };
     }
 
-    pub fn genUnique(self: *Store, region: Region) !Idx {
+    pub fn genUnique(self: *Store, region: Region) Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
@@ -129,7 +129,7 @@ pub const Store = struct {
         // const name_length = if (id < 10) 1 else ;
         const name = str_buffer[digit_index..];
 
-        const idx = try self.interner.insert(name);
+        const idx = self.interner.insert(name);
         self.regions.append(region) catch exitOnOom();
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
@@ -139,7 +139,7 @@ pub const Store = struct {
                 .ignored = false,
                 .reassignable = false,
             },
-            .id = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @as(u29, @intCast(@intFromEnum(idx))),
         };
     }
 
@@ -148,25 +148,27 @@ pub const Store = struct {
         first_idx: Idx,
         second_idx: Idx,
     ) bool {
-        return self.interner.identsHaveSameText(@enumFromInt(@as(u32, first_idx.id)), @enumFromInt(@as(u32, second_idx.id)));
+        return self.interner.identsHaveSameText(@enumFromInt(@as(u32, first_idx.idx)), @enumFromInt(@as(u32, second_idx.idx)));
     }
 
     // TODO: Should this return Idx instead of collections.interner.IdentName.Idx
+    // To return a slice or a list of mapped values would need an allocation.
+    // We should create an Iterator object to zero-allocation walk over multiple Idxs.
     pub fn lookup(self: *Store, string: []u8) []collections.IdentName.Idx {
         return self.interner.lookup(string);
     }
 
     pub fn getText(self: *Store, idx: Idx) []u8 {
-        const string_index = self.interner.outer_indices.items[@as(usize, idx.id)];
+        const string_index = self.interner.outer_indices.items[@as(usize, idx.idx)];
         return self.interner.strings.items[@as(usize, string_index)];
     }
 
     pub fn getRegion(self: *Store, idx: Idx) Region {
-        return self.regions.items[@as(usize, idx.id)];
+        return self.regions.items[@as(usize, idx.idx)];
     }
 
     pub fn getExposingModule(self: *Store, idx: Idx) Module.Idx {
-        return self.exposing_modules.items[@as(usize, idx.id)];
+        return self.exposing_modules.items[@as(usize, idx.idx)];
     }
 
     /// Set the module that exposes this ident.
@@ -174,6 +176,6 @@ pub const Store = struct {
     /// NOTE: This should be called as soon as an ident is encountered during
     /// canonicalization to make sure that we don't
     pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: Module.Idx) void {
-        self.exposing_modules.items[@as(usize, idx.id)] = exposing_module;
+        self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
     }
 };

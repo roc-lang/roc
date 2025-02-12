@@ -18,7 +18,7 @@ pub fn zero() Region {
     };
 }
 
-pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);
     }

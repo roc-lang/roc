@@ -55,7 +55,7 @@ pub const Interner = struct {
     }
 
     /// Add an ident name to this interner, returning a unique, serial index.
-    pub fn insert(self: *Interner, string: []u8) !Idx {
+    pub fn insert(self: *Interner, string: []u8) Idx {
         const hash = fnvStringHash(string);
 
         const string_indices = self.stringIndicesForHash(hash);
@@ -66,7 +66,7 @@ pub const Interner = struct {
             }
         }
 
-        const copied_string = try self.strings.allocator.alloc(u8, string.len);
+        const copied_string = self.strings.allocator.alloc(u8, string.len) catch exitOnOom();
         std.mem.copyForwards(u8, copied_string, string);
 
         const strings_len = @as(u32, @intCast(self.strings.items.len));

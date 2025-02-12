@@ -30,7 +30,7 @@ pub const Idx = List.Idx;
 /// module itself and builtin modules.
 pub const Store = struct {
     modules: List,
-    ident_store: Ident.Store,
+    ident_store: *Ident.Store,
     allocator: std.mem.Allocator,
 
     pub const LookupResult = struct {
@@ -38,7 +38,7 @@ pub const Store = struct {
         was_present: bool,
     };
 
-    pub fn init(allocator: std.mem.Allocator) Store {
+    pub fn init(allocator: std.mem.Allocator, ident_store: *Ident.Store) Store {
         var modules = collections.SafeMultiList(Module).init(allocator);
         _ = modules.append(Module{
             .name = &.{},
@@ -51,7 +51,7 @@ pub const Store = struct {
 
         return Store{
             .modules = modules,
-            .ident_store = Ident.Store.init(allocator),
+            .ident_store = ident_store,
             .allocator = allocator,
         };
     }
@@ -63,7 +63,6 @@ pub const Store = struct {
             module.exposed_idents.deinit();
         }
         self.modules.deinit();
-        self.ident_store.deinit();
     }
 
     /// Search for a module that's visible to the main module.
@@ -79,10 +78,15 @@ pub const Store = struct {
         for (0..self.modules.len()) |index| {
             const item = items.get(index);
             if (std.mem.eql(u8, name, item.name)) {
-                if (package_shorthand == null and item.package_shorthand == null) {
+                const neither_has_shorthand = package_shorthand == null and item.package_shorthand == null;
+                const both_have_shorthand = package_shorthand != null and item.package_shorthand != null;
+
+                if (neither_has_shorthand) {
                     return @enumFromInt(@as(u32, @intCast(index)));
-                } else if (package_shorthand != null and item.package_shorthand != null and std.mem.eql(u8, package_shorthand.?, item.package_shorthand.?)) {
-                    return @enumFromInt(@as(u32, @intCast(index)));
+                } else if (both_have_shorthand) {
+                    if (std.mem.eql(u8, package_shorthand.?, item.package_shorthand.?)) {
+                        return @enumFromInt(@as(u32, @intCast(index)));
+                    }
                 }
             }
         }

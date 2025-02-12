@@ -27,9 +27,10 @@ problems: problem.Problem.List,
 // pub record_fields: Vec<RecordField<()>>,
 
 pub fn init(allocator: std.mem.Allocator) ModuleEnv {
+    var ident_store = Ident.Store.init(allocator);
     return ModuleEnv{
-        .modules = Module.Store.init(allocator),
-        .idents = Ident.Store.init(allocator),
+        .modules = Module.Store.init(allocator, &ident_store),
+        .idents = ident_store,
         .strings = collections.StringLiteral.Interner.init(allocator),
         .tag_names = collections.TagName.Interner.init(allocator),
         .tag_ids_for_slicing = collections.SafeList(collections.TagName.Idx).init(allocator),

@@ -1,6 +1,7 @@
 //! A package imported at the root of a Roc application/platform/package.
 const std = @import("std");
 const collections = @import("../collections.zig");
+const utils = @import("../collections/utils.zig");
 const Region = @import("./Region.zig");
 
 // TODO: this is half-baked, we should finish it when we get to saving/loading packages
@@ -50,9 +51,9 @@ pub const Store = struct {
         primary_filename: []u8,
         all_primary_relative_paths: [][]u8,
         allocator: std.mem.Allocator,
-    ) !Store {
+    ) Store {
         var packages = List.init(allocator);
-        try packages.items.append(allocator, Package{
+        packages.items.append(allocator, Package{
             .content_hash = &.{},
             .download_url = &.{},
             .cache_subdir = &.{},
@@ -60,7 +61,7 @@ pub const Store = struct {
             .root_module_filename = primary_filename,
             .relative_file_paths = all_primary_relative_paths,
             .dependencies = std.AutoHashMap([]u8, Dependency).init(allocator),
-        });
+        }) catch utils.exitOnOom();
 
         return Store{ .packages = packages, .allocator = allocator };
     }
@@ -69,8 +70,8 @@ pub const Store = struct {
         self.packages.deinit();
     }
 
-    pub fn insert(self: *Store, package: Package) !void {
-        try self.packages.items.append(self.allocator, package);
+    pub fn insert(self: *Store, package: Package) void {
+        self.packages.items.append(self.allocator, package) catch utils.exitOnOom();
     }
 
     pub fn addDependencyToPackage(
