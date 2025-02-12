@@ -1,6 +1,7 @@
 //! The name of a tag, e.g. `Foo` in `Foo("abc", 123)`.
 const std = @import("std");
 const IdentName = @import("IdentName.zig");
+const exitOnOom = @import("../utils.zig").exitOnOom;
 
 /// The index for a tag name in a TagName.Interner.
 pub const Idx = enum(u32) { _ };
@@ -22,10 +23,11 @@ pub const Interner = struct {
     }
 
     pub fn insert(self: *Interner, name: []u8) Idx {
-        return @enumFromInt(self.names.insert(name).id);
+        const name_idx = self.names.insert(name);
+        return @enumFromInt(@intFromEnum(name_idx));
     }
 
     pub fn get(self: *Interner, id: Idx) []u8 {
-        return self.names.get(@intFromEnum(id));
+        return self.names.get(@enumFromInt(@intFromEnum(id)));
     }
 };

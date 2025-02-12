@@ -30,6 +30,7 @@ pub const Idx = List.Idx;
 /// module itself and builtin modules.
 pub const Store = struct {
     modules: List,
+    ident_store: *Ident.Store,
     allocator: std.mem.Allocator,
 
     pub const LookupResult = struct {
@@ -37,9 +38,9 @@ pub const Store = struct {
         was_present: bool,
     };
 
-    pub fn init(allocator: std.mem.Allocator) Store {
-        const modules = collections.SafeMultiList(Module).init(allocator);
-        modules.append(Module{
+    pub fn init(allocator: std.mem.Allocator, ident_store: *Ident.Store) Store {
+        var modules = collections.SafeMultiList(Module).init(allocator);
+        _ = modules.append(Module{
             .name = &.{},
             .package_shorthand = null,
             .is_builtin = false,
@@ -50,16 +51,17 @@ pub const Store = struct {
 
         return Store{
             .modules = modules,
-            .ident_store = Ident.Store.init(allocator),
+            .ident_store = ident_store,
             .allocator = allocator,
         };
     }
 
     pub fn deinit(self: *Store) void {
-        for (self.modules.items.items(.ident_store)) |store| {
-            store.deinit();
+        const modules = self.modules.items;
+        for (0..self.modules.len()) |index| {
+            var module = modules.get(index);
+            module.exposed_idents.deinit();
         }
-
         self.modules.deinit();
     }
 
@@ -70,16 +72,21 @@ pub const Store = struct {
     pub fn lookup(
         self: *Store,
         name: []const u8,
-        package_shorthand: ?[]const u8,
+        package_shorthand: ?[]u8,
     ) ?Idx {
         const items = self.modules.items;
-
         for (0..self.modules.len()) |index| {
-            const other_name = items.items(.name_segments)[index];
-            if (name == other_name) {
-                const other_package_shorthand = items.items(.package_shorthand)[index];
-                if (other_package_shorthand == package_shorthand) {
-                    return @enumFromInt(@as(u32, index));
+            const item = items.get(index);
+            if (std.mem.eql(u8, name, item.name)) {
+                const neither_has_shorthand = package_shorthand == null and item.package_shorthand == null;
+                const both_have_shorthand = package_shorthand != null and item.package_shorthand != null;
+
+                if (neither_has_shorthand) {
+                    return @enumFromInt(@as(u32, @intCast(index)));
+                } else if (both_have_shorthand) {
+                    if (std.mem.eql(u8, package_shorthand.?, item.package_shorthand.?)) {
+                        return @enumFromInt(@as(u32, @intCast(index)));
+                    }
                 }
             }
         }
@@ -91,8 +98,8 @@ pub const Store = struct {
     /// reusing an existing [Idx] if the module was already imported.
     pub fn getOrInsert(
         self: *Store,
-        name: []const u8,
-        package_shorthand: ?[]const u8,
+        name: []u8,
+        package_shorthand: ?[]u8,
     ) LookupResult {
         if (self.lookup(name, package_shorthand)) |idx| {
             return LookupResult{ .module_idx = idx, .was_present = true };
@@ -123,22 +130,23 @@ pub const Store = struct {
     /// method that will also set the ident's exposing module.
     pub fn addExposedIdent(
         self: *Store,
-        module: Module.Idx,
+        module_idx: Module.Idx,
         ident: Ident.Idx,
         problems: *collections.SafeList(problem.Problem),
     ) void {
-        const module_index = @intFromEnum(module);
-        const module_exposed_idents = self.modules.items.items(.exposed_idents)[module_index];
-        for (module_exposed_idents) |exposed_ident| {
-            if (exposed_ident == ident) {
-                problems.append(Problem.Canonicalize.make(.DuplicateExposes{
+        const module_index = @intFromEnum(module_idx);
+        var module = self.modules.items.get(module_index);
+
+        for (module.exposed_idents.items.items) |exposed_ident| {
+            if (std.meta.eql(exposed_ident, ident)) {
+                _ = problems.append(Problem.Canonicalize.make(.{ .DuplicateExposes = .{
                     .first_exposes = exposed_ident,
                     .duplicate_exposes = ident,
-                }));
+                } }));
                 return;
             }
         }
 
-        module_exposed_idents.append(ident);
+        _ = module.exposed_idents.append(ident);
     }
 };

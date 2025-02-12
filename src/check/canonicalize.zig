@@ -5,10 +5,11 @@ const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
 
 const Problem = problem.Problem;
-const Scope = @import("canonicalize/Scope.zig");
+const Ident = base.Ident;
+const Scope = @import("./canonicalize/Scope.zig");
 
-const can = @This();
-pub const IR = @import("canonicalize/IR.zig");
+const Self = @This();
+pub const IR = @import("./canonicalize/IR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -30,8 +31,10 @@ pub fn canonicalize(
     parse_ir: parse.IR,
     allocator: std.mem.Allocator,
 ) void {
-    const env = can_ir.env;
-    const scope = Scope.init(can_ir.env, .{}, .{}, allocator);
+    var env = can_ir.env;
+    const builtin_aliases = [0]Scope.Alias{};
+    const imported_idents = [0]Ident.Idx{};
+    const scope = Scope.init(&env, &builtin_aliases, &imported_idents, allocator);
     _ = scope;
 
     for (parse_ir.defs.items.items) |stmt| {
@@ -43,12 +46,17 @@ pub fn canonicalize(
                 );
 
                 if (res.was_present) {
-                    env.problems.append(Problem.Canonicalize.make(.{.DuplicateImport{
+                    _ = env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
                         .duplicate_import_region = import.name_region,
-                    }}));
+                    } }));
                 }
 
-                for (import.exposing.items.items) |exposed_ident| {
+                for (import.exposing.items.items) |exposed| {
+                    const exposed_ident = switch (exposed) {
+                        .Value => |ident| ident,
+                        .Type => |ident| ident,
+                        .CustomTagUnion => |custom| custom.name,
+                    };
                     env.addExposedIdentForModule(exposed_ident, res.module_idx);
                 }
             },

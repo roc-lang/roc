@@ -5,12 +5,12 @@ const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
-const TypeVar = types.Type.Var;
+const TypeVar = types.TypeVar;
 const TagName = collections.TagName;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
 
-const IR = @This();
+const Self = @This();
 
 env: base.ModuleEnv,
 aliases: std.AutoHashMap(Ident.Idx, Alias.WithVisibility),
@@ -23,9 +23,10 @@ patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
 type_vars: collections.SafeList(TypeVar),
 
-pub fn init(allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(allocator: std.mem.Allocator) Self {
+    return Self{
         .env = base.ModuleEnv.init(allocator),
+        .aliases = std.AutoHashMap(Ident.Idx, Alias.WithVisibility).init(allocator),
         .exprs = Expr.List.init(allocator),
         .exprs_at_regions = ExprAtRegion.List.init(allocator),
         .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),
@@ -37,7 +38,7 @@ pub fn init(allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.env.deinit();
     self.exprs.deinit();
     self.exprs_at_regions.deinit();
@@ -66,7 +67,7 @@ pub const Alias = struct {
     /// Extension variables that should be inferred in output positions, and closed in input
     /// positions.
     infer_ext_in_output_variables: collections.SafeList(TypeVar).Slice,
-    recursion_variables: std.AutoHashMap(TypeVar, .{}),
+    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
 
     //     pub typ: Type,
     kind: Kind,
@@ -145,7 +146,7 @@ pub const Expr = union(enum) {
         type_var: TypeVar,
     },
 
-    When: When.Id,
+    When: When.Idx,
     If: struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
@@ -238,10 +239,14 @@ pub const Def = struct {
         /// Ignored result, must be effectful
         Ignored: TypeVar,
     };
+
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
 };
 
 pub const Annotation = struct {
-    signature: types.Type,
+    signature: types.TypeVar,
     // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
     region: Region,
@@ -331,7 +336,7 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    Identifier: base.Module.Ident,
+    Identifier: base.Module.Idx,
     As: struct {
         pattern: Pattern.Idx,
         region: Region,

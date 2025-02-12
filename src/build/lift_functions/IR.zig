@@ -9,7 +9,7 @@ const Problem = problem.Problem;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
 
-pub const IR = @This();
+const Self = @This();
 
 env: *base.ModuleEnv,
 exposed_values: std.AutoHashMap(Ident.Idx, Expr.Idx),
@@ -22,8 +22,8 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+    return Self{
         .env = env,
         .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(allocator),
         .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(allocator),
@@ -37,7 +37,7 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.exposed_values.deinit();
     self.exposed_functions.deinit();
     self.types.deinit();

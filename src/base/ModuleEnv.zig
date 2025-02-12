@@ -3,20 +3,19 @@
 //!
 //! This reduces the size the IR as it can use references to these interned values.
 const std = @import("std");
-const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
+const Ident = @import("./Ident.zig");
+const Module = @import("./Module.zig");
 
-const Ident = base.Ident;
-const Module = base.Module;
 const Problem = problem.Problem;
 
 const ModuleEnv = @This();
 
 // stores information about modules, includes each of
 // this module's dependencies
-modules: base.Module.Store,
-idents: base.Ident.Store,
+modules: Module.Store,
+idents: Ident.Store,
 strings: collections.StringLiteral.Interner,
 tag_names: collections.TagName.Interner,
 tag_ids_for_slicing: collections.SafeList(collections.TagName.Idx),
@@ -28,8 +27,10 @@ problems: problem.Problem.List,
 // pub record_fields: Vec<RecordField<()>>,
 
 pub fn init(allocator: std.mem.Allocator) ModuleEnv {
+    var ident_store = Ident.Store.init(allocator);
     return ModuleEnv{
-        .modules = base.Module.Store.init(allocator),
+        .modules = Module.Store.init(allocator, &ident_store),
+        .idents = ident_store,
         .strings = collections.StringLiteral.Interner.init(allocator),
         .tag_names = collections.TagName.Interner.init(allocator),
         .tag_ids_for_slicing = collections.SafeList(collections.TagName.Idx).init(allocator),
@@ -64,6 +65,6 @@ pub fn addFieldNameSlice(
 }
 
 pub fn addExposedIdentForModule(self: *ModuleEnv, ident: Ident.Idx, module: Module.Idx) void {
-    self.modules.addExposedIdent(module, ident, self.problems);
+    self.modules.addExposedIdent(module, ident, &self.problems);
     self.idents.setExposingModule(ident, module);
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const base = @import("../base.zig");
-const func_lift = @import("lift_functions.zig");
+const func_lift = @import("./lift_functions.zig");
 const collections = @import("../collections.zig");
 
 const testing = std.testing;

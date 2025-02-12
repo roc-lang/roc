@@ -1,6 +1,7 @@
 //! The name of a field in a record, e.g. `foo` in `{ foo: 123 }`.
 const std = @import("std");
 const IdentName = @import("IdentName.zig");
+const exitOnOom = @import("../utils.zig").exitOnOom;
 
 /// The index for a record field name in a FieldName.Interner.
 pub const Idx = enum(u32) { _ };
@@ -22,10 +23,11 @@ pub const Interner = struct {
     }
 
     pub fn insert(self: *Interner, name: []u8) Idx {
-        return @enumFromInt(self.names.insert(name).id);
+        const name_idx = self.names.insert(name);
+        return @enumFromInt(@intFromEnum(name_idx));
     }
 
-    pub fn get(self: *Interner, id: Idx) []u8 {
-        return self.names.get(@intFromEnum(id));
+    pub fn get(self: *Interner, idx: Idx) []u8 {
+        return self.names.get(@enumFromInt(@intFromEnum(idx)));
     }
 };

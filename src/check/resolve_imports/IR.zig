@@ -10,7 +10,7 @@ const Region = base.Region;
 const TypeVar = types.TypeVar;
 const CanIR = @import("../canonicalize/IR.zig");
 
-const IR = @This();
+const Self = @This();
 
 // utable: UnificationTable,
 // pub type_var_slices: Vec<TypeVarSubsSlice>,
@@ -24,8 +24,8 @@ type_vars: collections.SafeList(TypeVar),
 declarations: DeclarationTag.List,
 host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+    return Self{
         .env = env,
         .regions = Region.List.init(allocator),
         .exprs = Expr.List.init(allocator),
@@ -38,7 +38,7 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.regions.deinit();
     self.exprs.deinit();
     self.destructs.deinit();
@@ -65,10 +65,10 @@ pub const DestructureDef = union(enum) {
 
 pub const DeclarationTag = union(enum) {
     Value,
-    Function: collections.SafeList(FunctionDef).Id,
-    Recursive: collections.SafeList(FunctionDef).Id,
-    TailRecursive: collections.SafeList(FunctionDef).Id,
-    Destructure: collections.SafeList(DestructureDef).Id,
+    Function: collections.SafeList(FunctionDef).Idx,
+    Recursive: collections.SafeList(FunctionDef).Idx,
+    TailRecursive: collections.SafeList(FunctionDef).Idx,
+    Destructure: collections.SafeList(DestructureDef).Idx,
     MutualRecursion: struct {
         length: u16,
         cycle_mark: IllegalCycleMark,

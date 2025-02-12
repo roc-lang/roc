@@ -1,7 +1,7 @@
 const std = @import("std");
 const collections = @import("../collections.zig");
 
-pub const Region = @This();
+const Region = @This();
 
 start: Position,
 end: Position,
@@ -18,7 +18,7 @@ pub fn zero() Region {
     };
 }
 
-pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) !void {
+pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: anytype) void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);
     }

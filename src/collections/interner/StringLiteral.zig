@@ -33,7 +33,7 @@ pub const Interner = struct {
 
         self.strings.append(copied_string) catch exitOnOom();
 
-        return @enumFromInt(@as(u32, len));
+        return @enumFromInt(@as(u32, @intCast(len)));
     }
 
     pub fn get(self: *Interner, idx: Idx) []u8 {

@@ -103,25 +103,25 @@ pub fn SafeMultiList(comptime T: type) type {
         pub const Slice = std.MultiArrayList(T).Slice;
 
         pub fn init(allocator: std.mem.Allocator) SafeMultiList(T) {
-            return SafeMultiList{
+            return SafeMultiList(T){
                 .items = std.MultiArrayList(T){},
                 .allocator = allocator,
             };
         }
 
         pub fn deinit(self: *SafeMultiList(T)) void {
-            self.items.deinit();
+            self.items.deinit(self.allocator);
         }
 
         pub fn len(self: *SafeMultiList(T)) usize {
-            return self.items.items.len;
+            return self.items.len;
         }
 
         pub fn append(self: *SafeMultiList(T), item: T) Idx {
             const length = self.len();
-            self.items.append(item) catch exitOnOom();
+            self.items.append(self.allocator, item) catch exitOnOom();
 
-            return @enumFromInt(@as(u32, length));
+            return @enumFromInt(@as(u32, @intCast(length)));
         }
     };
 }
