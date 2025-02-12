@@ -9,7 +9,7 @@ const TagName = collections.TagName;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
 
-pub const IR = @This();
+const Self = @This();
 
 env: *base.ModuleEnv,
 procedures: std.AutoHashMap(Ident.Idx, Procedure),
@@ -20,8 +20,8 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+    return Self{
         .env = env,
         .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(allocator),
         .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(allocator),
@@ -33,7 +33,7 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.procedures.deinit();
     self.constants.deinit();
     self.exprs.deinit();

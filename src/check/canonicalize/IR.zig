@@ -10,7 +10,7 @@ const TagName = collections.TagName;
 const FieldName = collections.FieldName;
 const StringLiteral = collections.StringLiteral;
 
-const IR = @This();
+const Self = @This();
 
 env: base.ModuleEnv,
 aliases: std.AutoHashMap(Ident.Idx, Alias.WithVisibility),
@@ -23,8 +23,8 @@ patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
 type_vars: collections.SafeList(TypeVar),
 
-pub fn init(allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(allocator: std.mem.Allocator) Self {
+    return Self{
         .env = base.ModuleEnv.init(allocator),
         .exprs = Expr.List.init(allocator),
         .exprs_at_regions = ExprAtRegion.List.init(allocator),
@@ -37,7 +37,7 @@ pub fn init(allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.env.deinit();
     self.exprs.deinit();
     self.exprs_at_regions.deinit();

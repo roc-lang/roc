@@ -10,7 +10,7 @@ const Region = base.Region;
 const TypeVar = types.TypeVar;
 const CanIR = @import("../canonicalize/IR.zig");
 
-const IR = @This();
+const Self = @This();
 
 // utable: UnificationTable,
 // pub type_var_slices: Vec<TypeVarSubsSlice>,
@@ -24,8 +24,8 @@ type_vars: collections.SafeList(TypeVar),
 declarations: DeclarationTag.List,
 host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
-    return IR{
+pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+    return Self{
         .env = env,
         .regions = Region.List.init(allocator),
         .exprs = Expr.List.init(allocator),
@@ -38,7 +38,7 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) IR {
     };
 }
 
-pub fn deinit(self: *IR) void {
+pub fn deinit(self: *Self) void {
     self.regions.deinit();
     self.exprs.deinit();
     self.destructs.deinit();

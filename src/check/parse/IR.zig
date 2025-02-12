@@ -3,7 +3,7 @@ const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
 
-const IR = @This();
+const Self = @This();
 
 header: Header,
 defs: Stmt.List,
