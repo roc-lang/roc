@@ -95,6 +95,21 @@ pub fn peekNewline(self: *Parser) ?u16 {
     return @intCast(indent);
 }
 
+pub fn pushDiagnostic(self: *Parser, tag: IR.Diagnostic.Tag, region: IR.Region) void {
+    self.diagnostics.append(.{
+        .tag = tag,
+        .region = region,
+    }) catch exitOnOom();
+}
+
+pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t {
+    self.diagnostics.append(.{
+        .tag = tag,
+        .region = .{ .start = self.pos, .end = self.pos },
+    }) catch exitOnOom();
+    return self.store.addMalformed(t, tag, self.pos);
+}
+
 pub fn parseFile(self: *Parser) void {
     self.store.emptyScratch();
     _ = self.store.addFile(.{
@@ -106,9 +121,7 @@ pub fn parseFile(self: *Parser) void {
     const header = self.parseHeader();
 
     while (self.peek() != .EndOfFile) {
-        if (self.consumeNewline()) |indent| {
-            std.debug.assert(indent == 0); // TODO: report an error
-        }
+        _ = self.consumeNewline();
         if (self.peek() == .EndOfFile) {
             break;
         }
@@ -117,7 +130,6 @@ pub fn parseFile(self: *Parser) void {
             if (self.store.scratch_statements.items.len > scratch_top) {
                 self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
             }
-            // ddd
             self.store.scratch_statements.append(idx) catch exitOnOom();
         } else {
             if (self.store.scratch_statements.items.len > scratch_top) {
@@ -148,9 +160,18 @@ fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
 pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
-    if (self.peek() != .KwApp) {
-        std.debug.panic("TODO: Support other headers besides app", .{});
+    switch (self.peek()) {
+        .KwApp => {
+            return self.parseAppHeader();
+        },
+        // TODO: other headers
+        else => {
+            return self.store.addMalformed(IR.NodeStore.HeaderIdx, .missing_header, self.pos);
+        },
     }
+}
+
+pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     var provides: []TokenIdx = &.{};
     var packages: []IR.NodeStore.RecordFieldIdx = &.{};
     var platform: ?TokenIdx = null;
@@ -162,14 +183,14 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
     // Get provides
     if (self.peek() != .OpenSquare) {
-        std.debug.panic("TODO: Handle header with no provides open bracket: {s}", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
     }
     self.advance();
     indent = self.consumeNewline() orelse indent;
     const scratch_top = self.store.scratch_tokens.items.len;
     while (self.peek() != .CloseSquare) {
         if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
-            std.debug.panic("TODO: Handler header bad provides contents: {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
         }
 
         self.store.scratch_tokens.append(self.pos) catch exitOnOom();
@@ -181,51 +202,51 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             break;
         } else if (self.consumeNewline()) |i| {
             if (i <= indent) {
-                std.debug.panic("TODO: Handle bad indent: {s}", .{@tagName(self.peek())});
+                return self.pushMalformed(IR.NodeStore.HeaderIdx, .bad_indent);
             }
         }
     }
     if (self.consumeNewline()) |i| {
         if (i > indent) {
-            std.debug.panic("TODO: Handle bad indent: {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .bad_indent);
         }
         indent = i;
     }
     if (self.peek() != .CloseSquare) {
-        std.debug.panic("TODO: Handle Bad header no closing provides bracket: {s}", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
     }
     self.advance();
 
     // Get platform and packages
     const statement_scratch_top = self.store.scratch_record_fields.items.len;
     if (self.peek() != .OpenCurly) {
-        std.debug.panic("TODO: Handle Bad header no packages curly: {s}", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
     }
     self.advance();
     while (self.peek() != .CloseCurly) {
         indent = self.consumeNewline() orelse indent;
         if (self.peek() != .LowerIdent) {
-            std.debug.panic("TODO: Handle bad package identifier: {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
         }
         const name_tok = self.pos;
         self.advance();
         if (self.peek() != .OpColon) {
-            std.debug.panic("TODO: Handle bad package identifier: {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
         }
         self.advance();
         if (self.peek() == .KwPlatform) {
             if (platform != null) {
-                std.debug.panic("TODO: Handle multiple platforms in app header: {s}", .{@tagName(self.peek())});
+                return self.pushMalformed(IR.NodeStore.HeaderIdx, .multiple_platforms);
             }
             self.advance();
             if (self.peek() != .String) {
-                std.debug.panic("TODO: Handle bad package URI in app header: {s}", .{@tagName(self.peek())});
+                return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
             }
             platform = self.pos;
             platform_name = name_tok;
         } else {
             if (self.peek() != .String) {
-                std.debug.panic("TODO: Handle bad package URI in app header: {s}", .{@tagName(self.peek())});
+                return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
             }
             const value = self.store.addExpr(.{ .string = .{
                 .token = self.pos,
@@ -247,12 +268,12 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     }
     if (self.consumeNewline()) |i| {
         if (i > indent) {
-            std.debug.panic("TODO: Handle bad indent: {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .bad_indent);
         }
         indent = i;
     }
     if (self.peek() != .CloseCurly) {
-        std.debug.panic("TODO: Handle Bad header no end curly in packages: {s}", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
     }
     self.advance();
 
@@ -271,7 +292,7 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             return idx;
         }
     }
-    std.debug.panic("TODO: Handle header with no platform: {s}", .{@tagName(self.peek())});
+    return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform);
 }
 
 pub fn parseStmt(self: *Parser, base_indent: u16) ?IR.NodeStore.StatementIdx {
@@ -351,9 +372,7 @@ pub fn parseStmt(self: *Parser, base_indent: u16) ?IR.NodeStore.StatementIdx {
             return statement_idx;
         },
         else => {
-            std.debug.print("Tokens:\n{any}", .{self.tok_buf.tokens.items(.tag)});
-            std.debug.panic("todo: emit error, unexpected token {s}", .{@tagName(self.peek())});
-            return null;
+            return self.pushMalformed(IR.NodeStore.StatementIdx, .unexpected_token);
         },
     }
 }
@@ -411,8 +430,7 @@ pub fn parseExpr(self: *Parser, min_indent: u16) IR.NodeStore.ExprIdx {
             } });
         },
         else => {
-            std.debug.print("Tokens:\n{any}", .{self.tok_buf.tokens.items(.tag)});
-            std.debug.panic("todo: emit error - {s}", .{@tagName(self.peek())});
+            return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
         },
     }
     if (expr) |e| {
@@ -425,9 +443,9 @@ pub fn parseExpr(self: *Parser, min_indent: u16) IR.NodeStore.ExprIdx {
                 var indent = min_indent;
                 if (self.consumeNewline()) |i| {
                     if (i < min_indent) {
-                        std.debug.panic("TODO: Indent problem", .{});
-                        indent = i;
+                        return self.pushMalformed(IR.NodeStore.ExprIdx, .bad_indent);
                     }
+                    indent = i;
                 }
                 const arg_expression = self.parseExpr(indent);
                 self.store.scratch_exprs.append(arg_expression) catch exitOnOom();
@@ -443,14 +461,14 @@ pub fn parseExpr(self: *Parser, min_indent: u16) IR.NodeStore.ExprIdx {
         // Check for try suffix...
         return expression;
     }
-    std.debug.panic("todo: Malformed Expr", .{});
+    return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
 }
 
 pub fn finishParseAssign(self: *Parser, base_indent: u16) ?IR.NodeStore.BodyIdx {
     self.advance();
     if (self.consumeNewline()) |indent| {
         if (indent <= base_indent) {
-            std.debug.panic("todo: emit error", .{});
+            return self.pushMalformed(IR.NodeStore.BodyIdx, .bad_indent);
         }
 
         const scratch_top = self.store.scratch_statements.items.len;
