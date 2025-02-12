@@ -14,7 +14,7 @@ const tokenize = @import("check/parse/tokenize.zig");
 const Package = base.Package;
 const exitOnOom = @import("collections/utils.zig").exitOnOom;
 
-const ResolveIR = type_spec.IR;
+const ResolveIR = resolve.IR;
 const TypeSpecIR = type_spec.IR;
 const RefCountIR = refcount.IR;
 

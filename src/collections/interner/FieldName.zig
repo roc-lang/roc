@@ -21,11 +21,12 @@ pub const Interner = struct {
         self.names.deinit();
     }
 
-    pub fn insert(self: *Interner, name: []u8) Idx {
-        return @enumFromInt(self.names.insert(name).id);
+    pub fn insert(self: *Interner, name: []u8) !Idx {
+        const name_idx = try self.names.insert(name);
+        return @enumFromInt(@intFromEnum(name_idx));
     }
 
     pub fn get(self: *Interner, id: Idx) []u8 {
-        return self.names.get(@intFromEnum(id));
+        return self.names.get(@enumFromInt(@intFromEnum(id)));
     }
 };
