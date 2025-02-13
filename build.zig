@@ -13,6 +13,19 @@ pub fn build(b: *std.Build) void {
     } });
     const optimize = b.standardOptimizeOption(.{});
 
+    // llvm configuration
+    const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
+    const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
+
+    if (use_system_llvm and user_llvm_path != null) {
+        std.log.err("-Dsystem-llvm and -Dllvm-path cannot both be specified", .{});
+        std.process.exit(1);
+    }
+
+    if (user_llvm_path) |path| {
+        b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
+    }
+
     // Zig unicode library - https://codeberg.org/atman/zg
     const zg = b.dependency("zg", .{});
 
@@ -59,28 +72,35 @@ pub fn build(b: *std.Build) void {
     const fmt_step = b.step("fmt", "Format all zig code");
     fmt_step.dependOn(&fmt.step);
 
-    const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
-    const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
-
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
-    const valid_fuzz_target = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl()) and target.result.os.tag != .windows;
-    if (fuzz and valid_fuzz_target) {
-        const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
+    if (fuzz) {
+        const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
+        const is_windows = target.result.os.tag == .windows;
 
-        // Eventually, llvm will be needed for all of roc.
-        // For now, it is only needed afl fuzzing.
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-        b.addSearchPrefix(llvm_paths.lib);
+        var build_afl = false;
+        if (!is_native) {
+            std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
+        } else if (is_windows) {
+            std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
+        } else {
+            // AFL++ does not work with our prebuilt static llvm.
+            // Check for llvm-config program in user_llvm_path or on the system.
+            // If found, let AFL++ use that.
+            if (b.findProgram(&.{"llvm-config"}, &.{})) |_| {
+                build_afl = true;
+            } else |_| {
+                std.log.warn("AFL++ requires a full version of llvm from the system (-Dsystem-llvm) or passed in via -Dllvm-path (Only building repro executables)", .{});
+            }
+        }
 
         // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
         // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
         // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
         add_fuzz_target(
             b,
-            afl,
+            build_afl,
             test_step,
             target,
-            llvm_paths.bin,
             "cli",
             b.path("src/fuzz/cli.zig"),
             &[_]Import{
@@ -96,6 +116,8 @@ const LlvmPaths = struct {
     lib: []const u8,
 };
 
+// This functions is not used right now due to AFL requiring system llvm.
+// This will be used once we begin linking roc to llvm.
 fn llvmPaths(
     b: *std.Build,
     target: ResolvedTarget,
@@ -103,7 +125,7 @@ fn llvmPaths(
     user_llvm_path: ?[]const u8,
 ) ?LlvmPaths {
     if (use_system_llvm and user_llvm_path != null) {
-        std.log.err("-Dsystem-llvm and -Dllvm-path cannot both be set", .{});
+        std.log.err("-Dsystem-llvm and -Dllvm-path cannot both be specified", .{});
         std.process.exit(1);
     }
 
@@ -173,10 +195,9 @@ const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
 
 fn add_fuzz_target(
     b: *std.Build,
-    afl: type,
+    build_afl: bool,
     parent_step: *Step,
     target: ResolvedTarget,
-    llvm_bin_path: []const u8,
     name: []const u8,
     root_source_file: LazyPath,
     imports: []const Import,
@@ -199,7 +220,9 @@ fn add_fuzz_target(
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
-    const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{llvm_bin_path}, fuzz_obj);
+    const name_exe = b.fmt("fuzz-{s}", .{name});
+    const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
+    parent_step.dependOn(fuzz_step);
 
     const name_repro = b.fmt("repro-{s}", .{name});
     const repro = b.addExecutable(.{
@@ -210,11 +233,11 @@ fn add_fuzz_target(
         .link_libc = true,
     });
     repro.addObject(fuzz_obj);
-
-    const name_exe = b.fmt("fuzz-{s}", .{name});
-    const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
-    fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
     fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro).step);
 
-    parent_step.dependOn(fuzz_step);
+    if (build_afl) {
+        const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
+        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, fuzz_obj);
+        fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
+    }
 }
