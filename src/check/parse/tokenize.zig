@@ -403,7 +403,7 @@ pub const Cursor = struct {
             return .{ .tag = .Invalid, .length = 1 };
         };
         const len: u32 = @intCast(len3);
-        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos .. self.pos + len]) catch {
+        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos..][0..len]) catch {
             return .{ .tag = .Invalid, .length = len };
         };
         switch (self.gc.gc(utf8_char)) {

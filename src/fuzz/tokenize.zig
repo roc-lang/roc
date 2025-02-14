@@ -398,88 +398,88 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             },
 
             .KwApp => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "app");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "app");
             },
             .KwAs => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "as");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "as");
             },
             .KwCrash => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "crash");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "crash");
             },
             .KwDbg => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "dbg");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "dbg");
             },
             .KwDebug => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "debug");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "debug");
             },
             .KwElse => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "else");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "else");
             },
             .KwExpect => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "expect");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "expect");
             },
             .KwExposes => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "exposes");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "exposes");
             },
             .KwGenerates => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "generates");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "generates");
             },
             .KwHas => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "has");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "has");
             },
             .KwHosted => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "hosted");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "hosted");
             },
             .KwIf => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "if");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "if");
             },
             .KwImplements => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "implements");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "implements");
             },
             .KwImport => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "import");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "import");
             },
             .KwImports => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "imports");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "imports");
             },
             .KwInterface => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "interface");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "interface");
             },
             .KwIs => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "is");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "is");
             },
             .KwModule => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "module");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "module");
             },
             .KwPackage => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "package");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "package");
             },
             .KwPackages => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "packages");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "packages");
             },
             .KwPlatform => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "platform");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "platform");
             },
             .KwProvides => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "provides");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "provides");
             },
             .KwRequires => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "requires");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "requires");
             },
             .KwThen => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "then");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "then");
             },
             .KwTo => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "to");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "to");
             },
             .KwWhen => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "when");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "when");
             },
             .KwWhere => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "where");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "where");
             },
             .KwWith => {
-                std.mem.copyForwards(u8, buf_slice[token.offset .. token.offset + token.length], "with");
+                std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "with");
             },
         }
     }
