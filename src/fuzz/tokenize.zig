@@ -52,6 +52,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         std.debug.print("\n\n", .{});
     }
 
+    // TODO: apply errors from messages to buffer below.
+    // For now, just skip on tokenizer finding a failure.
+    if (output.messages.len != 0) {
+        return;
+    }
+
     // Dump back to buffer.
     // Here we are just printing in the simplest way possible.
     var last_end: usize = 0;
@@ -484,12 +490,6 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     if (debug) {
         std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf_slice});
-    }
-
-    // TODO: apply errors from messages.
-    // For now, just skip on tokenizer finding a failure.
-    if (output.messages.len != 0) {
-        return;
     }
 
     // Second tokenization.
