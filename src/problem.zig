@@ -1,5 +1,10 @@
+const std = @import("std");
 const base = @import("base.zig");
 const collections = @import("collections.zig");
+
+const Ident = base.Ident;
+const Region = base.Region;
+const TagName = base.TagName;
 
 pub const Problem = union(enum) {
     Parse: Parse,
@@ -8,8 +13,8 @@ pub const Problem = union(enum) {
 
     pub const Parse = union(enum) {
         IdentIssue: struct {
-            problems: base.Ident.Problems,
-            region: base.Region,
+            problems: Ident.Problems,
+            region: Region,
         },
 
         pub fn make(problem: Parse) Problem {
@@ -19,18 +24,27 @@ pub const Problem = union(enum) {
 
     pub const Canonicalize = union(enum) {
         DuplicateImport: struct {
-            duplicate_import_region: base.Region,
+            duplicate_import_region: Region,
         },
         DuplicateExposes: struct {
-            first_exposes: base.Ident.Idx,
-            duplicate_exposes: base.Ident.Idx,
+            first_exposes: Ident.Idx,
+            duplicate_exposes: Ident.Idx,
         },
-        UnqualifiedNotInScope: struct {
-            ident: base.Ident.Idx,
+        AliasNotInScope: struct {
+            name: TagName.Idx,
+            suggestions: collections.SafeList(TagName.Idx).Slice,
         },
-        UnqualifiedAlreadyInScope: struct {
-            original_ident: base.Ident.Idx,
-            shadow: base.Ident.Idx,
+        IdentNotInScope: struct {
+            ident: Ident.Idx,
+            suggestions: collections.SafeList(Ident.Idx).Slice,
+        },
+        AliasAlreadyInScope: struct {
+            original_name: TagName.Idx,
+            shadow: TagName.Idx,
+        },
+        IdentAlreadyInScope: struct {
+            original_ident: Ident.Idx,
+            shadow: Ident.Idx,
         },
 
         pub fn make(problem: Canonicalize) Problem {
@@ -74,5 +88,5 @@ pub const Problem = union(enum) {
         pub const ReferenceCount = union(enum) {};
     };
 
-    pub const List = collections.SafeList(@This());
+    // pub const List = std.ArrayList(Problem);
 };

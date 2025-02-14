@@ -8,6 +8,7 @@ const Region = @import("./Region.zig");
 const Module = @import("./Module.zig");
 
 const Problem = problem.Problem;
+const SmallStringInterner = collections.SmallStringInterner;
 const exitOnOom = utils.exitOnOom;
 
 const Ident = @This();
@@ -65,41 +66,37 @@ pub const Problems = packed struct {
 
 /// An interner for identifier names.
 pub const Store = struct {
-    interner: collections.IdentName.Interner,
-    next_unique_name: u32,
-    regions: std.ArrayList(Region),
+    interner: SmallStringInterner,
     /// The index of the local module import that this ident comes from.
     ///
     /// By default, this is set to index 0, the primary module being compiled.
     /// This needs to be set when the ident is first seen during canonicalization
     /// before doing anything else.
     exposing_modules: std.ArrayList(Module.Idx),
+    next_unique_name: u32,
 
     pub fn init(allocator: std.mem.Allocator) Store {
         return Store{
-            .interner = collections.IdentName.Interner.init(allocator),
-            .next_unique_name = 0,
-            .regions = std.ArrayList(Region).init(allocator),
+            .interner = SmallStringInterner.init(allocator),
             .exposing_modules = std.ArrayList(Module.Idx).init(allocator),
+            .next_unique_name = 0,
         };
     }
 
     pub fn deinit(self: *Store) void {
         self.interner.deinit();
-        self.regions.deinit();
         self.exposing_modules.deinit();
     }
 
-    pub fn insert(self: *Store, ident: Ident, region: Region, problems: *Problem.List) Idx {
+    pub fn insert(self: *Store, ident: Ident, region: Region, problems: *std.ArrayList(Problem)) Idx {
         if (ident.problems.has_problems()) {
-            _ = problems.append(Problem.Parse.make(.{ .IdentIssue = .{
+            problems.append(Problem.Parse.make(.{ .IdentIssue = .{
                 .problems = ident.problems,
                 .region = region,
-            } }));
+            } })) catch exitOnOom();
         }
 
-        const idx = self.interner.insert(ident.raw_text);
-        self.regions.append(region) catch exitOnOom();
+        const idx = self.interner.insert(ident.raw_text, region);
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
         return Idx{
@@ -108,7 +105,7 @@ pub const Store = struct {
         };
     }
 
-    pub fn genUnique(self: *Store, region: Region) Idx {
+    pub fn genUnique(self: *Store) Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
@@ -129,8 +126,7 @@ pub const Store = struct {
         // const name_length = if (id < 10) 1 else ;
         const name = str_buffer[digit_index..];
 
-        const idx = self.interner.insert(name);
-        self.regions.append(region) catch exitOnOom();
+        const idx = self.interner.insert(name, Region.zero());
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
         return Idx{
@@ -139,7 +135,7 @@ pub const Store = struct {
                 .ignored = false,
                 .reassignable = false,
             },
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @truncate(@intFromEnum(idx)),
         };
     }
 
@@ -148,23 +144,18 @@ pub const Store = struct {
         first_idx: Idx,
         second_idx: Idx,
     ) bool {
-        return self.interner.identsHaveSameText(@enumFromInt(@as(u32, first_idx.idx)), @enumFromInt(@as(u32, second_idx.idx)));
-    }
-
-    // TODO: Should this return Idx instead of collections.interner.IdentName.Idx
-    // To return a slice or a list of mapped values would need an allocation.
-    // We should create an Iterator object to zero-allocation walk over multiple Idxs.
-    pub fn lookup(self: *Store, string: []u8) []collections.IdentName.Idx {
-        return self.interner.lookup(string);
+        return self.interner.indicesHaveSameText(
+            @enumFromInt(@as(u32, first_idx.idx)),
+            @enumFromInt(@as(u32, second_idx.idx)),
+        );
     }
 
     pub fn getText(self: *Store, idx: Idx) []u8 {
-        const string_index = self.interner.outer_indices.items[@as(usize, idx.idx)];
-        return self.interner.strings.items[@as(usize, string_index)];
+        return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
     pub fn getRegion(self: *Store, idx: Idx) Region {
-        return self.regions.items[@as(usize, idx.idx)];
+        return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
     }
 
     pub fn getExposingModule(self: *Store, idx: Idx) Module.Idx {
@@ -174,8 +165,15 @@ pub const Store = struct {
     /// Set the module that exposes this ident.
     ///
     /// NOTE: This should be called as soon as an ident is encountered during
-    /// canonicalization to make sure that we don't
+    /// canonicalization to make sure that we don't have to worry if the exposing
+    /// module is zero because it hasn't been set yet or if it's actually zero.
     pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: Module.Idx) void {
         self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
+    }
+
+    /// Look up text in this store, returning a slice of all string interner IDs
+    /// that match this ident's text.
+    pub fn lookup(self: *Store, string: []u8) []SmallStringInterner.Idx {
+        return self.interner.lookup(string);
     }
 };

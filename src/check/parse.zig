@@ -168,6 +168,7 @@ pub const Parser = struct {
         std.debug.print("finishParseAssign\n", .{});
     }
 };
+
 test "Parser advance and peek" {
     const allocator = std.heap.page_allocator;
     var tokens = try tokenize.TokenizedBuffer.init(allocator);
