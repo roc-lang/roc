@@ -17,9 +17,7 @@ pub fn build(b: *std.Build) void {
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
-
-    const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-    b.addSearchPrefix(llvm_paths.bin);
+    const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm or user_llvm_path != null;
 
     // Zig unicode library - https://codeberg.org/atman/zg
     const zg = b.dependency("zg", .{});
@@ -33,10 +31,19 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
-    // TODO: add these once we actually depend on llvm.
-    // exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-    // exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    // try addStaticLlvmOptionsToModule(&exe.root_module);
+
+    const config = b.addOptions();
+    config.addOption(bool, "enable-llvm", enable_llvm);
+    exe.root_module.addOptions("config", config);
+
+    if (enable_llvm or use_system_llvm or user_llvm_path != null) {
+        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
+        b.addSearchPrefix(llvm_paths.bin);
+
+        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+        try addStaticLlvmOptionsToModule(&exe.root_module);
+    }
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
@@ -89,7 +96,7 @@ pub fn build(b: *std.Build) void {
             if (b.findProgram(&.{"llvm-config"}, &.{})) |_| {
                 build_afl = true;
             } else |_| {
-                std.log.warn("AFL++ requires a full version of llvm from the system (-Dsystem-llvm) or passed in via -Dllvm-path (Only building repro executables)", .{});
+                std.log.warn("AFL++ requires a full version of llvm from the system or passed in via -Dllvm-path, but `llvm-config` was not found (Only building repro executables)", .{});
             }
         }
 
@@ -158,7 +165,7 @@ fn llvmPaths(
     const raw_triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
     if (!supported_deps_triples.has(raw_triple)) {
         std.log.err("Target triple({s}) not supported by roc-bootstrap.\n", .{raw_triple});
-        std.log.err("Please specify the either `-Dsystem-llvm` or `-Dllvm-config-path`.\n", .{});
+        std.log.err("Please specify the either `-Dsystem-llvm` or `-Dllvm-path`.\n", .{});
         std.process.exit(1);
     }
     const triple = supported_deps_triples.get(raw_triple).?;
