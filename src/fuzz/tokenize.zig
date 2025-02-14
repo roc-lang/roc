@@ -70,22 +70,18 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             break;
         }
         if (token.tag == .Newline) {
-            // Place a newline such that the next row starts with `indent` spaces.
-            const indents = token.offset;
-            const next_token = output.tokens.tokens.get(token_index + 1);
-            std.debug.assert(next_token.tag != .Newline);
-            const next_offset = if (next_token.tag == .EndOfFile) buf_slice.len else next_token.offset;
-            for (last_end..next_offset - indents - 1) |i| {
-                buf_slice[i] = ' ';
-            }
-            buf_slice[next_offset - indents - 1] = '\n';
-            last_end = next_offset - indents;
+            // Newlines will be copied with other whitespace
             continue;
         }
 
-        // Fill offset between all tokens with empty whitespace.
+        // Copy over limited whitespace.
+        // TODO: Long term, we should switch to dummy whitespace, but currently, Roc still has WSS.
         for (last_end..token.offset) |i| {
-            buf_slice[i] = ' ';
+            // Leave tabs and newlines alone, they are special to roc.
+            // Replace everything else with spaces.
+            if (buf_slice[i] != '\t' and buf_slice[i] != '\r' and buf_slice[i] != '\n') {
+                buf_slice[i] = ' ';
+            }
         }
         last_end = token.offset + token.length;
 
