@@ -16,8 +16,14 @@ pub fn build(b: *std.Build) void {
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
+    const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
-    const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm or user_llvm_path != null;
+
+    if (user_llvm_path) |path| {
+        // Even if the llvm backend is not enabled, still add the llvm path.
+        // AFL++ may use it for building fuzzing executables.
+        b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
+    }
 
     // Zig unicode library - https://codeberg.org/atman/zg
     const zg = b.dependency("zg", .{});
@@ -36,9 +42,8 @@ pub fn build(b: *std.Build) void {
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
 
-    if (enable_llvm or use_system_llvm or user_llvm_path != null) {
+    if (enable_llvm) {
         const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-        b.addSearchPrefix(llvm_paths.bin);
 
         exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
@@ -118,7 +123,6 @@ pub fn build(b: *std.Build) void {
 }
 
 const LlvmPaths = struct {
-    bin: []const u8,
     include: []const u8,
     lib: []const u8,
 };
@@ -141,12 +145,10 @@ fn llvmPaths(
             std.log.err("Failed to find system llvm-config binary", .{});
             std.process.exit(1);
         };
-        const llvm_bin_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--bindir" }), "\n");
         const llvm_lib_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--libdir" }), "\n");
         const llvm_include_dir = std.mem.trimRight(u8, b.run(&.{ llvm_config_path, "--includedir" }), "\n");
 
         return .{
-            .bin = llvm_bin_dir,
             .include = llvm_include_dir,
             .lib = llvm_lib_dir,
         };
@@ -155,7 +157,6 @@ fn llvmPaths(
     if (user_llvm_path) |llvm_path| {
         // We are just trust the user.
         return .{
-            .bin = b.pathJoin(&.{ llvm_path, "bin" }),
             .include = b.pathJoin(&.{ llvm_path, "include" }),
             .lib = b.pathJoin(&.{ llvm_path, "lib" }),
         };
@@ -177,7 +178,6 @@ fn llvmPaths(
     // Not sure how else to get a static path to the downloaded dependency.
     const llvm_path = lazy_llvm_path.getPath(deps.builder);
     return .{
-        .bin = b.pathJoin(&.{ llvm_path, "bin" }),
         .include = b.pathJoin(&.{ llvm_path, "include" }),
         .lib = b.pathJoin(&.{ llvm_path, "lib" }),
     };
