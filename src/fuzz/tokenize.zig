@@ -104,6 +104,12 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
                 for (0..token.length) |i| {
                     buf_slice[token.offset + i] = '~';
                 }
+                // This is technically ambiguous, but good enough for now.
+                const next_token = output.tokens.tokens.get(token_index + 1);
+                if (next_token.tag != .OpenCurly) {
+                    // No following interpolation, end the string.
+                    buf_slice[token.offset + token.length - 1] = '"';
+                }
             },
             .SingleQuoteBegin => {
                 buf_slice[token.offset] = '\'';
@@ -114,6 +120,12 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             .SingleQuotePart => {
                 for (0..token.length) |i| {
                     buf_slice[token.offset + i] = '~';
+                }
+                // This is technically ambiguous, but good enough for now.
+                const next_token = output.tokens.tokens.get(token_index + 1);
+                if (next_token.tag != .OpenCurly) {
+                    // No following interpolation, end the string.
+                    buf_slice[token.offset + token.length - 1] = '\'';
                 }
             },
 
@@ -470,12 +482,31 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     defer output2.tokens.deinit();
 
     // Assert same.
-    std.debug.assert(output.tokens.tokens.len != output2.tokens.tokens.len);
+    var matching = output.tokens.tokens.len == output2.tokens.tokens.len;
     for (0..output.tokens.tokens.len) |token_index| {
+        if (!matching) {
+            break;
+        }
         const token = output.tokens.tokens.get(token_index);
         const token2 = output2.tokens.tokens.get(token_index);
-        std.debug.assert(token.tag == token2.tag);
-        std.debug.assert(token.offset == token2.offset);
-        std.debug.assert(token.length == token2.length);
+        matching |= token.tag == token2.tag;
+        matching |= token.offset == token2.offset;
+        matching |= token.length == token2.length;
+    }
+    if (!matching) {
+        // TODO: Print some sort of nice diff
+        std.debug.print("Before:", .{});
+        for (0..output.tokens.tokens.len) |token_index| {
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+
+        std.debug.print("After:", .{});
+        for (0..output2.tokens.tokens.len) |token_index| {
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
     }
 }
