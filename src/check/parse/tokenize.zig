@@ -471,6 +471,7 @@ pub const Cursor = struct {
                         break;
                     },
                     else => {
+                        self.chompNumberSuffix();
                         tok = .Int;
                         break;
                     },
