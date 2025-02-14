@@ -14,9 +14,9 @@ const cli = @import("cli");
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
 
-export fn zig_fuzz_init() void {}
+pub export fn zig_fuzz_init() void {}
 
-export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
+pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};

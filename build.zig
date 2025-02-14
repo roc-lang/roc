@@ -108,6 +108,9 @@ pub fn build(b: *std.Build) void {
         // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
         // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
         // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
+        // TODO: Create one root lib module that all fuzzers can depend on instead of all these disparate manually managed modules.
+        // Since zig does tree shaking, that will still compile fast.
+        // We also can make main only depend on that module.
         add_fuzz_target(
             b,
             build_afl,
@@ -236,10 +239,10 @@ fn add_fuzz_target(
         .name = name_repro,
         .root_source_file = b.path("src/fuzz/repro.zig"),
         .target = target,
-        .optimize = .ReleaseSafe,
+        .optimize = .Debug,
         .link_libc = true,
     });
-    repro.addObject(fuzz_obj);
+    repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
     fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro).step);
 
     if (build_afl) {
