@@ -269,11 +269,13 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
     mod.linkSystemLibrary("zstd", .{});
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
+        // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?
         // This means we rely on clang-or-zig-built LLVM, Clang, LLD libraries.
         mod.linkSystemLibrary("c++", .{});
     }
 
     if (mod.resolved_target.?.result.os.tag == .windows) {
+        mod.linkSystemLibrary("ws2_32", .{});
         mod.linkSystemLibrary("version", .{});
         mod.linkSystemLibrary("uuid", .{});
         mod.linkSystemLibrary("ole32", .{});
