@@ -1021,9 +1021,9 @@ pub const Tokenizer = struct {
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    _ = self.cursor.chompNumber(b);
+                    const tag = self.cursor.chompNumber(b);
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.Int, start, len);
+                    try self.output.pushToken(tag, start, len);
                 },
 
                 // Lowercase identifiers
