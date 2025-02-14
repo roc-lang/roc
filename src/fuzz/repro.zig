@@ -30,7 +30,7 @@ pub fn main() !void {
         defer gpa.free(bytes);
 
         fuzz_test.zig_fuzz_init();
-        fuzz_test.zig_fuzz_test(bytes.ptr, @intCast(bytes.len));
+        fuzz_test.zig_fuzz_test_inner(bytes.ptr, @intCast(bytes.len), true);
     } else if (args.len == 2) {
         if (std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help")) {
             // Special case for help message.
@@ -51,7 +51,7 @@ pub fn main() !void {
         defer gpa.free(bytes);
 
         fuzz_test.zig_fuzz_init();
-        fuzz_test.zig_fuzz_test(bytes.ptr, @intCast(bytes.len));
+        fuzz_test.zig_fuzz_test_inner(bytes.ptr, @intCast(bytes.len), true);
     } else {
         // If many args are passed in, use them as the fuzz input.
         std.debug.print("Using commandline args as bytes for repro\n", .{});
@@ -67,6 +67,6 @@ pub fn main() !void {
         }
 
         fuzz_test.zig_fuzz_init();
-        fuzz_test.zig_fuzz_test(args_str.items.ptr, @intCast(args_str.items.len));
+        fuzz_test.zig_fuzz_test_inner(args_str.items.ptr, @intCast(args_str.items.len), true);
     }
 }

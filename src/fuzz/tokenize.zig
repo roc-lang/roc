@@ -16,6 +16,10 @@ const GenCatData = @import("GenCatData");
 pub export fn zig_fuzz_init() void {}
 
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
+    zig_fuzz_test_inner(buf, len, false);
+}
+
+pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
@@ -38,6 +42,15 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     };
     var output = tokenizer.finish_and_deinit();
     defer output.tokens.deinit();
+
+    if (debug) {
+        std.debug.print("Before:", .{});
+        for (0..output.tokens.tokens.len) |token_index| {
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+    }
 
     // Dump back to buffer.
     // Here we are just printing in the simplest way possible.
@@ -469,7 +482,15 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         }
     }
 
+    if (debug) {
+        std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf_slice});
+    }
+
     // TODO: apply errors from messages.
+    // For now, just skip on tokenizer finding a failure.
+    if (output.messages.len != 0) {
+        return;
+    }
 
     // Second tokenization.
     tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa) catch @panic("OOM");
@@ -480,32 +501,21 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();
 
-    // Assert same.
-    var matching = output.tokens.tokens.len == output2.tokens.tokens.len;
-    for (0..output.tokens.tokens.len) |token_index| {
-        if (!matching) {
-            break;
-        }
-        const token = output.tokens.tokens.get(token_index);
-        const token2 = output2.tokens.tokens.get(token_index);
-        matching = matching and token.tag == token2.tag;
-        matching = matching and token.offset == token2.offset;
-        matching = matching and token.length == token2.length;
-    }
-    if (!matching) {
-        // TODO: Print some sort of nice diff
-        std.debug.print("Before:", .{});
-        for (0..output.tokens.tokens.len) |token_index| {
-            const token = output.tokens.tokens.get(token_index);
-            std.debug.print("\t{any}\n", .{token});
-        }
-        std.debug.print("\n\n", .{});
-
+    if (debug) {
         std.debug.print("After:", .{});
         for (0..output2.tokens.tokens.len) |token_index| {
             const token = output2.tokens.tokens.get(token_index);
             std.debug.print("\t{any}\n", .{token});
         }
         std.debug.print("\n\n", .{});
+    }
+    // Assert same.
+    std.debug.assert(output.tokens.tokens.len == output2.tokens.tokens.len);
+    for (0..output.tokens.tokens.len) |token_index| {
+        const token = output.tokens.tokens.get(token_index);
+        const token2 = output2.tokens.tokens.get(token_index);
+        std.debug.assert(token.tag == token2.tag);
+        std.debug.assert(token.offset == token2.offset);
+        std.debug.assert(token.length == token2.length);
     }
 }

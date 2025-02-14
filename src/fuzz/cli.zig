@@ -17,6 +17,11 @@ const RocOpt = cli.RocOpt;
 pub export fn zig_fuzz_init() void {}
 
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
+    zig_fuzz_test_inner(buf, len, false);
+}
+
+pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
+    _ = debug;
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
