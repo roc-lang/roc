@@ -94,4 +94,4 @@ jobs:
 
             - name: cross compile with llvm
               run: |
-                zig build -Dtarget=${{matrix.target}} -Dllvm
+                zig build -Dtarget=${{ matrix.target }} -Dllvm
