@@ -92,7 +92,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                 buf_slice[token.offset] = '0';
                 buf_slice[token.offset + 1] = '.';
                 for (2..token.length) |i| {
-                    buf_slice[token.offset + i] = '0';
+                    buf_slice[token.offset + i] = '1';
                 }
             },
             .String => {
@@ -162,7 +162,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             .DotInt => {
                 buf_slice[token.offset] = '.';
                 for (1..token.length) |i| {
-                    buf_slice[token.offset + i] = '0';
+                    buf_slice[token.offset + i] = '1';
                 }
             },
             .DotLowerIdent => {
@@ -181,7 +181,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             .NoSpaceDotInt => {
                 buf_slice[token.offset] = '.';
                 for (1..token.length) |i| {
-                    buf_slice[token.offset + i] = '0';
+                    buf_slice[token.offset + i] = '1';
                 }
             },
             .NoSpaceDotLowerIdent => {
@@ -212,7 +212,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             },
             .Int => {
                 for (0..token.length) |i| {
-                    buf_slice[token.offset + i] = '0';
+                    buf_slice[token.offset + i] = '1';
                 }
             },
 
