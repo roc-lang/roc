@@ -33,9 +33,10 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
-    exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-    exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-    try addStaticLlvmOptionsToModule(&exe.root_module);
+    // TODO: add these once we actually depend on llvm.
+    // exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+    // exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+    // try addStaticLlvmOptionsToModule(&exe.root_module);
 
     b.installArtifact(exe);
     const run_cmd = b.addRunArtifact(exe);
