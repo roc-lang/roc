@@ -581,7 +581,7 @@ pub const Cursor = struct {
     /// Returns the token type - LowerIdent or Kw*
     pub fn chompIdentLower(self: *Cursor) Token.Tag {
         const start = self.pos;
-        _ = self.chompIdentGeneral();
+        self.chompIdentGeneral();
         const ident = self.buf[start..self.pos];
         const kw = Token.keywords.get(ident);
         return kw orelse .LowerIdent;
@@ -1023,14 +1023,14 @@ pub const Tokenizer = struct {
 
                 // Lowercase identifiers
                 'a'...'z' => {
-                    _ = self.cursor.chompIdentLower();
+                    const tag = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.LowerIdent, start, len);
+                    try self.output.pushToken(tag, start, len);
                 },
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    _ = self.cursor.chompIdentGeneral();
+                    self.cursor.chompIdentGeneral();
                     const len = self.cursor.pos - start;
                     try self.output.pushToken(.UpperIdent, start, len);
                 },
