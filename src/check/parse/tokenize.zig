@@ -403,6 +403,10 @@ pub const Cursor = struct {
             return .{ .tag = .Invalid, .length = 1 };
         };
         const len: u32 = @intCast(len3);
+        const remainder: u32 = @intCast(self.buf.len - self.pos);
+        if (remainder < len) {
+            return .{ .tag = .Invalid, .length = remainder };
+        }
         const utf8_char = std.unicode.utf8Decode(self.buf[self.pos..][0..len]) catch {
             return .{ .tag = .Invalid, .length = len };
         };
