@@ -28,7 +28,9 @@ jobs:
               with:
                 version: 0.13.0
 
-            - run: zig build
+            - name: build roc
+              run: |
+                zig build -Dllvm
 
             - name: roc executable minimal check (Unix)
               if: runner.os != 'Windows'
@@ -41,7 +43,8 @@ jobs:
                 zig-out\bin\roc.exe -h | findstr "Usage:"
 
             - name: zig tests
-              run: zig build test
+              run: |
+                zig build test -Dllvm
 
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
@@ -69,3 +72,29 @@ jobs:
                     $imports | ForEach-Object { echo "  $_" }
                     exit 1
                 }
+
+    zig-cross-compile:
+        needs: check-zig-fmt
+        runs-on: ubuntu-24.04
+        strategy:
+            matrix:
+                target:
+                - aarch64-linux-musl
+                - aarch64-macos-none
+                - aarch64-windows-gnu
+                - arm-linux-musleabihf
+                - x86-linux-musl
+                - x86_64-linux-musl
+                - x86_64-macos-none
+                - x86_64-windows-gnu
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - uses: mlugg/setup-zig@v1
+              with:
+                version: 0.13.0
+
+            - name: cross compile with llvm
+              run: |
+                zig build -Dtarget=${{ matrix.target }} -Dllvm
