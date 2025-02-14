@@ -1023,7 +1023,6 @@ pub const Tokenizer = struct {
 
                 // Lowercase identifiers
                 'a'...'z' => {
-                    self.cursor.pos += 1;
                     _ = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
                     try self.output.pushToken(.LowerIdent, start, len);
@@ -1031,7 +1030,6 @@ pub const Tokenizer = struct {
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    self.cursor.pos += 1;
                     _ = self.cursor.chompIdentGeneral();
                     const len = self.cursor.pos - start;
                     try self.output.pushToken(.UpperIdent, start, len);
