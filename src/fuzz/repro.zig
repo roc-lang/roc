@@ -3,14 +3,13 @@
 /// The default persistent mode fuzzer is really efficient, but can't be run from the command line.
 /// This runners makes a simple script to reproduce failures from the command line (stdin or file).
 const std = @import("std");
+const fuzz_test = @import("fuzz_test");
 
-// TODO: add an extern func zig_pretty_print or something to dump the test case in a pretty printed format.
+// TODO: add a func zig_pretty_print or something to dump the test case in a pretty printed format.
 // For example, for intermediate IRs, would pretty print the input IR.
 // Then make all the fuzzer implement it.
-
-extern fn zig_fuzz_init() void;
-
-extern fn zig_fuzz_test(buf: [*]u8, len: isize) void;
+// Another option is just adding a debug flag that defaults to false that the repro script can turn on to print more.
+// Also could just dump out a lot of state before panicking.
 
 const MAX_SIZE = std.math.maxInt(u32);
 
@@ -30,8 +29,8 @@ pub fn main() !void {
         const bytes = try std.io.getStdIn().readToEndAlloc(gpa, @intCast(MAX_SIZE));
         defer gpa.free(bytes);
 
-        zig_fuzz_init();
-        zig_fuzz_test(bytes.ptr, @intCast(bytes.len));
+        fuzz_test.zig_fuzz_init();
+        fuzz_test.zig_fuzz_test_inner(bytes.ptr, @intCast(bytes.len), true);
     } else if (args.len == 2) {
         if (std.mem.eql(u8, args[1], "-h") or std.mem.eql(u8, args[1], "--help")) {
             // Special case for help message.
@@ -51,8 +50,8 @@ pub fn main() !void {
         const bytes = try file.readToEndAlloc(gpa, @intCast(MAX_SIZE));
         defer gpa.free(bytes);
 
-        zig_fuzz_init();
-        zig_fuzz_test(bytes.ptr, @intCast(bytes.len));
+        fuzz_test.zig_fuzz_init();
+        fuzz_test.zig_fuzz_test_inner(bytes.ptr, @intCast(bytes.len), true);
     } else {
         // If many args are passed in, use them as the fuzz input.
         std.debug.print("Using commandline args as bytes for repro\n", .{});
@@ -67,7 +66,7 @@ pub fn main() !void {
             }
         }
 
-        zig_fuzz_init();
-        zig_fuzz_test(args_str.items.ptr, @intCast(args_str.items.len));
+        fuzz_test.zig_fuzz_init();
+        fuzz_test.zig_fuzz_test_inner(args_str.items.ptr, @intCast(args_str.items.len), true);
     }
 }
