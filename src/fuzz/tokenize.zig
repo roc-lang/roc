@@ -44,7 +44,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     defer output.tokens.deinit();
 
     if (debug) {
-        std.debug.print("Before:", .{});
+        std.debug.print("Before:\n", .{});
         for (0..output.tokens.tokens.len) |token_index| {
             const token = output.tokens.tokens.get(token_index);
             std.debug.print("\t{any}\n", .{token});
@@ -502,7 +502,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     defer output2.tokens.deinit();
 
     if (debug) {
-        std.debug.print("After:", .{});
+        std.debug.print("After:\n", .{});
         for (0..output2.tokens.tokens.len) |token_index| {
             const token = output2.tokens.tokens.get(token_index);
             std.debug.print("\t{any}\n", .{token});
