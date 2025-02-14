@@ -488,9 +488,9 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
         }
         const token = output.tokens.tokens.get(token_index);
         const token2 = output2.tokens.tokens.get(token_index);
-        matching |= token.tag == token2.tag;
-        matching |= token.offset == token2.offset;
-        matching |= token.length == token2.length;
+        matching = matching and token.tag == token2.tag;
+        matching = matching and token.offset == token2.offset;
+        matching = matching and token.length == token2.length;
     }
     if (!matching) {
         // TODO: Print some sort of nice diff
