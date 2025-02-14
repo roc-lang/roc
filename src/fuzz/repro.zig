@@ -8,6 +8,8 @@ const fuzz_test = @import("fuzz_test");
 // TODO: add a func zig_pretty_print or something to dump the test case in a pretty printed format.
 // For example, for intermediate IRs, would pretty print the input IR.
 // Then make all the fuzzer implement it.
+// Another option is just adding a debug flag that defaults to false that the repro script can turn on to print more.
+// Also could just dump out a lot of state before panicking.
 
 const MAX_SIZE = std.math.maxInt(u32);
 
