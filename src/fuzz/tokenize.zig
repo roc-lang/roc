@@ -468,7 +468,6 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
             },
         }
     }
-    std.debug.print("{s}\n\n", .{buf_slice});
 
     // TODO: apply errors from messages.
 
