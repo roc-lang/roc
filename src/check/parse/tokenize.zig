@@ -755,6 +755,7 @@ pub const Tokenizer = struct {
                             const len = self.cursor.pos - start;
                             try self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
                         } else if (n >= 0b11000000 and n <= 0xff) {
+                            self.cursor.pos += 1;
                             const info = self.cursor.decodeUnicode(n);
                             switch (info.tag) {
                                 .LetterUpper => {
