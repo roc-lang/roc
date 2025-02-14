@@ -469,12 +469,8 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();
 
-    // TODO: write to file or otherwise make better printouts on failure here.
     // Assert same.
-    if (output.tokens.tokens.len != output2.tokens.tokens.len) {
-        @panic("Total number of tokens doesn't match");
-    }
-    std.debug.print("here?\n", .{});
+    std.debug.assert(output.tokens.tokens.len != output2.tokens.tokens.len);
     for (0..output.tokens.tokens.len) |token_index| {
         const token = output.tokens.tokens.get(token_index);
         const token2 = output2.tokens.tokens.get(token_index);
