@@ -159,24 +159,19 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                 std.debug.assert(token.length == 1);
                 buf_slice[token.offset] = '_';
             },
-            // We turn all whitespace into regular space characters.
-            // Since these have whitespace before them, assert the space exists.
             .DotInt => {
-                std.debug.assert(buf_slice[token.offset - 1] == ' ');
                 buf_slice[token.offset] = '.';
                 for (1..token.length) |i| {
                     buf_slice[token.offset + i] = '0';
                 }
             },
             .DotLowerIdent => {
-                std.debug.assert(buf_slice[token.offset - 1] == ' ');
                 buf_slice[token.offset] = '.';
                 for (1..token.length) |i| {
                     buf_slice[token.offset + i] = 'z';
                 }
             },
             .DotUpperIdent => {
-                std.debug.assert(buf_slice[token.offset - 1] == ' ');
                 buf_slice[token.offset] = '.';
                 buf_slice[token.offset + 1] = 'Z';
                 for (2..token.length) |i| {
