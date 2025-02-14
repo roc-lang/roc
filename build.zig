@@ -33,7 +33,7 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     const config = b.addOptions();
-    config.addOption(bool, "enable-llvm", enable_llvm);
+    config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
 
     if (enable_llvm or use_system_llvm or user_llvm_path != null) {
