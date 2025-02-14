@@ -18,8 +18,9 @@ test {
     testing.refAllDeclsRecursive(@import("coordinate.zig"));
     testing.refAllDeclsRecursive(@import("check/parse.zig"));
     testing.refAllDeclsRecursive(@import("check/resolve_imports.zig"));
-    testing.refAllDeclsRecursive(@import("check/typecheck.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/test.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_types.zig"));
     testing.refAllDeclsRecursive(@import("build/lift_functions.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_functions.zig"));
