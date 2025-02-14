@@ -1186,10 +1186,16 @@ pub const Tokenizer = struct {
                 } else {
                     if (kind == .single_line and c == term) {
                         self.cursor.pos += 1;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
                         self.cursor.pos += 3;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     }
                     self.cursor.pos += 1;
                 }
