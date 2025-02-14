@@ -164,7 +164,6 @@ pub const Token = struct {
             .KwDbg,
             .KwElse,
             .KwExpect,
-            .KwExpectFx,
             .KwExposes,
             .KwGenerates,
             .KwHas,
@@ -227,7 +226,7 @@ pub const TokenizedBuffer = struct {
     /// Returns the offset of the token at index `idx`.
     pub fn offset(self: *TokenizedBuffer, idx: u32) u32 {
         // newline tokens don't have offsets - that field is used to store the indent.
-        std.debug.assert(self.tokens.items(.tag) != .Newline);
+        std.debug.assert(self.tokens.items(.tag)[@as(usize, idx)] != .Newline);
         return self.tokens.items(.offset)[@intCast(idx)];
     }
 };
@@ -329,8 +328,8 @@ pub const Cursor = struct {
     }
 
     pub fn isPeekedCharInRange(self: *Cursor, lookahead: usize, start: u8, end: u8) bool {
-        const c = self.peekAt(lookahead);
-        return c != null and c >= start and c <= end;
+        const peeked = self.peekAt(lookahead);
+        return if (peeked) |c| (c >= start and c <= end) else false;
     }
 
     /// Requires that the next byte is `ch`, otherwise pushes a message.

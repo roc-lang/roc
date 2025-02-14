@@ -10,6 +10,7 @@ const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const Region = @import("Region.zig");
 const Problem = problem.Problem;
+const exitOnOom = collections.utils.exitOnOom;
 
 const Module = @This();
 
@@ -132,17 +133,17 @@ pub const Store = struct {
         self: *Store,
         module_idx: Module.Idx,
         ident: Ident.Idx,
-        problems: *collections.SafeList(problem.Problem),
+        problems: *std.ArrayList(problem.Problem),
     ) void {
         const module_index = @intFromEnum(module_idx);
         var module = self.modules.items.get(module_index);
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident)) {
-                _ = problems.append(Problem.Canonicalize.make(.{ .DuplicateExposes = .{
+                problems.append(Problem.Canonicalize.make(.{ .DuplicateExposes = .{
                     .first_exposes = exposed_ident,
                     .duplicate_exposes = ident,
-                } }));
+                } })) catch exitOnOom();
                 return;
             }
         }

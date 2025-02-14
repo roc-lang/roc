@@ -2,6 +2,9 @@ const base = @import("../../base.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
+const Region = base.Region;
+const TagName = base.TagName;
+const StringLiteral = base.StringLiteral;
 
 const Self = @This();
 
@@ -26,7 +29,7 @@ pub const Header = struct {
 
     pub const Package = struct {
         shorthand: Ident.Idx,
-        url: collections.StringLiteral.Idx,
+        url: StringLiteral.Idx,
 
         const List = collections.SafeList(@This());
     };
@@ -39,17 +42,21 @@ pub const Stmt = union(enum) {
         // TODO: this will all be changed when the 1st draft of the parser MR is merged
         // Changing to get test working for now
         name: []u8,
-        name_region: base.Region,
+        name_region: Region,
         package_shorthand: ?[]u8,
         exposing: collections.SafeList(Exposing),
 
         pub const Exposing = union(enum) {
-            Value: base.Ident.Idx,
-            Type: base.Ident.Idx,
-            CustomTagUnion: struct {
-                name: base.Ident.Idx,
-                variants: collections.SafeList(base.Ident.Idx),
+            Value: Ident.Idx,
+            Type: struct {
+                name: TagName.Idx,
             },
+            CustomTagUnion: struct {
+                name: TagName.Idx,
+                variants: collections.SafeList(Ident.Idx),
+            },
+
+            pub const List = collections.SafeList(@This());
         };
     };
 

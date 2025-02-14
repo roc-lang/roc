@@ -3,17 +3,21 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const collections = @import("../../collections.zig");
 
+const Alias = @import("./Alias.zig");
+
 const Ident = base.Ident;
 const Region = base.Region;
+const Module = base.Module;
+const TagName = base.TagName;
+const FieldName = base.FieldName;
+const TypeVarName = base.TypeVarName;
+const StringLiteral = base.StringLiteral;
 const TypeVar = types.TypeVar;
-const TagName = collections.TagName;
-const FieldName = collections.FieldName;
-const StringLiteral = collections.StringLiteral;
 
 const Self = @This();
 
 env: base.ModuleEnv,
-aliases: std.AutoHashMap(Ident.Idx, Alias.WithVisibility),
+aliases: Alias.List,
 exprs: Expr.List,
 exprs_at_regions: ExprAtRegion.List,
 typed_exprs_at_regions: TypedExprAtRegion.List,
@@ -22,11 +26,13 @@ patterns: Pattern.List,
 patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
 type_vars: collections.SafeList(TypeVar),
+type_var_names: TypeVarName.Store,
+ingested_files: IngestedFile.List,
 
 pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .env = base.ModuleEnv.init(allocator),
-        .aliases = std.AutoHashMap(Ident.Idx, Alias.WithVisibility).init(allocator),
+        .aliases = Alias.List.init(allocator),
         .exprs = Expr.List.init(allocator),
         .exprs_at_regions = ExprAtRegion.List.init(allocator),
         .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),
@@ -35,6 +41,8 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .patterns_at_regions = PatternAtRegion.List.init(allocator),
         .typed_patterns_at_regions = TypedPatternAtRegion.List.init(allocator),
         .type_vars = collections.SafeList(TypeVar).init(allocator),
+        .type_var_names = TypeVarName.Store.init(allocator),
+        .ingested_files = IngestedFile.List.init(allocator),
     };
 }
 
@@ -48,6 +56,8 @@ pub fn deinit(self: *Self) void {
     self.patterns_at_regions.deinit();
     self.typed_patterns_at_regions.deinit();
     self.type_vars.deinit();
+    self.type_var_names.deinit();
+    self.ingested_files.deinit();
 }
 
 pub const RigidVariables = struct {
@@ -58,45 +68,6 @@ pub const RigidVariables = struct {
     //     name: Ident.Idx,
     //     methods: MethodSet,
     // };
-};
-
-pub const Alias = struct {
-    name: Ident.Idx,
-    region: Region,
-    type_variables: Alias.Var.Slice,
-    /// Extension variables that should be inferred in output positions, and closed in input
-    /// positions.
-    infer_ext_in_output_variables: collections.SafeList(TypeVar).Slice,
-    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
-
-    //     pub typ: Type,
-    kind: Kind,
-
-    pub const Kind = enum {
-        Structural,
-        /// Aliases for types that are defined in Zig instead of Roc,
-        /// like List and Box.
-        Builtin,
-        // Enable custom types in the future
-        //
-        // Custom,
-    };
-
-    pub const Var = struct {
-        name: Ident.Idx,
-        region: Region,
-        type_var: TypeVar,
-        // /// `Some` if this variable is bound to abilities; `None` otherwise.
-        // pub opt_bound_abilities: Option<AbilitySet>,
-
-        pub const List = collections.SafeMultiList(@This());
-        pub const Slice = List.Slice;
-    };
-
-    pub const WithVisibility = struct {
-        visible: bool,
-        alias: Alias,
-    };
 };
 
 // TODO: don't use symbol in this module, no imports really exist yet?
@@ -128,7 +99,7 @@ pub const Expr = union(enum) {
         value: f64,
         bound: types.num.Bound.Float,
     },
-    Str: collections.StringLiteral.Idx,
+    Str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
     SingleQuote: struct {
         num_var: TypeVar,
@@ -220,6 +191,17 @@ pub const Expr = union(enum) {
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+pub const IngestedFile = struct {
+    relative_path: StringLiteral.Idx,
+    ident: Ident.Idx,
+    type: Annotation,
+
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
+    pub const Slice = List.Slice;
+    pub const NonEmptySlice = List.NonEmptySlice;
+};
+
 pub const Def = struct {
     pattern: Pattern.Idx,
     pattern_region: Region,
@@ -246,7 +228,7 @@ pub const Def = struct {
 };
 
 pub const Annotation = struct {
-    signature: types.TypeVar,
+    signature: TypeVar,
     // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
     region: Region,
@@ -336,7 +318,7 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    Identifier: base.Module.Idx,
+    Identifier: Module.Idx,
     As: struct {
         pattern: Pattern.Idx,
         region: Region,

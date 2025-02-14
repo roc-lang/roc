@@ -1,70 +1,59 @@
-//! The common state or environment for a given module, and stores all the intered data
+//! The common state or environment for a given module, and stores all the interned data
 //! like symbols, strings, tag names, field names, and problems.
 //!
-//! This reduces the size the IR as it can use references to these interned values.
+//! This reduces the size of this module's IRs as they can store references to this
+//! interned (and deduplicated) data instead of storing the values themselves.
 const std = @import("std");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
+
 const Ident = @import("./Ident.zig");
 const Module = @import("./Module.zig");
+const TagName = @import("./TagName.zig");
+const FieldName = @import("./FieldName.zig");
+const StringLiteral = @import("./StringLiteral.zig");
 
 const Problem = problem.Problem;
 
-const ModuleEnv = @This();
+const Self = @This();
 
-// stores information about modules, includes each of
-// this module's dependencies
-modules: Module.Store,
+/// This siloed module's view of other modules based only on import statements.
 idents: Ident.Store,
-strings: collections.StringLiteral.Interner,
-tag_names: collections.TagName.Interner,
-tag_ids_for_slicing: collections.SafeList(collections.TagName.Idx),
-field_names: collections.FieldName.Interner,
-field_ids_for_slicing: collections.SafeList(collections.FieldName.Idx),
-problems: problem.Problem.List,
-// TODO: where are these used, and how do we manage them?
-// pub tuple_elem_indices: Vec<usize>,
-// pub record_fields: Vec<RecordField<()>>,
+ident_ids_for_slicing: collections.SafeList(Ident.Idx),
+modules: Module.Store,
+tag_names: TagName.Store,
+tag_name_ids_for_slicing: collections.SafeList(TagName.Idx),
+field_names: FieldName.Store,
+strings: StringLiteral.Store,
+problems: std.ArrayList(Problem),
 
-pub fn init(allocator: std.mem.Allocator) ModuleEnv {
+pub fn init(allocator: std.mem.Allocator) Self {
     var ident_store = Ident.Store.init(allocator);
-    return ModuleEnv{
-        .modules = Module.Store.init(allocator, &ident_store),
+
+    return Self{
         .idents = ident_store,
-        .strings = collections.StringLiteral.Interner.init(allocator),
-        .tag_names = collections.TagName.Interner.init(allocator),
-        .tag_ids_for_slicing = collections.SafeList(collections.TagName.Idx).init(allocator),
-        .field_names = collections.FieldName.Interner.init(allocator),
-        .field_ids_for_slicing = collections.SafeList(collections.FieldName.Idx).init(allocator),
-        .problems = problem.Problem.List.init(allocator),
+        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(allocator),
+        .modules = Module.Store.init(allocator, &ident_store),
+        .tag_names = TagName.Store.init(allocator),
+        .tag_name_ids_for_slicing = collections.SafeList(TagName.Idx).init(allocator),
+        .field_names = FieldName.Store.init(allocator),
+        .strings = StringLiteral.Store.init(allocator),
+        .problems = std.ArrayList(Problem).init(allocator),
     };
 }
 
-pub fn deinit(self: *ModuleEnv) void {
+pub fn deinit(self: *Self) void {
+    self.idents.deinit();
+    self.ident_ids_for_slicing.deinit();
     self.modules.deinit();
-    self.strings.deinit();
     self.tag_names.deinit();
-    self.tag_ids_for_slicing.deinit();
+    self.tag_name_ids_for_slicing.deinit();
     self.field_names.deinit();
-    self.field_ids_for_slicing.deinit();
+    self.strings.deinit();
     self.problems.deinit();
 }
 
-pub fn addTagNameSlice(
-    self: *ModuleEnv,
-    names: []collections.TagName.Idx,
-) collections.SafeList(collections.TagName.Idx).Slice {
-    return self.tag_ids_for_slicing.appendSlice(names);
-}
-
-pub fn addFieldNameSlice(
-    self: *ModuleEnv,
-    names: []collections.FieldName.Idx,
-) collections.SafeList(collections.FieldName.Idx).Slice {
-    return self.field_ids_for_slicing.appendSlice(names);
-}
-
-pub fn addExposedIdentForModule(self: *ModuleEnv, ident: Ident.Idx, module: Module.Idx) void {
+pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {
     self.modules.addExposedIdent(module, ident, &self.problems);
     self.idents.setExposingModule(ident, module);
 }
