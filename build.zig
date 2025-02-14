@@ -122,6 +122,20 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "cli", .module = b.createModule(.{ .root_source_file = b.path("src/cli.zig") }) },
             },
         );
+        const tokenize_module = b.createModule(.{ .root_source_file = b.path("src/check/parse/tokenize.zig") });
+        tokenize_module.addImport("GenCatData", zg.module("GenCatData"));
+        add_fuzz_target(
+            b,
+            build_afl,
+            test_step,
+            target,
+            "tokenize",
+            b.path("src/fuzz/tokenize.zig"),
+            &[_]Import{
+                .{ .name = "GenCatData", .module = zg.module("GenCatData") },
+                .{ .name = "tokenize", .module = tokenize_module },
+            },
+        );
     }
 }
 
