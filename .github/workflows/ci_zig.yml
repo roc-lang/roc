@@ -4,7 +4,7 @@ on:
 name: CI New Compiler
 
 jobs:
-    check-zig-fmt:
+    check-zig:
         runs-on: ubuntu-22.04
         steps:
             - name: Checkout
@@ -12,11 +12,15 @@ jobs:
             - uses: mlugg/setup-zig@v1
               with:
                 version: 0.13.0
-                
-            - run: zig fmt --check --ast-check src build.zig
+
+            - run: |
+                zig build check-fmt
+                # -Dllvm incurs a costly download step, leave that for later.
+                # Just the do super fast check step for now.
+                zig build check -Dfuzz
 
     zig-tests:
-        needs: check-zig-fmt
+        needs: check-zig
         runs-on: ${{ matrix.os }}
         strategy:
             matrix:

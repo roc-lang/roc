@@ -1,11 +1,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const InstallDir = std.Build.InstallDir;
-const Step = std.Build.Step;
-const LazyPath = std.Build.LazyPath;
-const ResolvedTarget = std.Build.ResolvedTarget;
-const OptimizeMode = std.builtin.OptimizeMode;
+const Dependency = std.Build.Dependency;
 const Import = std.Build.Module.Import;
+const InstallDir = std.Build.InstallDir;
+const LazyPath = std.Build.LazyPath;
+const OptimizeMode = std.builtin.OptimizeMode;
+const ResolvedTarget = std.Build.ResolvedTarget;
+const Step = std.Build.Step;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{ .default_target = .{
@@ -13,6 +14,12 @@ pub fn build(b: *std.Build) void {
     } });
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
+
+    const check_step = b.step("check", "Check roc binaries compile");
+    const run_step = b.step("run", "Build and run the roc cli");
+    const test_step = b.step("test", "Run all tests included in src/tests.zig");
+    const fmt_step = b.step("fmt", "Format all zig code");
+    const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -28,37 +35,16 @@ pub fn build(b: *std.Build) void {
     // Zig unicode library - https://codeberg.org/atman/zg
     const zg = b.dependency("zg", .{});
 
-    const exe = b.addExecutable(.{
-        .name = "roc",
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .strip = strip,
-        .link_libc = true,
-    });
-    exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
+    const install_exe = addMainExe(b, zg, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
+    const check_exe = addMainExe(b, zg, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
+    check_step.dependOn(&check_exe.step);
 
-    const config = b.addOptions();
-    config.addOption(bool, "llvm", enable_llvm);
-    exe.root_module.addOptions("config", config);
-
-    if (enable_llvm) {
-        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return;
-
-        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
-        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(&exe.root_module);
-    }
-
-    b.installArtifact(exe);
-    const run_cmd = b.addRunArtifact(exe);
+    b.installArtifact(install_exe);
+    const run_cmd = b.addRunArtifact(install_exe);
     run_cmd.step.dependOn(b.getInstallStep());
-
     if (b.args) |args| {
         run_cmd.addArgs(args);
     }
-
-    const run_step = b.step("run", "Build and run the roc cli");
     run_step.dependOn(&run_cmd.step);
 
     const all_tests = b.addTest(.{
@@ -68,21 +54,19 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     all_tests.root_module.addImport("GenCatData", zg.module("GenCatData"));
-
-    // Install the test binary so we can run separately
-    // ```sh
-    // $ zig build && ./zig-out/bin/test
-    // ```
-    b.installArtifact(all_tests);
+    check_step.dependOn(&all_tests.step);
 
     const run_tests = b.addRunArtifact(all_tests);
-    const test_step = b.step("test", "Run all tests included in src/tests.zig");
     test_step.dependOn(&run_tests.step);
 
     // Fmt zig code.
-    const fmt = b.addFmt(.{ .paths = &.{ "src", "build.zig" } });
-    const fmt_step = b.step("fmt", "Format all zig code");
+    const fmt_paths = .{ "src", "build.zig" };
+    const fmt = b.addFmt(.{ .paths = &fmt_paths });
     fmt_step.dependOn(&fmt.step);
+
+    // Fmt zig code.
+    const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
+    check_fmt_step.dependOn(&check_fmt.step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
     if (fuzz) {
@@ -114,7 +98,7 @@ pub fn build(b: *std.Build) void {
         add_fuzz_target(
             b,
             build_afl,
-            test_step,
+            check_step,
             target,
             "cli",
             b.path("src/fuzz/cli.zig"),
@@ -127,7 +111,7 @@ pub fn build(b: *std.Build) void {
         add_fuzz_target(
             b,
             build_afl,
-            test_step,
+            check_step,
             target,
             "tokenize",
             b.path("src/fuzz/tokenize.zig"),
@@ -142,7 +126,7 @@ pub fn build(b: *std.Build) void {
 fn add_fuzz_target(
     b: *std.Build,
     build_afl: bool,
-    parent_step: *Step,
+    check_step: *Step,
     target: ResolvedTarget,
     name: []const u8,
     root_source_file: LazyPath,
@@ -168,24 +152,70 @@ fn add_fuzz_target(
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
-    parent_step.dependOn(fuzz_step);
+    b.default_step.dependOn(fuzz_step);
 
     const name_repro = b.fmt("repro-{s}", .{name});
-    const repro = b.addExecutable(.{
+    const install_repro = b.addExecutable(.{
         .name = name_repro,
         .root_source_file = b.path("src/fuzz/repro.zig"),
         .target = target,
         .optimize = .Debug,
         .link_libc = true,
     });
-    repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
-    fuzz_step.dependOn(&b.addInstallBinFile(repro.getEmittedBin(), name_repro).step);
+    install_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
+    b.installArtifact(install_repro);
+    fuzz_step.dependOn(&install_repro.step);
+
+    const check_repro = b.addExecutable(.{
+        .name = name_repro,
+        .root_source_file = b.path("src/fuzz/repro.zig"),
+        .target = target,
+        .optimize = .Debug,
+        .link_libc = true,
+    });
+    check_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
+    check_step.dependOn(&check_repro.step);
 
     if (build_afl) {
         const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, fuzz_obj);
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
     }
+}
+
+fn addMainExe(
+    b: *std.Build,
+    zg: *Dependency,
+    target: ResolvedTarget,
+    optimize: OptimizeMode,
+    strip: ?bool,
+    enable_llvm: bool,
+    use_system_llvm: bool,
+    user_llvm_path: ?[]const u8,
+) ?*Step.Compile {
+    const exe = b.addExecutable(.{
+        .name = "roc",
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .strip = strip,
+        .link_libc = true,
+    });
+    exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
+
+    const config = b.addOptions();
+    config.addOption(bool, "llvm", enable_llvm);
+    exe.root_module.addOptions("config", config);
+
+    if (enable_llvm) {
+        const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
+
+        exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
+        exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
+        try addStaticLlvmOptionsToModule(&exe.root_module);
+    }
+
+    return exe;
 }
 
 const LlvmPaths = struct {
