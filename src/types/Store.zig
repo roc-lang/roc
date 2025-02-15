@@ -303,6 +303,12 @@ pub const Rank = struct {
     }
 };
 
+pub const UnificationError = error{
+    OccursCheck,
+    TypeMismatch,
+    OutOfMemory,
+};
+
 /// UnificationTable manages unification operations between types.
 /// It provides functionality for building, querying, and manipulating a table
 /// of type variables and their descriptors.
@@ -333,6 +339,14 @@ pub const UnificationTable = struct {
     /// Free allocated memory
     pub fn deinit(self: *UnificationTable) void {
         self.allocator.free(self.entries);
+    }
+
+    /// Ensure capacity for the table
+    pub fn ensureCapacity(self: *UnificationTable, needed: usize) !void {
+        if (self.len + needed > self.entries.len) {
+            const new_cap = std.math.max(self.entries.len * 2, self.len + needed);
+            self.entries = try self.allocator.realloc(self.entries, new_cap);
+        }
     }
 
     /// Adds a new type variable to the table with specified attributes.
@@ -444,8 +458,13 @@ pub const UnificationTable = struct {
     /// High-level unification operation that merges two type variables.
     /// Makes the second variable point to the first, sharing type information.
     /// Main entry point for type unification during type checking.
-    pub fn unify(self: *UnificationTable, v1: Variable, v2: Variable) !void {
+    pub fn unify(self: *UnificationTable, v1: Variable, v2: Variable) UnificationError!void {
         std.debug.print("\n=== Unifying {} and {} ===\n", .{ v1.val, v2.val });
+
+        // Add occurs check
+        if (try self.occurs(v1, v2)) {
+            return error.OccursCheck;
+        }
 
         // Get the current descriptor of v1
         const desc = self.getDescriptor(v1);
@@ -462,6 +481,46 @@ pub const UnificationTable = struct {
             current = parent;
         }
         std.debug.print("{} (root)\n", .{current.val});
+    }
+
+    /// Checks if a variable occurs within another type structure.
+    /// Returns true if there would be a circular reference.
+    /// This is a crucial check during unification to prevent infinite types.
+    pub fn occurs(self: *UnificationTable, variable: Variable, within: Variable) !bool {
+        // Create a visited set to track variables we've seen
+        var visited = std.AutoHashMap(u32, void).init(self.allocator);
+        defer visited.deinit();
+
+        // Get the root variables since we care about their actual representatives
+        const var_root = self.rootKeyWithoutCompacting(variable);
+        var current = within;
+
+        while (true) {
+            // Get the root of the current variable we're checking
+            current = self.rootKeyWithoutCompacting(current);
+
+            // If we've found the variable we're looking for, we have a circular reference
+            if (current.val == var_root.val) {
+                return true;
+            }
+
+            // If we've already visited this variable, no need to check again
+            if (visited.contains(current.val)) {
+                return false;
+            }
+
+            // Mark this variable as visited
+            try visited.put(current.val, {});
+
+            // Get the descriptor for the current variable
+            const desc = self.entries[current.val].descriptor;
+
+            // Check the content of the current variable
+            switch (desc.content) {
+                // For flex variables and similar base cases, no occurrence is possible
+                .FlexVar => return false,
+            }
+        }
     }
 
     /// Updates the type information associated with a variable.
@@ -549,5 +608,26 @@ pub const UnificationTable = struct {
         if (new_capacity > self.entries.len) {
             self.entries = try self.allocator.realloc(self.entries, new_capacity);
         }
+    }
+
+    pub fn format(
+        self: UnificationTable,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        try writer.writeAll("\nUnificationTable {\n");
+        var i: usize = 0;
+        while (i < self.len) : (i += 1) {
+            const entry = self.entries[i];
+            try writer.print("  {}: {} parent={?}\n", .{
+                i,
+                entry.descriptor,
+                entry.parent,
+            });
+        }
+        try writer.writeAll("}\n");
     }
 };

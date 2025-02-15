@@ -172,26 +172,25 @@ test "Descriptor basics" {
     }
 }
 
-test "UnificationTable basic operations" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
-
-    var table = try UnificationTable.init(allocator, 8);
+test "unification table - basic operations" {
+    var table = try UnificationTable.init(std.testing.allocator, 10);
     defer table.deinit();
 
-    // Create some variables
-    const var1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
-    const var2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    // Create two flex variables
+    const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
 
-    // Test root keys
-    try testing.expectEqual(var1, table.rootKey(var1));
-    try testing.expectEqual(var2, table.rootKey(var2));
+    // Initially they should not be unified
+    try std.testing.expect(!table.unioned(v1, v2));
 
-    // Unify variables
-    table.unifyRoots(var1, var2, Descriptor.default());
+    // Unify them
+    try table.unify(v1, v2);
 
-    // Test unification worked
-    try testing.expect(table.unioned(var1, var2));
+    // Now they should be unified
+    try std.testing.expect(table.unioned(v1, v2));
+
+    // Both should have the same root
+    try std.testing.expect(table.rootKey(v1).val == table.rootKey(v2).val);
 }
 
 test "UnificationTable advanced operations" {
@@ -306,4 +305,106 @@ test "basic unification" {
 
     try store.unify(v1, v2);
     try std.testing.expect(store.unioned(v1, v2));
+}
+
+test "unification table - transitive unification" {
+    var table = try UnificationTable.init(std.testing.allocator, 10);
+    defer table.deinit();
+
+    const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v3 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // Check that v1 and v2 are not unified yet
+    try std.testing.expect(!table.unioned(v1, v2));
+    try std.testing.expect(!table.unioned(v2, v3));
+    try std.testing.expect(!table.unioned(v1, v3));
+
+    // Unify v1 with v2, and v2 with v3
+    try table.unify(v1, v2);
+    try table.unify(v2, v3);
+
+    // All three should now be unified
+    try std.testing.expect(table.unioned(v1, v2));
+    try std.testing.expect(table.unioned(v2, v3));
+    try std.testing.expect(table.unioned(v1, v3));
+
+    // All should have the same root
+    const root = table.rootKey(v1);
+    try std.testing.expect(table.rootKey(v2).val == root.val);
+    try std.testing.expect(table.rootKey(v3).val == root.val);
+}
+
+test "unification table - path compression" {
+    var table = try UnificationTable.init(std.testing.allocator, 10);
+    defer table.deinit();
+
+    const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v3 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v4 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // Create a chain: v4 -> v3 -> v2 -> v1
+    try table.unify(v1, v2);
+    try table.unify(v2, v3);
+    try table.unify(v3, v4);
+
+    // Force path compression by getting root
+    _ = table.rootKey(v4);
+
+    // After path compression, all variables should point directly to root
+    try std.testing.expect(table.entries[v2.val].parent.?.val == v1.val);
+    try std.testing.expect(table.entries[v3.val].parent.?.val == v1.val);
+    try std.testing.expect(table.entries[v4.val].parent.?.val == v1.val);
+}
+
+test "unification table - occurs check" {
+    var table = try UnificationTable.init(std.testing.allocator, 10);
+    defer table.deinit();
+
+    const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // Basic occurs check should return false initially
+    try std.testing.expect(!try table.occurs(v1, v2));
+
+    // After unification, occurs check should detect the relationship
+    try table.unify(v1, v2);
+    try std.testing.expect(try table.occurs(v1, v2));
+}
+
+test "unification table - rank handling" {
+    var table = try UnificationTable.init(std.testing.allocator, 10);
+    defer table.deinit();
+
+    const rank1 = Rank{ .value = 1 };
+    const rank2 = Rank{ .value = 2 };
+
+    const v1 = table.push(Content{ .FlexVar = null }, rank1, Mark.NONE, null);
+    const v2 = table.push(Content{ .FlexVar = null }, rank2, Mark.NONE, null);
+
+    // Check initial ranks
+    try std.testing.expect(std.meta.eql(table.getRank(v1), rank1));
+    try std.testing.expect(std.meta.eql(table.getRank(v2), rank2));
+
+    // After unification, variables should share the same rank
+    try table.unify(v1, v2);
+    const unified_rank = table.getRank(v1);
+    try std.testing.expect(std.meta.eql(table.getRank(v2), unified_rank));
+}
+
+test "unification table - capacity management" {
+    var table = try UnificationTable.init(std.testing.allocator, 2);
+    defer table.deinit();
+
+    // Initial capacity is 2
+    try std.testing.expect(table.entries.len == 2);
+
+    // Add variables until we exceed capacity
+    _ = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    _ = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // This should trigger a capacity increase
+    try table.reserve(1);
+    try std.testing.expect(table.entries.len > 2);
 }
