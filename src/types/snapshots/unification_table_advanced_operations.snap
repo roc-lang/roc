@@ -1,13 +1,13 @@
 INFO: Create four variables with default descriptors
-New type variable: {FlexVar(null), rank: 0, mark: none, copy: null}
-New type variable: {FlexVar(null), rank: 0, mark: none, copy: null}
-New type variable: {FlexVar(null), rank: 0, mark: none, copy: null}
-New type variable: {FlexVar(null), rank: 0, mark: none, copy: null}
+New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 ==================== START Unification Table ====================
-Var 0: {FlexVar(null), rank: 0, mark: none, copy: null}
-Var 1: {FlexVar(null), rank: 0, mark: none, copy: null}
-Var 2: {FlexVar(null), rank: 0, mark: none, copy: null}
-Var 3: {FlexVar(null), rank: 0, mark: none, copy: null}
+Var 0: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+Var 1: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+Var 2: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+Var 3: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 ==================== END Unification Table ====================
 Unifying 0 <- 1
 Redirect check for 0: false
@@ -32,10 +32,10 @@ Root for variable 1: 0
 Root for variable 2: 0
 Root for variable 3: 0
 ==================== START Unification Table ====================
-Var 0: {FlexVar(null), rank: 0, mark: none, copy: null}
-Var 1: {FlexVar(null), rank: 0, mark: none, copy: null} → 0
-Var 2: {FlexVar(null), rank: 0, mark: none, copy: null} → 0
-Var 3: {FlexVar(null), rank: 0, mark: none, copy: null} → 0
+Var 0: {FlexVar(null), rank: 0, mark: NONE, copy: null}
+Var 1: {FlexVar(null), rank: 0, mark: NONE, copy: null} → 0
+Var 2: {FlexVar(null), rank: 0, mark: NONE, copy: null} → 0
+Var 3: {FlexVar(null), rank: 0, mark: NONE, copy: null} → 0
 Class with root 0:
   0
   1 → 0

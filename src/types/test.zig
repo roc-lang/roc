@@ -5,18 +5,6 @@ const Descriptor = @import("store.zig").Descriptor;
 const Content = @import("store.zig").Content;
 const UnificationTable = @import("store.zig").UnificationTable;
 
-/// Greek letter names for type variables
-const Greek = struct {
-    const alpha = "α"; // often used for type variables
-    const beta = "β"; // often used for type variables
-    const gamma = "γ"; // often used for type variables
-    const delta = "δ"; // often used for type variables
-    const epsilon = "ε"; // often used for type variables
-    const tau = "τ"; // often used for types
-    const sigma = "σ"; // often used for substitutions
-    const rho = "ρ"; // often used for environments
-};
-
 test "Mark constants have correct values" {
     try std.testing.expectEqual(@as(i32, 0), Mark.GET_VAR_NAMES.value);
     try std.testing.expectEqual(@as(i32, 1), Mark.OCCURS.value);
@@ -46,19 +34,19 @@ test "Mark formatting" {
 
     // Test all constant values
     try std.fmt.format(writer, "{}", .{Mark.NONE});
-    try std.testing.expectEqualStrings("none", fbs.getWritten());
+    try std.testing.expectEqualStrings("NONE", fbs.getWritten());
     fbs.reset();
 
     try std.fmt.format(writer, "{}", .{Mark.VISITED_IN_OCCURS_CHECK});
-    try std.testing.expectEqualStrings("visited_in_occurs_check", fbs.getWritten());
+    try std.testing.expectEqualStrings("VISITED_IN_OCCURS_CHECK", fbs.getWritten());
     fbs.reset();
 
     try std.fmt.format(writer, "{}", .{Mark.OCCURS});
-    try std.testing.expectEqualStrings("occurs", fbs.getWritten());
+    try std.testing.expectEqualStrings("OCCURS", fbs.getWritten());
     fbs.reset();
 
     try std.fmt.format(writer, "{}", .{Mark.GET_VAR_NAMES});
-    try std.testing.expectEqualStrings("get_var_names", fbs.getWritten());
+    try std.testing.expectEqualStrings("GET_VAR_NAMES", fbs.getWritten());
     fbs.reset();
 
     // Test non-constant value
@@ -281,24 +269,32 @@ test "UnificationTable redirect detection" {
 }
 
 test "UnificationTable descriptor modification" {
-    const testing = std.testing;
-    const allocator = testing.allocator;
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_descriptor_modification.snap", .{});
+    defer file.close();
 
-    var table = try UnificationTable.init(allocator, 4);
+    var table = try UnificationTable.init(std.testing.allocator, 4);
     defer table.deinit();
 
+    table.debug_capture = file.writer();
+
     // Create variable with initial descriptor
-    const var1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const start = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
 
-    // Modify descriptor
-    const new_desc = Descriptor.init(Content{ .FlexVar = null }, Rank.toplevel(), Mark.OCCURS, null);
-    table.setDescriptor(var1, new_desc);
+    table.debugPrint();
 
-    // Verify modifications
-    const retrieved_desc = table.getDescriptor(var1);
-    try testing.expectEqual(new_desc.rank, retrieved_desc.rank);
-    try testing.expectEqual(new_desc.mark, retrieved_desc.mark);
-    try testing.expectEqual(new_desc.copy, retrieved_desc.copy);
+    table.debugLog("INFO: Modify descriptor change Mark from {} to {}\n", .{ Mark.NONE, Mark.OCCURS });
+    table.debugLog("INFO: Changing Mark from {} to {}\n", .{ Mark.NONE, Mark.OCCURS });
+    table.debugLog("INFO: Changing Rank from {} to {}\n", .{ Rank.GENERALIZED, Rank.toplevel() });
+
+    const expected = Descriptor.init(Content{ .FlexVar = null }, Rank.toplevel(), Mark.OCCURS, null);
+    table.setDescriptor(start, expected);
+
+    const finish = table.getDescriptor(start);
+    try std.testing.expectEqual(expected.rank, finish.rank);
+    try std.testing.expectEqual(expected.mark, finish.mark);
+    try std.testing.expectEqual(expected.copy, finish.copy);
+
+    table.debugPrint();
 }
 
 test "basic unification" {

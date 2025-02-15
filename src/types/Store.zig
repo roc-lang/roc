@@ -224,10 +224,10 @@ pub const Mark = struct {
         _ = options;
 
         switch (self.value) {
-            NONE.value => try writer.writeAll("none"),
-            VISITED_IN_OCCURS_CHECK.value => try writer.writeAll("visited_in_occurs_check"),
-            OCCURS.value => try writer.writeAll("occurs"),
-            GET_VAR_NAMES.value => try writer.writeAll("get_var_names"),
+            NONE.value => try writer.writeAll("NONE"),
+            VISITED_IN_OCCURS_CHECK.value => try writer.writeAll("VISITED_IN_OCCURS_CHECK"),
+            OCCURS.value => try writer.writeAll("OCCURS"),
+            GET_VAR_NAMES.value => try writer.writeAll("GET_VAR_NAMES"),
             else => try std.fmt.format(writer, "Mark({})", .{self.value}),
         }
     }
