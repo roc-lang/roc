@@ -23,6 +23,7 @@ jobs:
         needs: check-zig
         runs-on: ${{ matrix.os }}
         strategy:
+            fail-fast: false
             matrix:
                 os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64 
         steps:
@@ -81,6 +82,7 @@ jobs:
         needs: check-zig
         runs-on: ubuntu-24.04
         strategy:
+            fail-fast: false
             matrix:
                 target:
                 - aarch64-linux-musl
