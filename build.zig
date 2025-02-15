@@ -64,7 +64,6 @@ pub fn build(b: *std.Build) void {
     const fmt = b.addFmt(.{ .paths = &fmt_paths });
     fmt_step.dependOn(&fmt.step);
 
-    // Fmt zig code.
     const check_fmt = b.addFmt(.{ .paths = &fmt_paths, .check = true });
     check_fmt_step.dependOn(&check_fmt.step);
 
