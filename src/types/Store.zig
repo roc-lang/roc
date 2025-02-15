@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Ident = @import("../base/Ident.zig");
 
@@ -164,7 +165,7 @@ pub const Descriptor = struct {
 
         try writer.writeAll("{");
         try self.content.format("", .{}, writer);
-        try std.fmt.format(writer, ", r: {}, m: {}, c: {?}", .{ // Changed to {?} for optional
+        try std.fmt.format(writer, ", rank: {}, mark: {}, copy: {?}", .{
             self.rank,
             self.mark,
             self.copy,
@@ -319,6 +320,8 @@ pub const UnificationTable = struct {
     allocator: Allocator,
     len: usize,
 
+    debug_capture: ?std.fs.File.Writer = null,
+
     // State tracking
     const Entry = struct {
         descriptor: Descriptor,
@@ -367,6 +370,8 @@ pub const UnificationTable = struct {
         };
         self.len += 1;
 
+        self.debugLog("New type variable: {s}\n", .{descriptor});
+
         return Variable{ .val = @intCast(index) };
     }
 
@@ -382,11 +387,9 @@ pub const UnificationTable = struct {
     /// Performs path compression to optimize future lookups.
     /// Core operation for maintaining the union-find data structure.
     pub fn rootKey(self: *UnificationTable, variable: Variable) Variable {
-        std.debug.print("\n=== rootKey called for variable {} ===\n", .{variable.val});
-
         const root = self.rootKeyWithoutCompacting(variable);
 
-        std.debug.print("Found root: {}\n", .{root.val});
+        self.debugLog("Root for variable {}: {}\n", .{ variable.val, root.val });
 
         // Perform path compression
         var current = variable;
@@ -403,84 +406,53 @@ pub const UnificationTable = struct {
     /// Useful when you need to inspect the structure without modifying it.
     /// Important for debugging and maintaining parent-child relationships.
     pub fn rootKeyWithoutCompacting(self: *const UnificationTable, variable: Variable) Variable {
-        std.debug.print("\n--- rootKeyWithoutCompacting for variable {} ---\n", .{variable.val});
+        // self.debugLog("\n--- rootKeyWithoutCompacting for variable {} ---\n", .{variable.val});
         var key = variable;
         var depth: usize = 0;
 
         while (self.entries[key.val].parent) |parent| {
             depth += 1;
-            std.debug.print("  Level {}: {} -> {}\n", .{ depth, key.val, parent.val });
+            // self.debugLog("  Level {}: {} -> {}\n", .{ depth, key.val, parent.val });
             key = parent;
         }
 
-        std.debug.print("  Found root: {} (depth: {})\n", .{ key.val, depth });
-        std.debug.print("--- rootKeyWithoutCompacting finished ---\n", .{});
+        // self.debugLog("  Found root: {} (depth: {})\n", .{ key.val, depth });
+        // self.debugLog("--- rootKeyWithoutCompacting finished ---\n", .{});
         return key;
-    }
-
-    /// Merges two equivalence classes by making one root point to another.
-    /// Core unification operation that maintains the union-find invariants.
-    /// Takes a descriptor to associate with the merged class.
-    pub fn unifyRoots(self: *UnificationTable, to: Variable, from: Variable, desc: Descriptor) void {
-        std.debug.print("\n*** unifyRoots called ***\n", .{});
-        std.debug.print("Unifying from={} to={}\n", .{ from.val, to.val });
-
-        if (from.val != to.val) {
-            // Debug: print current state
-            std.debug.print("Current state before unification:\n", .{});
-            std.debug.print("  'from' chain: ", .{});
-            var current = from;
-            while (self.entries[current.val].parent) |p| {
-                std.debug.print("{} -> ", .{current.val});
-                current = p;
-            }
-            std.debug.print("{}\n", .{current.val});
-
-            // Important: Set from's parent to point to 'to' directly
-            self.entries[from.val].parent = to; // Changed this line
-            self.entries[to.val].descriptor = desc;
-
-            // Debug: print final state
-            std.debug.print("Final state after unification:\n", .{});
-            std.debug.print("  Chain from original 'from': ", .{});
-            current = from;
-            while (self.entries[current.val].parent) |p| {
-                std.debug.print("{} -> ", .{current.val});
-                current = p;
-            }
-            std.debug.print("{}\n", .{current.val});
-        } else {
-            std.debug.print("Self-unification - no changes needed\n", .{});
-        }
-        std.debug.print("*** unifyRoots finished ***\n\n", .{});
     }
 
     /// High-level unification operation that merges two type variables.
     /// Makes the second variable point to the first, sharing type information.
     /// Main entry point for type unification during type checking.
-    pub fn unify(self: *UnificationTable, v1: Variable, v2: Variable) UnificationError!void {
-        std.debug.print("\n=== Unifying {} and {} ===\n", .{ v1.val, v2.val });
+    pub fn unify(self: *UnificationTable, to: Variable, from: Variable) UnificationError!void {
+        self.debugLog("Unifying {} <- {}\n", .{ to.val, from.val });
 
-        // Add occurs check
-        if (try self.occurs(v1, v2)) {
+        // Add occurs check to avoid infinite types
+        if (try self.occurs(to, from)) {
             return error.OccursCheck;
         }
 
-        // Get the current descriptor of v1
-        const desc = self.getDescriptor(v1);
+        // Get the current descriptor to replace
+        const desc = self.getDescriptor(to);
 
-        // Perform the unification by making v2 point to v1
-        self.unifyRoots(v1, v2, desc);
+        // Perform the unification
+        if (from.val != to.val) {
+            var current = from;
+            while (self.entries[current.val].parent) |p| {
+                current = p;
+            }
 
-        // Debug: print the resulting chain
-        std.debug.print("After unification:\n", .{});
-        var current = v2;
-        std.debug.print("Chain from {}: ", .{current.val});
-        while (self.entries[current.val].parent) |parent| {
-            std.debug.print("{} -> ", .{current.val});
-            current = parent;
+            // Important: Set from's parent to point to 'to' directly
+            self.entries[from.val].parent = to; // Changed this line
+            self.entries[to.val].descriptor = desc;
+
+            current = from;
+            while (self.entries[current.val].parent) |p| {
+                current = p;
+            }
+        } else {
+            self.debugLog("Self-unification - no changes needed\n", .{});
         }
-        std.debug.print("{} (root)\n", .{current.val});
     }
 
     /// Checks if a variable occurs within another type structure.
@@ -574,16 +546,19 @@ pub const UnificationTable = struct {
     /// Checks if two variables belong to the same equivalence class.
     /// Returns true if the variables have been unified.
     pub fn unioned(self: *UnificationTable, var1: Variable, var2: Variable) bool {
-        return self.rootKey(var1).val == self.rootKey(var2).val;
+        self.debugLog("Checking union for {} and {}\n", .{ var1.val, var2.val });
+        const is_unioned = self.rootKey(var1).val == self.rootKey(var2).val;
+        self.debugLog("Union result: {}\n", .{is_unioned});
+        return is_unioned;
     }
 
     /// Checks if a variable points to another (has a parent).
     /// Used to determine if a variable has been unified with another.
     pub fn isRedirect(self: *const UnificationTable, variable: Variable) bool {
         const has_parent = self.entries[variable.val].parent != null;
-        std.debug.print("isRedirect check for {}: {}\n", .{ variable.val, has_parent });
+        self.debugLog("Redirect check for {}: {}\n", .{ variable.val, has_parent });
         if (has_parent) {
-            std.debug.print("  Parent is: {}\n", .{self.entries[variable.val].parent.?.val});
+            self.debugLog("  Parent is: {}\n", .{self.entries[variable.val].parent.?.val});
         }
         return has_parent;
     }
@@ -629,5 +604,77 @@ pub const UnificationTable = struct {
             });
         }
         try writer.writeAll("}\n");
+    }
+
+    pub fn debugLog(self: *const UnificationTable, comptime fmt: []const u8, args: anytype) void {
+        if (builtin.is_test and self.debug_capture != null) {
+            self.debug_capture.?.print(fmt, args) catch unreachable;
+        }
+    }
+
+    /// Prints a detailed representation of the UnificationTable's current state to the debug log.
+    pub fn debugPrint(self: *const UnificationTable) void {
+        self.debugLog("==================== START Unification Table ====================\n", .{});
+
+        if (self.len == 0) {
+            self.debugLog("(empty table)\n", .{});
+            return;
+        }
+
+        // First pass: Print direct information about each variable
+        for (0..self.len) |i| {
+            const entry = self.entries[i];
+            self.debugLog("Var {d}: {any}", .{ i, entry.descriptor });
+            if (entry.parent) |parent| {
+                self.debugLog(" → {d}", .{parent.val});
+            }
+            self.debugLog("\n", .{});
+        }
+
+        // Track which variables we've already processed
+        var processed = std.AutoHashMap(u32, void).init(self.allocator);
+        defer processed.deinit();
+
+        // Find and print each equivalence class
+        for (0..self.len) |i| {
+            if (processed.contains(@intCast(i))) continue;
+
+            const current = Variable{ .val = @intCast(i) };
+            const root = self.rootKeyWithoutCompacting(current);
+
+            // Only print trees that have more than one node
+            var has_children = false;
+            const temp = current;
+            while (self.entries[temp.val].parent) |_| {
+                has_children = true;
+                break;
+            }
+
+            if (has_children) {
+                self.debugLog("Class with root {d}:\n", .{root.val});
+
+                // Print the path from each variable to the root
+                for (0..self.len) |j| {
+                    if (processed.contains(@intCast(j))) continue;
+
+                    const var_j = Variable{ .val = @intCast(j) };
+                    if (self.rootKeyWithoutCompacting(var_j).val == root.val) {
+                        processed.put(@intCast(j), {}) catch continue;
+
+                        // Build and print the chain
+                        var current_var = var_j;
+                        self.debugLog("  {d}", .{current_var.val});
+
+                        while (self.entries[current_var.val].parent) |parent| {
+                            self.debugLog(" → {d}", .{parent.val});
+                            current_var = parent;
+                        }
+                        self.debugLog("\n", .{});
+                    }
+                }
+            }
+        }
+
+        self.debugLog("==================== END Unification Table ====================\n", .{});
     }
 };
