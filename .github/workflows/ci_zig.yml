@@ -78,7 +78,7 @@ jobs:
                 }
 
     zig-cross-compile:
-        needs: check-zig-fmt
+        needs: check-zig
         runs-on: ubuntu-24.04
         strategy:
             matrix:
