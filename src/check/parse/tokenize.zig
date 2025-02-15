@@ -403,7 +403,11 @@ pub const Cursor = struct {
             return .{ .tag = .Invalid, .length = 1 };
         };
         const len: u32 = @intCast(len3);
-        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos .. self.pos + len]) catch {
+        const remainder: u32 = @intCast(self.buf.len - self.pos);
+        if (remainder < len) {
+            return .{ .tag = .Invalid, .length = remainder };
+        }
+        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos..][0..len]) catch {
             return .{ .tag = .Invalid, .length = len };
         };
         switch (self.gc.gc(utf8_char)) {
@@ -467,6 +471,7 @@ pub const Cursor = struct {
                         break;
                     },
                     else => {
+                        self.chompNumberSuffix();
                         tok = .Int;
                         break;
                     },
@@ -581,7 +586,7 @@ pub const Cursor = struct {
     /// Returns the token type - LowerIdent or Kw*
     pub fn chompIdentLower(self: *Cursor) Token.Tag {
         const start = self.pos;
-        _ = self.chompIdentGeneral();
+        self.chompIdentGeneral();
         const ident = self.buf[start..self.pos];
         const kw = Token.keywords.get(ident);
         return kw orelse .LowerIdent;
@@ -751,6 +756,7 @@ pub const Tokenizer = struct {
                             const len = self.cursor.pos - start;
                             try self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
                         } else if (n >= 0b11000000 and n <= 0xff) {
+                            self.cursor.pos += 1;
                             const info = self.cursor.decodeUnicode(n);
                             switch (info.tag) {
                                 .LetterUpper => {
@@ -1016,23 +1022,21 @@ pub const Tokenizer = struct {
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    _ = self.cursor.chompNumber(b);
+                    const tag = self.cursor.chompNumber(b);
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.Int, start, len);
+                    try self.output.pushToken(tag, start, len);
                 },
 
                 // Lowercase identifiers
                 'a'...'z' => {
-                    self.cursor.pos += 1;
-                    _ = self.cursor.chompIdentLower();
+                    const tag = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.LowerIdent, start, len);
+                    try self.output.pushToken(tag, start, len);
                 },
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    self.cursor.pos += 1;
-                    _ = self.cursor.chompIdentGeneral();
+                    self.cursor.chompIdentGeneral();
                     const len = self.cursor.pos - start;
                     try self.output.pushToken(.UpperIdent, start, len);
                 },
@@ -1186,10 +1190,16 @@ pub const Tokenizer = struct {
                 } else {
                     if (kind == .single_line and c == term) {
                         self.cursor.pos += 1;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
                         self.cursor.pos += 3;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     }
                     self.cursor.pos += 1;
                 }
