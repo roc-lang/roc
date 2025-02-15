@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const Ident = @import("../base/Ident.zig");
 
 /// VarStore manages generation of fresh type variables by tracking the next available ID.
@@ -16,14 +17,6 @@ pub const VarStore = struct {
         std.debug.assert(next.val >= Variable.FIRST_USER_SPACE_VAR.val);
         return VarStore{ .next = next.val };
     }
-
-    // /// Create a new VarStore initialized based on the size of a subs table.
-    // /// The next ID will be the length of the subs table.
-    // pub fn initFromSubs(subs: *const Subs) VarStore {
-    //     const next = @as(u32, @intCast(subs.utable.len()));
-    //     std.debug.assert(next >= Variable.FIRST_USER_SPACE_VAR.val);
-    //     return VarStore{ .next = next };
-    // }
 
     /// Get the next variable ID without incrementing
     pub fn peek(self: *VarStore) u32 {
@@ -304,5 +297,171 @@ pub const Rank = struct {
     /// Creates a new Rank from a usize value.
     pub fn fromUsize(value: usize) Rank {
         return .{ .value = @as(u32, @intCast(value)) };
+    }
+};
+
+/// UnificationTable manages unification operations between types.
+/// It provides functionality for building, querying, and manipulating a table
+/// of type variables and their descriptors.
+pub const UnificationTable = struct {
+
+    // Fields to track entries
+    entries: []Entry,
+    allocator: Allocator,
+    len: usize,
+
+    // State tracking
+    const Entry = struct {
+        descriptor: Descriptor,
+        parent: ?Variable, // The parent entry in the union-find tree
+    };
+
+    /// Initialize a new UnificationTable with a given capacity
+    pub fn init(allocator: Allocator, capacity: usize) !UnificationTable {
+        const entries = try allocator.alloc(Entry, capacity);
+        return UnificationTable{
+            .entries = entries,
+            .allocator = allocator,
+            .len = 0,
+        };
+    }
+
+    /// Free allocated memory
+    pub fn deinit(self: *UnificationTable) void {
+        self.allocator.free(self.entries);
+    }
+
+    /// Add a new entry to the table with the given descriptor
+    pub fn push(self: *UnificationTable, content: Content, rank: Rank, mark: Mark, copy: ?Variable) Variable {
+        const descriptor = Descriptor{
+            .content = content,
+            .rank = rank,
+            .mark = mark,
+            .copy = copy,
+        };
+
+        const index = self.len;
+        self.entries[index] = Entry{
+            .descriptor = descriptor,
+            .parent = null,
+        };
+        self.len += 1;
+
+        return Variable{ .val = @intCast(index) };
+    }
+
+    /// Get the descriptor for a variable without compacting paths
+    pub fn getDescriptor(self: *const UnificationTable, variable: Variable) Descriptor {
+        const root = self.rootKeyWithoutCompacting(variable);
+        return self.entries[root.val].descriptor;
+    }
+
+    /// Find the root key for a variable, compacting paths along the way
+    pub fn rootKey(self: *UnificationTable, variable: Variable) Variable {
+        var current = variable;
+        var path = std.ArrayList(Variable).init(self.allocator);
+        defer path.deinit();
+
+        // Find the root
+        while (self.entries[current.val].parent) |parent| {
+            path.append(current) catch unreachable;
+            current = parent;
+        }
+
+        // Path compression - point all nodes to root
+        for (path.items) |node| {
+            self.entries[node.val].parent = current;
+        }
+
+        return current;
+    }
+
+    /// Find the root key without compacting paths
+    pub fn rootKeyWithoutCompacting(self: *const UnificationTable, variable: Variable) Variable {
+        var current = variable;
+        while (self.entries[current.val].parent) |parent| {
+            current = parent;
+        }
+        return current;
+    }
+
+    /// Unify two variables, making them equivalent
+    pub fn unifyRoots(self: *UnificationTable, var1: Variable, var2: Variable, new_desc: Descriptor) void {
+        if (var1.val == var2.val) return;
+
+        // Make var1 point to var2
+        self.entries[var1.val] = Entry{
+            .descriptor = new_desc,
+            .parent = var2,
+        };
+    }
+
+    /// Set the descriptor for a variable
+    pub fn setDescriptor(self: *UnificationTable, variable: Variable, descriptor: Descriptor) void {
+        self.entries[variable.val].descriptor = descriptor;
+    }
+
+    /// Get the rank for a variable
+    pub fn getRank(self: *const UnificationTable, variable: Variable) Rank {
+        const root = self.rootKeyWithoutCompacting(variable);
+        return self.entries[root.val].descriptor.rank;
+    }
+
+    /// Get the mark for a variable
+    pub fn getMark(self: *const UnificationTable, variable: Variable) Mark {
+        const root = self.rootKeyWithoutCompacting(variable);
+        return self.entries[root.val].descriptor.mark;
+    }
+
+    /// Set the rank for a variable
+    pub fn setRank(self: *UnificationTable, variable: Variable, rank: Rank) void {
+        const root = self.rootKey(variable);
+        self.entries[root.val].descriptor.rank = rank;
+    }
+
+    /// Set the mark for a variable
+    pub fn setMark(self: *UnificationTable, variable: Variable, mark: Mark) void {
+        const root = self.rootKey(variable);
+        self.entries[root.val].descriptor.mark = mark;
+    }
+
+    /// Get the copy for a variable
+    pub fn getCopy(self: *const UnificationTable, variable: Variable) ?Variable {
+        const root = self.rootKeyWithoutCompacting(variable);
+        return self.entries[root.val].descriptor.copy;
+    }
+
+    /// Set the copy for a variable
+    pub fn setCopy(self: *UnificationTable, variable: Variable, copy: ?Variable) void {
+        const root = self.rootKey(variable);
+        self.entries[root.val].descriptor.copy = copy;
+    }
+
+    /// Check if two variables are unified
+    pub fn unioned(self: *UnificationTable, var1: Variable, var2: Variable) bool {
+        return self.rootKey(var1).val == self.rootKey(var2).val;
+    }
+
+    /// Check if a variable is a redirect (has a parent)
+    pub fn isRedirect(self: *const UnificationTable, variable: Variable) bool {
+        return self.entries[variable.val].parent != null;
+    }
+
+    /// Get the current length of the table
+    pub fn len(self: *const UnificationTable) usize {
+        return self.len;
+    }
+
+    /// Check if the table is empty
+    pub fn isEmpty(self: *const UnificationTable) bool {
+        return self.len == 0;
+    }
+
+    /// Reserve space for additional entries
+    pub fn reserve(self: *UnificationTable, additional: usize) !void {
+        const new_capacity = self.len + additional;
+        if (new_capacity > self.entries.len) {
+            self.entries = try self.allocator.realloc(self.entries, new_capacity);
+        }
     }
 };

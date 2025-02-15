@@ -3,6 +3,7 @@ const Mark = @import("store.zig").Mark;
 const Rank = @import("store.zig").Rank;
 const Descriptor = @import("store.zig").Descriptor;
 const Content = @import("store.zig").Content;
+const UnificationTable = @import("store.zig").UnificationTable;
 
 test "Mark constants have correct values" {
     try std.testing.expectEqual(@as(i32, 0), Mark.GET_VAR_NAMES.value);
@@ -169,4 +170,26 @@ test "Descriptor basics" {
         const written = fbs.getWritten();
         try std.testing.expect(written.len > 0);
     }
+}
+
+test "UnificationTable basic operations" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var table = try UnificationTable.init(allocator, 8);
+    defer table.deinit();
+
+    // Create some variables
+    const var1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const var2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // Test root keys
+    try testing.expectEqual(var1, table.rootKey(var1));
+    try testing.expectEqual(var2, table.rootKey(var2));
+
+    // Unify variables
+    table.unifyRoots(var1, var2, Descriptor.default());
+
+    // Test unification worked
+    try testing.expect(table.unioned(var1, var2));
 }
