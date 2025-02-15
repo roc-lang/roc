@@ -370,16 +370,18 @@ pub const UnificationTable = struct {
     pub fn rootKey(self: *UnificationTable, variable: Variable) Variable {
         std.debug.print("\n=== rootKey called for variable {} ===\n", .{variable.val});
 
-        // First find the root without compressing
-        const current = variable;
-        var root = current;
-
-        // Follow the chain to find the root
-        while (self.entries[root.val].parent) |parent| {
-            root = parent;
-        }
+        const root = self.rootKeyWithoutCompacting(variable);
 
         std.debug.print("Found root: {}\n", .{root.val});
+
+        // Perform path compression
+        var current = variable;
+        while (self.entries[current.val].parent) |parent| {
+            const next = parent;
+            self.entries[current.val].parent = root;
+            current = next;
+        }
+
         return root;
     }
 
