@@ -172,7 +172,7 @@ test "Descriptor basics" {
     }
 }
 
-test "unification table basic" {
+test "unification table - basic" {
     const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_basic_operations.snap", .{});
     defer file.close();
 
@@ -199,7 +199,7 @@ test "unification table basic" {
     table.debugPrint();
 }
 
-test "UnificationTable advanced operations" {
+test "unification table - advanced" {
     var table = try UnificationTable.init(std.testing.allocator, 4);
     defer table.deinit();
 
@@ -244,7 +244,7 @@ test "UnificationTable advanced operations" {
     table.debugPrint();
 }
 
-test "UnificationTable redirect detection" {
+test "unification table - redirect" {
     const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_redirect.snap", .{});
     defer file.close();
 
@@ -268,7 +268,7 @@ test "UnificationTable redirect detection" {
     table.debugPrint();
 }
 
-test "UnificationTable descriptor modification" {
+test "unification table - descriptor" {
     const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_descriptor_modification.snap", .{});
     defer file.close();
 
@@ -297,54 +297,54 @@ test "UnificationTable descriptor modification" {
     table.debugPrint();
 }
 
-test "basic unification" {
-    var store = try UnificationTable.init(std.testing.allocator, 10);
-    defer store.deinit();
-
-    // Create two variables
-    const v1 = store.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
-    const v2 = store.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
-
-    try store.unify(v1, v2);
-    try std.testing.expect(store.unioned(v1, v2));
-}
-
-test "unification table - transitive unification" {
+test "unification table - transitive" {
     var table = try UnificationTable.init(std.testing.allocator, 10);
     defer table.deinit();
 
-    const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
-    const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
-    const v3 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_transitive.snap", .{});
+    defer file.close();
+    table.debug_capture = file.writer();
 
-    // Check that v1 and v2 are not unified yet
-    try std.testing.expect(!table.unioned(v1, v2));
-    try std.testing.expect(!table.unioned(v2, v3));
-    try std.testing.expect(!table.unioned(v1, v3));
+    const alpha = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const beta = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const gamma = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
 
-    // Unify v1 with v2, and v2 with v3
-    try table.unify(v1, v2);
-    try table.unify(v2, v3);
+    table.debugPrint();
+
+    try std.testing.expect(!table.unioned(alpha, beta));
+    try std.testing.expect(!table.unioned(beta, gamma));
+    try std.testing.expect(!table.unioned(alpha, gamma));
+
+    try table.unify(alpha, beta);
+    try table.unify(beta, gamma);
 
     // All three should now be unified
-    try std.testing.expect(table.unioned(v1, v2));
-    try std.testing.expect(table.unioned(v2, v3));
-    try std.testing.expect(table.unioned(v1, v3));
+    try std.testing.expect(table.unioned(alpha, beta));
+    try std.testing.expect(table.unioned(beta, gamma));
+    try std.testing.expect(table.unioned(alpha, gamma));
 
     // All should have the same root
-    const root = table.rootKey(v1);
-    try std.testing.expect(table.rootKey(v2).val == root.val);
-    try std.testing.expect(table.rootKey(v3).val == root.val);
+    const root = table.rootKey(alpha);
+    try std.testing.expect(table.rootKey(beta).val == root.val);
+    try std.testing.expect(table.rootKey(gamma).val == root.val);
+
+    table.debugPrint();
 }
 
 test "unification table - path compression" {
     var table = try UnificationTable.init(std.testing.allocator, 10);
     defer table.deinit();
 
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_compression.snap", .{});
+    defer file.close();
+    table.debug_capture = file.writer();
+
     const v1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
     const v2 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
     const v3 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
     const v4 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    table.debugPrint();
 
     // Create a chain: v4 -> v3 -> v2 -> v1
     try table.unify(v1, v2);
@@ -358,6 +358,8 @@ test "unification table - path compression" {
     try std.testing.expect(table.entries[v2.val].parent.?.val == v1.val);
     try std.testing.expect(table.entries[v3.val].parent.?.val == v1.val);
     try std.testing.expect(table.entries[v4.val].parent.?.val == v1.val);
+
+    table.debugPrint();
 }
 
 test "unification table - occurs check" {
