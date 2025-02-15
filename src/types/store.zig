@@ -769,3 +769,56 @@ pub const UnificationTable = struct {
         self.debugLog("===========================================================\n", .{});
     }
 };
+
+/// UnificationMode controls how type unification behaves.
+pub const UnificationMode = packed struct {
+    eq: bool = false,
+    present: bool = false,
+    lambda_set_specialization: bool = false,
+    _padding: u5 = 0, // To make it byte-aligned
+
+    // Predefined modes
+    pub const EQ = UnificationMode{ .eq = true };
+    pub const PRESENT = UnificationMode{ .present = true };
+    pub const LAMBDA_SET_SPECIALIZATION = UnificationMode{ .eq = true, .lambda_set_specialization = true };
+
+    pub fn isEq(self: UnificationMode) bool {
+        std.debug.assert(!(self.eq and self.present));
+        return self.eq;
+    }
+
+    pub fn isPresent(self: UnificationMode) bool {
+        std.debug.assert(!(self.eq and self.present));
+        return self.present;
+    }
+
+    pub fn isLambdaSetSpecialization(self: UnificationMode) bool {
+        std.debug.assert(!(self.eq and self.present));
+        return self.lambda_set_specialization;
+    }
+
+    pub fn asEq(self: UnificationMode) UnificationMode {
+        return .{
+            .eq = true,
+            .present = false,
+            .lambda_set_specialization = self.lambda_set_specialization,
+        };
+    }
+
+    pub fn format(
+        self: UnificationMode,
+        comptime fmt: []const u8,
+        options: std.fmt.FormatOptions,
+        writer: anytype,
+    ) !void {
+        _ = fmt;
+        _ = options;
+        if (self.eq) {
+            try writer.writeAll("~");
+        } else if (self.present) {
+            try writer.writeAll("+=");
+        } else {
+            @panic("Bad mode!");
+        }
+    }
+};

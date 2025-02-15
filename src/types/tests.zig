@@ -4,6 +4,7 @@ const Rank = @import("store.zig").Rank;
 const Descriptor = @import("store.zig").Descriptor;
 const Content = @import("store.zig").Content;
 const UnificationTable = @import("store.zig").UnificationTable;
+const UnificationMode = @import("store.zig").UnificationMode;
 
 test "Mark constants have correct values" {
     try std.testing.expectEqual(@as(i32, 0), Mark.GET_VAR_NAMES.value);
@@ -411,4 +412,30 @@ test "unification table - capacity management" {
     // This should trigger a capacity increase
     try table.reserve(1);
     try std.testing.expect(table.entries.len > 2);
+}
+
+test "UnificationMode" {
+
+    // Test EQ mode
+    const eq_mode = UnificationMode.EQ;
+    try std.testing.expect(eq_mode.isEq());
+    try std.testing.expect(!eq_mode.isPresent());
+    try std.testing.expect(!eq_mode.isLambdaSetSpecialization());
+
+    // Test PRESENT mode
+    const present_mode = UnificationMode.PRESENT;
+    try std.testing.expect(!present_mode.isEq());
+    try std.testing.expect(present_mode.isPresent());
+    try std.testing.expect(!present_mode.isLambdaSetSpecialization());
+
+    // Test LAMBDA_SET_SPECIALIZATION mode
+    const lambda_mode = UnificationMode.LAMBDA_SET_SPECIALIZATION;
+    try std.testing.expect(lambda_mode.isEq());
+    try std.testing.expect(!lambda_mode.isPresent());
+    try std.testing.expect(lambda_mode.isLambdaSetSpecialization());
+
+    // Test asEq
+    const eq_converted = UnificationMode.PRESENT.asEq();
+    try std.testing.expect(eq_converted.isEq());
+    try std.testing.expect(!eq_converted.isPresent());
 }

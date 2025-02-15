@@ -5,7 +5,7 @@ test {
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("problem.zig"));
     testing.refAllDeclsRecursive(@import("types.zig"));
-    testing.refAllDeclsRecursive(@import("types/test.zig"));
+    testing.refAllDeclsRecursive(@import("types/tests.zig"));
     testing.refAllDeclsRecursive(@import("collections.zig"));
     testing.refAllDeclsRecursive(@import("collections/utils.zig"));
     testing.refAllDeclsRecursive(@import("collections/safe_list.zig"));

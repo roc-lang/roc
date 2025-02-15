@@ -1,4 +1,3 @@
-
 fn infer_eq(expression_str: []const u8, expected: []const u8) void {
     _ = expression_str;
     _ = expected;
