@@ -5,6 +5,18 @@ const Descriptor = @import("store.zig").Descriptor;
 const Content = @import("store.zig").Content;
 const UnificationTable = @import("store.zig").UnificationTable;
 
+/// Greek letter names for type variables
+const Greek = struct {
+    const alpha = "α"; // often used for type variables
+    const beta = "β"; // often used for type variables
+    const gamma = "γ"; // often used for type variables
+    const delta = "δ"; // often used for type variables
+    const epsilon = "ε"; // often used for type variables
+    const tau = "τ"; // often used for types
+    const sigma = "σ"; // often used for substitutions
+    const rho = "ρ"; // often used for environments
+};
+
 test "Mark constants have correct values" {
     try std.testing.expectEqual(@as(i32, 0), Mark.GET_VAR_NAMES.value);
     try std.testing.expectEqual(@as(i32, 1), Mark.OCCURS.value);
@@ -245,33 +257,27 @@ test "UnificationTable advanced operations" {
 }
 
 test "UnificationTable redirect detection" {
-    // Initialize table with space for 2 variables
-    var table = try UnificationTable.init(std.testing.allocator, 2);
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_redirect.snap", .{});
+    defer file.close();
+
+    const allocator = std.testing.allocator;
+    var table = try UnificationTable.init(allocator, 3);
     defer table.deinit();
 
-    // Create two variables v0, v1 with default descriptors
-    const desc = Descriptor.default();
-    const v0 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v0.val = 0
-    const v1 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v1.val = 1
-    std.log.debug("\nInitial state: two independent variables\n", .{});
-    std.log.debug("v0={}, v1={}\n", .{ v0.val, v1.val });
+    table.debug_capture = file.writer();
 
-    // Initially both variables should be roots (no redirects)
-    try std.testing.expect(!table.isRedirect(v0)); // v0 starts as root
-    try std.testing.expect(!table.isRedirect(v1)); // v1 starts as root
+    const alpha = table.push(Content{ .FlexVar = null }, Rank.toplevel(), Mark.NONE, null);
+    const beta = table.push(Content{ .FlexVar = null }, Rank.toplevel(), Mark.NONE, null);
 
-    // Unify v0 <- v1
-    // After this: v1 should point to v0 (v0 is root)
-    std.log.debug("\nUnifying v0({}) <- v1({})\n", .{ v0.val, v1.val });
-    try table.unify(v0, v1);
+    table.debugPrint();
 
-    // Check final state
-    try std.testing.expect(!table.isRedirect(v0)); // v0 should be root
-    try std.testing.expect(table.isRedirect(v1)); // v1 should point to v0
+    table.debugLog("INFO: Perform unification, redirect {} to {}\n", .{ beta, alpha });
+    try table.unify(alpha, beta);
 
-    // Verify root finding
-    const root = table.rootKey(v1);
-    try std.testing.expectEqual(v0, root); // v0 should be the root
+    try std.testing.expect(!table.isRedirect(alpha));
+    try std.testing.expect(table.isRedirect(beta));
+
+    table.debugPrint();
 }
 
 test "UnificationTable descriptor modification" {

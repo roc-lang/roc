@@ -49,6 +49,15 @@ pub const Variable = struct {
     pub fn index(self: Variable) u32 {
         return self.val;
     }
+
+    pub fn format(self: Variable, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+
+        try writer.writeAll("Var(");
+        try std.fmt.format(writer, "{any}", .{self.val});
+        try writer.writeAll(")");
+    }
 };
 
 pub const Content = union(enum) {
