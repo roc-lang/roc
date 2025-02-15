@@ -1,10 +1,10 @@
 New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 0, mark: NONE, copy: null}
-==================== END Unification Table ====================
+===========================================================
 INFO: Modify descriptor change Mark from NONE to OCCURS
 INFO: Changing Mark from NONE to OCCURS
 INFO: Changing Rank from 0 to 1
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 1, mark: OCCURS, copy: null}
-==================== END Unification Table ====================
+===========================================================

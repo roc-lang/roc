@@ -173,7 +173,7 @@ test "Descriptor basics" {
 }
 
 test "unification table - basic" {
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_basic_operations.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_basic_operations.txt", .{});
     defer file.close();
 
     var table = try UnificationTable.init(std.testing.allocator, 10);
@@ -203,7 +203,7 @@ test "unification table - advanced" {
     var table = try UnificationTable.init(std.testing.allocator, 4);
     defer table.deinit();
 
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_advanced_operations.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_advanced_operations.txt", .{});
     defer file.close();
     table.debug_capture = file.writer();
 
@@ -245,7 +245,7 @@ test "unification table - advanced" {
 }
 
 test "unification table - redirect" {
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_redirect.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_redirect.txt", .{});
     defer file.close();
 
     const allocator = std.testing.allocator;
@@ -269,7 +269,7 @@ test "unification table - redirect" {
 }
 
 test "unification table - descriptor" {
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_descriptor_modification.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_descriptor_modification.txt", .{});
     defer file.close();
 
     var table = try UnificationTable.init(std.testing.allocator, 4);
@@ -301,7 +301,7 @@ test "unification table - transitive" {
     var table = try UnificationTable.init(std.testing.allocator, 10);
     defer table.deinit();
 
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_transitive.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_transitive.txt", .{});
     defer file.close();
     table.debug_capture = file.writer();
 
@@ -335,7 +335,7 @@ test "unification table - path compression" {
     var table = try UnificationTable.init(std.testing.allocator, 10);
     defer table.deinit();
 
-    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_compression.snap", .{});
+    const file = try std.fs.cwd().createFile("src/types/snapshots/unification_table_compression.txt", .{});
     defer file.close();
     table.debug_capture = file.writer();
 

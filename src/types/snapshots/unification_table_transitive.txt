@@ -1,11 +1,11 @@
 New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 New type variable: {FlexVar(null), rank: 0, mark: NONE, copy: null}
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 Var 1: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 Var 2: {FlexVar(null), rank: 0, mark: NONE, copy: null}
-==================== END Unification Table ====================
+===========================================================
 Checking union for 0 and 1
 Root for variable 0: 0
 Root for variable 1: 1
@@ -35,7 +35,7 @@ Union result: true
 Root for variable 0: 0
 Root for variable 1: 0
 Root for variable 2: 0
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 0, mark: NONE, copy: null}
 Var 1: {FlexVar(null), rank: 0, mark: NONE, copy: null} → 0
 Var 2: {FlexVar(null), rank: 0, mark: NONE, copy: null} → 0
@@ -43,4 +43,4 @@ Class with root 0:
   0
   1 → 0
   2 → 0
-==================== END Unification Table ====================
+===========================================================

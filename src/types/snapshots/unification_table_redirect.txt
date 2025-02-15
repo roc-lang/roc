@@ -1,18 +1,18 @@
 New type variable: {FlexVar(null), rank: 1, mark: NONE, copy: null}
 New type variable: {FlexVar(null), rank: 1, mark: NONE, copy: null}
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 1, mark: NONE, copy: null}
 Var 1: {FlexVar(null), rank: 1, mark: NONE, copy: null}
-==================== END Unification Table ====================
+===========================================================
 INFO: Perform unification, redirect Var(1) to Var(0)
 Unifying 0 <- 1
 Redirect check for 0: false
 Redirect check for 1: true
   Parent is: 0
-==================== START Unification Table ====================
+==================== Unification Table ====================
 Var 0: {FlexVar(null), rank: 1, mark: NONE, copy: null}
 Var 1: {FlexVar(null), rank: 1, mark: NONE, copy: null} → 0
 Class with root 0:
   0
   1 → 0
-==================== END Unification Table ====================
+===========================================================

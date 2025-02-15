@@ -65,8 +65,21 @@ pub const Content = union(enum) {
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    // FlexVar(Option<SubsIndex<Lowercase>>),
     FlexVar: ?[]usize,
+    // FlexVar(Option<SubsIndex<Lowercase>>),
+
+    /// Name given in a user-written annotation
+    RigidVar: []usize,
+
+    Structure: FlatType,
+
+    Error,
+
+    /// The fx type variable for a given function
+    Pure,
+
+    /// The fx type variable for a given function
+    Effectful,
 
     pub fn format(
         self: Content,
@@ -87,21 +100,47 @@ pub const Content = union(enum) {
                 }
                 try writer.writeAll(")");
             },
+            .RigidVar => |indices| {
+                try writer.writeAll("RigidVar(");
+                try std.fmt.format(writer, "{any}", .{indices});
+                try writer.writeAll(")");
+            },
+            .Structure => |flat_type| {
+                try writer.writeAll("Structure(");
+                switch (flat_type) {
+                    .Apply => |apply| {
+                        try writer.writeAll("Apply{name: ");
+                        try std.fmt.format(writer, "{}, arguments: {any}", .{ apply.name, apply.arguments });
+                        try writer.writeAll("}");
+                    },
+                    .Func => |func| {
+                        try writer.writeAll("Func{arguments: ");
+                        try std.fmt.format(writer, "{any}, lambda_set: {}, result: {}, fx: {}", .{ func.arguments, func.lambda_set, func.result, func.fx });
+                        try writer.writeAll("}");
+                    },
+                    .EmptyRecord => try writer.writeAll("EmptyRecord"),
+                    .EmptyTagUnion => try writer.writeAll("EmptyTagUnion"),
+                }
+                try writer.writeAll(")");
+            },
+            .Error => try writer.writeAll("Error"),
+            .Pure => try writer.writeAll("Pure"),
+            .Effectful => try writer.writeAll("Effectful"),
         }
     }
 };
 
 pub const FlatType = union(enum) {
     Apply: struct {
-        name: Ident.Idx,
-        arguments: []Ident.Idx,
+        name: Variable,
+        arguments: []Variable,
     },
 
     Func: struct {
-        arguments: []Ident.Idx,
-        lambda_set: Ident.Idx,
-        result: Ident.Idx,
-        fx: Ident.Idx,
+        arguments: []Variable,
+        lambda_set: Variable,
+        result: Variable,
+        fx: Variable,
     },
 
     EmptyRecord,
@@ -498,8 +537,51 @@ pub const UnificationTable = struct {
 
             // Check the content of the current variable
             switch (desc.content) {
-                // For flex variables and similar base cases, no occurrence is possible
-                .FlexVar => return false,
+                // Base cases - no occurrence possible
+                .FlexVar, .Pure, .Effectful, .Error => return false,
+
+                // For rigid variables, we need to check if it matches our target
+                .RigidVar => |_| return false,
+
+                // For structures, we need to recursively check all contained types
+                .Structure => |flat_type| {
+                    switch (flat_type) {
+                        .Apply => |apply| {
+                            // Check each argument type
+                            for (apply.arguments) |arg| {
+                                if (try self.occurs(variable, arg)) {
+                                    return true;
+                                }
+                            }
+                        },
+                        .Func => |func| {
+                            // Check argument types
+                            for (func.arguments) |arg| {
+                                if (try self.occurs(variable, arg)) {
+                                    return true;
+                                }
+                            }
+
+                            // Check lambda set
+                            if (try self.occurs(variable, func.lambda_set)) {
+                                return true;
+                            }
+
+                            // Check result type
+                            if (try self.occurs(variable, func.result)) {
+                                return true;
+                            }
+
+                            // Check effect type
+                            if (try self.occurs(variable, func.fx)) {
+                                return true;
+                            }
+                        },
+                        // Empty structures have no types to check
+                        .EmptyRecord, .EmptyTagUnion => return false,
+                    }
+                    return false;
+                },
             }
         }
     }
@@ -623,7 +705,7 @@ pub const UnificationTable = struct {
 
     /// Prints a detailed representation of the UnificationTable's current state to the debug log.
     pub fn debugPrint(self: *const UnificationTable) void {
-        self.debugLog("==================== START Unification Table ====================\n", .{});
+        self.debugLog("==================== Unification Table ====================\n", .{});
 
         if (self.len == 0) {
             self.debugLog("(empty table)\n", .{});
@@ -684,6 +766,6 @@ pub const UnificationTable = struct {
             }
         }
 
-        self.debugLog("==================== END Unification Table ====================\n", .{});
+        self.debugLog("===========================================================\n", .{});
     }
 };
