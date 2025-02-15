@@ -143,8 +143,6 @@ fn add_fuzz_target(
     }
 
     // TODO: Once 0.14.0 is released, uncomment this. Will make fuzzing work better.
-    // Until then, to get the best fuzzing result modify the std library as specified here:
-    // https://github.com/kristoff-it/zig-afl-kit?tab=readme-ov-file#-------important-------
     // fuzz_obj.root_module.fuzz = true;
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
