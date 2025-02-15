@@ -295,3 +295,15 @@ test "UnificationTable descriptor modification" {
     try testing.expectEqual(new_desc.mark, retrieved_desc.mark);
     try testing.expectEqual(new_desc.copy, retrieved_desc.copy);
 }
+
+test "basic unification" {
+    var store = try UnificationTable.init(std.testing.allocator, 10);
+    defer store.deinit();
+
+    // Create two variables
+    const v1 = store.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+    const v2 = store.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    try store.unify(v1, v2);
+    try std.testing.expect(store.unioned(v1, v2));
+}
