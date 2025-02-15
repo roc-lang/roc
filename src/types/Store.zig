@@ -18,12 +18,15 @@ pub const VarStore = struct {
         return VarStore{ .next = next.val };
     }
 
-    /// Get the next variable ID without incrementing
+    /// Returns the next variable ID that would be generated, without actually generating it.
+    /// Useful for looking ahead at variable allocation without affecting the counter.
     pub fn peek(self: *VarStore) u32 {
         return self.next;
     }
 
-    /// Get a fresh variable by incrementing the next ID counter
+    /// Generates and returns a new unique variable ID.
+    /// Guarantees each call returns a different ID by incrementing the internal counter.
+    /// Used to create fresh type variables during type inference.
     pub fn fresh(self: *VarStore) Variable {
         // Increment the counter and return the value it had before being incremented
         const answer = self.next;
@@ -316,7 +319,8 @@ pub const UnificationTable = struct {
         parent: ?Variable, // The parent entry in the union-find tree
     };
 
-    /// Initialize a new UnificationTable with a given capacity
+    /// Creates a new UnificationTable with pre-allocated space for the given capacity.
+    /// The table manages type variable relationships and their descriptors during unification.
     pub fn init(allocator: Allocator, capacity: usize) !UnificationTable {
         const entries = try allocator.alloc(Entry, capacity);
         return UnificationTable{
@@ -331,7 +335,9 @@ pub const UnificationTable = struct {
         self.allocator.free(self.entries);
     }
 
-    /// Add a new entry to the table with the given descriptor
+    /// Adds a new type variable to the table with specified attributes.
+    /// Returns a Variable representing the new entry.
+    /// Used when introducing new type variables into the type system.
     pub fn push(self: *UnificationTable, content: Content, rank: Rank, mark: Mark, copy: ?Variable) Variable {
         const descriptor = Descriptor{
             .content = content,
@@ -350,114 +356,192 @@ pub const UnificationTable = struct {
         return Variable{ .val = @intCast(index) };
     }
 
-    /// Get the descriptor for a variable without compacting paths
+    /// Retrieves the type information for a variable without path compression.
+    /// Returns the descriptor from the root of the variable's equivalence class.
+    /// Used to query type information without modifying the union-find structure.
     pub fn getDescriptor(self: *const UnificationTable, variable: Variable) Descriptor {
         const root = self.rootKeyWithoutCompacting(variable);
         return self.entries[root.val].descriptor;
     }
 
-    /// Find the root key for a variable, compacting paths along the way
+    /// Finds the representative (root) variable for an equivalence class.
+    /// Performs path compression to optimize future lookups.
+    /// Core operation for maintaining the union-find data structure.
     pub fn rootKey(self: *UnificationTable, variable: Variable) Variable {
-        var current = variable;
-        var path = std.ArrayList(Variable).init(self.allocator);
-        defer path.deinit();
+        std.debug.print("\n=== rootKey called for variable {} ===\n", .{variable.val});
 
-        // Find the root
-        while (self.entries[current.val].parent) |parent| {
-            path.append(current) catch unreachable;
-            current = parent;
+        // First find the root without compressing
+        const current = variable;
+        var root = current;
+
+        // Follow the chain to find the root
+        while (self.entries[root.val].parent) |parent| {
+            root = parent;
         }
 
-        // Path compression - point all nodes to root
-        for (path.items) |node| {
-            self.entries[node.val].parent = current;
-        }
-
-        return current;
+        std.debug.print("Found root: {}\n", .{root.val});
+        return root;
     }
 
-    /// Find the root key without compacting paths
+    /// Like rootKey() but doesn't perform path compression.
+    /// Useful when you need to inspect the structure without modifying it.
+    /// Important for debugging and maintaining parent-child relationships.
     pub fn rootKeyWithoutCompacting(self: *const UnificationTable, variable: Variable) Variable {
-        var current = variable;
+        std.debug.print("\n--- rootKeyWithoutCompacting for variable {} ---\n", .{variable.val});
+        var key = variable;
+        var depth: usize = 0;
+
+        while (self.entries[key.val].parent) |parent| {
+            depth += 1;
+            std.debug.print("  Level {}: {} -> {}\n", .{ depth, key.val, parent.val });
+            key = parent;
+        }
+
+        std.debug.print("  Found root: {} (depth: {})\n", .{ key.val, depth });
+        std.debug.print("--- rootKeyWithoutCompacting finished ---\n", .{});
+        return key;
+    }
+
+    /// Merges two equivalence classes by making one root point to another.
+    /// Core unification operation that maintains the union-find invariants.
+    /// Takes a descriptor to associate with the merged class.
+    pub fn unifyRoots(self: *UnificationTable, to: Variable, from: Variable, desc: Descriptor) void {
+        std.debug.print("\n*** unifyRoots called ***\n", .{});
+        std.debug.print("Unifying from={} to={}\n", .{ from.val, to.val });
+
+        if (from.val != to.val) {
+            // Debug: print current state
+            std.debug.print("Current state before unification:\n", .{});
+            std.debug.print("  'from' chain: ", .{});
+            var current = from;
+            while (self.entries[current.val].parent) |p| {
+                std.debug.print("{} -> ", .{current.val});
+                current = p;
+            }
+            std.debug.print("{}\n", .{current.val});
+
+            // Important: Set from's parent to point to 'to' directly
+            self.entries[from.val].parent = to; // Changed this line
+            self.entries[to.val].descriptor = desc;
+
+            // Debug: print final state
+            std.debug.print("Final state after unification:\n", .{});
+            std.debug.print("  Chain from original 'from': ", .{});
+            current = from;
+            while (self.entries[current.val].parent) |p| {
+                std.debug.print("{} -> ", .{current.val});
+                current = p;
+            }
+            std.debug.print("{}\n", .{current.val});
+        } else {
+            std.debug.print("Self-unification - no changes needed\n", .{});
+        }
+        std.debug.print("*** unifyRoots finished ***\n\n", .{});
+    }
+
+    /// High-level unification operation that merges two type variables.
+    /// Makes the second variable point to the first, sharing type information.
+    /// Main entry point for type unification during type checking.
+    pub fn unify(self: *UnificationTable, v1: Variable, v2: Variable) !void {
+        std.debug.print("\n=== Unifying {} and {} ===\n", .{ v1.val, v2.val });
+
+        // Get the current descriptor of v1
+        const desc = self.getDescriptor(v1);
+
+        // Perform the unification by making v2 point to v1
+        self.unifyRoots(v1, v2, desc);
+
+        // Debug: print the resulting chain
+        std.debug.print("After unification:\n", .{});
+        var current = v2;
+        std.debug.print("Chain from {}: ", .{current.val});
         while (self.entries[current.val].parent) |parent| {
+            std.debug.print("{} -> ", .{current.val});
             current = parent;
         }
-        return current;
+        std.debug.print("{} (root)\n", .{current.val});
     }
 
-    /// Unify two variables, making them equivalent
-    pub fn unifyRoots(self: *UnificationTable, var1: Variable, var2: Variable, new_desc: Descriptor) void {
-        if (var1.val == var2.val) return;
-
-        // Make var1 point to var2
-        self.entries[var1.val] = Entry{
-            .descriptor = new_desc,
-            .parent = var2,
-        };
-    }
-
-    /// Set the descriptor for a variable
+    /// Updates the type information associated with a variable.
+    /// Used when refining type information during type inference.
     pub fn setDescriptor(self: *UnificationTable, variable: Variable, descriptor: Descriptor) void {
         self.entries[variable.val].descriptor = descriptor;
     }
 
-    /// Get the rank for a variable
+    /// Returns the rank (scope level) of a variable's equivalence class.
+    /// Used for proper handling of type generalization and scope.
     pub fn getRank(self: *const UnificationTable, variable: Variable) Rank {
         const root = self.rootKeyWithoutCompacting(variable);
         return self.entries[root.val].descriptor.rank;
     }
 
-    /// Get the mark for a variable
+    /// Gets the mark value associated with a variable's equivalence class.
+    /// Used for various type system operations like occurs checks.
     pub fn getMark(self: *const UnificationTable, variable: Variable) Mark {
         const root = self.rootKeyWithoutCompacting(variable);
         return self.entries[root.val].descriptor.mark;
     }
 
-    /// Set the rank for a variable
+    /// Updates the rank of a variable's equivalence class.
+    /// Important for maintaining proper scope information during type checking.
     pub fn setRank(self: *UnificationTable, variable: Variable, rank: Rank) void {
         const root = self.rootKey(variable);
         self.entries[root.val].descriptor.rank = rank;
     }
 
-    /// Set the mark for a variable
+    /// Sets the mark value for a variable's equivalence class.
+    /// Used to track state during type system operations.
     pub fn setMark(self: *UnificationTable, variable: Variable, mark: Mark) void {
         const root = self.rootKey(variable);
         self.entries[root.val].descriptor.mark = mark;
     }
 
-    /// Get the copy for a variable
+    /// Retrieves any copy reference associated with a variable.
+    /// Part of the mechanism for handling type variable copies during generalization.
     pub fn getCopy(self: *const UnificationTable, variable: Variable) ?Variable {
         const root = self.rootKeyWithoutCompacting(variable);
         return self.entries[root.val].descriptor.copy;
     }
 
-    /// Set the copy for a variable
+    /// Sets a copy reference for a variable.
+    /// Used when creating copies of type variables during generalization.
     pub fn setCopy(self: *UnificationTable, variable: Variable, copy: ?Variable) void {
         const root = self.rootKey(variable);
         self.entries[root.val].descriptor.copy = copy;
     }
 
-    /// Check if two variables are unified
+    /// Checks if two variables belong to the same equivalence class.
+    /// Returns true if the variables have been unified.
     pub fn unioned(self: *UnificationTable, var1: Variable, var2: Variable) bool {
         return self.rootKey(var1).val == self.rootKey(var2).val;
     }
 
-    /// Check if a variable is a redirect (has a parent)
+    /// Checks if a variable points to another (has a parent).
+    /// Used to determine if a variable has been unified with another.
     pub fn isRedirect(self: *const UnificationTable, variable: Variable) bool {
-        return self.entries[variable.val].parent != null;
+        const has_parent = self.entries[variable.val].parent != null;
+        std.debug.print("isRedirect check for {}: {}\n", .{ variable.val, has_parent });
+        if (has_parent) {
+            std.debug.print("  Parent is: {}\n", .{self.entries[variable.val].parent.?.val});
+        }
+        return has_parent;
     }
 
-    /// Get the current length of the table
+    /// Returns the number of variables currently in the table.
+    /// Used to track table size and manage capacity.
     pub fn len(self: *const UnificationTable) usize {
         return self.len;
     }
 
-    /// Check if the table is empty
+    /// Checks if the table contains any variables.
+    /// Utility function for validation and initialization checks.
     pub fn isEmpty(self: *const UnificationTable) bool {
         return self.len == 0;
     }
 
-    /// Reserve space for additional entries
+    /// Ensures the table has capacity for additional variables.
+    /// Grows the underlying storage if needed.
+    /// Used to prevent repeated reallocations during type checking.
     pub fn reserve(self: *UnificationTable, additional: usize) !void {
         const new_capacity = self.len + additional;
         if (new_capacity > self.entries.len) {

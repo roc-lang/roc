@@ -193,3 +193,105 @@ test "UnificationTable basic operations" {
     // Test unification worked
     try testing.expect(table.unioned(var1, var2));
 }
+
+test "UnificationTable advanced operations" {
+    // Initialize table with space for 10 variables
+    var table = try UnificationTable.init(std.testing.allocator, 10);
+    defer table.deinit();
+
+    // Create four variables v1, v2, v3, v4 with default descriptors
+    const desc = Descriptor.default();
+    const v1 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v1.val = 0
+    const v2 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v2.val = 1
+    const v3 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v3.val = 2
+    const v4 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v4.val = 3
+
+    std.debug.print("\nInitial state: four independent variables\n", .{});
+    std.debug.print("v1={}, v2={}, v3={}, v4={}\n", .{ v1.val, v2.val, v3.val, v4.val });
+
+    // First unification: v1 <- v2
+    // After this: v2 should point to v1 (v1 is root)
+    std.debug.print("\nUnifying v1({}) <- v2({})\n", .{ v1.val, v2.val });
+    try table.unify(v1, v2);
+    try std.testing.expect(!table.isRedirect(v1)); // v1 should be root
+    try std.testing.expect(table.isRedirect(v2)); // v2 should point to v1
+
+    // Second unification: v2 <- v3
+    // After this: v3 should point to v2, which points to v1 (v1 is root)
+    std.debug.print("\nUnifying v2({}) <- v3({})\n", .{ v2.val, v3.val });
+    try table.unify(v2, v3);
+    try std.testing.expect(!table.isRedirect(v1)); // v1 should still be root
+    try std.testing.expect(table.isRedirect(v2)); // v2 should still point to v1
+    try std.testing.expect(table.isRedirect(v3)); // v3 should point to v2
+
+    // Third unification: v3 <- v4
+    // After this: v4 should point to v3, which points to v2, which points to v1 (v1 is root)
+    std.debug.print("\nUnifying v3({}) <- v4({})\n", .{ v3.val, v4.val });
+    try table.unify(v3, v4);
+    try std.testing.expect(!table.isRedirect(v1)); // v1 should still be root
+    try std.testing.expect(table.isRedirect(v2)); // v2 should still point to v1
+    try std.testing.expect(table.isRedirect(v3)); // v3 should still point to v2
+    try std.testing.expect(table.isRedirect(v4)); // v4 should point to v3
+
+    // Final state should be: v4 -> v3 -> v2 -> v1
+    // Where v1 is the root of the entire chain
+    const root = table.rootKey(v1);
+    try std.testing.expectEqual(v1, root); // v1 should be the root
+
+    // Verify we get the same root regardless of which variable we start from
+    try std.testing.expectEqual(v1, table.rootKey(v2));
+    try std.testing.expectEqual(v1, table.rootKey(v3));
+    try std.testing.expectEqual(v1, table.rootKey(v4));
+}
+
+test "UnificationTable redirect detection" {
+    // Initialize table with space for 2 variables
+    var table = try UnificationTable.init(std.testing.allocator, 2);
+    defer table.deinit();
+
+    // Create two variables v0, v1 with default descriptors
+    const desc = Descriptor.default();
+    const v0 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v0.val = 0
+    const v1 = table.push(desc.content, desc.rank, desc.mark, desc.copy); // v1.val = 1
+
+    std.debug.print("\nInitial state: two independent variables\n", .{});
+    std.debug.print("v0={}, v1={}\n", .{ v0.val, v1.val });
+
+    // Initially both variables should be roots (no redirects)
+    try std.testing.expect(!table.isRedirect(v0)); // v0 starts as root
+    try std.testing.expect(!table.isRedirect(v1)); // v1 starts as root
+
+    // Unify v0 <- v1
+    // After this: v1 should point to v0 (v0 is root)
+    std.debug.print("\nUnifying v0({}) <- v1({})\n", .{ v0.val, v1.val });
+    try table.unify(v0, v1);
+
+    // Check final state
+    try std.testing.expect(!table.isRedirect(v0)); // v0 should be root
+    try std.testing.expect(table.isRedirect(v1)); // v1 should point to v0
+
+    // Verify root finding
+    const root = table.rootKey(v1);
+    try std.testing.expectEqual(v0, root); // v0 should be the root
+}
+
+test "UnificationTable descriptor modification" {
+    const testing = std.testing;
+    const allocator = testing.allocator;
+
+    var table = try UnificationTable.init(allocator, 4);
+    defer table.deinit();
+
+    // Create variable with initial descriptor
+    const var1 = table.push(Content{ .FlexVar = null }, Rank.GENERALIZED, Mark.NONE, null);
+
+    // Modify descriptor
+    const new_desc = Descriptor.init(Content{ .FlexVar = null }, Rank.toplevel(), Mark.OCCURS, null);
+    table.setDescriptor(var1, new_desc);
+
+    // Verify modifications
+    const retrieved_desc = table.getDescriptor(var1);
+    try testing.expectEqual(new_desc.rank, retrieved_desc.rank);
+    try testing.expectEqual(new_desc.mark, retrieved_desc.mark);
+    try testing.expectEqual(new_desc.copy, retrieved_desc.copy);
+}
