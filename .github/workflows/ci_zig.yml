@@ -4,7 +4,7 @@ on:
 name: CI New Compiler
 
 jobs:
-    check-zig-fmt:
+    check-zig:
         runs-on: ubuntu-22.04
         steps:
             - name: Checkout
@@ -12,13 +12,18 @@ jobs:
             - uses: mlugg/setup-zig@v1
               with:
                 version: 0.13.0
-                
-            - run: zig fmt --check --ast-check src build.zig
+
+            - run: |
+                zig build check-fmt
+                # -Dllvm incurs a costly download step, leave that for later.
+                # Just the do super fast check step for now.
+                zig build check -Dfuzz
 
     zig-tests:
-        needs: check-zig-fmt
+        needs: check-zig
         runs-on: ${{ matrix.os }}
         strategy:
+            fail-fast: false
             matrix:
                 os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64 
         steps:
@@ -74,9 +79,10 @@ jobs:
                 }
 
     zig-cross-compile:
-        needs: check-zig-fmt
+        needs: check-zig
         runs-on: ubuntu-24.04
         strategy:
+            fail-fast: false
             matrix:
                 target:
                 - aarch64-linux-musl
