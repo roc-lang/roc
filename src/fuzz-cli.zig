@@ -5,12 +5,12 @@
 ///
 /// To run:
 ///  1. zig build fuzz-cli
-///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/cli-corpus/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
+///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/cli/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
 ///
 /// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
-const cli = @import("cli");
+const cli = @import("cli.zig");
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
 

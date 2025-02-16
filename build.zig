@@ -88,63 +88,41 @@ pub fn build(b: *std.Build) void {
             }
         }
 
-        // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
-        // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
-        // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
-        // TODO: Create one root lib module that all fuzzers can depend on instead of all these disparate manually managed modules.
-        // Since zig does tree shaking, that will still compile fast.
-        // We also can make main only depend on that module.
-        add_fuzz_target(
-            b,
-            build_afl,
-            check_step,
-            target,
+        const names: []const []const u8 = &.{
             "cli",
-            b.path("src/fuzz/cli.zig"),
-            &[_]Import{
-                .{ .name = "cli", .module = b.createModule(.{ .root_source_file = b.path("src/cli.zig") }) },
-            },
-        );
-        // const tokenize_module = b.createModule(.{ .root_source_file = b.path("src/check/parse/tokenize.zig") });
-        // tokenize_module.addImport("GenCatData", zg.module("GenCatData"));
-        // add_fuzz_target(
-        //     b,
-        //     build_afl,
-        //     check_step,
-        //     target,
-        //     "tokenize",
-        //     b.path("src/fuzz/tokenize.zig"),
-        //     &[_]Import{
-        //         .{ .name = "GenCatData", .module = zg.module("GenCatData") },
-        //         .{ .name = "tokenize", .module = tokenize_module },
-        //     },
-        // );
+            "tokenize",
+        };
+        for (names) |name| {
+            add_fuzz_target(
+                b,
+                zg,
+                build_afl,
+                check_step,
+                target,
+                name,
+            );
+        }
     }
 }
 
 fn add_fuzz_target(
     b: *std.Build,
+    zg: *Dependency,
     build_afl: bool,
     check_step: *Step,
     target: ResolvedTarget,
     name: []const u8,
-    root_source_file: LazyPath,
-    imports: []const Import,
 ) void {
+    const root_source_file = b.path(b.fmt("src/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
         .target = target,
         .optimize = .ReleaseSafe,
     });
-
-    for (imports) |import| {
-        fuzz_obj.root_module.addImport(import.name, import.module);
-    }
+    fuzz_obj.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     // TODO: Once 0.14.0 is released, uncomment this. Will make fuzzing work better.
-    // Until then, to get the best fuzzing result modify the std library as specified here:
-    // https://github.com/kristoff-it/zig-afl-kit?tab=readme-ov-file#-------important-------
     // fuzz_obj.root_module.fuzz = true;
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
@@ -156,7 +134,7 @@ fn add_fuzz_target(
     const name_repro = b.fmt("repro-{s}", .{name});
     const install_repro = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("src/fuzz/repro.zig"),
+        .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
         .optimize = .Debug,
         .link_libc = true,
@@ -167,7 +145,7 @@ fn add_fuzz_target(
 
     const check_repro = b.addExecutable(.{
         .name = name_repro,
-        .root_source_file = b.path("src/fuzz/repro.zig"),
+        .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
         .optimize = .Debug,
         .link_libc = true,
