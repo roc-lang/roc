@@ -88,9 +88,6 @@ pub fn build(b: *std.Build) void {
             }
         }
 
-        // TODO: this just builds the fuzz target. Afterwards, they are still awkward to orchestrate and run.
-        // Make a script to manage the corpus and run the fuzzers (or at least some good docs)
-        // Likely will should check in a minimal corpus somewhere so we don't always start from zero.
         const names: []const []const u8 = &.{
             "cli",
             "tokenize",
