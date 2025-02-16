@@ -255,6 +255,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
                         .StringBegin, .StringPart => {
                             buf_slice[token.offset - 1] = '$';
                         },
+                        .SingleQuoteBegin, .SingleQuotePart => {
+                            buf_slice[token.offset - 1] = '$';
+                        },
                         else => {},
                     }
                 }
