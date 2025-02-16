@@ -7,6 +7,7 @@ pub mod collection;
 pub mod def;
 pub mod expr;
 pub mod header;
+pub mod migrate;
 pub mod node;
 pub mod pattern;
 pub mod spaces;

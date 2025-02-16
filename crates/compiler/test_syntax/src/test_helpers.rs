@@ -7,6 +7,7 @@ use roc_can::scope::Scope;
 use roc_can_solo::env::SoloEnv;
 use roc_can_solo::scope::SoloScope;
 use roc_error_macros::set_panic_not_exit;
+use roc_fmt::migrate::{MigrateError, Suffix};
 use roc_fmt::{annotation::Formattable, header::fmt_header, MigrationFlags};
 use roc_module::ident::QualifiedModuleName;
 use roc_module::symbol::{IdentIds, Interns, ModuleIds, PackageModuleIds, Symbol};
@@ -30,7 +31,7 @@ use roc_types::{
     types::{AliasVar, Type},
 };
 
-use roc_fmt::Buf;
+use roc_fmt::{migrate, Buf};
 
 /// Source code to parse. Usually in the form of a test case.
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -250,6 +251,77 @@ impl<'a> Output<'a> {
                     module_ids: env.qualified_module_ids.clone().into_module_ids(),
                     all_ident_ids,
                 };
+            }
+        }
+    }
+
+    pub fn migrate(&self) -> Result<InputOwned, MigrateError> {
+        match self {
+            Output::Header(header) => {
+                let arena = Bump::new();
+                let mut buf = Buf::new_in(
+                    &arena,
+                    MigrationFlags {
+                        snakify: false,
+                        parens_and_commas: false,
+                    },
+                );
+                migrate::fmt_header(&mut buf, header)?;
+                buf.fmt_end_of_file();
+                Ok(InputOwned::Header(buf.as_str().to_string()))
+            }
+            Output::ModuleDefs(defs) => {
+                let arena = Bump::new();
+                let mut buf = Buf::new_in(
+                    &arena,
+                    MigrationFlags {
+                        snakify: false,
+                        parens_and_commas: false,
+                    },
+                );
+                migrate::fmt_defs(&mut buf, defs)?;
+                buf.fmt_end_of_file();
+                Ok(InputOwned::ModuleDefs(buf.as_str().to_string()))
+            }
+            Output::Expr(expr) => {
+                let arena = Bump::new();
+                let mut buf = Buf::new_in(
+                    &arena,
+                    MigrationFlags {
+                        snakify: false,
+                        parens_and_commas: false,
+                    },
+                );
+                migrate::fmt_expr_top_level(&mut buf, 0, &expr.value)?;
+                buf.fmt_end_of_file();
+                Ok(InputOwned::Expr(buf.as_str().to_string()))
+            }
+            Output::Full(full_ast) => {
+                let arena = Bump::new();
+                let mut buf = Buf::new_in(
+                    &arena,
+                    MigrationFlags {
+                        snakify: false,
+                        parens_and_commas: false,
+                    },
+                );
+                migrate::fmt_header(&mut buf, &full_ast.header)?;
+                migrate::fmt_defs(&mut buf, &full_ast.defs)?;
+                buf.fmt_end_of_file();
+                Ok(InputOwned::Full(buf.as_str().to_string()))
+            }
+            Output::Pattern(pat) => {
+                let arena = Bump::new();
+                let mut buf = Buf::new_in(
+                    &arena,
+                    MigrationFlags {
+                        snakify: false,
+                        parens_and_commas: false,
+                    },
+                );
+                migrate::fmt_pattern(&mut buf, 0, &pat.value, Suffix::None)?;
+                buf.fmt_end_of_file();
+                Ok(InputOwned::Pattern(buf.as_str().to_string()))
             }
         }
     }

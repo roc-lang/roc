@@ -979,7 +979,7 @@ fn format_str_segment(seg: &StrSegment, buf: &mut Buf) {
     }
 }
 
-fn push_op(buf: &mut Buf, op: BinOp) {
+pub fn push_op(buf: &mut Buf, op: BinOp) {
     match op {
         called_via::BinOp::Caret => buf.push('^'),
         called_via::BinOp::Star => buf.push('*'),
