@@ -17,19 +17,25 @@ pub const Token = struct {
 
     pub const Tag = enum(u8) {
         EndOfFile,
-        // Whitespace
+
         Newline,
 
         // primitives
         Float,
         String,
         SingleQuote,
+        Int,
+        MalformedIntBadSuffix, // malformed, but should be treated similar to an int in the parser
 
         // a part of a string interpolation; generally you'll see something like:
         // StringBegin, OpenCurly, <expr>, CloseCurly, StringPart, OpenCurly, <expr>, CloseCurly, StringEnd
         StringBegin,
         StringPart,
         StringEnd,
+
+        // Should be treated as StringPart in the parser, but we forward the error to the ast
+        MalformedInvalidUnicodeEscapeSequence,
+        MalformedInvalidEscapeSequence,
 
         // These are not technically valid, but we can have the formatter fix them up.
         SingleQuoteBegin,
@@ -38,6 +44,7 @@ pub const Token = struct {
 
         UpperIdent,
         LowerIdent,
+        MalformedUnicodeIdent,
         Underscore,
         DotLowerIdent,
         DotInt,
@@ -45,10 +52,11 @@ pub const Token = struct {
         NoSpaceDotInt,
         NoSpaceDotLowerIdent,
         NoSpaceDotUpperIdent,
+        MalformedDotUnicodeIdent,
+        MalformedNoSpaceDotUnicodeIdent,
 
         NamedUnderscore,
         OpaqueName,
-        Int,
 
         OpenRound,
         CloseRound,
@@ -121,6 +129,8 @@ pub const Token = struct {
         KwWhen,
         KwWhere,
         KwWith,
+
+        MalformedUnknownToken,
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
@@ -278,14 +288,12 @@ pub const Diagnostic = struct {
         MisplacedCarriageReturn,
         AsciiControl,
         LeadingZero,
-        UnknownToken,
         OpaqueNameWithoutName,
         UppercaseBase,
         InvalidUnicodeEscapeSequence,
         InvalidEscapeSequence,
         UnclosedString,
         UnclosedSingleQuote,
-        BadNumberSuffix,
         OverClosedBrace,
         MismatchedBrace,
     };
@@ -453,31 +461,27 @@ pub const Cursor = struct {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase16();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     'o', 'O' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase8();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     'b', 'B' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase2();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
                         _ = self.chompNumberBase10();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     '_' => {
@@ -492,16 +496,14 @@ pub const Cursor = struct {
                         break;
                     },
                     else => {
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                 }
             }
         } else {
             _ = self.chompNumberBase10();
-            self.chompNumberSuffix();
-            tok = .Int;
+            tok = self.chompNumberSuffix();
         }
         return tok;
     }
@@ -519,9 +521,9 @@ pub const Cursor = struct {
         return false;
     }
 
-    pub fn chompNumberSuffix(self: *Cursor) void {
+    pub fn chompNumberSuffix(self: *Cursor) Token.Tag {
         if (self.peek() == null or !std.ascii.isAlphabetic(self.peek() orelse 0)) {
-            return;
+            return .Int;
         }
         const start = self.pos;
         var pos = self.pos + 1;
@@ -535,9 +537,11 @@ pub const Cursor = struct {
         }
         const suffix = self.buf[start..pos];
         if (Token.valid_number_suffixes.get(suffix) == null) {
-            self.pushMessageHere(.BadNumberSuffix);
+            return .MalformedIntBadSuffix;
+        } else {
+            self.pos = pos;
+            return .Int;
         }
-        self.pos = pos;
     }
 
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
@@ -796,7 +800,9 @@ pub const Tokenizer = struct {
                                 },
                                 else => {
                                     self.cursor.pos += info.length;
-                                    self.cursor.pushMessageHere(.UnknownToken);
+                                    self.cursor.chompIdentGeneral();
+                                    const len = self.cursor.pos - start;
+                                    self.output.pushToken(if (sp) .MalformedDotUnicodeIdent else .MalformedNoSpaceDotUnicodeIdent, start, len);
                                 },
                             }
                         } else if (n == open_curly) {
@@ -1090,15 +1096,20 @@ pub const Tokenizer = struct {
                         },
                         else => {
                             self.cursor.pos += info.length;
-                            self.cursor.pushMessageHere(.UnknownToken);
+                            self.cursor.chompIdentGeneral();
+                            const len = self.cursor.pos - start;
+                            self.output.pushToken(.MalformedUnicodeIdent, start, len);
                         },
                     }
                 },
 
+                // TODO: emit a MalformedOpToken for invalid combinations of operator-like characters
+
                 // Fallback for any unknown token.
                 else => {
-                    self.cursor.pushMessageHere(.UnknownToken);
-                    self.cursor.pos += 1;
+                    const len = 1; // TODO: fast-forward to the next thing that looks like a real token
+                    self.cursor.pos += len;
+                    self.output.pushToken(.MalformedUnknownToken, start, len);
                 },
             }
         }
@@ -1210,7 +1221,7 @@ pub const Tokenizer = struct {
                 } else if (c == '\n') {
                     if (kind == .single_line) {
                         self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
-                        return .String;
+                        return .StringBegin;
                     } else {
                         self.cursor.pos += 1;
                     }

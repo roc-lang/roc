@@ -16,7 +16,11 @@ pub const Diagnostic = struct {
     region: Region,
 
     pub const Tag = enum {
-        // TODO
+        bad_indent,
+        multiple_platforms,
+        no_platform,
+        unexpected_token,
+        missing_header,
     };
 };
 
@@ -57,6 +61,10 @@ pub const Node = struct {
 
     /// This is the tag associated with a raw Node in the list
     pub const Tag = enum {
+        /// lhs - error code
+        /// rhs - ignored
+        malformed,
+
         /// lhs - first token
         /// rhs - last token
         root,
@@ -477,6 +485,16 @@ pub const NodeStore = struct {
     // ------------------------------------------------------------------------
     // Creation API - All nodes should be added using these functions
     // ------------------------------------------------------------------------
+
+    /// Any node type can be malformed, but must come with a diagnostic reason
+    pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag, token: TokenIdx) t {
+        const nid = store.nodes.append(.{
+            .tag = .malformed,
+            .main_token = token,
+            .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
+        });
+        return .{ .id = @intFromEnum(nid) };
+    }
 
     pub fn addFile(store: *NodeStore, file: File) FileIdx {
         const start = store.extra_data.items.len;
