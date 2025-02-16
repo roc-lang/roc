@@ -488,6 +488,29 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
             .KwWith => {
                 std.mem.copyForwards(u8, buf_slice[token.offset..][0..token.length], "with");
             },
+
+            // If the input has malformed tokens, we don't want to assert anything about it (yet)
+            .MalformedIntBadSuffix => {
+                return;
+            },
+            .MalformedInvalidUnicodeEscapeSequence => {
+                return;
+            },
+            .MalformedInvalidEscapeSequence => {
+                return;
+            },
+            .MalformedUnicodeIdent => {
+                return;
+            },
+            .MalformedDotUnicodeIdent => {
+                return;
+            },
+            .MalformedNoSpaceDotUnicodeIdent => {
+                return;
+            },
+            .MalformedUnknownToken => {
+                return;
+            },
         }
     }
 
