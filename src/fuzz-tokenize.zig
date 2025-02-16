@@ -5,12 +5,12 @@
 ///
 /// To run:
 ///  1. zig build fuzz-tokenize
-///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/tokenize-corpus/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
+///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
 ///
 /// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
-const tokenize = @import("tokenize");
+const tokenize = @import("check/parse/tokenize.zig");
 const GenCatData = @import("GenCatData");
 
 pub export fn zig_fuzz_init() void {}

@@ -26,7 +26,7 @@ Lastly, it will build `zig-out/bin/repro-*` executables to help with easily repr
 afl++ can be a bit of a beast to use. The basics may be simple enough, but it has a lot of things to learn.
 
 If you just want to run a fuzzer single threaded for a short bit, this is the only command you need:
-`./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/tokenize-corpus/ -o /tmp/tokenize-out zig-out/bin/fuzz-tokenize`
+`./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out zig-out/bin/fuzz-tokenize`
  Just change `tokenize` to the fuzzer you want to run.
 
 At this point, the fuzzer should start running and looking for crashes.
