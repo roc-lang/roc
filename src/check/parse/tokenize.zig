@@ -502,8 +502,16 @@ pub const Cursor = struct {
                 }
             }
         } else {
-            _ = self.chompNumberBase10();
-            tok = self.chompNumberSuffix();
+            tok = self.chompNumberBase10();
+            switch (tok) {
+                .Int => {
+                    tok = self.chompNumberSuffix();
+                },
+                .Float => {
+                    _ = self.chompExponent();
+                },
+                else => unreachable,
+            }
         }
         return tok;
     }
