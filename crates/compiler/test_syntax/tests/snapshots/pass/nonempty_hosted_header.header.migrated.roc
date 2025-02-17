@@ -1,0 +1,5 @@
+hosted [
+    Stuff,
+    Things,
+    somethingElse,
+]

@@ -1,0 +1,1 @@
+module {echo,read,} -> [menu,]
