@@ -26,6 +26,7 @@ pub const Token = struct {
         SingleQuote,
         Int,
         MalformedIntBadSuffix, // malformed, but should be treated similar to an int in the parser
+        MalformedFloatBadSuffix, // malformed, but should be treated similar to a float in the parser
 
         // a part of a string interpolation; generally you'll see something like:
         // StringBegin, OpenCurly, <expr>, CloseCurly, StringPart, OpenCurly, <expr>, CloseCurly, StringEnd
@@ -429,17 +430,17 @@ pub const Cursor = struct {
 
     /// Decodes a Unicode character starting at `self.pos` and returns its category.
     /// Note this assumes the caller has already peek'd the first byte.
-    pub fn decodeUnicode(self: *Cursor, first_byte: u8) Unicode {
-        std.debug.assert(first_byte == self.buf[self.pos]);
+    pub fn decodeUnicode(self: *Cursor, first_byte: u8, pos: u32) Unicode {
+        std.debug.assert(first_byte == self.buf[pos]);
         const len3 = std.unicode.utf8ByteSequenceLength(first_byte) catch {
             return .{ .tag = .Invalid, .length = 1 };
         };
         const len: u32 = @intCast(len3);
-        const remainder: u32 = @intCast(self.buf.len - self.pos);
+        const remainder: u32 = @intCast(self.buf.len - pos);
         if (remainder < len) {
             return .{ .tag = .Invalid, .length = remainder };
         }
-        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos..][0..len]) catch {
+        const utf8_char = std.unicode.utf8Decode(self.buf[pos..][0..len]) catch {
             return .{ .tag = .Invalid, .length = len };
         };
         switch (self.gc.gc(utf8_char)) {
@@ -455,7 +456,7 @@ pub const Cursor = struct {
         std.debug.assert(initialDigit == self.buf[self.pos]);
         self.pos += 1;
 
-        var tok: Token.Tag = undefined;
+        var tok = Token.Tag.Int;
         if (initialDigit == '0') {
             while (true) {
                 const c = self.peek() orelse 0;
@@ -464,27 +465,35 @@ pub const Cursor = struct {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase16();
-                        tok = self.chompNumberSuffix();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedIntBadSuffix;
+                        }
                         break;
                     },
                     'o', 'O' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase8();
-                        tok = self.chompNumberSuffix();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedIntBadSuffix;
+                        }
                         break;
                     },
                     'b', 'B' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase2();
-                        tok = self.chompNumberSuffix();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedIntBadSuffix;
+                        }
                         break;
                     },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
                         _ = self.chompNumberBase10();
-                        tok = self.chompNumberSuffix();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedIntBadSuffix;
+                        }
                         break;
                     },
                     '_' => {
@@ -493,27 +502,34 @@ pub const Cursor = struct {
                     },
                     '.' => {
                         self.pos += 1;
-                        _ = self.chompIntegerBase10();
+                        self.chompIntegerBase10();
                         tok = .Float;
                         _ = self.chompExponent();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedFloatBadSuffix;
+                        }
                         break;
                     },
                     else => {
-                        tok = self.chompNumberSuffix();
+                        if (!self.chompNumberSuffix()) {
+                            tok = .MalformedIntBadSuffix;
+                        }
                         break;
                     },
                 }
             }
         } else {
             tok = self.chompNumberBase10();
-            switch (tok) {
-                .Int => {
-                    tok = self.chompNumberSuffix();
-                },
-                .Float => {
-                    _ = self.chompExponent();
-                },
-                else => unreachable,
+            if (!self.chompNumberSuffix()) {
+                switch (tok) {
+                    .Int => {
+                        tok = .MalformedIntBadSuffix;
+                    },
+                    .Float => {
+                        tok = .MalformedFloatBadSuffix;
+                    },
+                    else => unreachable,
+                }
             }
         }
         return tok;
@@ -532,33 +548,45 @@ pub const Cursor = struct {
         return false;
     }
 
-    pub fn chompNumberSuffix(self: *Cursor) Token.Tag {
-        if (self.peek() == null or !std.ascii.isAlphabetic(self.peek() orelse 0)) {
-            return .Int;
+    /// Chomp what's expected to be the suffix of a number.
+    /// Returns whether the suffix was valid. Also returns true if the suffix was missing.
+    pub fn chompNumberSuffix(self: *Cursor) bool {
+        if (self.peek()) |c| {
+            const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
+            if (!is_ident_char) {
+                return true;
+            }
+        } else {
+            return true;
         }
         const start = self.pos;
         var pos = self.pos + 1;
         while (pos < self.buf.len) : (pos += 1) {
             const c = self.buf[pos];
-            if (std.ascii.isAlphabetic(c) or std.ascii.isDigit(c)) {
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') {
                 // continue advancing
             } else {
-                break;
+                const info = self.decodeUnicode(c, pos);
+                if (info.tag != .Other and info.tag != .Invalid) {
+                    // continue advancing
+                } else {
+                    break;
+                }
             }
         }
         const suffix = self.buf[start..pos];
         if (Token.valid_number_suffixes.get(suffix) == null) {
-            return .MalformedIntBadSuffix;
+            return false;
         } else {
             self.pos = pos;
-            return .Int;
+            return true;
         }
     }
 
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
         self.chompIntegerBase10();
         var token_type: Token.Tag = .Int;
-        if (self.peek() orelse 0 == '.') {
+        if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or self.peekAt(1) == 'e' or self.peekAt(1) == 'E')) {
             self.pos += 1;
             self.chompIntegerBase10();
             token_type = .Float;
@@ -638,7 +666,7 @@ pub const Cursor = struct {
             if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
                 self.pos += 1;
             } else {
-                const info = self.decodeUnicode(c);
+                const info = self.decodeUnicode(c, self.pos);
                 if (info.tag != .Other and info.tag != .Invalid) {
                     self.pos += info.length;
                 } else {
@@ -795,7 +823,7 @@ pub const Tokenizer = struct {
                             self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
                         } else if (n >= 0b11000000 and n <= 0xff) {
                             self.cursor.pos += 1;
-                            const info = self.cursor.decodeUnicode(n);
+                            const info = self.cursor.decodeUnicode(n, self.cursor.pos);
                             switch (info.tag) {
                                 .LetterUpper => {
                                     self.cursor.pos += info.length;
@@ -841,11 +869,9 @@ pub const Tokenizer = struct {
                             self.output.pushToken(.OpBinaryMinus, start, 1);
                         } else if (n >= '0' and n <= '9' and sp) {
                             self.cursor.pos += 1;
-                            while (self.cursor.pos < self.cursor.buf.len and std.ascii.isDigit(self.cursor.buf[self.cursor.pos])) {
-                                self.cursor.pos += 1;
-                            }
+                            const tag = self.cursor.chompNumber(n);
                             const len = self.cursor.pos - start;
-                            self.output.pushToken(.Int, start, len);
+                            self.output.pushToken(tag, start, len);
                         } else {
                             self.cursor.pos += 1;
                             const tokenType: Token.Tag = if (sp) .OpUnaryMinus else .OpBinaryMinus;
@@ -1091,7 +1117,7 @@ pub const Tokenizer = struct {
 
                 // first byte of a UTF-8 sequence
                 0b11000000...0xff => {
-                    const info = self.cursor.decodeUnicode(b);
+                    const info = self.cursor.decodeUnicode(b, self.cursor.pos);
                     switch (info.tag) {
                         .LetterUpper => {
                             self.cursor.pos += info.length;
@@ -1125,7 +1151,7 @@ pub const Tokenizer = struct {
             }
         }
 
-        self.pushToken(.EndOfFile, 0);
+        self.pushToken(.EndOfFile, self.cursor.pos);
     }
 
     pub fn tokenizeStringLikeLiteral(self: *Tokenizer, term: u8) Token.Tag {
@@ -1241,13 +1267,13 @@ pub const Tokenizer = struct {
                         self.cursor.pos += 1;
                         switch (state) {
                             .start => return .String,
-                            .after_interpolation => return .StringPart,
+                            .after_interpolation => return .StringEnd,
                         }
                     } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
                         self.cursor.pos += 3;
                         switch (state) {
                             .start => return .String,
-                            .after_interpolation => return .StringPart,
+                            .after_interpolation => return .StringEnd,
                         }
                     }
                     self.cursor.pos += 1;
@@ -1263,3 +1289,41 @@ pub const Tokenizer = struct {
         }
     }
 };
+
+fn testTokenization(allocator: std.mem.Allocator, gc: *GenCatData, input: []const u8, expected: []const Token.Tag) !void {
+    var messages: [10]Diagnostic = undefined;
+    var tokenizer = Tokenizer.init(input, &messages, gc, allocator);
+    defer tokenizer.deinit();
+
+    tokenizer.tokenize();
+    const tokenizedBuffer = tokenizer.output;
+    const tokens = tokenizedBuffer.tokens.items(.tag);
+
+    try std.testing.expectEqual(tokens[tokens.len - 1], Token.Tag.EndOfFile);
+
+    try std.testing.expectEqual(@as(usize, expected.len), tokens.len - 1);
+
+    for (expected[0..expected.len], tokens[0 .. tokens.len - 1]) |exp, actual| {
+        try std.testing.expectEqual(exp, actual);
+    }
+}
+
+test "tokenizer" {
+    const gpa = std.testing.allocator;
+    var gc = try GenCatData.init(gpa);
+    defer gc.deinit();
+    try testTokenization(gpa, &gc, "42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, &gc, "3.14", &[_]Token.Tag{.Float});
+    try testTokenization(gpa, &gc, ".", &[_]Token.Tag{.Dot});
+    try testTokenization(gpa, &gc, "..", &[_]Token.Tag{.DoubleDot});
+    try testTokenization(gpa, &gc, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
+    try testTokenization(gpa, &gc, "...", &[_]Token.Tag{.TripleDot});
+    try testTokenization(gpa, &gc, "-", &[_]Token.Tag{.OpUnaryMinus});
+    try testTokenization(gpa, &gc, "-42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, &gc, "1e10", &[_]Token.Tag{.Float});
+    try testTokenization(gpa, &gc, "_ident", &[_]Token.Tag{.NamedUnderscore});
+    try testTokenization(gpa, &gc, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
+    try testTokenization(gpa, &gc, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, &gc, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
+    try testTokenization(gpa, &gc, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
+}
