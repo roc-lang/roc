@@ -3,14 +3,54 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
-        .@"zig-afl-kit" = .{
-            .url = "git+https://github.com/kristoff-it/zig-afl-kit#78ffdb150f893ee101525c78d4dc67684d163169",
-            .hash = "1220f7ceaf0867b5a5769b6d8d1e44e190cff690ac34ddc00824ff8bd291cd2abf40",
-            .lazy = true,
-        },
         .zg = .{
             .url = "https://codeberg.org/dude_the_builder/zg/archive/v0.13.2.tar.gz",
             .hash = "122055beff332830a391e9895c044d33b15ea21063779557024b46169fb1984c6e40",
+        },
+        .@"zig-afl-kit" = .{
+            .url = "git+https://github.com/kristoff-it/zig-afl-kit#21d80a52213a469c6921e4ff890d4b0129c9aeb0",
+            .hash = "1220ca5642b07f784121cd268e2b57eb5d103b24f217cedf5b1dfe8fd4ecda079139",
+            .lazy = true,
+        },
+        .@"roc-deps-aarch64-macos-none" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/aarch64-macos-none.tar.xz",
+            .hash = "122044a065bfe8f6286901b110a1b0b5a764f9fcb2d1472a5eeb3423527e95419427",
+            .lazy = true,
+        },
+        .@"roc-deps-aarch64-linux-musl" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/aarch64-linux-musl.tar.xz",
+            .hash = "1220949c8b509cbdac3eb9de5656906ea3e777dfea9e7333f32462754cb1d7708bf2",
+            .lazy = true,
+        },
+        .@"roc-deps-aarch64-windows-gnu" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/aarch64-windows-gnu.zip",
+            .hash = "1220fcd7dcb6768b907f20369ec6390adb4de41bd5c1c34dc0f1611af50a331b3e01",
+            .lazy = true,
+        },
+        .@"roc-deps-arm-linux-musleabihf" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/arm-linux-musleabihf.tar.xz",
+            .hash = "122037ecc8654feb3d34da5424ca6a73f140dbd30475e3d4f23a6f29844e799d51a3",
+            .lazy = true,
+        },
+        .@"roc-deps-x86-linux-musl" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/x86-linux-musl.tar.xz",
+            .hash = "12208fbefa56ba6571399c60d96810d00a561af1926cf566e07fc32c748fbbb70ccf",
+            .lazy = true,
+        },
+        .@"roc-deps-x86_64-linux-musl" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/x86_64-linux-musl.tar.xz",
+            .hash = "1220aff2ba681359149edde57256206d87695f84d33375082a3a442da9ba8dfc177f",
+            .lazy = true,
+        },
+        .@"roc-deps-x86_64-macos-none" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/x86_64-macos-none.tar.xz",
+            .hash = "1220a0714d1cd12799885b5217252511012cca5d2d679d318520515d2487b80533db",
+            .lazy = true,
+        },
+        .@"roc-deps-x86_64-windows-gnu" = .{
+            .url = "https://github.com/roc-lang/roc-bootstrap/releases/download/zig-0.13.0/x86_64-windows-gnu.zip",
+            .hash = "122070972a9f996fc1a167b78d3a6a8c10f85349f9369383f5e26af1c5eed3cc41b0",
+            .lazy = true,
         },
     },
     .paths = .{

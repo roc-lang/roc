@@ -18,6 +18,7 @@ const Self = @This();
 
 env: base.ModuleEnv,
 aliases: Alias.List,
+defs: Def.List,
 exprs: Expr.List,
 exprs_at_regions: ExprAtRegion.List,
 typed_exprs_at_regions: TypedExprAtRegion.List,
@@ -33,6 +34,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .env = base.ModuleEnv.init(allocator),
         .aliases = Alias.List.init(allocator),
+        .defs = Def.List.init(allocator),
         .exprs = Expr.List.init(allocator),
         .exprs_at_regions = ExprAtRegion.List.init(allocator),
         .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),
@@ -48,6 +50,8 @@ pub fn init(allocator: std.mem.Allocator) Self {
 
 pub fn deinit(self: *Self) void {
     self.env.deinit();
+    self.aliases.deinit();
+    self.defs.deinit();
     self.exprs.deinit();
     self.exprs_at_regions.deinit();
     self.typed_exprs_at_regions.deinit();
@@ -429,9 +433,9 @@ pub const Content = union(enum) {
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar: ?Ident.Idx,
+    FlexVar: ?TypeVarName.Idx,
     /// name given in a user-written annotation
-    RigidVar: Ident.Idx,
+    RigidVar: TypeVarName.Idx,
     /// name given to a recursion variable
     RecursionVar: struct {
         structure: TypeVar,

@@ -4,7 +4,7 @@ on:
 name: CI New Compiler
 
 jobs:
-    check-zig-fmt:
+    check-zig:
         runs-on: ubuntu-22.04
         steps:
             - name: Checkout
@@ -12,15 +12,20 @@ jobs:
             - uses: mlugg/setup-zig@v1
               with:
                 version: 0.13.0
-                
-            - run: zig fmt --check --ast-check src build.zig
+
+            - run: |
+                zig build check-fmt
+                # -Dllvm incurs a costly download step, leave that for later.
+                # Just the do super fast check step for now.
+                zig build check -Dfuzz
 
     zig-tests:
-        needs: check-zig-fmt
+        needs: check-zig
         runs-on: ${{ matrix.os }}
         strategy:
+            fail-fast: false
             matrix:
-                os: [macos-13, macos-14, ubuntu-24.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64 
+                os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64
         steps:
             - name: Checkout
               uses: actions/checkout@v4
@@ -28,7 +33,9 @@ jobs:
               with:
                 version: 0.13.0
 
-            - run: zig build
+            - name: build roc
+              run: |
+                zig build -Dllvm -Dfuzz
 
             - name: roc executable minimal check (Unix)
               if: runner.os != 'Windows'
@@ -41,7 +48,8 @@ jobs:
                 zig-out\bin\roc.exe -h | findstr "Usage:"
 
             - name: zig tests
-              run: zig build test
+              run: |
+                zig build test -Dllvm -Dfuzz
 
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
@@ -69,3 +77,30 @@ jobs:
                     $imports | ForEach-Object { echo "  $_" }
                     exit 1
                 }
+
+    zig-cross-compile:
+        needs: check-zig
+        runs-on: ubuntu-24.04
+        strategy:
+            fail-fast: false
+            matrix:
+                target:
+                - aarch64-linux-musl
+                - aarch64-macos-none
+                - aarch64-windows-gnu
+                - arm-linux-musleabihf
+                - x86-linux-musl
+                - x86_64-linux-musl
+                - x86_64-macos-none
+                - x86_64-windows-gnu
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v4
+            - uses: mlugg/setup-zig@v1
+              with:
+                version: 0.13.0
+
+            - name: cross compile with llvm
+              run: |
+                zig build -Dtarget=${{ matrix.target }} -Dllvm

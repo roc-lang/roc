@@ -8,6 +8,7 @@ const Scope = @import("./canonicalize/Scope.zig");
 const Alias = @import("./canonicalize/Alias.zig");
 
 const Ident = base.Ident;
+const Region = base.Region;
 const TagName = base.TagName;
 const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
@@ -32,7 +33,7 @@ pub const IR = @import("./canonicalize/IR.zig");
 /// The canonicalization occurs on a single module (file) in isolation. This allows for this work to be easily parallelized and also cached. So where the source code for a module has not changed, the CanIR can simply be loaded from disk and used immediately.
 pub fn canonicalize(
     can_ir: *IR,
-    parse_ir: parse.IR,
+    parse_ir: *parse.IR,
     allocator: std.mem.Allocator,
 ) void {
     var env = can_ir.env;
@@ -40,11 +41,15 @@ pub fn canonicalize(
     const imported_idents = &.{};
     var scope = Scope.init(&env, builtin_aliases, imported_idents, allocator);
 
-    for (parse_ir.defs.items.items) |stmt| {
+    const file = parse_ir.store.getFile(parse.IR.NodeStore.FileIdx{ .id = 0 });
+
+    for (file.statements) |stmt_id| {
+        const stmt = parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
-            .Import => |import| {
-                bringImportIntoScope(&import, can_ir, &scope);
+            .import => |import| {
+                bringImportIntoScope(&import, parse_ir, can_ir, &scope);
             },
+            else => std.debug.panic("Unhandled statement type: {}", .{stmt}),
         }
     }
 
@@ -52,58 +57,67 @@ pub fn canonicalize(
 }
 
 fn bringImportIntoScope(
-    import: *const parse.IR.Stmt.Import,
+    import: *const parse.IR.NodeStore.Statement.Import,
+    parse_ir: *parse.IR,
     ir: *IR,
     scope: *Scope,
 ) void {
-    const res = ir.env.modules.getOrInsert(
-        import.name,
-        import.package_shorthand,
-    );
+    _ = import;
+    _ = parse_ir;
+    _ = scope;
+
+    const import_name: []u8 = &.{}; // import.module_name_tok;
+    const shorthand: []u8 = &.{}; // import.qualifier_tok;
+    const region = Region{
+        .start = Region.Position.zero(),
+        .end = Region.Position.zero(),
+    };
+
+    const res = ir.env.modules.getOrInsert(import_name, shorthand);
 
     if (res.was_present) {
         ir.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
-            .duplicate_import_region = import.name_region,
+            .duplicate_import_region = region,
         } })) catch exitOnOom();
     }
 
-    for (import.exposing.items.items) |exposed| {
-        switch (exposed) {
-            .Value => |ident| {
-                ir.env.addExposedIdentForModule(ident, res.module_idx);
-                _ = scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
-            },
-            .Type => |imported_type| {
-                const alias = Alias{
-                    .name = imported_type.name,
-                    .region = ir.env.tag_names.getRegion(imported_type.name),
-                    .is_builtin = false,
-                    .kind = .ImportedUnknown,
-                };
-                const alias_idx = ir.aliases.append(alias);
+    // for (import.exposing.items.items) |exposed| {
+    //     switch (exposed) {
+    //         .Value => |ident| {
+    //             ir.env.addExposedIdentForModule(ident, res.module_idx);
+    //             _ = scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
+    //         },
+    //         .Type => |imported_type| {
+    //             const alias = Alias{
+    //                 .name = imported_type.name,
+    //                 .region = ir.env.tag_names.getRegion(imported_type.name),
+    //                 .is_builtin = false,
+    //                 .kind = .ImportedUnknown,
+    //             };
+    //             const alias_idx = ir.aliases.append(alias);
 
-                _ = scope.levels.introduce(.alias, .{
-                    .scope_name = imported_type.name,
-                    .alias = alias_idx,
-                });
-            },
-            .CustomTagUnion => |custom| {
-                const alias = Alias{
-                    .name = custom.name,
-                    .region = ir.env.tag_names.getRegion(custom.name),
-                    .is_builtin = false,
-                    .kind = .ImportedCustomUnion,
-                };
-                const alias_idx = ir.aliases.append(alias);
+    //             _ = scope.levels.introduce(.alias, .{
+    //                 .scope_name = imported_type.name,
+    //                 .alias = alias_idx,
+    //             });
+    //         },
+    //         .CustomTagUnion => |custom| {
+    //             const alias = Alias{
+    //                 .name = custom.name,
+    //                 .region = ir.env.tag_names.getRegion(custom.name),
+    //                 .is_builtin = false,
+    //                 .kind = .ImportedCustomUnion,
+    //             };
+    //             const alias_idx = ir.aliases.append(alias);
 
-                _ = scope.levels.introduce(.alias, .{
-                    .scope_name = custom.name,
-                    .alias = alias_idx,
-                });
-                // TODO: add to scope.custom_tags
-            },
-        }
-    }
+    //             _ = scope.levels.introduce(.alias, .{
+    //                 .scope_name = custom.name,
+    //                 .alias = alias_idx,
+    //             });
+    //             // TODO: add to scope.custom_tags
+    //         },
+    //     }
+    // }
 }
 
 fn bringIngestedFileIntoScope(

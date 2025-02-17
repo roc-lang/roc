@@ -5,18 +5,23 @@
 ///
 /// To run:
 ///  1. zig build fuzz-cli
-///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz/cli-corpus/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
+///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/cli/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
 ///
 /// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
-const cli = @import("cli");
+const cli = @import("cli.zig");
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
 
-export fn zig_fuzz_init() void {}
+pub export fn zig_fuzz_init() void {}
 
-export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
+pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
+    zig_fuzz_test_inner(buf, len, false);
+}
+
+pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
+    _ = debug;
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};

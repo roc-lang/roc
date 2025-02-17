@@ -138,6 +138,43 @@ pub fn SafeMultiList(comptime T: type) type {
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
+
+        pub fn set(self: *SafeMultiList(T), idx: Idx, value: T) void {
+            self.items.set(@intFromEnum(idx), value);
+        }
+
+        // TODO: consider removing this, or at least renaming to imply this is not a zero-cost operation
+        pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
+            return self.items.get(@intFromEnum(idx));
+        }
+
+        pub fn ensureTotalCapacity(self: *SafeMultiList(T), capacity: usize) void {
+            self.items.ensureTotalCapacity(self.allocator, capacity) catch exitOnOom();
+        }
+
+        pub const IndexIterator = struct {
+            len: usize,
+            current: usize,
+
+            pub fn next(iter: *IndexIterator) ?Idx {
+                if (iter.len == iter.current) {
+                    return null;
+                }
+
+                const curr = iter.current;
+                iter.current += 1;
+
+                const idx: u32 = @truncate(curr);
+                return @enumFromInt(idx);
+            }
+        };
+
+        pub fn iterIndices(self: *SafeMultiList(T)) IndexIterator {
+            return IndexIterator{
+                .len = self.len(),
+                .current = 0,
+            };
+        }
     };
 }
 

@@ -25,6 +25,7 @@ test {
     testing.refAllDeclsRecursive(@import("base/StringLiteral.zig"));
     testing.refAllDeclsRecursive(@import("base/name_store.zig"));
     testing.refAllDeclsRecursive(@import("coordinate.zig"));
+    testing.refAllDeclsRecursive(@import("fmt.zig"));
     testing.refAllDeclsRecursive(@import("check/parse.zig"));
     testing.refAllDeclsRecursive(@import("check/parse/IR.zig"));
     testing.refAllDeclsRecursive(@import("check/parse/tokenize.zig"));

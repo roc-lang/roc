@@ -1,4 +1,7 @@
 const std = @import("std");
+const collections = @import("../../collections.zig");
+const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+const base = @import("../../base.zig");
 
 // Unicode data tables - allows us to identify upper/lowercase letters for non-ASCII characters.
 const GenCatData = @import("GenCatData");
@@ -8,26 +11,40 @@ pub const Token = struct {
     offset: u32,
     length: u32,
 
+    pub const List = std.MultiArrayList(@This());
+
+    pub const Idx = u32;
+
     pub const Tag = enum(u8) {
         EndOfFile,
+
         Newline,
 
         // primitives
         Float,
         String,
         SingleQuote,
+        Int,
+        MalformedIntBadSuffix, // malformed, but should be treated similar to an int in the parser
 
         // a part of a string interpolation; generally you'll see something like:
-        // StringBegin, OpenCurly, <expr>, CloseCurly StringPart, OpenCurly, <expr>, CloseCurly
+        // StringBegin, OpenCurly, <expr>, CloseCurly, StringPart, OpenCurly, <expr>, CloseCurly, StringEnd
         StringBegin,
         StringPart,
+        StringEnd,
+
+        // Should be treated as StringPart in the parser, but we forward the error to the ast
+        MalformedInvalidUnicodeEscapeSequence,
+        MalformedInvalidEscapeSequence,
 
         // These are not technically valid, but we can have the formatter fix them up.
         SingleQuoteBegin,
         SingleQuotePart,
+        SingleQuoteEnd,
 
         UpperIdent,
         LowerIdent,
+        MalformedUnicodeIdent,
         Underscore,
         DotLowerIdent,
         DotInt,
@@ -35,10 +52,11 @@ pub const Token = struct {
         NoSpaceDotInt,
         NoSpaceDotLowerIdent,
         NoSpaceDotUpperIdent,
+        MalformedDotUnicodeIdent,
+        MalformedNoSpaceDotUnicodeIdent,
 
         NamedUnderscore,
         OpaqueName,
-        Int,
 
         OpenRound,
         CloseRound,
@@ -46,6 +64,8 @@ pub const Token = struct {
         CloseSquare,
         OpenCurly,
         CloseCurly,
+        NoSpaceOpenRound,
+        // NoSpaceOpenCurly,
 
         OpPlus,
         OpStar,
@@ -109,6 +129,8 @@ pub const Token = struct {
         KwWhen,
         KwWhere,
         KwWith,
+
+        MalformedUnknownToken,
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
@@ -192,48 +214,55 @@ pub const Token = struct {
 
 /// The buffer that accumulates tokens.
 pub const TokenizedBuffer = struct {
-    allocator: std.mem.Allocator,
-    tokens: std.MultiArrayList(Token),
+    gpa: std.mem.Allocator,
+    tokens: Token.List,
 
-    pub fn init(allocator: std.mem.Allocator) !TokenizedBuffer {
+    pub fn init(gpa: std.mem.Allocator) TokenizedBuffer {
         return TokenizedBuffer{
-            .allocator = allocator,
-            .tokens = std.MultiArrayList(Token){},
+            .gpa = gpa,
+            .tokens = Token.List{},
         };
     }
 
     pub fn deinit(self: *TokenizedBuffer) void {
-        self.tokens.deinit(self.allocator);
+        self.tokens.deinit(self.gpa);
+    }
+
+    pub fn resolve(self: *TokenizedBuffer, token: Token.Idx) base.Region {
+        const start = self.tokens.items(.offset)[@intCast(token)];
+        const len = self.tokens.items(.length)[@intCast(token)];
+        const end = start + len;
+        return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
     }
 
     /// Pushes a token with the given tag, token offset, and length.
-    pub fn pushToken(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, tok_length: u32) !void {
-        try self.tokens.append(self.allocator, .{
+    pub fn pushToken(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, tok_length: u32) void {
+        self.tokens.append(self.gpa, .{
             .tag = tag,
             .offset = tok_offset,
             .length = tok_length,
-        });
+        }) catch exitOnOom();
     }
 
-    pub fn pushNewline(self: *TokenizedBuffer, indent: u32) !void {
-        try self.tokens.append(self.allocator, .{
+    pub fn pushNewline(self: *TokenizedBuffer, indent: u32) void {
+        self.tokens.append(self.gpa, .{
             .tag = .Newline,
             .offset = indent, // store the indent in the offset field
             .length = 0,
-        });
+        }) catch exitOnOom();
     }
 
     /// Returns the offset of the token at index `idx`.
     pub fn offset(self: *TokenizedBuffer, idx: u32) u32 {
         // newline tokens don't have offsets - that field is used to store the indent.
-        std.debug.assert(self.tokens.items(.tag)[@as(usize, idx)] != .Newline);
+        std.debug.assert(self.tokens.items(.tag)[idx] != .Newline);
         return self.tokens.items(.offset)[@intCast(idx)];
     }
 };
 
 pub const Comment = struct {
-    begin: usize,
-    end: usize,
+    begin: u32,
+    end: u32,
 };
 
 const Unicode = struct {
@@ -258,14 +287,12 @@ pub const Diagnostic = struct {
         MisplacedCarriageReturn,
         AsciiControl,
         LeadingZero,
-        UnknownToken,
         OpaqueNameWithoutName,
         UppercaseBase,
         InvalidUnicodeEscapeSequence,
         InvalidEscapeSequence,
         UnclosedString,
         UnclosedSingleQuote,
-        BadNumberSuffix,
         OverClosedBrace,
         MismatchedBrace,
     };
@@ -281,7 +308,7 @@ pub const Cursor = struct {
     buf: []const u8,
     pos: u32,
     messages: []Diagnostic,
-    message_count: usize,
+    message_count: u32,
     gc: *GenCatData,
     tab_width: u8 = 4, // TODO: make this configurable
 
@@ -320,16 +347,20 @@ pub const Cursor = struct {
     }
 
     /// Returns the byte at the given lookahead offset.
-    pub fn peekAt(self: *Cursor, lookahead: usize) ?u8 {
+    pub fn peekAt(self: *Cursor, lookahead: u32) ?u8 {
         if (self.pos + lookahead < self.buf.len) {
             return self.buf[self.pos + lookahead];
         }
         return null;
     }
 
-    pub fn isPeekedCharInRange(self: *Cursor, lookahead: usize, start: u8, end: u8) bool {
+    pub fn isPeekedCharInRange(self: *Cursor, lookahead: u32, start: u8, end: u8) bool {
         const peeked = self.peekAt(lookahead);
-        return if (peeked) |c| (c >= start and c <= end) else false;
+
+        return if (peeked) |c|
+            c >= start and c <= end
+        else
+            false;
     }
 
     /// Requires that the next byte is `ch`, otherwise pushes a message.
@@ -374,7 +405,7 @@ pub const Cursor = struct {
                 }
             } else if (b == '#') {
                 self.pos += 1;
-                while (self.pos < self.buf.len and self.buf[self.pos] != '\n') {
+                while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
             } else if (b >= 0 and b <= 31) {
@@ -384,7 +415,9 @@ pub const Cursor = struct {
                 break;
             }
         }
-        if (sawNewline) return indent;
+        if (sawNewline) {
+            return indent;
+        }
         return null;
     }
 
@@ -402,7 +435,11 @@ pub const Cursor = struct {
             return .{ .tag = .Invalid, .length = 1 };
         };
         const len: u32 = @intCast(len3);
-        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos .. self.pos + len]) catch {
+        const remainder: u32 = @intCast(self.buf.len - self.pos);
+        if (remainder < len) {
+            return .{ .tag = .Invalid, .length = remainder };
+        }
+        const utf8_char = std.unicode.utf8Decode(self.buf[self.pos..][0..len]) catch {
             return .{ .tag = .Invalid, .length = len };
         };
         switch (self.gc.gc(utf8_char)) {
@@ -427,31 +464,27 @@ pub const Cursor = struct {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase16();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     'o', 'O' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase8();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     'b', 'B' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase2();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
                         _ = self.chompNumberBase10();
-                        self.chompNumberSuffix();
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                     '_' => {
@@ -466,15 +499,22 @@ pub const Cursor = struct {
                         break;
                     },
                     else => {
-                        tok = .Int;
+                        tok = self.chompNumberSuffix();
                         break;
                     },
                 }
             }
         } else {
-            _ = self.chompNumberBase10();
-            self.chompNumberSuffix();
-            tok = .Int;
+            tok = self.chompNumberBase10();
+            switch (tok) {
+                .Int => {
+                    tok = self.chompNumberSuffix();
+                },
+                .Float => {
+                    _ = self.chompExponent();
+                },
+                else => unreachable,
+            }
         }
         return tok;
     }
@@ -492,9 +532,9 @@ pub const Cursor = struct {
         return false;
     }
 
-    pub fn chompNumberSuffix(self: *Cursor) void {
+    pub fn chompNumberSuffix(self: *Cursor) Token.Tag {
         if (self.peek() == null or !std.ascii.isAlphabetic(self.peek() orelse 0)) {
-            return;
+            return .Int;
         }
         const start = self.pos;
         var pos = self.pos + 1;
@@ -508,9 +548,11 @@ pub const Cursor = struct {
         }
         const suffix = self.buf[start..pos];
         if (Token.valid_number_suffixes.get(suffix) == null) {
-            self.pushMessageHere(.BadNumberSuffix);
+            return .MalformedIntBadSuffix;
+        } else {
+            self.pos = pos;
+            return .Int;
         }
-        self.pos = pos;
     }
 
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
@@ -580,7 +622,7 @@ pub const Cursor = struct {
     /// Returns the token type - LowerIdent or Kw*
     pub fn chompIdentLower(self: *Cursor) Token.Tag {
         const start = self.pos;
-        _ = self.chompIdentGeneral();
+        self.chompIdentGeneral();
         const ident = self.buf[start..self.pos];
         const kw = Token.keywords.get(ident);
         return kw orelse .LowerIdent;
@@ -593,7 +635,7 @@ pub const Cursor = struct {
     pub fn chompIdentGeneral(self: *Cursor) void {
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') {
+            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
                 self.pos += 1;
             } else {
                 const info = self.decodeUnicode(c);
@@ -633,6 +675,8 @@ const BraceKind = enum {
     StringInterpolationMultiline,
     SingleQuoteInterpolation,
     SingleQuoteInterpolationMultiline,
+
+    const List = collections.SafeList(@This());
 };
 
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
@@ -643,9 +687,9 @@ pub const Tokenizer = struct {
 
     /// Creates a new Tokenizer.
     /// Note that the caller must also provide a pre-allocated messages buffer.
-    pub fn init(text: []const u8, messages: []Diagnostic, gc: *GenCatData, allocator: std.mem.Allocator) !Tokenizer {
+    pub fn init(text: []const u8, messages: []Diagnostic, gc: *GenCatData, allocator: std.mem.Allocator) Tokenizer {
         const cursor = Cursor.init(text, messages, gc);
-        const output = try TokenizedBuffer.init(allocator);
+        const output = TokenizedBuffer.init(allocator);
         return Tokenizer{
             .cursor = cursor,
             .output = output,
@@ -668,13 +712,13 @@ pub const Tokenizer = struct {
         };
     }
 
-    fn pushToken(self: *Tokenizer, tag: Token.Tag, start: u32) !void {
+    fn pushToken(self: *Tokenizer, tag: Token.Tag, start: u32) void {
         const len = self.cursor.pos - start;
-        try self.output.pushToken(tag, start, len);
+        self.output.pushToken(tag, start, len);
     }
 
-    fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) !void {
-        std.debug.assert(self.cursor.peek() == '}' or self.cursor.peek() == ']' or self.cursor.peek() == ')');
+    fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) void {
+        std.debug.assert(self.cursor.peek() == close_curly or self.cursor.peek() == ']' or self.cursor.peek() == ')');
         if (self.stack.items.len == 0) {
             self.cursor.pushMessageHere(.OverClosedBrace);
             self.cursor.pos += 1;
@@ -700,13 +744,13 @@ pub const Tokenizer = struct {
                 else => .single_line,
             };
             _ = self.stack.pop();
-            const tok = try self.tokenizeStringLikeLiteralBody(.after_interpolation, kind, term, start);
-            try self.output.pushToken(tok, start, self.cursor.pos - start);
+            const tok = self.tokenizeStringLikeLiteralBody(.after_interpolation, kind, term, start);
+            self.output.pushToken(tok, start, self.cursor.pos - start);
         }
     }
 
     /// The main tokenize loop. This loops over the whole input buffer, tokenizing as it goes.
-    pub fn tokenize(self: *Tokenizer) !void {
+    pub fn tokenize(self: *Tokenizer) void {
         var sawWhitespace: bool = true;
         while (self.cursor.pos < self.cursor.buf.len) {
             const start = self.cursor.pos;
@@ -717,7 +761,7 @@ pub const Tokenizer = struct {
                 // Whitespace & control characters
                 0...32, '#' => {
                     if (self.cursor.chompTrivia()) |indent| {
-                        try self.output.pushNewline(indent);
+                        self.output.pushNewline(indent);
                     }
                     sawWhitespace = true;
                 },
@@ -729,56 +773,59 @@ pub const Tokenizer = struct {
                         if (n == '.') {
                             if (self.cursor.peekAt(2) == '.') {
                                 self.cursor.pos += 3;
-                                try self.output.pushToken(.TripleDot, start, 3);
+                                self.output.pushToken(.TripleDot, start, 3);
                             } else {
                                 self.cursor.pos += 2;
-                                try self.output.pushToken(.DoubleDot, start, 2);
+                                self.output.pushToken(.DoubleDot, start, 2);
                             }
                         } else if (n >= '0' and n <= '9') {
                             self.cursor.pos += 1;
                             self.cursor.chompInteger();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(if (sp) .DotInt else .NoSpaceDotInt, start, len);
+                            self.output.pushToken(if (sp) .DotInt else .NoSpaceDotInt, start, len);
                         } else if (n >= 'a' and n <= 'z') {
                             self.cursor.pos += 1;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
+                            self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
                         } else if (n >= 'A' and n <= 'Z') {
                             self.cursor.pos += 1;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
+                            self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
                         } else if (n >= 0b11000000 and n <= 0xff) {
+                            self.cursor.pos += 1;
                             const info = self.cursor.decodeUnicode(n);
                             switch (info.tag) {
                                 .LetterUpper => {
                                     self.cursor.pos += info.length;
                                     self.cursor.chompIdentGeneral();
                                     const len = self.cursor.pos - start;
-                                    try self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
+                                    self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
                                 },
                                 .LetterNotUpper => {
                                     self.cursor.pos += info.length;
                                     self.cursor.chompIdentGeneral();
                                     const len = self.cursor.pos - start;
-                                    try self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
+                                    self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
                                 },
                                 else => {
                                     self.cursor.pos += info.length;
-                                    self.cursor.pushMessageHere(.UnknownToken);
+                                    self.cursor.chompIdentGeneral();
+                                    const len = self.cursor.pos - start;
+                                    self.output.pushToken(if (sp) .MalformedDotUnicodeIdent else .MalformedNoSpaceDotUnicodeIdent, start, len);
                                 },
                             }
-                        } else if (n == '{') {
+                        } else if (n == open_curly) {
                             self.cursor.pos += 1;
-                            try self.output.pushToken(.Dot, start, 1);
+                            self.output.pushToken(.Dot, start, 1);
                         } else {
                             self.cursor.pos += 1;
-                            try self.output.pushToken(.Dot, start, 1);
+                            self.output.pushToken(.Dot, start, 1);
                         }
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.Dot, start, 1);
+                        self.output.pushToken(.Dot, start, 1);
                     }
                 },
 
@@ -788,25 +835,25 @@ pub const Tokenizer = struct {
                     if (next) |n| {
                         if (n == '>') {
                             self.cursor.pos += 2;
-                            try self.output.pushToken(.OpArrow, start, 2);
+                            self.output.pushToken(.OpArrow, start, 2);
                         } else if (n == ' ' or n == '\t' or n == '\n' or n == '\r' or n == '#') {
                             self.cursor.pos += 1;
-                            try self.output.pushToken(.OpBinaryMinus, start, 1);
+                            self.output.pushToken(.OpBinaryMinus, start, 1);
                         } else if (n >= '0' and n <= '9' and sp) {
                             self.cursor.pos += 1;
                             while (self.cursor.pos < self.cursor.buf.len and std.ascii.isDigit(self.cursor.buf[self.cursor.pos])) {
                                 self.cursor.pos += 1;
                             }
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(.Int, start, len);
+                            self.output.pushToken(.Int, start, len);
                         } else {
                             self.cursor.pos += 1;
                             const tokenType: Token.Tag = if (sp) .OpUnaryMinus else .OpBinaryMinus;
-                            try self.output.pushToken(tokenType, start, 1);
+                            self.output.pushToken(tokenType, start, 1);
                         }
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(if (sp) .OpUnaryMinus else .OpBinaryMinus, start, 1);
+                        self.output.pushToken(if (sp) .OpUnaryMinus else .OpBinaryMinus, start, 1);
                     }
                 },
 
@@ -814,10 +861,10 @@ pub const Tokenizer = struct {
                 '!' => {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpNotEquals, start, 2);
+                        self.output.pushToken(.OpNotEquals, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpBang, start, 1);
+                        self.output.pushToken(.OpBang, start, 1);
                     }
                 },
 
@@ -825,88 +872,88 @@ pub const Tokenizer = struct {
                 '&' => {
                     if (self.cursor.peekAt(1) == '&') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpAnd, start, 2);
+                        self.output.pushToken(.OpAnd, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpAmpersand, start, 1);
+                        self.output.pushToken(.OpAmpersand, start, 1);
                     }
                 },
 
                 // Comma (,)
                 ',' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.Comma, start, 1);
+                    self.output.pushToken(.Comma, start, 1);
                 },
 
                 // Question mark (?)
                 '?' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpQuestion, start, 1);
+                    self.output.pushToken(.OpQuestion, start, 1);
                 },
 
                 // Pipe (|)
                 '|' => {
                     if (self.cursor.peekAt(1) == '|') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpOr, start, 2);
+                        self.output.pushToken(.OpOr, start, 2);
                     } else if (self.cursor.peekAt(1) == '>') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpPizza, start, 2);
+                        self.output.pushToken(.OpPizza, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpBar, start, 1);
+                        self.output.pushToken(.OpBar, start, 1);
                     }
                 },
 
                 // Plus (+)
                 '+' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpPlus, start, 1);
+                    self.output.pushToken(.OpPlus, start, 1);
                 },
 
                 // Star (*)
                 '*' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpStar, start, 1);
+                    self.output.pushToken(.OpStar, start, 1);
                 },
 
                 // Slash (/)
                 '/' => {
                     if (self.cursor.peekAt(1) == '/') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpDoubleSlash, start, 2);
+                        self.output.pushToken(.OpDoubleSlash, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpSlash, start, 1);
+                        self.output.pushToken(.OpSlash, start, 1);
                     }
                 },
 
                 // Backslash (\)
                 '\\' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpBackslash, start, 1);
+                    self.output.pushToken(.OpBackslash, start, 1);
                 },
 
                 // Percent (%)
                 '%' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpPercent, start, 1);
+                    self.output.pushToken(.OpPercent, start, 1);
                 },
 
                 // Caret (^)
                 '^' => {
                     self.cursor.pos += 1;
-                    try self.output.pushToken(.OpCaret, start, 1);
+                    self.output.pushToken(.OpCaret, start, 1);
                 },
 
                 // Greater-than (>)
                 '>' => {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpGreaterThanOrEq, start, 2);
+                        self.output.pushToken(.OpGreaterThanOrEq, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpGreaterThan, start, 1);
+                        self.output.pushToken(.OpGreaterThan, start, 1);
                     }
                 },
 
@@ -914,13 +961,13 @@ pub const Tokenizer = struct {
                 '<' => {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpLessThanOrEq, start, 2);
+                        self.output.pushToken(.OpLessThanOrEq, start, 2);
                     } else if (self.cursor.peekAt(1) == '-') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpBackArrow, start, 2);
+                        self.output.pushToken(.OpBackArrow, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpLessThan, start, 1);
+                        self.output.pushToken(.OpLessThan, start, 1);
                     }
                 },
 
@@ -928,10 +975,10 @@ pub const Tokenizer = struct {
                 '=' => {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpEquals, start, 2);
+                        self.output.pushToken(.OpEquals, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpAssign, start, 1);
+                        self.output.pushToken(.OpAssign, start, 1);
                     }
                 },
 
@@ -939,40 +986,40 @@ pub const Tokenizer = struct {
                 ':' => {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
-                        try self.output.pushToken(.OpColonEqual, start, 2);
+                        self.output.pushToken(.OpColonEqual, start, 2);
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpColon, start, 1);
+                        self.output.pushToken(.OpColon, start, 1);
                     }
                 },
 
                 '(' => {
                     self.cursor.pos += 1;
-                    try self.stack.append(.Round);
-                    try self.output.pushToken(.OpenRound, start, 1);
+                    self.stack.append(.Round) catch exitOnOom();
+                    self.output.pushToken(if (sp) .NoSpaceOpenRound else .OpenRound, start, 1);
                 },
                 '[' => {
                     self.cursor.pos += 1;
-                    try self.stack.append(.Square);
-                    try self.output.pushToken(.OpenSquare, start, 1);
+                    self.stack.append(.Square) catch exitOnOom();
+                    self.output.pushToken(.OpenSquare, start, 1);
                 },
-                '{' => {
+                open_curly => {
                     self.cursor.pos += 1;
-                    try self.stack.append(.Curly);
-                    try self.output.pushToken(.OpenCurly, start, 1);
+                    self.stack.append(.Curly) catch exitOnOom();
+                    self.output.pushToken(.OpenCurly, start, 1);
                 },
 
                 ')' => {
-                    try self.output.pushToken(.CloseRound, start, 1);
-                    try self.consumeBraceCloseAndContinueStringInterp(.Round);
+                    self.output.pushToken(.CloseRound, start, 1);
+                    self.consumeBraceCloseAndContinueStringInterp(.Round);
                 },
                 ']' => {
-                    try self.output.pushToken(.CloseSquare, start, 1);
-                    try self.consumeBraceCloseAndContinueStringInterp(.Square);
+                    self.output.pushToken(.CloseSquare, start, 1);
+                    self.consumeBraceCloseAndContinueStringInterp(.Square);
                 },
-                '}' => {
-                    try self.output.pushToken(.CloseCurly, start, 1);
-                    try self.consumeBraceCloseAndContinueStringInterp(.Curly);
+                close_curly => {
+                    self.output.pushToken(.CloseCurly, start, 1);
+                    self.consumeBraceCloseAndContinueStringInterp(.Curly);
                 },
 
                 '_' => {
@@ -982,14 +1029,14 @@ pub const Tokenizer = struct {
                             self.cursor.pos += 2;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(.NamedUnderscore, start, len);
+                            self.output.pushToken(.NamedUnderscore, start, len);
                         } else {
                             self.cursor.pos += 1;
-                            try self.output.pushToken(.Underscore, start, 1);
+                            self.output.pushToken(.Underscore, start, 1);
                         }
                     } else {
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.Underscore, start, 1);
+                        self.output.pushToken(.Underscore, start, 1);
                     }
                 },
 
@@ -1000,48 +1047,46 @@ pub const Tokenizer = struct {
                             self.cursor.pos += 2;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(.OpaqueName, start, len);
+                            self.output.pushToken(.OpaqueName, start, len);
                         } else {
                             self.cursor.pushMessageHere(.OpaqueNameWithoutName);
                             self.cursor.pos += 1;
-                            try self.output.pushToken(.OpaqueName, start, 1);
+                            self.output.pushToken(.OpaqueName, start, 1);
                         }
                     } else {
                         self.cursor.pushMessageHere(.OpaqueNameWithoutName);
                         self.cursor.pos += 1;
-                        try self.output.pushToken(.OpaqueName, start, 1);
+                        self.output.pushToken(.OpaqueName, start, 1);
                     }
                 },
 
                 // Numbers starting with 0-9
                 '0'...'9' => {
-                    _ = self.cursor.chompNumber(b);
+                    const tag = self.cursor.chompNumber(b);
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.Int, start, len);
+                    self.output.pushToken(tag, start, len);
                 },
 
                 // Lowercase identifiers
                 'a'...'z' => {
-                    self.cursor.pos += 1;
-                    _ = self.cursor.chompIdentLower();
+                    const tag = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.LowerIdent, start, len);
+                    self.output.pushToken(tag, start, len);
                 },
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    self.cursor.pos += 1;
-                    _ = self.cursor.chompIdentGeneral();
+                    self.cursor.chompIdentGeneral();
                     const len = self.cursor.pos - start;
-                    try self.output.pushToken(.UpperIdent, start, len);
+                    self.output.pushToken(.UpperIdent, start, len);
                 },
 
                 // String-like literal starting with a single or double quote
                 '"', '\'' => {
                     // Note this may return StringBegin/StringPart instead of String,
                     // in the case of a string interpolation.
-                    const tok = try self.tokenizeStringLikeLiteral(b);
-                    try self.output.pushToken(tok, start, self.cursor.pos - start);
+                    const tok = self.tokenizeStringLikeLiteral(b);
+                    self.output.pushToken(tok, start, self.cursor.pos - start);
                 },
 
                 // first byte of a UTF-8 sequence
@@ -1052,33 +1097,38 @@ pub const Tokenizer = struct {
                             self.cursor.pos += info.length;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(.UpperIdent, start, len);
+                            self.output.pushToken(.UpperIdent, start, len);
                         },
                         .LetterNotUpper => {
                             self.cursor.pos += info.length;
                             self.cursor.chompIdentGeneral();
                             const len = self.cursor.pos - start;
-                            try self.output.pushToken(.LowerIdent, start, len);
+                            self.output.pushToken(.LowerIdent, start, len);
                         },
                         else => {
                             self.cursor.pos += info.length;
-                            self.cursor.pushMessageHere(.UnknownToken);
+                            self.cursor.chompIdentGeneral();
+                            const len = self.cursor.pos - start;
+                            self.output.pushToken(.MalformedUnicodeIdent, start, len);
                         },
                     }
                 },
 
+                // TODO: emit a MalformedOpToken for invalid combinations of operator-like characters
+
                 // Fallback for any unknown token.
                 else => {
-                    self.cursor.pushMessageHere(.UnknownToken);
-                    self.cursor.pos += 1;
+                    const len = 1; // TODO: fast-forward to the next thing that looks like a real token
+                    self.cursor.pos += len;
+                    self.output.pushToken(.MalformedUnknownToken, start, len);
                 },
             }
         }
 
-        try self.pushToken(.EndOfFile, 0);
+        self.pushToken(.EndOfFile, 0);
     }
 
-    pub fn tokenizeStringLikeLiteral(self: *Tokenizer, term: u8) !Token.Tag {
+    pub fn tokenizeStringLikeLiteral(self: *Tokenizer, term: u8) Token.Tag {
         const start = self.cursor.pos;
         // Skip the initial quote.
         self.cursor.pos += 1;
@@ -1087,7 +1137,7 @@ pub const Tokenizer = struct {
             self.cursor.pos += 2;
             kind = .multi_line;
         }
-        return try self.tokenizeStringLikeLiteralBody(.start, kind, term, start);
+        return self.tokenizeStringLikeLiteralBody(.start, kind, term, start);
     }
 
     const StringState = enum {
@@ -1100,7 +1150,11 @@ pub const Tokenizer = struct {
         multi_line,
     };
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, state: StringState, kind: StringKind, term: u8, start: u32) !Token.Tag {
+    // Moving curly chars to constants because some editors hate them inline.
+    const open_curly = '{';
+    const close_curly = '}';
+
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, state: StringState, kind: StringKind, term: u8, start: u32) Token.Tag {
         var escape: bool = false;
         while (self.cursor.pos < self.cursor.buf.len) {
             const c = self.cursor.buf[self.cursor.pos];
@@ -1144,7 +1198,7 @@ pub const Tokenizer = struct {
                 if (c == '\\') {
                     escape = true;
                     self.cursor.pos += 1;
-                } else if (c == '$' and self.cursor.peekAt(1) == '{') {
+                } else if (c == '$' and self.cursor.peekAt(1) == open_curly) {
                     self.cursor.pos += 1;
                     var brace: BraceKind = undefined;
                     if (term == '"') {
@@ -1158,7 +1212,7 @@ pub const Tokenizer = struct {
                             .single_line => brace = .SingleQuoteInterpolation,
                         }
                     }
-                    try self.stack.append(brace);
+                    self.stack.append(brace) catch exitOnOom();
                     switch (term) {
                         '"' => {
                             switch (state) {
@@ -1178,17 +1232,23 @@ pub const Tokenizer = struct {
                 } else if (c == '\n') {
                     if (kind == .single_line) {
                         self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
-                        return .String;
+                        return .StringBegin;
                     } else {
                         self.cursor.pos += 1;
                     }
                 } else {
                     if (kind == .single_line and c == term) {
                         self.cursor.pos += 1;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
                         self.cursor.pos += 3;
-                        return .String;
+                        switch (state) {
+                            .start => return .String,
+                            .after_interpolation => return .StringPart,
+                        }
                     }
                     self.cursor.pos += 1;
                 }
@@ -1197,7 +1257,7 @@ pub const Tokenizer = struct {
         const diag: Diagnostic.Tag = if (term == '"') .UnclosedString else .UnclosedSingleQuote;
         self.cursor.pushMessage(diag, start, self.cursor.pos);
         if (state == .after_interpolation) {
-            return if (term == '"') .StringPart else .SingleQuotePart;
+            return if (term == '"') .StringEnd else .SingleQuoteEnd;
         } else {
             return if (term == '"') .String else .SingleQuote;
         }

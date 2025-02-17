@@ -15,10 +15,10 @@ const exitOnOom = collections.utils.exitOnOom;
 const Module = @This();
 
 /// The full name of a module, e.g. `Foo.Bar`.
-name: []u8,
+name: []const u8,
 /// The shorthand for the package this module is imported from
 /// if it is not from the current package, e.g. `json` in `json.Json`.
-package_shorthand: ?[]u8,
+package_shorthand: ?[]const u8,
 /// Whether the module is a builtin module.
 is_builtin: bool,
 /// The list of all idents exposed by this module.
@@ -73,7 +73,7 @@ pub const Store = struct {
     pub fn lookup(
         self: *Store,
         name: []const u8,
-        package_shorthand: ?[]u8,
+        package_shorthand: ?[]const u8,
     ) ?Idx {
         const items = self.modules.items;
         for (0..self.modules.len()) |index| {
@@ -99,8 +99,8 @@ pub const Store = struct {
     /// reusing an existing [Idx] if the module was already imported.
     pub fn getOrInsert(
         self: *Store,
-        name: []u8,
-        package_shorthand: ?[]u8,
+        name: []const u8,
+        package_shorthand: ?[]const u8,
     ) LookupResult {
         if (self.lookup(name, package_shorthand)) |idx| {
             return LookupResult{ .module_idx = idx, .was_present = true };
@@ -116,11 +116,11 @@ pub const Store = struct {
         }
     }
 
-    pub fn getName(self: *Store, idx: Idx) []u8 {
+    pub fn getName(self: *Store, idx: Idx) []const u8 {
         return self.modules.items.items(.name)[@as(usize, @intFromEnum(idx))];
     }
 
-    pub fn getPackageShorthand(self: *Store, idx: Idx) ?[]u8 {
+    pub fn getPackageShorthand(self: *Store, idx: Idx) ?[]const u8 {
         return self.modules.items.items(.package_shorthand)[@as(usize, @intFromEnum(idx))];
     }
 

@@ -1,5 +1,6 @@
-//! The common state or environment for a given module, and stores all the interned data
-//! like symbols, strings, tag names, field names, and problems.
+//! The common state or environment for a module.
+//!
+//! Stores all interned data like symbols, strings, tag names, field names, and problems.
 //!
 //! This reduces the size of this module's IRs as they can store references to this
 //! interned (and deduplicated) data instead of storing the values themselves.

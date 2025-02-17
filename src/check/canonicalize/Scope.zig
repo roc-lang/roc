@@ -303,16 +303,16 @@ pub const Levels = struct {
                     return null;
                 }
 
-                const levels = self.levels.levels.items.items;
+                const levels = self.levels.levels.items;
                 var level = levels[self.level_index];
-                const next_item = level.items(item_kind)[self.prior_item_index - 1];
+                const next_item = level.items(item_kind).items[self.prior_item_index - 1];
 
                 self.prior_item_index -= 1;
 
                 if (self.prior_item_index == 0) {
                     self.level_index -|= 1;
 
-                    while (self.level_index > 0 and levels[self.level_index].items(item_kind).len == 0) {
+                    while (self.level_index > 0 and levels[self.level_index].items(item_kind).items.len == 0) {
                         self.level_index -= 1;
                     }
                 }
@@ -346,3 +346,51 @@ pub const Levels = struct {
         };
     }
 };
+
+fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Self {
+    const allocator = std.testing.allocator;
+    var env = base.ModuleEnv.init(allocator);
+
+    var scope = Self{
+        .env = &env,
+        .focused_custom_alias = null,
+        .custom_tags = std.AutoHashMap(TagName.Idx, Alias.Idx).init(allocator),
+        .levels = Levels.init(&env, allocator),
+        .allocator = allocator,
+    };
+
+    const max_level = @min(idents.len, aliases.len);
+    for (0..max_level) |_| {
+        scope.levels.enter();
+    }
+
+    if (idents.len > 0) {
+        for (idents, 0..) |ident_level, level_index| {
+            var level = scope.levels.levels.items[level_index];
+            for (ident_level) |ident_in_scope| {
+                level.idents.append(ident_in_scope) catch exitOnOom();
+            }
+        }
+    }
+
+    if (aliases.len > 0) {
+        for (aliases, 0..) |alias_level, level_index| {
+            var level = scope.levels.levels.items[level_index];
+            for (alias_level) |aliases_in_scope| {
+                level.aliases.append(aliases_in_scope) catch exitOnOom();
+            }
+        }
+    }
+
+    return scope;
+}
+
+// test "empty scope has no items" {
+//     var scope = createTestScope(&.{}, &.{});
+//     defer scope.env.deinit();
+//     defer scope.deinit();
+
+//     var ident_iter = scope.levels.iter(.ident);
+
+//     try std.testing.expectEqual(null, ident_iter.next());
+// }
