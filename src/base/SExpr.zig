@@ -20,12 +20,12 @@ pub fn Token(comptime T: type, comptime V: type) type {
 /// Represents an error that can occur during S-expression parsing.
 pub const ParseError = error{
     OutOfMemory,
-    UnmatchedParentheses,
+    UnmatchedOpenParen,
+    UnmatchedCloseParen,
     EmptyInput,
     InvalidToken,
     ExpectedIdentifier,
-    ExpectedOpenParen,
-    ExpectedValueOrCloseParen,
+    UnexpectedToken,
 };
 
 /// Represents a parser for S-expressions.
@@ -110,14 +110,25 @@ pub fn Parser(comptime T: type, comptime V: type) type {
             self.skipWhitespace();
 
             if (self.current()) |c| {
+                if (c == ')') {
+                    return ParseError.UnmatchedCloseParen;
+                }
+
                 if (c == '(') {
                     try self.tokens.append(.lparen);
                     self.pos += 1;
 
-                    // Parse identifier
+                    // Skip whitespace before identifier
                     self.skipWhitespace();
+                    if (self.isAtEnd()) {
+                        return ParseError.UnmatchedOpenParen;
+                    }
+
+                    // Must have an identifier after opening paren
                     const ident_str = self.consumeUntilDelimiter();
-                    if (ident_str.len == 0) return ParseError.ExpectedIdentifier;
+                    if (ident_str.len == 0) {
+                        return ParseError.ExpectedIdentifier;
+                    }
 
                     if (self.parse_fns.parseIdent(ident_str)) |ident| {
                         try self.tokens.append(.{ .ident = ident });
@@ -128,6 +139,11 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                     // Parse arguments
                     while (true) {
                         self.skipWhitespace();
+
+                        // Check for end of input while parsing arguments
+                        if (self.isAtEnd()) {
+                            return ParseError.UnmatchedOpenParen;
+                        }
 
                         if (self.current()) |next| {
                             if (next == ')') {
@@ -140,7 +156,9 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                             } else {
                                 // Parse value
                                 const value_str = self.consumeUntilDelimiter();
-                                if (value_str.len == 0) return ParseError.UnmatchedParentheses;
+                                if (value_str.len == 0) {
+                                    return ParseError.InvalidToken;
+                                }
 
                                 if (self.parse_fns.parseValue(value_str)) |value| {
                                     try self.tokens.append(.{ .value = value });
@@ -149,26 +167,37 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                                 }
                             }
                         } else {
-                            return ParseError.UnmatchedParentheses;
+                            return ParseError.UnmatchedOpenParen;
                         }
                     }
                 } else {
-                    return ParseError.ExpectedOpenParen;
+                    return ParseError.UnexpectedToken;
                 }
             } else {
-                return ParseError.EmptyInput;
+                return ParseError.UnmatchedOpenParen;
             }
         }
 
         /// Parse the input string into a list of tokens.
         pub fn parse(self: *Self) ParseError![]Token(T, V) {
+            // Check for empty or whitespace-only input first
             if (self.input.len == 0) return ParseError.EmptyInput;
+
+            // Skip initial whitespace
+            self.skipWhitespace();
+
+            // If we're at the end after skipping whitespace, it was all whitespace
+            if (self.pos >= self.input.len) return ParseError.EmptyInput;
 
             try self.parseExpr();
 
             // Check for any remaining non-whitespace characters
             self.skipWhitespace();
             if (self.pos < self.input.len) {
+                // If we see a closing parenthesis here, it's unmatched
+                if (self.input[self.pos] == ')') {
+                    return ParseError.UnmatchedCloseParen;
+                }
                 return ParseError.InvalidToken;
             }
 
@@ -197,18 +226,22 @@ pub fn Generator(comptime T: type, comptime V: type) type {
                     .lparen => try output.append('('),
                     .rparen => {
                         try output.append(')');
+                        // Add space after closing paren unless it's the last token
+                        // or the next token is another closing paren
                         if (i + 1 < tokens.len and tokens[i + 1] != .rparen) {
                             try output.append(' ');
                         }
                     },
                     .ident => |ident| {
                         try output.appendSlice(generate_fns.identToString(ident));
+                        // Add space after ident unless next token is closing paren
                         if (i + 1 < tokens.len and tokens[i + 1] != .rparen) {
                             try output.append(' ');
                         }
                     },
                     .value => |value| {
                         try output.appendSlice(generate_fns.valueToString(value));
+                        // Add space after value unless next token is closing paren
                         if (i + 1 < tokens.len and tokens[i + 1] != .rparen) {
                             try output.append(' ');
                         }
@@ -345,29 +378,88 @@ const TestTypes = struct {
     }
 };
 
-test "simple expression" {
+test "parsing - basic cases" {
     const allocator = testing.allocator;
     const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
 
-    try T.parseAndVerify(allocator, "(+ 1 2)", &[_]Token(T.Ident, T.Value){
-        .lparen,
-        .{ .ident = .plus },
-        .{ .value = 1 },
-        .{ .value = 2 },
-        .rparen,
-    });
+    // Test cases with their normalized (expected) output
+    const TestCase = struct {
+        input: []const u8,
+        expected: []const u8,
+        tokens: []const Token(T.Ident, T.Value),
+    };
+
+    const test_cases = [_]TestCase{
+        .{
+            .input = "(+ 1 2)",
+            .expected = "(+ 1 2)",
+            .tokens = &[_]Token(T.Ident, T.Value){
+                .lparen,
+                .{ .ident = .plus },
+                .{ .value = 1 },
+                .{ .value = 2 },
+                .rparen,
+            },
+        },
+        .{
+            .input = "(  +    1     2   )",
+            .expected = "(+ 1 2)",
+            .tokens = &[_]Token(T.Ident, T.Value){
+                .lparen,
+                .{ .ident = .plus },
+                .{ .value = 1 },
+                .{ .value = 2 },
+                .rparen,
+            },
+        },
+        .{
+            .input = "(+(- 1 2)3)",
+            .expected = "(+ (- 1 2) 3)",
+            .tokens = &[_]Token(T.Ident, T.Value){
+                .lparen,
+                .{ .ident = .plus },
+                .lparen,
+                .{ .ident = .minus },
+                .{ .value = 1 },
+                .{ .value = 2 },
+                .rparen,
+                .{ .value = 3 },
+                .rparen,
+            },
+        },
+    };
+
+    for (test_cases) |case| {
+        var parser = Parser(T.Ident, T.Value).init(allocator, case.input, T.parse_fns);
+        defer parser.deinit();
+
+        const tokens = try parser.parse();
+        defer allocator.free(tokens);
+
+        try testing.expectEqualSlices(Token(T.Ident, T.Value), case.tokens, tokens);
+
+        const output = try Generator(T.Ident, T.Value).generate(
+            allocator,
+            tokens,
+            T.generate_fns,
+        );
+        defer allocator.free(output);
+
+        try testing.expectEqualStrings(case.expected, output);
+    }
 }
 
-test "nested expression" {
+test "parsing - nested expressions" {
     const allocator = testing.allocator;
     const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
 
+    // Simple nested expression
     try T.parseAndVerify(allocator, "(+ 1 (* 2 3))", &[_]Token(T.Ident, T.Value){
         .lparen,
         .{ .ident = .plus },
@@ -379,15 +471,8 @@ test "nested expression" {
         .rparen,
         .rparen,
     });
-}
 
-test "complex expression" {
-    const allocator = testing.allocator;
-    const T = TestTypes;
-
-    test_context = TestContext.init(allocator);
-    defer test_context.deinit();
-
+    // Multiple nested expressions
     try T.parseAndVerify(
         allocator,
         "(+ (* 2 3) (/ 10 (- 5 2)))",
@@ -411,60 +496,174 @@ test "complex expression" {
             .rparen,
         },
     );
+
+    // Deeply nested expression
+    try T.parseAndVerify(
+        allocator,
+        "(+ 1 (- 2 (* 3 (/ 4 5))))",
+        &[_]Token(T.Ident, T.Value){
+            .lparen,
+            .{ .ident = .plus },
+            .{ .value = 1 },
+            .lparen,
+            .{ .ident = .minus },
+            .{ .value = 2 },
+            .lparen,
+            .{ .ident = .multiply },
+            .{ .value = 3 },
+            .lparen,
+            .{ .ident = .divide },
+            .{ .value = 4 },
+            .{ .value = 5 },
+            .rparen,
+            .rparen,
+            .rparen,
+            .rparen,
+        },
+    );
 }
 
-test "parsing errors" {
+test "parsing - error cases" {
     const allocator = testing.allocator;
     const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
 
-    // Empty input
-    {
-        var parser = Parser(T.Ident, T.Value).init(allocator, "", T.parse_fns);
+    // Test cases with expected errors
+    const ErrorTestCase = struct {
+        input: []const u8,
+        expected_error: ParseError,
+        description: []const u8, // Added for better test documentation
+    };
+
+    const error_cases = [_]ErrorTestCase{
+        // Empty input cases
+        .{
+            .input = "",
+            .expected_error = ParseError.EmptyInput,
+            .description = "empty string",
+        },
+        .{
+            .input = "    ",
+            .expected_error = ParseError.EmptyInput,
+            .description = "only whitespace",
+        },
+
+        // Unmatched parentheses cases
+        .{
+            .input = "(+ 1 2))",
+            .expected_error = ParseError.UnmatchedCloseParen,
+            .description = "extra closing parenthesis",
+        },
+        .{
+            .input = ")",
+            .expected_error = ParseError.UnmatchedCloseParen,
+            .description = "lone closing parenthesis",
+        },
+        .{
+            .input = "(+ 1 2",
+            .expected_error = ParseError.UnmatchedOpenParen,
+            .description = "missing closing parenthesis",
+        },
+        .{
+            .input = "((+ 1 2)",
+            .expected_error = ParseError.ExpectedIdentifier,
+            .description = "should start with an identifier",
+        },
+
+        // Invalid token cases
+        .{
+            .input = "($ 1 2)",
+            .expected_error = ParseError.InvalidToken,
+            .description = "invalid operator",
+        },
+        .{
+            .input = "(+ a 2)",
+            .expected_error = ParseError.InvalidToken,
+            .description = "invalid first argument",
+        },
+        .{
+            .input = "(+ 1 b)",
+            .expected_error = ParseError.InvalidToken,
+            .description = "invalid second argument",
+        },
+
+        // Missing required elements cases
+        .{
+            .input = "()",
+            .expected_error = ParseError.ExpectedIdentifier,
+            .description = "empty expression",
+        },
+        .{
+            .input = "( )",
+            .expected_error = ParseError.ExpectedIdentifier,
+            .description = "empty expression with whitespace",
+        },
+
+        // Invalid structure cases
+        .{
+            .input = "1 2 3",
+            .expected_error = ParseError.UnexpectedToken,
+            .description = "bare values without expression",
+        },
+        .{
+            .input = "+ 1 2",
+            .expected_error = ParseError.UnexpectedToken,
+            .description = "bare operator expression",
+        },
+    };
+
+    for (error_cases) |case| {
+        var parser = Parser(T.Ident, T.Value).init(allocator, case.input, T.parse_fns);
         defer parser.deinit();
-        if (parser.parse()) |tokens| {
+
+        const result = parser.parse();
+
+        // Add error context
+        if (result) |tokens| {
+            std.debug.print("\nTest failed: {s}\nInput: '{s}'\nExpected error: {}, but parsing succeeded\n", .{ case.description, case.input, case.expected_error });
             allocator.free(tokens);
-            return error.TestExpectedError;
+            return error.TestUnexpectedSuccess;
         } else |err| {
-            try testing.expectEqual(ParseError.EmptyInput, err);
+            if (err != case.expected_error) {
+                std.debug.print("\nTest failed: {s}\nInput: '{s}'\nExpected error: {}, got: {}\n", .{ case.description, case.input, case.expected_error, err });
+                return error.TestExpectedError;
+            }
         }
     }
+}
 
-    // Unmatched parentheses
-    {
-        var parser = Parser(T.Ident, T.Value).init(allocator, "(+ 1 2", T.parse_fns);
-        defer parser.deinit();
-        if (parser.parse()) |tokens| {
-            allocator.free(tokens);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(ParseError.UnmatchedParentheses, err);
-        }
-    }
+test "generation - formatting" {
+    const allocator = testing.allocator;
+    const T = TestTypes;
 
-    // Invalid (unexpected) token
-    {
-        var parser = Parser(T.Ident, T.Value).init(allocator, "($ 1 2)", T.parse_fns);
-        defer parser.deinit();
-        if (parser.parse()) |tokens| {
-            allocator.free(tokens);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(ParseError.InvalidToken, err);
-        }
-    }
+    test_context = TestContext.init(allocator);
+    defer test_context.deinit();
 
-    // Expected open parenthesis
-    {
-        var parser = Parser(T.Ident, T.Value).init(allocator, "1 2 3)", T.parse_fns);
+    // Test different formatting patterns
+    const format_cases = [_][]const u8{
+        "(+ 1 2)",
+        "(+ (* 2 3) 4)",
+        "(+ 1 (* 2 (- 3 4)))",
+        "(+ 1 2 3 4 5)",
+        "(* (+ 1 2) (- 3 4))",
+    };
+
+    for (format_cases) |input| {
+        var parser = Parser(T.Ident, T.Value).init(allocator, input, T.parse_fns);
         defer parser.deinit();
-        if (parser.parse()) |tokens| {
-            allocator.free(tokens);
-            return error.TestExpectedError;
-        } else |err| {
-            try testing.expectEqual(ParseError.ExpectedOpenParen, err);
-        }
+
+        const tokens = try parser.parse();
+        defer allocator.free(tokens);
+
+        const output = try Generator(T.Ident, T.Value).generate(
+            allocator,
+            tokens,
+            T.generate_fns,
+        );
+        defer allocator.free(output);
+
+        try testing.expectEqualStrings(input, output);
     }
 }
