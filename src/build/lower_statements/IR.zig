@@ -5,9 +5,9 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
-const TagName = collections.TagName;
-const FieldName = collections.FieldName;
-const StringLiteral = collections.StringLiteral;
+const TagName = base.TagName;
+const FieldName = base.FieldName;
+const StringLiteral = base.StringLiteral;
 
 const Self = @This();
 

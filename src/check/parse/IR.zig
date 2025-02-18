@@ -1,7 +1,7 @@
 const IR = @This();
 
 pub fn deinit(self: *IR) void {
-    defer self.tokens.deinit(self.store.gpa);
+    defer self.tokens.deinit();
     defer self.store.deinit();
 }
 
@@ -1142,13 +1142,7 @@ pub const NodeStore = struct {
             expr: ExprIdx,
             region: Region,
         },
-        import: struct {
-            module_name_tok: TokenIdx,
-            qualifier_tok: ?TokenIdx,
-            alias_tok: ?TokenIdx,
-            exposes: []const TokenIdx,
-            region: Region,
-        },
+        import: Import,
         type_decl: struct {
             // TODO: complete this
             region: Region,
@@ -1157,6 +1151,14 @@ pub const NodeStore = struct {
             // TODO: complete this
             region: Region,
         },
+
+        pub const Import = struct {
+            module_name_tok: TokenIdx,
+            qualifier_tok: ?TokenIdx,
+            alias_tok: ?TokenIdx,
+            exposes: []const TokenIdx,
+            region: Region,
+        };
     };
 
     /// Represents a Pattern used in pattern matching.

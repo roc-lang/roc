@@ -68,6 +68,15 @@ pub fn SafeList(comptime T: type) type {
             return self.items.items[start_length..];
         }
 
+        pub fn extendFromIter(self: *SafeList(T), iter: anytype) Slice {
+            const start_length = self.len();
+            while (iter.next()) |item| {
+                self.items.append(item) catch exitOnOom();
+            }
+
+            return self.items.items[start_length..];
+        }
+
         pub fn get(self: *SafeList(T), id: Idx) T {
             return self.items.items[@as(usize, @intFromEnum(id))];
         }
@@ -102,11 +111,17 @@ pub fn SafeMultiList(comptime T: type) type {
         /// A typesafe Slice of the list.
         pub const Slice = std.MultiArrayList(T).Slice;
 
+        pub const Field = std.MultiArrayList(T).Field;
+
         pub fn init(allocator: std.mem.Allocator) SafeMultiList(T) {
             return SafeMultiList(T){
                 .items = std.MultiArrayList(T){},
                 .allocator = allocator,
             };
+        }
+
+        pub fn field(self: *SafeMultiList(T), comptime field_name: Field) []type {
+            return self.items.items(field_name);
         }
 
         pub fn deinit(self: *SafeMultiList(T)) void {
@@ -128,12 +143,37 @@ pub fn SafeMultiList(comptime T: type) type {
             self.items.set(@intFromEnum(idx), value);
         }
 
+        // TODO: consider removing this, or at least renaming to imply this is not a zero-cost operation
         pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
             return self.items.get(@intFromEnum(idx));
         }
 
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), capacity: usize) void {
             self.items.ensureTotalCapacity(self.allocator, capacity) catch exitOnOom();
+        }
+
+        pub const IndexIterator = struct {
+            len: usize,
+            current: usize,
+
+            pub fn next(iter: *IndexIterator) ?Idx {
+                if (iter.len == iter.current) {
+                    return null;
+                }
+
+                const curr = iter.current;
+                iter.current += 1;
+
+                const idx: u32 = @truncate(curr);
+                return @enumFromInt(idx);
+            }
+        };
+
+        pub fn iterIndices(self: *SafeMultiList(T)) IndexIterator {
+            return IndexIterator{
+                .len = self.len(),
+                .current = 0,
+            };
         }
     };
 }

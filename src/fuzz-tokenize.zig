@@ -38,7 +38,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa);
     tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
-    defer output.tokens.deinit(gpa);
+    defer output.tokens.deinit();
 
     if (debug) {
         std.debug.print("Before:\n", .{});
@@ -525,7 +525,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa);
     tokenizer.tokenize();
     var output2 = tokenizer.finish_and_deinit();
-    defer output2.tokens.deinit(gpa);
+    defer output2.tokens.deinit();
 
     if (debug) {
         std.debug.print("After:\n", .{});
