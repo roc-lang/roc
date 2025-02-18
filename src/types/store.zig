@@ -3,32 +3,32 @@ const builtin = @import("builtin");
 const Allocator = std.mem.Allocator;
 const Ident = @import("../base/Ident.zig");
 
-/// VarStore manages generation of fresh type variables by tracking the next available ID.
-pub const VarStore = struct {
+/// Manages types
+pub const TypeStore = struct {
     next: u32,
 
     /// Create a new VarStore initialized to the first user space variable.
-    pub fn init() VarStore {
-        return VarStore.initWithNext(Variable.FIRST_USER_SPACE_VAR);
+    pub fn init() TypeStore {
+        return TypeStore.initWithNext(Variable.FIRST_USER_SPACE_VAR);
     }
 
     /// Create a new VarStore initialized with a specific next variable ID.
     /// The next ID must be >= the first user space variable.
-    pub fn initWithNext(next: Variable) VarStore {
+    pub fn initWithNext(next: Variable) TypeStore {
         std.debug.assert(next.val >= Variable.FIRST_USER_SPACE_VAR.val);
-        return VarStore{ .next = next.val };
+        return TypeStore{ .next = next.val };
     }
 
     /// Returns the next variable ID that would be generated, without actually generating it.
     /// Useful for looking ahead at variable allocation without affecting the counter.
-    pub fn peek(self: *VarStore) u32 {
+    pub fn peek(self: *TypeStore) u32 {
         return self.next;
     }
 
     /// Generates and returns a new unique variable ID.
     /// Guarantees each call returns a different ID by incrementing the internal counter.
     /// Used to create fresh type variables during type inference.
-    pub fn fresh(self: *VarStore) Variable {
+    pub fn fresh(self: *TypeStore) Variable {
         // Increment the counter and return the value it had before being incremented
         const answer = self.next;
         self.next += 1;
@@ -131,21 +131,22 @@ pub const Content = union(enum) {
 };
 
 pub const FlatType = union(enum) {
-    Apply: struct {
-        name: Variable,
-        arguments: []Variable,
-    },
+    Apply: Apply,
+    Func: Func,
+    EmptyRecord,
+    EmptyTagUnion,
 
-    Func: struct {
+    pub const Func = struct {
         arguments: []Variable,
         lambda_set: Variable,
         result: Variable,
         fx: Variable,
-    },
+    };
 
-    EmptyRecord,
-
-    EmptyTagUnion,
+    pub const Apply = struct {
+        name: Variable,
+        arguments: []Variable,
+    };
 };
 
 /// Descriptor holds the complete type information for a variable in the type system,
@@ -770,7 +771,7 @@ pub const UnificationTable = struct {
     }
 };
 
-/// UnificationMode controls how type unification behaves.
+/// Controls how type unification behaves
 pub const UnificationMode = packed struct {
     eq: bool = false,
     present: bool = false,
