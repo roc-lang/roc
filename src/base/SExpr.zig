@@ -68,12 +68,44 @@ pub fn Parser(comptime T: type, comptime V: type) type {
             }
         }
 
-        /// Returns the current character in the input.
-        fn current(self: Self) ?u8 {
-            return if (self.pos < self.input.len) self.input[self.pos] else null;
+        /// Checks if we've reached the end of input
+        fn isAtEnd(self: Self) bool {
+            return self.pos >= self.input.len;
         }
 
-        /// Parses an expression from the input.
+        /// Returns the current character without advancing
+        fn current(self: Self) ?u8 {
+            return if (self.isAtEnd()) null else self.input[self.pos];
+        }
+
+        /// Returns true if current character is a delimiter (whitespace or parenthesis)
+        fn isDelimiter(self: Self) bool {
+            if (self.current()) |c| {
+                return std.ascii.isWhitespace(c) or c == '(' or c == ')';
+            }
+            return true;
+        }
+
+        /// Consumes characters until a delimiter is reached and returns the consumed slice
+        fn consumeUntilDelimiter(self: *Self) []const u8 {
+            const start = self.pos;
+            while (!self.isAtEnd() and !self.isDelimiter()) {
+                self.pos += 1;
+            }
+            return self.input[start..self.pos];
+        }
+
+        /// Checks if the current character matches the expected one
+        fn match(self: *Self, expected: u8) bool {
+            if (self.current()) |c| {
+                if (c == expected) {
+                    self.pos += 1;
+                    return true;
+                }
+            }
+            return false;
+        }
+
         fn parseExpr(self: *Self) ParseError!void {
             self.skipWhitespace();
 
@@ -84,15 +116,7 @@ pub fn Parser(comptime T: type, comptime V: type) type {
 
                     // Parse identifier
                     self.skipWhitespace();
-                    const ident_start = self.pos;
-                    while (self.pos < self.input.len and
-                        !std.ascii.isWhitespace(self.input[self.pos]) and
-                        self.input[self.pos] != '(' and
-                        self.input[self.pos] != ')')
-                    {
-                        self.pos += 1;
-                    }
-                    const ident_str = self.input[ident_start..self.pos];
+                    const ident_str = self.consumeUntilDelimiter();
                     if (ident_str.len == 0) return ParseError.ExpectedIdentifier;
 
                     if (self.parse_fns.parseIdent(ident_str)) |ident| {
@@ -104,25 +128,19 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                     // Parse arguments
                     while (true) {
                         self.skipWhitespace();
+
                         if (self.current()) |next| {
                             if (next == ')') {
                                 try self.tokens.append(.rparen);
                                 self.pos += 1;
                                 break;
                             } else if (next == '(') {
+                                // Don't consume the '(' here, let recursive call handle it
                                 try self.parseExpr();
                             } else {
                                 // Parse value
-                                const value_start = self.pos;
-                                while (self.pos < self.input.len and
-                                    !std.ascii.isWhitespace(self.input[self.pos]) and
-                                    self.input[self.pos] != '(' and
-                                    self.input[self.pos] != ')')
-                                {
-                                    self.pos += 1;
-                                }
-                                const value_str = self.input[value_start..self.pos];
-                                if (value_str.len == 0) return ParseError.ExpectedValueOrCloseParen;
+                                const value_str = self.consumeUntilDelimiter();
+                                if (value_str.len == 0) return ParseError.UnmatchedParentheses;
 
                                 if (self.parse_fns.parseValue(value_str)) |value| {
                                     try self.tokens.append(.{ .value = value });
