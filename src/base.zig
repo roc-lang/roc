@@ -1,18 +1,18 @@
 pub const Ident = @import("base/Ident.zig");
 pub const Module = @import("base/Module.zig");
-pub const ModuleEnv = @import("base/ModuleEnv.zig");
-pub const Package = @import("base/Package.zig");
 pub const Region = @import("base/Region.zig");
-
-const StringLiteral = @import("collections/interner/StringLiteral.zig");
+pub const Package = @import("base/Package.zig");
+pub const TagName = @import("base/TagName.zig");
+pub const FieldName = @import("base/FieldName.zig");
+pub const ModuleEnv = @import("base/ModuleEnv.zig");
+pub const TypeVarName = @import("base/TypeVarName.zig");
+pub const StringLiteral = @import("base/StringLiteral.zig");
 
 pub const Recursive = enum {
     NotRecursive,
     Recursive,
     TailRecursive,
 };
-
-pub const LowLevel = .{};
 
 pub const CalledVia = enum {};
 
@@ -21,9 +21,9 @@ pub const Literal = union(enum) {
     Int: Int,
     Float: Float,
     Bool: bool,
-    Str: StringLiteral,
+    Str: StringLiteral.Idx,
     /// A crash with a textual message describing why a crash occurred.
-    Crash: StringLiteral,
+    Crash: StringLiteral.Idx,
 
     /// An integer number literal.
     pub const Int = union(enum) {

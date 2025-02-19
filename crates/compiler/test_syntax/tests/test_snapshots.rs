@@ -98,6 +98,8 @@ mod test_snapshots {
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".formatted.roc") {
                             test
+                        } else if let Some(test) = file.strip_suffix(".migrated.roc") {
+                            test
                         } else if let Some(test) = file.strip_suffix(".roc") {
                             test
                         } else if let Some(test) = file.strip_suffix(".result-ast") {
@@ -889,6 +891,7 @@ mod test_snapshots {
         let input_path = parent.join(format!("{name}.{ty}.roc"));
         let result_path = parent.join(format!("{name}.{ty}.result-ast"));
         let formatted_path = parent.join(format!("{name}.{ty}.formatted.roc"));
+        let migrated_path = parent.join(format!("{name}.{ty}.migrated.roc"));
 
         let source = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
             panic!("Could not find a snapshot test result at {input_path:?} - {err:?}")
@@ -933,6 +936,23 @@ mod test_snapshots {
                 true,
                 Some(expect_canonicalize_panics(name)),
             );
+
+            let arena = Bump::new();
+
+            let actual = input.parse_in(&arena).unwrap_or_else(|err| {
+                panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", input.as_str(), err);
+            });
+
+            let output = actual.migrate();
+
+            match output {
+                Ok(output) => {
+                    compare_snapshots(&migrated_path, Some(output.as_ref().as_str()));
+                }
+                Err(err) => {
+                    println!("Skipping migration test for {name}.{ty}.roc: {err:?}");
+                }
+            }
         }
     }
 
