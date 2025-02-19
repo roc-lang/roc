@@ -32,14 +32,11 @@ test {
     testing.refAllDeclsRecursive(@import("check/parse/tokenize.zig"));
     testing.refAllDeclsRecursive(@import("check/resolve_imports.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types.zig"));
-    testing.refAllDeclsRecursive(@import("check/canonicalize.zig"));
-<<<<<<< HEAD
     testing.refAllDeclsRecursive(@import("check/check_types/test.zig"));
-=======
+    testing.refAllDeclsRecursive(@import("check/canonicalize.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/Scope.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/Alias.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/IR.zig"));
->>>>>>> remote/main
     testing.refAllDeclsRecursive(@import("build/specialize_types.zig"));
     testing.refAllDeclsRecursive(@import("build/lift_functions.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_functions.zig"));
