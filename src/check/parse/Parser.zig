@@ -40,10 +40,8 @@ pub fn deinit(parser: *Parser) void {
 
 const TestError = error{TestError};
 fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
-    const gc = try @import("GenCatData").GenCatData.init(std.testing.allocator);
-    defer gc.deinit();
     const messages = [128]tokenize.Diagnostic;
-    const tokenizer = tokenize.Tokenizer.init(source, messages[0..], gc, std.testing.allocator);
+    const tokenizer = tokenize.Tokenizer.init(source, messages[0..], std.testing.allocator);
     tokenizer.tokenize();
     const tok_result = tokenizer.finalize_and_deinit();
     defer tok_result.tokens.deinit();

@@ -11,7 +11,6 @@
 ///
 const std = @import("std");
 const tokenize = @import("check/parse/tokenize.zig");
-const GenCatData = @import("GenCatData");
 
 pub export fn zig_fuzz_init() void {}
 
@@ -28,14 +27,11 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
     const gpa = gpa_impl.allocator();
 
-    var gcd = GenCatData.init(gpa) catch @panic("OOM");
-    defer gcd.deinit();
-
     var buf_slice = buf[0..@intCast(len)];
 
     // Initial tokenization.
     var messages: [32]tokenize.Diagnostic = undefined;
-    var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, &gcd, gpa);
+    var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, gpa);
     tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
     defer output.tokens.deinit();
@@ -67,7 +63,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Second tokenization.
-    tokenizer = tokenize.Tokenizer.init(buf2.items, &messages, &gcd, gpa);
+    tokenizer = tokenize.Tokenizer.init(buf2.items, &messages, gpa);
     tokenizer.tokenize();
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();
@@ -550,14 +546,17 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
             },
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
-            .MalformedIntBadSuffix,
-            .MalformedFloatBadSuffix,
+            .MalformedNumberBadSuffix,
             .MalformedInvalidUnicodeEscapeSequence,
             .MalformedInvalidEscapeSequence,
             .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
             .MalformedNoSpaceDotUnicodeIdent,
             .MalformedUnknownToken,
+            .MalformedNumberUnicodeSuffix,
+            .MalformedNamedUnderscoreUnicode,
+            .MalformedOpaqueNameUnicode,
+            .MalformedOpaqueNameWithoutName,
             => {
                 return error.Unsupported;
             },

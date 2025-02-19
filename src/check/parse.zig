@@ -6,7 +6,6 @@ const TokenizedBuffer = tokenize.TokenizedBuffer;
 pub const IR = @import("parse/IR.zig");
 const NodeList = IR.NodeList;
 const Diagnostic = IR.Diagnostic;
-const GenCatData = @import("GenCatData");
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
@@ -20,9 +19,7 @@ errors: []const Diagnostic,
 pub fn parse(allocator: std.mem.Allocator, source: []const u8) IR {
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var gc = GenCatData.init(allocator) catch exitOnOom();
-    defer gc.deinit();
-    var tokenizer = tokenize.Tokenizer.init(source, msg_slice, &gc, allocator);
+    var tokenizer = tokenize.Tokenizer.init(source, msg_slice, allocator);
     tokenizer.tokenize();
     const result = tokenizer.finish_and_deinit();
 

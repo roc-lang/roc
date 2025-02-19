@@ -3,9 +3,6 @@ const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 const base = @import("../../base.zig");
 
-// Unicode data tables - allows us to identify upper/lowercase letters for non-ASCII characters.
-const GenCatData = @import("GenCatData");
-
 pub const Token = struct {
     tag: Tag,
     offset: u32,
@@ -25,8 +22,8 @@ pub const Token = struct {
         String,
         SingleQuote,
         Int,
-        MalformedIntBadSuffix, // malformed, but should be treated similar to an int in the parser
-        MalformedFloatBadSuffix, // malformed, but should be treated similar to a float in the parser
+        MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
+        MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
 
         // a part of a string interpolation; generally you'll see something like:
         // StringBegin, OpenCurly, <expr>, CloseCurly, StringPart, OpenCurly, <expr>, CloseCurly, StringEnd
@@ -57,7 +54,11 @@ pub const Token = struct {
         MalformedNoSpaceDotUnicodeIdent,
 
         NamedUnderscore,
+        MalformedNamedUnderscoreUnicode,
+
         OpaqueName,
+        MalformedOpaqueNameUnicode,
+        MalformedOpaqueNameWithoutName,
 
         OpenRound,
         CloseRound,
@@ -288,7 +289,6 @@ pub const Diagnostic = struct {
         MisplacedCarriageReturn,
         AsciiControl,
         LeadingZero,
-        OpaqueNameWithoutName,
         UppercaseBase,
         InvalidUnicodeEscapeSequence,
         InvalidEscapeSequence,
@@ -310,17 +310,15 @@ pub const Cursor = struct {
     pos: u32,
     messages: []Diagnostic,
     message_count: u32,
-    gc: *GenCatData,
     tab_width: u8 = 4, // TODO: make this configurable
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
-    pub fn init(buf: []const u8, messages: []Diagnostic, gc: *GenCatData) Cursor {
+    pub fn init(buf: []const u8, messages: []Diagnostic) Cursor {
         return Cursor{
             .buf = buf,
             .pos = 0,
             .messages = messages,
             .message_count = 0,
-            .gc = gc,
         };
     }
 
@@ -428,29 +426,6 @@ pub const Cursor = struct {
         }
     }
 
-    /// Decodes a Unicode character starting at `self.pos` and returns its category.
-    /// Note this assumes the caller has already peek'd the first byte.
-    pub fn decodeUnicode(self: *Cursor, first_byte: u8, pos: u32) Unicode {
-        std.debug.assert(first_byte == self.buf[pos]);
-        const len3 = std.unicode.utf8ByteSequenceLength(first_byte) catch {
-            return .{ .tag = .Invalid, .length = 1 };
-        };
-        const len: u32 = @intCast(len3);
-        const remainder: u32 = @intCast(self.buf.len - pos);
-        if (remainder < len) {
-            return .{ .tag = .Invalid, .length = remainder };
-        }
-        const utf8_char = std.unicode.utf8Decode(self.buf[pos..][0..len]) catch {
-            return .{ .tag = .Invalid, .length = len };
-        };
-        switch (self.gc.gc(utf8_char)) {
-            .Lu, .Lt => return .{ .tag = .LetterUpper, .length = len },
-            .Ll, .Lm, .Lo => return .{ .tag = .LetterNotUpper, .length = len },
-            .Nd, .Nl, .No => return .{ .tag = .Digit, .length = len },
-            else => return .{ .tag = .Other, .length = len },
-        }
-    }
-
     pub fn chompNumber(self: *Cursor, initialDigit: u8) Token.Tag {
         // Consume the initial digit.
         std.debug.assert(initialDigit == self.buf[self.pos]);
@@ -465,35 +440,27 @@ pub const Cursor = struct {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase16();
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedIntBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     'o', 'O' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase8();
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedIntBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     'b', 'B' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
                         self.chompIntegerBase2();
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedIntBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
                         _ = self.chompNumberBase10();
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedIntBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     '_' => {
@@ -505,32 +472,18 @@ pub const Cursor = struct {
                         self.chompIntegerBase10();
                         tok = .Float;
                         _ = self.chompExponent();
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedFloatBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     else => {
-                        if (!self.chompNumberSuffix()) {
-                            tok = .MalformedIntBadSuffix;
-                        }
+                        tok = self.chompNumberSuffix(tok);
                         break;
                     },
                 }
             }
         } else {
             tok = self.chompNumberBase10();
-            if (!self.chompNumberSuffix()) {
-                switch (tok) {
-                    .Int => {
-                        tok = .MalformedIntBadSuffix;
-                    },
-                    .Float => {
-                        tok = .MalformedFloatBadSuffix;
-                    },
-                    else => unreachable,
-                }
-            }
+            tok = self.chompNumberSuffix(tok);
         }
         return tok;
     }
@@ -549,37 +502,25 @@ pub const Cursor = struct {
     }
 
     /// Chomp what's expected to be the suffix of a number.
-    /// Returns whether the suffix was valid. Also returns true if the suffix was missing.
-    pub fn chompNumberSuffix(self: *Cursor) bool {
+    /// Returns either the original token hypothesis, or a malformed token tag.
+    pub fn chompNumberSuffix(self: *Cursor, hypothesis: Token.Tag) Token.Tag {
         if (self.peek()) |c| {
             const is_ident_char = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c >= 0x80;
             if (!is_ident_char) {
-                return true;
+                return hypothesis;
             }
         } else {
-            return true;
+            return hypothesis;
         }
         const start = self.pos;
-        var pos = self.pos + 1;
-        while (pos < self.buf.len) : (pos += 1) {
-            const c = self.buf[pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_') {
-                // continue advancing
-            } else {
-                const info = self.decodeUnicode(c, pos);
-                if (info.tag != .Other and info.tag != .Invalid) {
-                    // continue advancing
-                } else {
-                    break;
-                }
-            }
+        if (!self.chompIdentGeneral()) {
+            return .MalformedNumberUnicodeSuffix;
         }
-        const suffix = self.buf[start..pos];
+        const suffix = self.buf[start..self.pos];
         if (Token.valid_number_suffixes.get(suffix) == null) {
-            return false;
+            return .MalformedNumberBadSuffix;
         } else {
-            self.pos = pos;
-            return true;
+            return hypothesis;
         }
     }
 
@@ -650,7 +591,9 @@ pub const Cursor = struct {
     /// Returns the token type - LowerIdent or Kw*
     pub fn chompIdentLower(self: *Cursor) Token.Tag {
         const start = self.pos;
-        self.chompIdentGeneral();
+        if (!self.chompIdentGeneral()) {
+            return .MalformedUnicodeIdent;
+        }
         const ident = self.buf[start..self.pos];
         const kw = Token.keywords.get(ident);
         return kw orelse .LowerIdent;
@@ -660,20 +603,22 @@ pub const Cursor = struct {
     /// Doesn't check if the identifier is a keyword, since we assume the caller already
     /// determined that was impossible (e.g. because the first character was uppercase),
     /// or otherwise not relevant.
-    pub fn chompIdentGeneral(self: *Cursor) void {
+    ///
+    /// Returns whether the chomped identifier was valid - i.e. didn't contain any non-ascii characters.
+    pub fn chompIdentGeneral(self: *Cursor) bool {
+        var valid = true;
         while (self.pos < self.buf.len) {
             const c = self.buf[self.pos];
             if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_' or c == '!') {
                 self.pos += 1;
+            } else if (c >= 0x80) {
+                valid = false;
+                self.pos += 1;
             } else {
-                const info = self.decodeUnicode(c, self.pos);
-                if (info.tag != .Other and info.tag != .Invalid) {
-                    self.pos += info.length;
-                } else {
-                    break;
-                }
+                break;
             }
         }
+        return valid;
     }
 
     pub fn chompInteger(self: *Cursor) void {
@@ -715,8 +660,8 @@ pub const Tokenizer = struct {
 
     /// Creates a new Tokenizer.
     /// Note that the caller must also provide a pre-allocated messages buffer.
-    pub fn init(text: []const u8, messages: []Diagnostic, gc: *GenCatData, allocator: std.mem.Allocator) Tokenizer {
-        const cursor = Cursor.init(text, messages, gc);
+    pub fn init(text: []const u8, messages: []Diagnostic, allocator: std.mem.Allocator) Tokenizer {
+        const cursor = Cursor.init(text, messages);
         const output = TokenizedBuffer.init(allocator);
         return Tokenizer{
             .cursor = cursor,
@@ -812,38 +757,25 @@ pub const Tokenizer = struct {
                             const len = self.cursor.pos - start;
                             self.output.pushToken(if (sp) .DotInt else .NoSpaceDotInt, start, len);
                         } else if (n >= 'a' and n <= 'z') {
+                            var tag: Token.Tag = if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent;
                             self.cursor.pos += 1;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
-                        } else if (n >= 'A' and n <= 'Z') {
-                            self.cursor.pos += 1;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
-                        } else if (n >= 0b11000000 and n <= 0xff) {
-                            self.cursor.pos += 1;
-                            const info = self.cursor.decodeUnicode(n, self.cursor.pos);
-                            switch (info.tag) {
-                                .LetterUpper => {
-                                    self.cursor.pos += info.length;
-                                    self.cursor.chompIdentGeneral();
-                                    const len = self.cursor.pos - start;
-                                    self.output.pushToken(if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent, start, len);
-                                },
-                                .LetterNotUpper => {
-                                    self.cursor.pos += info.length;
-                                    self.cursor.chompIdentGeneral();
-                                    const len = self.cursor.pos - start;
-                                    self.output.pushToken(if (sp) .DotLowerIdent else .NoSpaceDotLowerIdent, start, len);
-                                },
-                                else => {
-                                    self.cursor.pos += info.length;
-                                    self.cursor.chompIdentGeneral();
-                                    const len = self.cursor.pos - start;
-                                    self.output.pushToken(if (sp) .MalformedDotUnicodeIdent else .MalformedNoSpaceDotUnicodeIdent, start, len);
-                                },
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedDotUnicodeIdent;
                             }
+                            const len = self.cursor.pos - start;
+                            self.output.pushToken(tag, start, len);
+                        } else if (n >= 'A' and n <= 'Z') {
+                            var tag: Token.Tag = if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent;
+                            self.cursor.pos += 1;
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tag = .MalformedDotUnicodeIdent;
+                            }
+                            const len = self.cursor.pos - start;
+                            self.output.pushToken(tag, start, len);
+                        } else if (n >= 0x80 and n <= 0xff) {
+                            self.cursor.pos += 1;
+                            _ = self.cursor.chompIdentGeneral();
+                            self.output.pushToken(.MalformedDotUnicodeIdent, start, self.cursor.pos - start);
                         } else if (n == open_curly) {
                             self.cursor.pos += 1;
                             self.output.pushToken(.Dot, start, 1);
@@ -1052,10 +984,13 @@ pub const Tokenizer = struct {
                     const next = self.cursor.peekAt(1);
                     if (next) |n| {
                         if ((n >= 'a' and n <= 'z') or (n >= 'A' and n <= 'Z') or (n >= '0' and n <= '9')) {
+                            var tok: Token.Tag = .NamedUnderscore;
                             self.cursor.pos += 2;
-                            self.cursor.chompIdentGeneral();
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tok = .MalformedNamedUnderscoreUnicode;
+                            }
                             const len = self.cursor.pos - start;
-                            self.output.pushToken(.NamedUnderscore, start, len);
+                            self.output.pushToken(tok, start, len);
                         } else {
                             self.cursor.pos += 1;
                             self.output.pushToken(.Underscore, start, 1);
@@ -1067,23 +1002,24 @@ pub const Tokenizer = struct {
                 },
 
                 '@' => {
+                    var tok: Token.Tag = .OpaqueName;
                     const next = self.cursor.peekAt(1);
                     if (next) |n| {
-                        if ((n >= 'a' and n <= 'z') or (n >= 'A' and n <= 'Z') or (n >= '0' and n <= '9')) {
-                            self.cursor.pos += 2;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(.OpaqueName, start, len);
-                        } else {
-                            self.cursor.pushMessageHere(.OpaqueNameWithoutName);
+                        if ((n >= 'a' and n <= 'z') or (n >= 'A' and n <= 'Z') or (n >= '0' and n <= '9') or n == '_' or n >= 0x80) {
                             self.cursor.pos += 1;
-                            self.output.pushToken(.OpaqueName, start, 1);
+                            if (!self.cursor.chompIdentGeneral()) {
+                                tok = .MalformedOpaqueNameUnicode;
+                            }
+                        } else {
+                            tok = .MalformedOpaqueNameWithoutName;
+                            self.cursor.pos += 1;
                         }
                     } else {
-                        self.cursor.pushMessageHere(.OpaqueNameWithoutName);
+                        tok = .MalformedOpaqueNameWithoutName;
                         self.cursor.pos += 1;
-                        self.output.pushToken(.OpaqueName, start, 1);
                     }
+                    const len = self.cursor.pos - start;
+                    self.output.pushToken(tok, start, len);
                 },
 
                 // Numbers starting with 0-9
@@ -1102,7 +1038,10 @@ pub const Tokenizer = struct {
 
                 // Uppercase identifiers
                 'A'...'Z' => {
-                    self.cursor.chompIdentGeneral();
+                    var tag: Token.Tag = .UpperIdent;
+                    if (!self.cursor.chompIdentGeneral()) {
+                        tag = .MalformedUnicodeIdent;
+                    }
                     const len = self.cursor.pos - start;
                     self.output.pushToken(.UpperIdent, start, len);
                 },
@@ -1116,28 +1055,10 @@ pub const Tokenizer = struct {
                 },
 
                 // first byte of a UTF-8 sequence
-                0b11000000...0xff => {
-                    const info = self.cursor.decodeUnicode(b, self.cursor.pos);
-                    switch (info.tag) {
-                        .LetterUpper => {
-                            self.cursor.pos += info.length;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(.UpperIdent, start, len);
-                        },
-                        .LetterNotUpper => {
-                            self.cursor.pos += info.length;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(.LowerIdent, start, len);
-                        },
-                        else => {
-                            self.cursor.pos += info.length;
-                            self.cursor.chompIdentGeneral();
-                            const len = self.cursor.pos - start;
-                            self.output.pushToken(.MalformedUnicodeIdent, start, len);
-                        },
-                    }
+                0x80...0xff => {
+                    _ = self.cursor.chompIdentGeneral();
+                    const len = self.cursor.pos - start;
+                    self.output.pushToken(.MalformedUnicodeIdent, start, len);
                 },
 
                 // TODO: emit a MalformedOpToken for invalid combinations of operator-like characters
@@ -1290,9 +1211,9 @@ pub const Tokenizer = struct {
     }
 };
 
-fn testTokenization(allocator: std.mem.Allocator, gc: *GenCatData, input: []const u8, expected: []const Token.Tag) !void {
+fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
-    var tokenizer = Tokenizer.init(input, &messages, gc, allocator);
+    var tokenizer = Tokenizer.init(input, &messages, allocator);
     defer tokenizer.deinit();
 
     tokenizer.tokenize();
@@ -1310,20 +1231,18 @@ fn testTokenization(allocator: std.mem.Allocator, gc: *GenCatData, input: []cons
 
 test "tokenizer" {
     const gpa = std.testing.allocator;
-    var gc = try GenCatData.init(gpa);
-    defer gc.deinit();
-    try testTokenization(gpa, &gc, "42", &[_]Token.Tag{.Int});
-    try testTokenization(gpa, &gc, "3.14", &[_]Token.Tag{.Float});
-    try testTokenization(gpa, &gc, ".", &[_]Token.Tag{.Dot});
-    try testTokenization(gpa, &gc, "..", &[_]Token.Tag{.DoubleDot});
-    try testTokenization(gpa, &gc, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
-    try testTokenization(gpa, &gc, "...", &[_]Token.Tag{.TripleDot});
-    try testTokenization(gpa, &gc, "-", &[_]Token.Tag{.OpUnaryMinus});
-    try testTokenization(gpa, &gc, "-42", &[_]Token.Tag{.Int});
-    try testTokenization(gpa, &gc, "1e10", &[_]Token.Tag{.Float});
-    try testTokenization(gpa, &gc, "_ident", &[_]Token.Tag{.NamedUnderscore});
-    try testTokenization(gpa, &gc, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
-    try testTokenization(gpa, &gc, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
-    try testTokenization(gpa, &gc, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
-    try testTokenization(gpa, &gc, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
+    try testTokenization(gpa, "42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "3.14", &[_]Token.Tag{.Float});
+    try testTokenization(gpa, ".", &[_]Token.Tag{.Dot});
+    try testTokenization(gpa, "..", &[_]Token.Tag{.DoubleDot});
+    try testTokenization(gpa, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
+    try testTokenization(gpa, "...", &[_]Token.Tag{.TripleDot});
+    try testTokenization(gpa, "-", &[_]Token.Tag{.OpUnaryMinus});
+    try testTokenization(gpa, "-42", &[_]Token.Tag{.Int});
+    try testTokenization(gpa, "1e10", &[_]Token.Tag{.Float});
+    try testTokenization(gpa, "_ident", &[_]Token.Tag{.NamedUnderscore});
+    try testTokenization(gpa, "1..2", &[_]Token.Tag{ .Int, .DoubleDot, .Int });
+    try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
+    try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
+    try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
 }
