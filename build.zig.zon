@@ -3,10 +3,6 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.13.0",
     .dependencies = .{
-        .zg = .{
-            .url = "https://codeberg.org/dude_the_builder/zg/archive/v0.13.2.tar.gz",
-            .hash = "122055beff332830a391e9895c044d33b15ea21063779557024b46169fb1984c6e40",
-        },
         .@"zig-afl-kit" = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit#21d80a52213a469c6921e4ff890d4b0129c9aeb0",
             .hash = "1220ca5642b07f784121cd268e2b57eb5d103b24f217cedf5b1dfe8fd4ecda079139",
