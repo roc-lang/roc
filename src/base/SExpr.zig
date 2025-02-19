@@ -23,7 +23,7 @@ pub const ParseError = error{
     UnmatchedOpenParen,
     UnmatchedCloseParen,
     EmptyInput,
-    InvalidToken,
+    InvalidIdentifier,
     ExpectedIdentifier,
     UnexpectedToken,
 };
@@ -39,13 +39,13 @@ pub fn Parser(comptime T: type, comptime V: type) type {
 
         const Self = @This();
 
-        /// Provided functions for parsing identifiers and values from bytes.
+        /// Functions used to parse identifiers and values.
         pub const ParseFns = struct {
             parseIdent: *const fn ([]const u8) ?T,
             parseValue: *const fn ([]const u8) ?V,
         };
 
-        /// Initializes a new parser instance.
+        /// Initializes a new parser.
         pub fn init(allocator: Allocator, input: []const u8, parse_fns: ParseFns) Self {
             return .{
                 .allocator = allocator,
@@ -133,7 +133,7 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                     if (self.parse_fns.parseIdent(ident_str)) |ident| {
                         try self.tokens.append(.{ .ident = ident });
                     } else {
-                        return ParseError.InvalidToken;
+                        return ParseError.InvalidIdentifier;
                     }
 
                     // Parse arguments
@@ -157,13 +157,13 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                                 // Parse value
                                 const value_str = self.consumeUntilDelimiter();
                                 if (value_str.len == 0) {
-                                    return ParseError.InvalidToken;
+                                    return ParseError.InvalidIdentifier;
                                 }
 
                                 if (self.parse_fns.parseValue(value_str)) |value| {
                                     try self.tokens.append(.{ .value = value });
                                 } else {
-                                    return ParseError.InvalidToken;
+                                    return ParseError.InvalidIdentifier;
                                 }
                             }
                         } else {
@@ -198,7 +198,7 @@ pub fn Parser(comptime T: type, comptime V: type) type {
                 if (self.input[self.pos] == ')') {
                     return ParseError.UnmatchedCloseParen;
                 }
-                return ParseError.InvalidToken;
+                return ParseError.InvalidIdentifier;
             }
 
             return self.tokens.toOwnedSlice();
@@ -292,6 +292,8 @@ const TestContext = struct {
 var test_context: TestContext = undefined;
 
 const TestTypes = struct {
+
+    // Example "IR" that we want to represent using S-Expressions
     pub const Ident = enum {
         plus,
         minus,
@@ -380,7 +382,6 @@ const TestTypes = struct {
 
 test "parsing - basic cases" {
     const allocator = testing.allocator;
-    const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
@@ -389,14 +390,14 @@ test "parsing - basic cases" {
     const TestCase = struct {
         input: []const u8,
         expected: []const u8,
-        tokens: []const Token(T.Ident, T.Value),
+        tokens: []const Token(TestTypes.Ident, TestTypes.Value),
     };
 
     const test_cases = [_]TestCase{
         .{
             .input = "(+ 1 2)",
             .expected = "(+ 1 2)",
-            .tokens = &[_]Token(T.Ident, T.Value){
+            .tokens = &[_]Token(TestTypes.Ident, TestTypes.Value){
                 .lparen,
                 .{ .ident = .plus },
                 .{ .value = 1 },
@@ -407,7 +408,7 @@ test "parsing - basic cases" {
         .{
             .input = "(  +    1     2   )",
             .expected = "(+ 1 2)",
-            .tokens = &[_]Token(T.Ident, T.Value){
+            .tokens = &[_]Token(TestTypes.Ident, TestTypes.Value){
                 .lparen,
                 .{ .ident = .plus },
                 .{ .value = 1 },
@@ -418,7 +419,7 @@ test "parsing - basic cases" {
         .{
             .input = "(+(- 1 2)3)",
             .expected = "(+ (- 1 2) 3)",
-            .tokens = &[_]Token(T.Ident, T.Value){
+            .tokens = &[_]Token(TestTypes.Ident, TestTypes.Value){
                 .lparen,
                 .{ .ident = .plus },
                 .lparen,
@@ -433,18 +434,18 @@ test "parsing - basic cases" {
     };
 
     for (test_cases) |case| {
-        var parser = Parser(T.Ident, T.Value).init(allocator, case.input, T.parse_fns);
+        var parser = Parser(TestTypes.Ident, TestTypes.Value).init(allocator, case.input, TestTypes.parse_fns);
         defer parser.deinit();
 
         const tokens = try parser.parse();
         defer allocator.free(tokens);
 
-        try testing.expectEqualSlices(Token(T.Ident, T.Value), case.tokens, tokens);
+        try testing.expectEqualSlices(Token(TestTypes.Ident, TestTypes.Value), case.tokens, tokens);
 
-        const output = try Generator(T.Ident, T.Value).generate(
+        const output = try Generator(TestTypes.Ident, TestTypes.Value).generate(
             allocator,
             tokens,
-            T.generate_fns,
+            TestTypes.generate_fns,
         );
         defer allocator.free(output);
 
@@ -454,29 +455,32 @@ test "parsing - basic cases" {
 
 test "parsing - nested expressions" {
     const allocator = testing.allocator;
-    const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
 
     // Simple nested expression
-    try T.parseAndVerify(allocator, "(+ 1 (* 2 3))", &[_]Token(T.Ident, T.Value){
-        .lparen,
-        .{ .ident = .plus },
-        .{ .value = 1 },
-        .lparen,
-        .{ .ident = .multiply },
-        .{ .value = 2 },
-        .{ .value = 3 },
-        .rparen,
-        .rparen,
-    });
+    try TestTypes.parseAndVerify(
+        allocator,
+        "(+ 1 (* 2 3))",
+        &[_]Token(TestTypes.Ident, TestTypes.Value){
+            .lparen,
+            .{ .ident = .plus },
+            .{ .value = 1 },
+            .lparen,
+            .{ .ident = .multiply },
+            .{ .value = 2 },
+            .{ .value = 3 },
+            .rparen,
+            .rparen,
+        },
+    );
 
     // Multiple nested expressions
-    try T.parseAndVerify(
+    try TestTypes.parseAndVerify(
         allocator,
         "(+ (* 2 3) (/ 10 (- 5 2)))",
-        &[_]Token(T.Ident, T.Value){
+        &[_]Token(TestTypes.Ident, TestTypes.Value){
             .lparen,
             .{ .ident = .plus },
             .lparen,
@@ -498,10 +502,10 @@ test "parsing - nested expressions" {
     );
 
     // Deeply nested expression
-    try T.parseAndVerify(
+    try TestTypes.parseAndVerify(
         allocator,
         "(+ 1 (- 2 (* 3 (/ 4 5))))",
-        &[_]Token(T.Ident, T.Value){
+        &[_]Token(TestTypes.Ident, TestTypes.Value){
             .lparen,
             .{ .ident = .plus },
             .{ .value = 1 },
@@ -525,7 +529,6 @@ test "parsing - nested expressions" {
 
 test "parsing - error cases" {
     const allocator = testing.allocator;
-    const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
@@ -575,17 +578,17 @@ test "parsing - error cases" {
         // Invalid token cases
         .{
             .input = "($ 1 2)",
-            .expected_error = ParseError.InvalidToken,
+            .expected_error = ParseError.InvalidIdentifier,
             .description = "invalid operator",
         },
         .{
             .input = "(+ a 2)",
-            .expected_error = ParseError.InvalidToken,
+            .expected_error = ParseError.InvalidIdentifier,
             .description = "invalid first argument",
         },
         .{
             .input = "(+ 1 b)",
-            .expected_error = ParseError.InvalidToken,
+            .expected_error = ParseError.InvalidIdentifier,
             .description = "invalid second argument",
         },
 
@@ -615,7 +618,7 @@ test "parsing - error cases" {
     };
 
     for (error_cases) |case| {
-        var parser = Parser(T.Ident, T.Value).init(allocator, case.input, T.parse_fns);
+        var parser = Parser(TestTypes.Ident, TestTypes.Value).init(allocator, case.input, TestTypes.parse_fns);
         defer parser.deinit();
 
         const result = parser.parse();
@@ -636,7 +639,6 @@ test "parsing - error cases" {
 
 test "generation - formatting" {
     const allocator = testing.allocator;
-    const T = TestTypes;
 
     test_context = TestContext.init(allocator);
     defer test_context.deinit();
@@ -651,16 +653,16 @@ test "generation - formatting" {
     };
 
     for (format_cases) |input| {
-        var parser = Parser(T.Ident, T.Value).init(allocator, input, T.parse_fns);
+        var parser = Parser(TestTypes.Ident, TestTypes.Value).init(allocator, input, TestTypes.parse_fns);
         defer parser.deinit();
 
         const tokens = try parser.parse();
         defer allocator.free(tokens);
 
-        const output = try Generator(T.Ident, T.Value).generate(
+        const output = try Generator(TestTypes.Ident, TestTypes.Value).generate(
             allocator,
             tokens,
-            T.generate_fns,
+            TestTypes.generate_fns,
         );
         defer allocator.free(output);
 
