@@ -93,6 +93,7 @@ pub const Token = struct {
         OpLessThan,
         OpEquals,
         OpColonEqual,
+        NoSpaceOpQuestion,
 
         Comma,
         Dot,
@@ -846,7 +847,7 @@ pub const Tokenizer = struct {
                 // Question mark (?)
                 '?' => {
                     self.cursor.pos += 1;
-                    self.output.pushToken(.OpQuestion, start, 1);
+                    self.output.pushToken(if (sp) .OpQuestion else .NoSpaceOpQuestion, start, 1);
                 },
 
                 // Pipe (|)
