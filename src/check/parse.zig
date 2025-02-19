@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const base = @import("../base.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
@@ -16,10 +17,10 @@ errors: []const Diagnostic,
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(allocator: std.mem.Allocator, source: []const u8) IR {
+pub fn parse(env: *base.ModuleEnv, allocator: std.mem.Allocator, source: []const u8) IR {
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = tokenize.Tokenizer.init(source, msg_slice, allocator);
+    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice, allocator);
     tokenizer.tokenize();
     const result = tokenizer.finish_and_deinit();
 

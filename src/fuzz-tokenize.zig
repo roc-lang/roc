@@ -10,6 +10,7 @@
 /// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
+const base = @import("./base.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
 pub export fn zig_fuzz_init() void {}
@@ -29,9 +30,12 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     var buf_slice = buf[0..@intCast(len)];
 
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
     // Initial tokenization.
     var messages: [32]tokenize.Diagnostic = undefined;
-    var tokenizer = tokenize.Tokenizer.init(buf_slice, &messages, gpa);
+    var tokenizer = tokenize.Tokenizer.init(&env, buf_slice, &messages, gpa);
     tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
     defer output.tokens.deinit();
@@ -51,7 +55,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         return;
     }
 
-    const buf2 = rebuild_buffer(buf_slice, &output.tokens.tokens, gpa) catch |err| switch (err) {
+    const buf2 = rebuild_buffer(buf_slice, &output.tokens, gpa) catch |err| switch (err) {
         error.Unsupported => return,
         error.OutOfMemory => std.debug.panic("OOM", .{}),
     };
@@ -63,7 +67,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 
     // Second tokenization.
-    tokenizer = tokenize.Tokenizer.init(buf2.items, &messages, gpa);
+    tokenizer = tokenize.Tokenizer.init(&env, buf2.items, &messages, gpa);
     tokenizer.tokenize();
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();
@@ -85,9 +89,13 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         }
         const token = output.tokens.tokens.get(token_index);
         const token2 = output2.tokens.tokens.get(token_index);
+        const region1 = output.tokens.resolve(@intCast(token_index));
+        const region2 = output2.tokens.resolve(@intCast(token_index));
+        const length1 = region1.end.offset - region1.start.offset;
+        const length2 = region2.end.offset - region2.start.offset;
         same = same and (token.tag == token2.tag);
         same = same and (token.offset == token2.offset);
-        same = same and (token.length == token2.length);
+        same = same and (length1 == length2);
     }
 
     if (!same) {
@@ -96,7 +104,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         while (prefix_len < output.tokens.tokens.len and prefix_len < output2.tokens.tokens.len) : (prefix_len += 1) {
             const token = output.tokens.tokens.get(prefix_len);
             const token2 = output2.tokens.tokens.get(prefix_len);
-            if (!std.meta.eql(token, token2)) {
+            if (token.tag != token2.tag or token.offset != token2.offset) {
                 break;
             }
         }
@@ -104,19 +112,21 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
         while (suffix_len < output.tokens.tokens.len - prefix_len and suffix_len < output2.tokens.tokens.len - prefix_len) : (suffix_len += 1) {
             const token = output.tokens.tokens.get(output.tokens.tokens.len - suffix_len - 1);
             const token2 = output2.tokens.tokens.get(output2.tokens.tokens.len - suffix_len - 1);
-            if (!std.meta.eql(token, token2)) {
+            if (token.tag != token2.tag or token.offset != token2.offset) {
                 break;
             }
         }
 
         std.debug.print("...\n", .{});
         for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output.tokens.resolve(@intCast(token_index));
             const token = output.tokens.tokens.get(token_index);
-            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, buf_slice[token.offset..][0..token.length] });
+            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, buf_slice[token.offset..region.end.offset] });
         }
         for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output.tokens.resolve(@intCast(token_index));
             const token = output2.tokens.tokens.get(token_index);
-            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[token.offset..][0..token.length] });
+            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[token.offset..region.end.offset] });
         }
         std.debug.print("...\n", .{});
 
@@ -124,7 +134,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     }
 }
 
-fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.Allocator) !std.ArrayList(u8) {
+fn rebuild_buffer(buf: []const u8, tokens: *tokenize.TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayList(u8) {
     // Create an arraylist to store the new buffer.
     var buf2 = try std.ArrayList(u8).initCapacity(alloc, buf.len);
     errdefer buf2.deinit();
@@ -132,8 +142,8 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
     // Dump back to buffer.
     // Here we are just printing in the simplest way possible.
     var last_end: usize = 0;
-    for (0..tokens.len) |token_index| {
-        const token = tokens.get(token_index);
+    for (0..tokens.tokens.len) |token_index| {
+        const token = tokens.tokens.get(token_index);
         // EndOfFile and NewLine are special, handle them early.
         // Unlike other tokens they do not store a correct offset and length
         // EndOfFile consumes the entire file. Newline stores the indentation level of the next line.
@@ -156,65 +166,71 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
         if (token.tag == .EndOfFile) {
             break;
         }
-        last_end = token.offset + token.length;
+        const region = tokens.resolve(@intCast(token_index));
+        std.debug.assert(region.start.offset == token.offset);
+        std.debug.assert(region.end.offset >= region.start.offset);
+        std.debug.assert(region.end.offset <= buf.len);
+        std.debug.assert(region.start.offset >= last_end);
+        last_end = region.end.offset;
+        const length = region.end.offset - region.start.offset;
         switch (token.tag) {
             .EndOfFile, .Newline => unreachable,
 
             .Float => {
                 try buf2.append('0');
                 try buf2.append('.');
-                for (2..token.length) |_| {
+                for (2..length) |_| {
                     try buf2.append('1');
                 }
             },
             .String => {
                 try buf2.append('"');
-                for (1..token.length - 1) |_| {
+                for (1..length - 1) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('"');
             },
             .SingleQuote => {
                 try buf2.append('\'');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('\'');
             },
             .StringBegin => {
                 try buf2.append('"');
-                for (1..token.length - 1) |_| {
+                for (1..length - 1) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('$');
             },
             .StringPart => {
-                for (0..token.length - 1) |_| {
+                for (0..length - 1) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('$');
             },
             .StringEnd => {
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('"');
             },
             .SingleQuoteBegin => {
                 try buf2.append('\'');
-                for (1..token.length - 1) |_| {
+                for (1..length - 1) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('$');
             },
             .SingleQuotePart => {
-                for (0..token.length - 1) |_| {
+                for (0..length - 1) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('$');
             },
             .SingleQuoteEnd => {
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('~');
                 }
                 try buf2.append('\'');
@@ -222,54 +238,54 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
 
             .UpperIdent => {
                 try buf2.append('Z');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('z');
                 }
             },
             .LowerIdent => {
-                for (0..token.length) |_| {
+                for (0..length) |_| {
                     try buf2.append('z');
                 }
             },
             .Underscore => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('_');
             },
             .DotInt => {
                 try buf2.append('.');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('1');
                 }
             },
             .DotLowerIdent => {
                 try buf2.append('.');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('z');
                 }
             },
             .DotUpperIdent => {
                 try buf2.append('.');
                 try buf2.append('Z');
-                for (2..token.length) |_| {
+                for (2..length) |_| {
                     try buf2.append('z');
                 }
             },
             .NoSpaceDotInt => {
                 try buf2.append('.');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('1');
                 }
             },
             .NoSpaceDotLowerIdent => {
                 try buf2.append('.');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('z');
                 }
             },
             .NoSpaceDotUpperIdent => {
                 try buf2.append('.');
                 try buf2.append('Z');
-                for (2..token.length) |_| {
+                for (2..length) |_| {
                     try buf2.append('z');
                 }
             },
@@ -279,184 +295,184 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
 
             .NamedUnderscore => {
                 try buf2.append('_');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('z');
                 }
             },
             .OpaqueName => {
                 try buf2.append('@');
-                for (1..token.length) |_| {
+                for (1..length) |_| {
                     try buf2.append('z');
                 }
             },
             .Int => {
-                for (0..token.length) |_| {
+                for (0..length) |_| {
                     try buf2.append('1');
                 }
             },
 
             .OpenRound => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('(');
             },
             .CloseRound => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append(')');
             },
             .OpenSquare => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('[');
             },
             .CloseSquare => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append(']');
             },
             .OpenCurly => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('{');
             },
             .CloseCurly => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('}');
             },
 
             .OpPlus => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('+');
             },
             .OpStar => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('*');
             },
             .OpPizza => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('|');
                 try buf2.append('>');
             },
             .OpAssign => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('=');
             },
             .OpBinaryMinus => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('-');
             },
             .OpUnaryMinus => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('-');
             },
             .OpNotEquals => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('!');
                 try buf2.append('=');
             },
             .OpBang => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('!');
             },
             .OpAnd => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('&');
                 try buf2.append('&');
             },
             .OpAmpersand => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('&');
             },
             .OpQuestion, .NoSpaceOpQuestion => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('?');
             },
             .OpOr => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('|');
                 try buf2.append('|');
             },
             .OpBar => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('|');
             },
             .OpDoubleSlash => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('/');
                 try buf2.append('/');
             },
             .OpSlash => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('/');
             },
             .OpPercent => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('%');
             },
             .OpCaret => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('^');
             },
             .OpGreaterThanOrEq => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('>');
                 try buf2.append('=');
             },
             .OpGreaterThan => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('>');
             },
             .OpLessThanOrEq => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('<');
                 try buf2.append('=');
             },
             .OpBackArrow => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('<');
                 try buf2.append('-');
             },
             .OpLessThan => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('<');
             },
             .OpEquals => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('=');
                 try buf2.append('=');
             },
             .OpColonEqual => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append(':');
                 try buf2.append('=');
             },
 
             .Comma => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append(',');
             },
             .Dot => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('.');
             },
             .DoubleDot => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('.');
                 try buf2.append('.');
             },
             .TripleDot => {
-                std.debug.assert(token.length == 3);
+                std.debug.assert(length == 3);
                 try buf2.append('.');
                 try buf2.append('.');
                 try buf2.append('.');
             },
             .OpColon => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append(':');
             },
             .OpArrow => {
-                std.debug.assert(token.length == 2);
+                std.debug.assert(length == 2);
                 try buf2.append('-');
                 try buf2.append('>');
             },
             .OpBackslash => {
-                std.debug.assert(token.length == 1);
+                std.debug.assert(length == 1);
                 try buf2.append('\\');
             },
 

@@ -5,6 +5,7 @@ const tokenizer = @import("check/parse/tokenize.zig");
 const TokenizedBuffer = tokenizer.TokenizedBuffer;
 const TokenIdx = tokenizer.Token.Idx;
 const exitOnOom = @import("./collections/utils.zig").exitOnOom;
+const base = @import("base.zig");
 
 const NodeStore = IR.NodeStore;
 const FileIdx = NodeStore.FileIdx;
@@ -301,21 +302,25 @@ fn pushIndent(fmt: *Formatter) void {
 }
 
 fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
-    const t = fmt.ast.tokens.tokens.get(ti);
-    var start = t.offset;
-    switch (t.tag) {
+    const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
+    const region = fmt.ast.tokens.resolve(ti);
+    var start = region.start.offset;
+    switch (tag) {
         .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
             start += 1;
         },
         else => {},
     }
-    const text = fmt.ast.source[start..(t.offset + t.length)];
+
+    const text = fmt.ast.source[start..region.end.offset];
     fmt.buffer.appendSlice(text) catch exitOnOom();
 }
 
 fn moduleFmtsSame(source: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var test_ast = parse(std.testing.allocator, source);
+    var env = base.ModuleEnv.init(std.testing.allocator);
+    defer env.deinit();
+    var test_ast = parse(&env, std.testing.allocator, source);
     defer test_ast.deinit();
     defer std.testing.allocator.free(test_ast.errors);
     try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
@@ -328,7 +333,9 @@ fn moduleFmtsSame(source: []const u8) !void {
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var test_ast = parse(std.testing.allocator, source);
+    var env = base.ModuleEnv.init(std.testing.allocator);
+    defer env.deinit();
+    var test_ast = parse(&env, std.testing.allocator, source);
     defer test_ast.deinit();
     defer std.testing.allocator.free(test_ast.errors);
     try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
