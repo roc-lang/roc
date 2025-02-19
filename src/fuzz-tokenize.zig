@@ -363,7 +363,7 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.Token.List, alloc: std.mem.
                 std.debug.assert(token.length == 1);
                 try buf2.append('&');
             },
-            .OpQuestion => {
+            .OpQuestion, .NoSpaceOpQuestion => {
                 std.debug.assert(token.length == 1);
                 try buf2.append('?');
             },
