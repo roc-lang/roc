@@ -61,4 +61,3 @@ pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Id
     self.modules.addExposedIdent(module, ident, &self.problems);
     self.idents.setExposingModule(ident, module);
 }
-
