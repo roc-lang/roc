@@ -1,4 +1,4 @@
-//! The common state or environment for a module.
+//! The common state or environment for a module for things that live for the duration of the compilation.
 //!
 //! Stores all interned data like symbols, strings, tag names, field names, and problems.
 //!
@@ -13,12 +13,12 @@ const Module = @import("./Module.zig");
 const TagName = @import("./TagName.zig");
 const FieldName = @import("./FieldName.zig");
 const StringLiteral = @import("./StringLiteral.zig");
+const Type = @import("../types/type.zig").Type;
 
 const Problem = problem.Problem;
 
 const Self = @This();
 
-/// This siloed module's view of other modules based only on import statements.
 idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 modules: Module.Store,
@@ -27,7 +27,7 @@ tag_name_ids_for_slicing: collections.SafeList(TagName.Idx),
 field_names: FieldName.Store,
 strings: StringLiteral.Store,
 problems: std.ArrayList(Problem),
-next_type_id: TypeId,
+type_store: Type.Store,
 
 pub fn init(allocator: std.mem.Allocator) Self {
     var ident_store = Ident.Store.init(allocator);
@@ -41,7 +41,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .field_names = FieldName.Store.init(allocator),
         .strings = StringLiteral.Store.init(allocator),
         .problems = std.ArrayList(Problem).init(allocator),
-        .next_type_id = @enumFromInt(0),
+        .type_store = Type.Store.init(allocator),
     };
 }
 
@@ -54,6 +54,7 @@ pub fn deinit(self: *Self) void {
     self.field_names.deinit();
     self.strings.deinit();
     self.problems.deinit();
+    self.type_store.deinit();
 }
 
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {
@@ -61,32 +62,3 @@ pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Id
     self.idents.setExposingModule(ident, module);
 }
 
-/// Generate a new type ID.
-pub fn newTypeId(self: *Self) TypeId {
-    const id = self.next_type_id;
-    self.next_type_id = self.next_type_id.next();
-    return id;
-}
-
-pub const TypeId = enum(u32) {
-    string = 0,
-    // Add builtins here
-    first_user_space = 1,
-
-    fn index(self: TypeId) u32 {
-        return @intFromEnum(self);
-    }
-
-    fn next(self: TypeId) TypeId {
-        return @enumFromInt(self.index() + 1);
-    }
-
-    pub fn format(self: TypeId, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
-
-        try writer.writeAll("TypeId(");
-        try std.fmt.format(writer, "{any}", .{self.index()});
-        try writer.writeAll(")");
-    }
-};

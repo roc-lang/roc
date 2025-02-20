@@ -9,6 +9,7 @@ const TagName = base.TagName;
 pub const Problem = union(enum) {
     Parse: Parse,
     Canonicalize: Canonicalize,
+    TypeCheck: TypeCheck,
     Compiler: Compiler,
 
     pub const Parse = union(enum) {
@@ -50,6 +51,12 @@ pub const Problem = union(enum) {
         pub fn make(problem: Canonicalize) Problem {
             return Problem{ .Canonicalize = problem };
         }
+    };
+
+    pub const TypeCheck = union(enum) {
+        OccursCheck,
+        TypeMismatch,
+        OutOfMemory,
     };
 
     pub const Compiler = union(enum) {
