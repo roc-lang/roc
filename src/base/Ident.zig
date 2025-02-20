@@ -7,26 +7,19 @@ const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
 const ModuleImport = @import("ModuleImport.zig");
 
-const Problem = problem.Problem;
-const ParseRegion = base.ParseRegion;
 const SmallStringInterner = collections.SmallStringInterner;
 const exitOnOom = utils.exitOnOom;
 
 const Ident = @This();
 
 /// The original text of the identifier.
-raw_text: []u8,
+raw_text: []const u8,
 
 /// Attributes of the identifier such as if it is effectful, ignored, or reassignable.
 attributes: Attributes,
 
-/// Problems with the identifier
-/// e.g. if it has two underscores in a row
-/// or if it starts with a lowercase then it shouldn't be `lowerCamelCase`, it must be `snake_case`
-problems: Problems,
-
 /// Create a new identifier from a string.
-pub fn for_text(text: []u8) Ident {
+pub fn for_text(text: []const u8) Ident {
     // TODO: parse idents and their attributes/problems
     return Ident{
         .raw_text = text,
@@ -35,7 +28,6 @@ pub fn for_text(text: []u8) Ident {
             .ignored = false,
             .reassignable = false,
         },
-        .problems = Problems{ .subsequent_underscores = false },
     };
 }
 
@@ -52,17 +44,6 @@ pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
     reassignable: bool,
-};
-
-// for example we detect two underscores in a row during parsing... we can make a problem and report
-// it to the user later as a warning, but still allow the program to run
-pub const Problems = packed struct {
-    // TODO: add more problem cases
-    subsequent_underscores: bool,
-
-    pub fn has_problems(self: Problems) bool {
-        return self.subsequent_underscores;
-    }
 };
 
 /// An interner for identifier names.
@@ -89,14 +70,7 @@ pub const Store = struct {
         self.exposing_modules.deinit();
     }
 
-    pub fn insert(self: *Store, ident: Ident, region: ParseRegion, problems: *std.ArrayList(Problem)) Idx {
-        if (ident.problems.has_problems()) {
-            problems.append(Problem.Parse.make(.{ .IdentIssue = .{
-                .problems = ident.problems,
-                .region = region,
-            } })) catch exitOnOom();
-        }
-
+    pub fn insert(self: *Store, ident: Ident, region: Region) Idx {
         const idx = self.interner.insert(ident.raw_text, region);
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 

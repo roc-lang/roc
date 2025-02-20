@@ -44,25 +44,29 @@ pub fn init(allocator: std.mem.Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
-    // var string_indices_iter = self.string_indices_per_hash.valueIterator();
-    // while (string_indices_iter.next()) |index_list| {
-    //     index_list.deinit();
-    // }
+    var string_indices_iter = self.string_indices_per_hash.valueIterator();
+    while (string_indices_iter.next()) |index_list| {
+        index_list.deinit();
+    }
 
-    // var outer_ids_iter = self.outer_ids_per_string_index.valueIterator();
-    // while (outer_ids_iter.next()) |outer_id_list| {
-    //     outer_id_list.deinit();
-    // }
+    var outer_ids_iter = self.outer_ids_per_string_index.valueIterator();
+    while (outer_ids_iter.next()) |outer_id_list| {
+        outer_id_list.deinit();
+    }
 
-    // self.strings.deinit();
-    // self.string_indices_per_hash.deinit();
+    for (self.strings.items) |string| {
+        self.strings.allocator.free(string);
+    }
+
+    self.strings.deinit();
+    self.string_indices_per_hash.deinit();
     self.outer_ids_per_string_index.deinit();
     self.outer_indices.deinit();
     self.regions.deinit();
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *Self, string: []u8, region: ParseRegion) Idx {
+pub fn insert(self: *Self, string: []const u8, region: Region) Idx {
     const hash = fnvStringHash(string);
 
     const string_indices = self.stringIndicesForHash(hash);
