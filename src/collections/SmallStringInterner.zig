@@ -7,8 +7,10 @@
 //! arrays with values corresponding 1-to-1 to interned values, e.g. regions.
 
 const std = @import("std");
+const base = @import("../base.zig");
 const utils = @import("./utils.zig");
-const Region = @import("../base/Region.zig");
+
+const ParseRegion = base.ParseRegion;
 
 const exitOnOom = utils.exitOnOom;
 const fnvStringHash = utils.fnvStringHash;
@@ -24,7 +26,7 @@ outer_ids_per_string_index: std.AutoHashMap(u32, std.ArrayList(Idx)),
 /// A unique ID for every string, which may or may not correspond
 /// to the same underlying string
 outer_indices: std.ArrayList(u32),
-regions: std.ArrayList(Region),
+regions: std.ArrayList(ParseRegion),
 allocator: std.mem.Allocator,
 
 /// A unique index for a deduped string in this interner.
@@ -36,7 +38,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .string_indices_per_hash = std.AutoHashMap(u32, std.ArrayList(u32)).init(allocator),
         .outer_ids_per_string_index = std.AutoHashMap(u32, std.ArrayList(Idx)).init(allocator),
         .outer_indices = std.ArrayList(u32).init(allocator),
-        .regions = std.ArrayList(Region).init(allocator),
+        .regions = std.ArrayList(ParseRegion).init(allocator),
         .allocator = allocator,
     };
 }
@@ -60,7 +62,7 @@ pub fn deinit(self: *Self) void {
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *Self, string: []u8, region: Region) Idx {
+pub fn insert(self: *Self, string: []u8, region: ParseRegion) Idx {
     const hash = fnvStringHash(string);
 
     const string_indices = self.stringIndicesForHash(hash);
@@ -89,7 +91,7 @@ fn stringIndicesForHash(self: *Self, hash: u32) *std.ArrayList(u32) {
     return res.value_ptr;
 }
 
-fn addOuterIdForStringIndex(self: *Self, string_index: u32, region: Region) Idx {
+fn addOuterIdForStringIndex(self: *Self, string_index: u32, region: ParseRegion) Idx {
     const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
     self.outer_indices.append(string_index) catch exitOnOom();
     self.regions.append(region) catch exitOnOom();
@@ -140,6 +142,6 @@ pub fn getText(self: *Self, idx: Idx) []u8 {
 }
 
 /// Get the region for an interned string.
-pub fn getRegion(self: *Self, idx: Idx) Region {
+pub fn getRegion(self: *Self, idx: Idx) ParseRegion {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
 }

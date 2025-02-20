@@ -1443,10 +1443,10 @@ pub const NodeStore = struct {
     };
 };
 
-pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
-    const range = self.tokens.resolve(token);
-    return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
-}
+// pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
+//     const range = self.tokens.resolve(token);
+//     return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
+// }
 
 pub const ImportLhs = packed struct { aliased: u1, qualified: u1, num_exposes: u30 };
 pub const BodyRhs = packed struct { has_whitespace: u1, num_statements: u31 };

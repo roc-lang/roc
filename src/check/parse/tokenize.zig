@@ -231,12 +231,12 @@ pub const TokenizedBuffer = struct {
         self.tokens.deinit(self.gpa);
     }
 
-    pub fn resolve(self: *TokenizedBuffer, token: Token.Idx) base.Region {
-        const start = self.tokens.items(.offset)[@intCast(token)];
-        const len = self.tokens.items(.length)[@intCast(token)];
-        const end = start + len;
-        return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
-    }
+    // pub fn resolve(self: *TokenizedBuffer, token: Token.Idx) base.Region {
+    //     const start = self.tokens.items(.offset)[@intCast(token)];
+    //     const len = self.tokens.items(.length)[@intCast(token)];
+    //     const end = start + len;
+    //     return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
+    // }
 
     /// Pushes a token with the given tag, token offset, and length.
     pub fn pushToken(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, tok_length: u32) void {

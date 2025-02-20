@@ -1,12 +1,25 @@
+const std = @import("std");
+const parse = @import("check/parse.zig");
+const module_work = @import("base/module_work.zig");
+
 pub const Ident = @import("base/Ident.zig");
-pub const Module = @import("base/Module.zig");
-pub const Region = @import("base/Region.zig");
 pub const Package = @import("base/Package.zig");
 pub const TagName = @import("base/TagName.zig");
 pub const FieldName = @import("base/FieldName.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
 pub const TypeVarName = @import("base/TypeVarName.zig");
+pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
+pub const ModuleWork = module_work.ModuleWork;
+pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
+
+pub const ParseRegion = struct {
+    node_idx: parse.IR.Node.Idx,
+
+    pub const empty = ParseRegion{
+        .node_idx = @enumFromInt(std.math.maxInt(u32)),
+    };
+};
 
 pub const Recursive = enum {
     NotRecursive,

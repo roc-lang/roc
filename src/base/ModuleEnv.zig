@@ -8,11 +8,11 @@ const std = @import("std");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
 
-const Ident = @import("./Ident.zig");
-const Module = @import("./Module.zig");
-const TagName = @import("./TagName.zig");
-const FieldName = @import("./FieldName.zig");
-const StringLiteral = @import("./StringLiteral.zig");
+const Ident = @import("Ident.zig");
+const TagName = @import("TagName.zig");
+const FieldName = @import("FieldName.zig");
+const ModuleImport = @import("ModuleImport.zig");
+const StringLiteral = @import("StringLiteral.zig");
 const Type = @import("../types/type.zig").Type;
 
 const Problem = problem.Problem;
@@ -21,7 +21,7 @@ const Self = @This();
 
 idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
-modules: Module.Store,
+module_imports: ModuleImport.Store,
 tag_names: TagName.Store,
 tag_name_ids_for_slicing: collections.SafeList(TagName.Idx),
 field_names: FieldName.Store,
@@ -35,7 +35,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
     return Self{
         .idents = ident_store,
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(allocator),
-        .modules = Module.Store.init(allocator, &ident_store),
+        .module_imports = ModuleImport.Store.init(allocator, &ident_store),
         .tag_names = TagName.Store.init(allocator),
         .tag_name_ids_for_slicing = collections.SafeList(TagName.Idx).init(allocator),
         .field_names = FieldName.Store.init(allocator),
@@ -48,7 +48,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.idents.deinit();
     self.ident_ids_for_slicing.deinit();
-    self.modules.deinit();
+    self.module_imports.deinit();
     self.tag_names.deinit();
     self.tag_name_ids_for_slicing.deinit();
     self.field_names.deinit();
@@ -57,7 +57,7 @@ pub fn deinit(self: *Self) void {
     self.type_store.deinit();
 }
 
-pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {
-    self.modules.addExposedIdent(module, ident, &self.problems);
-    self.idents.setExposingModule(ident, module);
+pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module_import: ModuleImport.Idx) void {
+    self.module_imports.addExposedIdent(module_import, ident, &self.problems);
+    self.idents.setExposingModule(ident, module_import);
 }

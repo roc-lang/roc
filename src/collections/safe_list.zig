@@ -84,6 +84,30 @@ pub fn SafeList(comptime T: type) type {
         pub fn set(self: *SafeList(T), id: Idx, value: T) void {
             self.items.items[@as(usize, @intFromEnum(id))] = value;
         }
+
+        pub const IndexIterator = struct {
+            len: usize,
+            current: usize,
+
+            pub fn next(iter: *IndexIterator) ?Idx {
+                if (iter.len == iter.current) {
+                    return null;
+                }
+
+                const curr = iter.current;
+                iter.current += 1;
+
+                const idx: u32 = @truncate(curr);
+                return @enumFromInt(idx);
+            }
+        };
+
+        pub fn iterIndices(self: *SafeList(T)) IndexIterator {
+            return IndexIterator{
+                .len = self.len(),
+                .current = 0,
+            };
+        }
     };
 }
 
