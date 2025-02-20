@@ -7,8 +7,8 @@ test {
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("problem.zig"));
     testing.refAllDeclsRecursive(@import("types.zig"));
+    testing.refAllDeclsRecursive(@import("types/type.zig"));
     testing.refAllDeclsRecursive(@import("types/num.zig"));
-    testing.refAllDeclsRecursive(@import("types/primitive.zig"));
     testing.refAllDeclsRecursive(@import("collections.zig"));
     testing.refAllDeclsRecursive(@import("collections/utils.zig"));
     testing.refAllDeclsRecursive(@import("collections/safe_list.zig"));
@@ -30,11 +30,12 @@ test {
     testing.refAllDeclsRecursive(@import("check/parse/IR.zig"));
     testing.refAllDeclsRecursive(@import("check/parse/tokenize.zig"));
     testing.refAllDeclsRecursive(@import("check/resolve_imports.zig"));
-    testing.refAllDeclsRecursive(@import("check/typecheck.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/Scope.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/Alias.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/IR.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_types.zig"));
     testing.refAllDeclsRecursive(@import("build/lift_functions.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_functions.zig"));
