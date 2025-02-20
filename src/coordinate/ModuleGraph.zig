@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 const base = @import("../base.zig");
 const utils = @import("../utils.zig");
 const cache = @import("../cache.zig");
@@ -251,4 +252,34 @@ fn sccRecurseIntoGraph(
     }
 }
 
-test {}
+test "ModuleGraph fromPackages constructs correctly" {
+    const module = base.Module{
+        .filepath_relative_to_package_root = "mock_module.roc",
+        .name = "MockModule",
+    };
+
+    var package = base.Package{
+        .absolute_dirpath = "mock_package",
+        .modules = std.ArrayList(base.Module).init(testing.allocator),
+        .dependencies = std.ArrayList(base.Dependency).init(testing.allocator),
+    };
+    defer package.deinit();
+
+    var package_store = base.Package.Store.init(testing.allocator);
+    defer package_store.deinit();
+
+    package.modules.append(module) catch Self.exitOnOom();
+
+    package_store.packages.append(package) catch Self.exitOnOom();
+
+    var graph = Self.fromPackages(package_store, testing.allocator);
+    defer graph.deinit();
+
+    // Verify that the graph has one module
+    try std.testing.expect(graph.modules.items.len == 1);
+
+    // Verify that the module's details are correct
+    const module_work = graph.modules.items[0];
+    try std.testing.expect(std.mem.eql(u8, module_work.package_root_absdir, "mock_package"));
+    try std.testing.expect(std.mem.eql(u8, module_work.filename_relative_to_root, "mock_module.roc"));
+}

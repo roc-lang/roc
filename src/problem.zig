@@ -3,8 +3,8 @@ const base = @import("base.zig");
 const collections = @import("collections.zig");
 
 const Ident = base.Ident;
+const Region = base.Region;
 const TagName = base.TagName;
-const ParseRegion = base.ParseRegion;
 
 pub const Problem = union(enum) {
     Canonicalize: Canonicalize,
@@ -12,7 +12,7 @@ pub const Problem = union(enum) {
 
     pub const Canonicalize = union(enum) {
         DuplicateImport: struct {
-            duplicate_import_region: ParseRegion,
+            duplicate_import_region: Region,
         },
         DuplicateExposes: struct {
             first_exposes: Ident.Idx,

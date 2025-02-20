@@ -1,14 +1,13 @@
 //! Stores attributes for an identifier like the raw_text, is it effectful, ignored, or reassignable.
 //! An example of an identifier is the name of a top-level function like `main!` or a variable like `x_`.
 const std = @import("std");
-const base = @import("../base.zig");
-const utils = @import("../collections/utils.zig");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
+const Region = @import("Region.zig");
 const ModuleImport = @import("ModuleImport.zig");
 
 const SmallStringInterner = collections.SmallStringInterner;
-const exitOnOom = utils.exitOnOom;
+const exitOnOom = collections.utils.exitOnOom;
 
 const Ident = @This();
 
@@ -101,7 +100,7 @@ pub const Store = struct {
         // const name_length = if (id < 10) 1 else ;
         const name = str_buffer[digit_index..];
 
-        const idx = self.interner.insert(name, ParseRegion.empty);
+        const idx = self.interner.insert(name, Region.zero());
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
         return Idx{
@@ -129,7 +128,7 @@ pub const Store = struct {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
-    pub fn getRegion(self: *Store, idx: Idx) ParseRegion {
+    pub fn getRegion(self: *Store, idx: Idx) Region {
         return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
     }
 

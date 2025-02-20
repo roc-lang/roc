@@ -240,6 +240,7 @@ pub const TokenizedBuffer = struct {
 
     pub fn resolve(self: *TokenizedBuffer, token: Token.Idx) base.Region {
         const tag = self.tokens.items(.tag)[@intCast(token)];
+        const start = self.tokens.items(.offset)[@intCast(token)];
         const extra = self.tokens.items(.extra)[@intCast(token)];
         switch (tag) {
             .LowerIdent,
@@ -253,13 +254,8 @@ pub const TokenizedBuffer = struct {
                 return self.env.idents.getRegion(extra.interned);
             },
             else => {
-                const start = self.tokens.items(.offset)[@intCast(token)];
-
                 const end = start + extra.length;
-                return .{
-                    .start = base.Region.Position{ .offset = start },
-                    .end = base.Region.Position{ .offset = end },
-                };
+                return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
             },
         }
     }

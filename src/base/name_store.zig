@@ -1,11 +1,11 @@
 //! An interner for names of entities in a module, e.g. idents, tag names, etc.
 const std = @import("std");
-const base = @import("../base.zig");
 const collections = @import("../collections.zig");
+
+const Region = @import("./Region.zig");
+const Module = @import("./Module.zig");
 const SmallStringInterner = @import("../collections/SmallStringInterner.zig");
 
-const ParseRegion = base.ParseRegion;
-const ModuleImport = base.ModuleImport;
 const exitOnOom = collections.utils.exitOnOom;
 
 pub fn NameStore(comptime Idx: type) type {
@@ -26,7 +26,7 @@ pub fn NameStore(comptime Idx: type) type {
             self.interner.deinit();
         }
 
-        pub fn insert(self: *NameStore(Idx), name: []u8, region: ParseRegion) Idx {
+        pub fn insert(self: *NameStore(Idx), name: []u8, region: Region) Idx {
             const idx = self.interner.insert(name, region);
 
             return @enumFromInt(@intFromEnum(idx));
@@ -52,7 +52,7 @@ pub fn NameStore(comptime Idx: type) type {
 
             const name = str_buffer[digit_index..];
 
-            const idx = self.interner.insert(name, ParseRegion.empty);
+            const idx = self.interner.insert(name, Region.zero());
 
             return @enumFromInt(@intFromEnum(idx));
         }
@@ -72,7 +72,7 @@ pub fn NameStore(comptime Idx: type) type {
             return self.interner.getText(@enumFromInt(@intFromEnum(idx)));
         }
 
-        pub fn getRegion(self: *NameStore(Idx), idx: Idx) ParseRegion {
+        pub fn getRegion(self: *NameStore(Idx), idx: Idx) Region {
             return self.interner.getRegion(@enumFromInt(@intFromEnum(idx)));
         }
 

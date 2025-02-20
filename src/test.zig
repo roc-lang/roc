@@ -13,10 +13,12 @@ test {
     testing.refAllDeclsRecursive(@import("collections/utils.zig"));
     testing.refAllDeclsRecursive(@import("collections/safe_list.zig"));
     testing.refAllDeclsRecursive(@import("collections/SmallStringInterner.zig"));
+    testing.refAllDeclsRecursive(@import("coordinate/ModuleGraph.zig"));
     testing.refAllDeclsRecursive(@import("base.zig"));
     testing.refAllDeclsRecursive(@import("base/Ident.zig"));
     testing.refAllDeclsRecursive(@import("base/ModuleEnv.zig"));
     testing.refAllDeclsRecursive(@import("base/Package.zig"));
+    testing.refAllDeclsRecursive(@import("base/Region.zig"));
     testing.refAllDeclsRecursive(@import("base/TagName.zig"));
     testing.refAllDeclsRecursive(@import("base/FieldName.zig"));
     testing.refAllDeclsRecursive(@import("base/TypeVarName.zig"));
