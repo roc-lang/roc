@@ -83,8 +83,19 @@ pub const Type = union(enum) {
             .str => {
                 @panic("todo");
             },
-            .int => {
-                @panic("todo");
+            .int => |i| {
+                switch (i) {
+                    .u8 => try writer.writeAll("U8"),
+                    .i8 => try writer.writeAll("I8"),
+                    .u16 => try writer.writeAll("U16"),
+                    .i16 => try writer.writeAll("I16"),
+                    .u32 => try writer.writeAll("U32"),
+                    .i32 => try writer.writeAll("I32"),
+                    .u64 => try writer.writeAll("U64"),
+                    .i64 => try writer.writeAll("I64"),
+                    .u128 => try writer.writeAll("U128"),
+                    .i128 => try writer.writeAll("I128"),
+                }
             },
             .frac => {
                 @panic("todo");
@@ -173,12 +184,13 @@ test "formatting" {
     var store = Type.Store.init(std.testing.allocator);
     defer store.deinit();
 
-    var buffer = std.ArrayList(u8).init(std.testing.allocator);
-    defer buffer.deinit();
+    const bool_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.BOOL)});
+    defer testing.allocator.free(bool_str);
 
-    try store.get(Type.Store.BOOL).format("", .{}, &buffer.writer());
+    try testing.expectEqualStrings(bool_str, "Bool");
 
-    const formattedString = try buffer.toOwnedSlice();
-    defer std.testing.allocator.free(formattedString);
-    try testing.expectEqualStrings(formattedString, "Bool");
+    const i128_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.I128)});
+    defer testing.allocator.free(i128_str);
+
+    try testing.expectEqualStrings(i128_str, "I128");
 }
