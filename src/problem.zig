@@ -7,20 +7,8 @@ const Region = base.Region;
 const TagName = base.TagName;
 
 pub const Problem = union(enum) {
-    Parse: Parse,
     Canonicalize: Canonicalize,
     Compiler: Compiler,
-
-    pub const Parse = union(enum) {
-        IdentIssue: struct {
-            problems: Ident.Problems,
-            region: Region,
-        },
-
-        pub fn make(problem: Parse) Problem {
-            return Problem{ .Parse = problem };
-        }
-    };
 
     pub const Canonicalize = union(enum) {
         DuplicateImport: struct {
@@ -53,7 +41,6 @@ pub const Problem = union(enum) {
     };
 
     pub const Compiler = union(enum) {
-        Parse: Compiler.Parse,
         Canonicalize: Compiler.Canonicalize,
         ResolveImports: Compiler.ResolveImports,
         TypeCheck: Compiler.TypeCheck,
