@@ -32,11 +32,8 @@ pub fn build(b: *std.Build) void {
         b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
     }
 
-    // Zig unicode library - https://codeberg.org/atman/zg
-    const zg = b.dependency("zg", .{});
-
-    const install_exe = addMainExe(b, zg, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
-    const check_exe = addMainExe(b, zg, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
+    const install_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
+    const check_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
     check_step.dependOn(&check_exe.step);
 
     b.installArtifact(install_exe);
@@ -53,7 +50,6 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    all_tests.root_module.addImport("GenCatData", zg.module("GenCatData"));
     check_step.dependOn(&all_tests.step);
 
     const run_tests = b.addRunArtifact(all_tests);
@@ -95,7 +91,6 @@ pub fn build(b: *std.Build) void {
         for (names) |name| {
             add_fuzz_target(
                 b,
-                zg,
                 build_afl,
                 check_step,
                 target,
@@ -107,7 +102,6 @@ pub fn build(b: *std.Build) void {
 
 fn add_fuzz_target(
     b: *std.Build,
-    zg: *Dependency,
     build_afl: bool,
     check_step: *Step,
     target: ResolvedTarget,
@@ -120,7 +114,6 @@ fn add_fuzz_target(
         .target = target,
         .optimize = .ReleaseSafe,
     });
-    fuzz_obj.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     // TODO: Once 0.14.0 is released, uncomment this. Will make fuzzing work better.
     // fuzz_obj.root_module.fuzz = true;
@@ -162,7 +155,6 @@ fn add_fuzz_target(
 
 fn addMainExe(
     b: *std.Build,
-    zg: *Dependency,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     strip: ?bool,
@@ -178,7 +170,6 @@ fn addMainExe(
         .strip = strip,
         .link_libc = true,
     });
-    exe.root_module.addImport("GenCatData", zg.module("GenCatData"));
 
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
