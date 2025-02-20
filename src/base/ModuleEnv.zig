@@ -1,4 +1,4 @@
-//! The common state or environment for a module.
+//! The common state or environment for a module for things that live for the duration of the compilation.
 //!
 //! Stores all interned data like symbols, strings, tag names, field names, and problems.
 //!
@@ -13,12 +13,12 @@ const Module = @import("./Module.zig");
 const TagName = @import("./TagName.zig");
 const FieldName = @import("./FieldName.zig");
 const StringLiteral = @import("./StringLiteral.zig");
+const Type = @import("../types/type.zig").Type;
 
 const Problem = problem.Problem;
 
 const Self = @This();
 
-/// This siloed module's view of other modules based only on import statements.
 idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 modules: Module.Store,
@@ -27,6 +27,7 @@ tag_name_ids_for_slicing: collections.SafeList(TagName.Idx),
 field_names: FieldName.Store,
 strings: StringLiteral.Store,
 problems: std.ArrayList(Problem),
+type_store: Type.Store,
 
 pub fn init(allocator: std.mem.Allocator) Self {
     var ident_store = Ident.Store.init(allocator);
@@ -40,6 +41,7 @@ pub fn init(allocator: std.mem.Allocator) Self {
         .field_names = FieldName.Store.init(allocator),
         .strings = StringLiteral.Store.init(allocator),
         .problems = std.ArrayList(Problem).init(allocator),
+        .type_store = Type.Store.init(allocator),
     };
 }
 
@@ -52,6 +54,7 @@ pub fn deinit(self: *Self) void {
     self.field_names.deinit();
     self.strings.deinit();
     self.problems.deinit();
+    self.type_store.deinit();
 }
 
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {
