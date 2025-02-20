@@ -242,6 +242,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     }
     self.advance();
     while (self.peek() != .CloseCurly) {
+        const entry_start = self.pos;
         if (self.peek() != .LowerIdent) {
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .unexpected_token);
         }
@@ -274,6 +275,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
                 .name = name_tok,
                 .value = value,
                 .optional = false,
+                .region = .{ .start = entry_start, .end = self.pos },
             })) catch exitOnOom();
         }
         self.advance();
@@ -371,30 +373,219 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
     }
 }
 
-pub fn parsePattern(self: *Parser) IR.NodeStore.PatternIdx {
-    const start = self.pos;
-    var pattern: ?IR.NodeStore.PatternIdx = null;
-    switch (self.peek()) {
-        .LowerIdent => {
-            pattern = self.store.addPattern(.{ .ident = .{
-                .ident_tok = start,
-                .region = .{ .start = start, .end = self.pos },
-            } });
+/// Whether Pattern Alternatives are allowed in the current context
+const Alternatives = enum {
+    alternatives_allowed,
+    alternatives_forbidden,
+};
+
+pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternIdx {
+    const outer_start = self.pos;
+    const patterns_scratch_top = self.store.scratch_patterns.items.len;
+    defer self.store.scratch_patterns.shrinkRetainingCapacity(patterns_scratch_top);
+    while (self.peek() != .EndOfFile) {
+        const start = self.pos;
+        var pattern: ?IR.NodeStore.PatternIdx = null;
+        switch (self.peek()) {
+            .LowerIdent => {
+                pattern = self.store.addPattern(.{ .ident = .{
+                    .ident_tok = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance();
+            },
+            .UpperIdent => {
+                pattern = self.store.addPattern(.{ .tag = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .tag_tok = start,
+                } });
+                self.advance();
+            },
+            .String => {
+                pattern = self.store.addPattern(.{ .string = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .string_tok = start,
+                } });
+                self.advance();
+            },
+            .Int => {
+                // Should be number
+                pattern = self.store.addPattern(.{ .number = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .number_tok = start,
+                } });
+                self.advance();
+            },
+            .Float => {
+                // Should be number
+                pattern = self.store.addPattern(.{ .number = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .number_tok = start,
+                } });
+                self.advance();
+            },
+            .OpenSquare => {
+                // List
+                self.advance();
+                const scratch_top = self.store.scratch_patterns.items.len;
+                defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                while (self.peek() != .CloseSquare) {
+                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                    if (self.peek() != .Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+                if (self.peek() != .CloseSquare) {
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .list_not_closed);
+                }
+                self.advance();
+                const patterns = self.store.scratch_patterns.items[scratch_top..];
+
+                pattern = self.store.addPattern(.{ .list = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .patterns = patterns,
+                } });
+            },
+            .OpenCurly => {
+                self.advance();
+                const scratch_top = self.store.scratch_pattern_record_fields.items.len;
+                defer self.store.scratch_pattern_record_fields.shrinkRetainingCapacity(scratch_top);
+                while (self.peek() != .CloseCurly) {
+                    self.store.scratch_pattern_record_fields.append(self.parsePatternRecordField(alternatives)) catch exitOnOom();
+                    if (self.peek() != .Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+                if (self.peek() != .CloseCurly) {
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                }
+                self.advance();
+                const fields = self.store.scratch_pattern_record_fields.items[scratch_top..];
+                pattern = self.store.addPattern(.{ .record = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .fields = fields,
+                } });
+            },
+            .DoubleDot => {
+                var name: ?TokenIdx = null;
+                var end: u32 = self.pos;
+                self.advance();
+                if (self.peek() == .KwAs) {
+                    self.advance();
+                    if (self.peek() != .LowerIdent) {
+                        return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                    }
+                    name = self.pos;
+                    end = self.pos;
+                    self.advance();
+                }
+                pattern = self.store.addPattern(.{ .list_rest = .{
+                    .region = .{ .start = start, .end = end },
+                    .name = name,
+                } });
+            },
+            .Underscore => {
+                pattern = self.store.addPattern(.{ .underscore = .{
+                    .region = .{ .start = start, .end = start },
+                } });
+                self.advance();
+            },
+            .OpenRound, .NoSpaceOpenRound => {
+                self.advance();
+                const scratch_top = self.store.scratch_patterns.items.len;
+                defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                while (self.peek() != .CloseRound) {
+                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                    if (self.peek() != .Comma) {
+                        break;
+                    }
+                    self.advance();
+                }
+                if (self.peek() != .CloseRound) {
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .list_not_closed);
+                }
+                self.advance();
+                const patterns = self.store.scratch_patterns.items[scratch_top..];
+
+                pattern = self.store.addPattern(.{ .tuple = .{
+                    .patterns = patterns,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            },
+            else => {},
+        }
+
+        if (pattern) |p| {
+            if (alternatives == .alternatives_forbidden) {
+                return p;
+            }
+            if (self.peek() != .OpBar) {
+                if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
+                    return p;
+                }
+                self.store.scratch_patterns.append(p) catch exitOnOom();
+                break;
+            }
+            self.store.scratch_patterns.append(p) catch exitOnOom();
             self.advance();
-        },
-        .Underscore => {
-            pattern = self.store.addPattern(.{ .underscore = .{
-                .region = .{ .start = start, .end = start },
-            } });
+        }
+    }
+    if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
+        std.debug.print("Tokens:\n{any}\n", .{self.tok_buf.tokens.items(.tag)[self.pos..]});
+        std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}", .{ self.pos, @tagName(self.peek()) });
+    }
+    const patterns = self.store.scratch_patterns.items[patterns_scratch_top..];
+    return self.store.addPattern(.{ .alternatives = .{
+        .region = .{ .start = outer_start, .end = self.pos },
+        .patterns = patterns,
+    } });
+}
+
+pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternRecordFieldIdx {
+    const field_start = self.pos;
+    if (self.peek() == .DoubleDot) {
+        self.advance();
+        var name: u32 = 0;
+        if (self.peek() == .LowerIdent) {
+            name = self.pos;
             self.advance();
-        },
-        else => {},
+        }
+        return self.store.addPatternRecordField(.{
+            .name = name,
+            .value = null,
+            .rest = true,
+            .region = .{ .start = field_start, .end = self.pos },
+        });
+    }
+    if (self.peek() != .LowerIdent) {
+        while (self.peek() != .CloseCurly) {
+            self.advance();
+        }
+        return self.pushMalformed(IR.NodeStore.PatternRecordFieldIdx, .unexpected_token);
+    }
+    const name = self.pos;
+    self.advance();
+    var value: ?IR.NodeStore.PatternIdx = null;
+    if (self.peek() != .OpColon and (self.peekNext() != .Comma or self.peekNext() != .CloseCurly)) {
+        while (self.peek() != .CloseCurly) {
+            self.advance();
+        }
+        return self.pushMalformed(IR.NodeStore.PatternRecordFieldIdx, .unexpected_token);
+    }
+    self.advance();
+    if (self.peekNext() != .Comma or self.peekNext() != .CloseCurly) {
+        const patt = self.parsePattern(alternatives);
+        value = patt;
     }
 
-    if (pattern) |p| {
-        return p;
-    }
-    std.debug.panic("Should have gotten a valid pattern", .{});
+    return self.store.addPatternRecordField(.{
+        .name = name,
+        .value = value,
+        .rest = false,
+        .region = .{ .start = field_start, .end = self.pos },
+    });
 }
 
 pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
@@ -527,7 +718,7 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
             self.advance();
             while (self.peek() != .OpBar) {
-                self.store.scratch_patterns.append(self.parsePattern()) catch exitOnOom();
+                self.store.scratch_patterns.append(self.parsePattern(.alternatives_forbidden)) catch exitOnOom();
                 if (self.peek() != .Comma) {
                     break;
                 }
@@ -535,6 +726,7 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             }
             if (self.peek() != .OpBar) {
                 // self.addProblem()
+                std.debug.print("Tokens:\n{any}\n", .{self.tok_buf.tokens.items(.tag)[self.pos..]});
                 std.debug.panic("TODO: Add problem for unclosed args, got {s}\n", .{@tagName(self.peek())});
             }
             const args = self.store.scratch_patterns.items[scratch_top..];
@@ -562,6 +754,32 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
                 .@"else" = else_idx,
             } });
         },
+        .KwMatch => {
+            self.advance();
+            const e = self.parseExpr();
+
+            if (self.peek() != .OpenCurly) {
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            }
+            self.advance();
+            const scratch_top = self.store.scratch_when_branches.items.len;
+            defer self.store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
+            while (self.peek() != .CloseCurly) {
+                self.store.scratch_when_branches.append(self.parseBranch()) catch exitOnOom();
+                if (self.peek() == .Comma) {
+                    self.advance();
+                }
+            }
+            if (self.peek() != .CloseCurly) {
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            }
+            self.advance();
+            expr = self.store.addExpr(.{ .match = .{
+                .region = .{ .start = start, .end = self.pos },
+                .expr = e,
+                .branches = self.store.scratch_when_branches.items[scratch_top..],
+            } });
+        },
         .KwDbg => {
             self.advance();
             const e = self.parseExpr();
@@ -577,7 +795,7 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
     if (expr) |e| {
         var expression = e;
         // Check for an apply...
-        if (self.peek() == .OpenRound) {
+        if (self.peek() == .NoSpaceOpenRound) {
             const scratch_top = self.store.scratch_exprs.items.len;
             self.advance();
             while (self.peek() != .CloseRound) {
@@ -613,6 +831,20 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
         return expression;
     }
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+}
+
+pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
+    const start = self.pos;
+    const p = self.parsePattern(.alternatives_allowed);
+    if (self.peek() == .OpArrow) {
+        self.advance();
+    }
+    const b = self.parseBody();
+    return self.store.addWhenBranch(.{
+        .region = .{ .start = start, .end = self.pos },
+        .pattern = p,
+        .body = b,
+    });
 }
 
 pub fn parseBody(self: *Parser) IR.NodeStore.BodyIdx {
