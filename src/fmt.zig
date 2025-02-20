@@ -213,6 +213,32 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .tag => |t| {
             fmt.formatIdent(t.tag_tok, null);
         },
+        .string => |s| {
+            fmt.formatIdent(s.string_tok, null);
+        },
+        .number => |n| {
+            fmt.formatIdent(n.number_tok, null);
+        },
+        .list => |l| {
+            fmt.push('[');
+            var i: usize = 0;
+            for (l.patterns) |p| {
+                fmt.formatPattern(p);
+                if (i < (l.patterns.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(']');
+        },
+        .list_rest => |_| {
+            fmt.pushAll("..");
+        },
+        .as => |a| {
+            fmt.formatPattern(a.pattern);
+            fmt.pushAll(" as ");
+            fmt.pushTokenText(a.name);
+        },
         .underscore => |_| {
             fmt.push('_');
         },
@@ -454,6 +480,9 @@ test "Syntax grab bag" {
         \\        Blue -> 47,
         \\        Green -> 19,
         \\        Red -> 12,
+        \\        lower -> 1,
+        \\        [1, 2, 3, .. as rest] -> 123,
+        \\        3.14 -> 314,
         \\    }
         \\}
         \\

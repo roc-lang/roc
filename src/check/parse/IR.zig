@@ -703,7 +703,6 @@ pub const NodeStore = struct {
                 }
             },
             .list => |l| {
-                std.debug.assert(l.patterns.len > 1);
                 node.tag = .list_patt;
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(l.patterns.len));
@@ -741,6 +740,7 @@ pub const NodeStore = struct {
             .as => |a| {
                 node.tag = .as_patt;
                 node.data.lhs = a.pattern.id;
+                node.data.rhs = a.name;
             },
         }
         const nid = store.nodes.append(node);
@@ -1070,9 +1070,71 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .string_patt => {
+                return .{ .string = .{
+                    .string_tok = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .number_patt => {
+                return .{ .number = .{
+                    .number_tok = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .list_patt => {
+                const scratch_top = store.scratch_patterns.items.len;
+                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                const p_start = @as(usize, @intCast(node.data.lhs));
+                const p_end = p_start + @as(usize, @intCast(node.data.rhs));
+
+                const ed = store.extra_data.items[p_start..p_end];
+
+                for (ed) |d| {
+                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                }
+
+                const patterns = store.scratch_patterns.items[scratch_top..];
+
+                return .{ .list = .{
+                    .region = emptyRegion(),
+                    .patterns = patterns,
+                } };
+            },
+            .list_rest_patt => {
+                return .{ .list_rest = .{
+                    .region = emptyRegion(),
+                } };
+            },
+            .alternatives_patt => {
+                const scratch_top = store.scratch_patterns.items.len;
+                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                const p_start = @as(usize, @intCast(node.data.lhs));
+                const p_end = p_start + @as(usize, @intCast(node.data.rhs));
+
+                const ed = store.extra_data.items[p_start..p_end];
+
+                for (ed) |d| {
+                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                }
+
+                const patterns = store.scratch_patterns.items[scratch_top..];
+
+                return .{ .alternatives = .{
+                    .region = emptyRegion(),
+                    .patterns = patterns,
+                } };
+            },
             .underscore_patt => {
                 return .{ .underscore = .{
                     .region = emptyRegion(),
+                } };
+            },
+            .as_patt => {
+                return .{ .as = .{
+                    .region = emptyRegion(),
+                    .pattern = .{ .id = @as(u32, @intCast(node.data.lhs)) },
+                    .name = node.data.rhs,
                 } };
             },
             else => {
@@ -1388,6 +1450,7 @@ pub const NodeStore = struct {
         },
         as: struct {
             pattern: PatternIdx,
+            name: TokenIdx,
             region: Region,
         },
     };

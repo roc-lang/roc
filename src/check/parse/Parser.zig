@@ -389,6 +389,71 @@ pub fn parsePattern(self: *Parser) IR.NodeStore.PatternIdx {
             } });
             self.advance();
         },
+        .String => {
+            pattern = self.store.addPattern(.{ .string = .{
+                .region = .{ .start = start, .end = self.pos },
+                .string_tok = start,
+            } });
+            self.advance();
+        },
+        .Int => {
+            // Should be number
+            pattern = self.store.addPattern(.{ .number = .{
+                .region = .{ .start = start, .end = self.pos },
+                .number_tok = start,
+            } });
+            self.advance();
+        },
+        .Float => {
+            // Should be number
+            pattern = self.store.addPattern(.{ .number = .{
+                .region = .{ .start = start, .end = self.pos },
+                .number_tok = start,
+            } });
+            self.advance();
+        },
+        .OpenSquare => {
+            // List
+            self.advance();
+            const scratch_top = self.store.scratch_patterns.items.len;
+            defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+            while (self.peek() != .CloseSquare) {
+                self.store.scratch_patterns.append(self.parsePattern()) catch exitOnOom();
+                if (self.peek() != .Comma) {
+                    break;
+                }
+                self.advance();
+            }
+            if (self.peek() != .CloseSquare) {
+                return self.pushMalformed(IR.NodeStore.PatternIdx, .list_not_closed);
+            }
+            self.advance();
+            const patterns = self.store.scratch_patterns.items[scratch_top..];
+
+            pattern = self.store.addPattern(.{ .list = .{
+                .region = .{ .start = start, .end = self.pos },
+                .patterns = patterns,
+            } });
+        },
+        .DoubleDot => {
+            const rest = self.store.addPattern(.{ .list_rest = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance();
+            pattern = rest;
+            if (self.peek() == .KwAs) {
+                self.advance();
+                if (self.peek() != .LowerIdent) {
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                }
+                pattern = self.store.addPattern(.{ .as = .{
+                    .pattern = rest,
+                    .name = self.pos,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance();
+            }
+        },
         .Underscore => {
             pattern = self.store.addPattern(.{ .underscore = .{
                 .region = .{ .start = start, .end = start },
