@@ -35,6 +35,7 @@ test {
     testing.refAllDeclsRecursive(@import("check/canonicalize/Scope.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/Alias.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize/IR.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/unify.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_types.zig"));
     testing.refAllDeclsRecursive(@import("build/lift_functions.zig"));
     testing.refAllDeclsRecursive(@import("build/specialize_functions.zig"));

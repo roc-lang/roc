@@ -169,6 +169,10 @@ pub const Type = union(enum) {
             return self.types.get(id);
         }
 
+        pub fn set(self: *Store, id: Idx, value: Type) void {
+            self.types.set(id, value);
+        }
+
         /// Create a fresh type variable
         /// Used in canonicalization when creating type slots
         pub fn fresh(self: *Store) Idx {

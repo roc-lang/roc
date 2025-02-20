@@ -80,6 +80,10 @@ pub fn SafeList(comptime T: type) type {
         pub fn get(self: *SafeList(T), id: Idx) T {
             return self.items.items[@as(usize, @intFromEnum(id))];
         }
+
+        pub fn set(self: *SafeList(T), id: Idx, value: T) void {
+            self.items.items[@as(usize, @intFromEnum(id))] = value;
+        }
     };
 }
 
