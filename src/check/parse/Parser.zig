@@ -382,6 +382,13 @@ pub fn parsePattern(self: *Parser) IR.NodeStore.PatternIdx {
             } });
             self.advance();
         },
+        .UpperIdent => {
+            pattern = self.store.addPattern(.{ .tag = .{
+                .region = .{ .start = start, .end = self.pos },
+                .tag_tok = start,
+            } });
+            self.advance();
+        },
         .Underscore => {
             pattern = self.store.addPattern(.{ .underscore = .{
                 .region = .{ .start = start, .end = start },
@@ -562,6 +569,33 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
                 .@"else" = else_idx,
             } });
         },
+        .KwMatch => {
+            self.advance();
+            const e = self.parseExpr();
+
+            if (self.peek() != .OpenCurly) {
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            }
+            self.advance();
+            const scratch_top = self.store.scratch_when_branches.items.len;
+            defer self.store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
+            while (self.peek() != .CloseCurly) {
+                self.store.scratch_when_branches.append(self.parseBranch()) catch exitOnOom();
+                if (self.peek() != .Comma) {
+                    break;
+                }
+                self.advance();
+            }
+            if (self.peek() != .CloseCurly) {
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            }
+            self.advance();
+            expr = self.store.addExpr(.{ .match = .{
+                .region = .{ .start = start, .end = self.pos },
+                .expr = e,
+                .branches = self.store.scratch_when_branches.items[scratch_top..],
+            } });
+        },
         .KwDbg => {
             self.advance();
             const e = self.parseExpr();
@@ -613,6 +647,21 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
         return expression;
     }
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+}
+
+pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
+    const start = self.pos;
+    const p = self.parsePattern();
+    if (self.peek() != .OpArrow) {
+        return self.pushMalformed(IR.NodeStore.WhenBranchIdx, .missing_arrow);
+    }
+    self.advance();
+    const b = self.parseBody();
+    return self.store.addWhenBranch(.{
+        .region = .{ .start = start, .end = self.pos },
+        .pattern = p,
+        .body = b,
+    });
 }
 
 pub fn parseBody(self: *Parser) IR.NodeStore.BodyIdx {

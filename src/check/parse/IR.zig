@@ -22,6 +22,7 @@ pub const Diagnostic = struct {
         unexpected_token,
         missing_header,
         list_not_closed,
+        missing_arrow,
     };
 };
 
@@ -355,7 +356,7 @@ pub const Node = struct {
         /// * lhs - start index of extra_data
         /// * rhs - end index of extra_data
         /// * extra_data format - expr node index,[pattern node index, block/expr node index]*
-        when,
+        match,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - start index of extra_data
@@ -382,8 +383,14 @@ pub const Node = struct {
         /// The end of a block of states
         /// Main token is final newline of block
         /// * lhs - ignored
-        /// * rgs - ignored
+        /// * rhs - ignored
         block_end,
+
+        /// A branch is a when expression
+        /// Main token is ignored
+        /// * lhs - Pattern index
+        /// * rhs - Body index
+        branch,
     };
 };
 
@@ -401,6 +408,7 @@ pub const NodeStore = struct {
     scratch_patterns: std.ArrayList(PatternIdx),
     scratch_record_fields: std.ArrayList(RecordFieldIdx),
     scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIdx),
+    scratch_when_branches: std.ArrayList(WhenBranchIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
@@ -416,6 +424,7 @@ pub const NodeStore = struct {
             .scratch_patterns = std.ArrayList(PatternIdx).init(gpa),
             .scratch_record_fields = std.ArrayList(RecordFieldIdx).init(gpa),
             .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIdx).init(gpa),
+            .scratch_when_branches = std.ArrayList(WhenBranchIdx).init(gpa),
         };
 
         store.nodes.ensureTotalCapacity(capacity);
@@ -431,6 +440,7 @@ pub const NodeStore = struct {
         store.scratch_patterns.ensureTotalCapacity(10) catch exitOnOom();
         store.scratch_record_fields.ensureTotalCapacity(10) catch exitOnOom();
         store.scratch_pattern_record_fields.ensureTotalCapacity(10) catch exitOnOom();
+        store.scratch_when_branches.ensureTotalCapacity(10) catch exitOnOom();
 
         return store;
     }
@@ -448,6 +458,7 @@ pub const NodeStore = struct {
         store.scratch_patterns.deinit();
         store.scratch_record_fields.deinit();
         store.scratch_pattern_record_fields.deinit();
+        store.scratch_when_branches.deinit();
     }
 
     /// Ensures that all scratch buffers in the store
@@ -459,6 +470,7 @@ pub const NodeStore = struct {
         store.scratch_patterns.shrinkRetainingCapacity(0);
         store.scratch_record_fields.shrinkRetainingCapacity(0);
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
+        store.scratch_when_branches.shrinkRetainingCapacity(0);
     }
 
     // Idx types
@@ -850,7 +862,15 @@ pub const NodeStore = struct {
                 store.extra_data.append(i.then.id) catch exitOnOom();
                 store.extra_data.append(i.@"else".id) catch exitOnOom();
             },
-            .when => |_| {},
+            .match => |m| {
+                node.tag = .match;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = node.data.lhs + 1 + @as(u32, @intCast(m.branches.len));
+                store.extra_data.append(m.expr.id) catch exitOnOom();
+                for (m.branches) |b| {
+                    store.extra_data.append(b.id) catch exitOnOom();
+                }
+            },
             .ident => |id| {
                 node.tag = .ident;
                 node.main_token = id.token;
@@ -886,6 +906,20 @@ pub const NodeStore = struct {
         if (field.optional) {
             node.data.rhs = 1;
         }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addWhenBranch(store: *NodeStore, branch: WhenBranch) WhenBranchIdx {
+        const node = Node{
+            .tag = .branch,
+            .main_token = 0,
+            .data = .{
+                .lhs = branch.pattern.id,
+                .rhs = branch.body.id,
+            },
+        };
 
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -1030,6 +1064,12 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .tag_patt => {
+                return .{ .tag = .{
+                    .tag_tok = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
             .underscore_patt => {
                 return .{ .underscore = .{
                     .region = emptyRegion(),
@@ -1159,6 +1199,24 @@ pub const NodeStore = struct {
                     .@"else" = .{ .id = else_ed },
                 } };
             },
+            .match => {
+                const expr_idx = @as(usize, @intCast(node.data.lhs));
+                const branch_start = expr_idx + 1;
+                const branch_end = @as(usize, @intCast(node.data.rhs));
+                const expr_ed = store.extra_data.items[expr_idx];
+                const scratch_top = store.scratch_when_branches.items.len;
+                defer store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
+                const branch_ed = store.extra_data.items[branch_start..branch_end];
+                for (branch_ed) |branch| {
+                    store.scratch_when_branches.append(.{ .id = branch }) catch exitOnOom();
+                }
+                const branches = store.scratch_when_branches.items[scratch_top..];
+                return .{ .match = .{
+                    .region = emptyRegion(),
+                    .expr = .{ .id = expr_ed },
+                    .branches = branches,
+                } };
+            },
             .dbg => {
                 return .{ .dbg = .{
                     .region = emptyRegion(),
@@ -1186,6 +1244,15 @@ pub const NodeStore = struct {
         return .{
             .statements = statements,
             .whitespace = whitespace,
+        };
+    }
+
+    pub fn getBranch(store: *NodeStore, branch: WhenBranchIdx) WhenBranch {
+        const node = store.nodes.get(@enumFromInt(branch.id));
+        return .{
+            .region = emptyRegion(),
+            .pattern = .{ .id = node.data.lhs },
+            .body = .{ .id = node.data.rhs },
         };
     }
 
@@ -1391,7 +1458,7 @@ pub const NodeStore = struct {
             @"else": BodyIdx,
             region: Region,
         },
-        when: struct {
+        match: struct {
             expr: ExprIdx,
             branches: []const WhenBranchIdx,
             region: Region,
@@ -1429,6 +1496,7 @@ pub const NodeStore = struct {
     };
     pub const WhenBranch = struct {
         pattern: PatternIdx,
+        body: BodyIdx,
         region: Region,
     };
 
