@@ -36,7 +36,7 @@ new_scatter = \{ data, orientation ? Vertical, name ? ""} ->
             }
         )
 
-# CHANING ANYHTING IN HERE SEEMS TO "FIX" IT
+# CHANING ANYTHING IN HERE SEEMS TO "FIX" IT
 scatter_to_str : Trace x -> Str where x implements Inspect
 scatter_to_str = \@Trace inner ->
 

@@ -9,8 +9,6 @@ const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
 
 const Ident = @import("Ident.zig");
-const TagName = @import("TagName.zig");
-const FieldName = @import("FieldName.zig");
 const ModuleImport = @import("ModuleImport.zig");
 const StringLiteral = @import("StringLiteral.zig");
 const Type = @import("../types/type.zig").Type;
@@ -22,39 +20,23 @@ const Self = @This();
 idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 imports: ModuleImport.Store,
-tag_names: TagName.Store,
-tag_name_ids_for_slicing: collections.SafeList(TagName.Idx),
-field_names: FieldName.Store,
 strings: StringLiteral.Store,
 problems: std.ArrayList(Problem),
 type_store: Type.Store,
+arena: *std.heap.ArenaAllocator,
 
-pub fn init(allocator: std.mem.Allocator) Self {
-    var ident_store = Ident.Store.init(allocator);
+pub fn init(arena: *std.heap.ArenaAllocator) Self {
+    var ident_store = Ident.Store.init(arena);
 
     return Self{
         .idents = ident_store,
-        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(allocator),
-        .imports = ModuleImport.Store.init(allocator, &ident_store),
-        .tag_names = TagName.Store.init(allocator),
-        .tag_name_ids_for_slicing = collections.SafeList(TagName.Idx).init(allocator),
-        .field_names = FieldName.Store.init(allocator),
-        .strings = StringLiteral.Store.init(allocator),
-        .problems = std.ArrayList(Problem).init(allocator),
-        .type_store = Type.Store.init(allocator),
+        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(arena.allocator()),
+        .imports = ModuleImport.Store.init(arena, &ident_store),
+        .strings = StringLiteral.Store.init(arena.allocator()),
+        .problems = std.ArrayList(Problem).init(arena.allocator()),
+        .type_store = Type.Store.init(arena.allocator()),
+        .arena = arena,
     };
-}
-
-pub fn deinit(self: *Self) void {
-    self.idents.deinit();
-    self.ident_ids_for_slicing.deinit();
-    self.imports.deinit();
-    self.tag_names.deinit();
-    self.tag_name_ids_for_slicing.deinit();
-    self.field_names.deinit();
-    self.strings.deinit();
-    self.problems.deinit();
-    self.type_store.deinit();
 }
 
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module_import: ModuleImport.Idx) void {

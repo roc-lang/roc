@@ -40,7 +40,7 @@ pub const Resolved = struct {
 pub const Store = struct {
     imports: List,
     ident_store: *Ident.Store,
-    arena: std.heap.ArenaAllocator,
+    arena: *std.heap.ArenaAllocator,
 
     pub const primary_idx: Idx = @enumFromInt(0);
 
@@ -52,7 +52,7 @@ pub const Store = struct {
     pub fn init(
         builtin_names: []const []const u8,
         ident_store: *Ident.Store,
-        arena: std.heap.ArenaAllocator,
+        arena: *std.heap.ArenaAllocator,
     ) Store {
         var modules = List.init(arena);
         _ = modules.append(Self{
@@ -123,7 +123,7 @@ pub const Store = struct {
                 .name = name,
                 .package_shorthand = package_shorthand,
                 .is_builtin = false,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(self.allocator),
+                .exposed_idents = collections.SafeList(Ident.Idx).init(self.arena.allocator()),
             });
 
             return LookupResult{ .import_idx = idx, .was_present = false };

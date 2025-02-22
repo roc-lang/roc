@@ -1,4 +1,5 @@
 const std = @import("std");
+const testing = std.testing;
 
 const base = @import("../base.zig");
 const tokenize = @import("parse/tokenize.zig");
@@ -92,4 +93,19 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
             },
         }
     }
+}
+
+test "example s-expr" {
+    const source =
+        \\module []
+        \\
+        \\foo = "bar"
+    ;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    var env = base.ModuleEnv.init(&arena);
+    var parse_ir = parse(&env, testing.allocator, source);
+    defer parse_ir.deinit();
+
+    // std.debug.print("{}", .{parse_ir});
 }

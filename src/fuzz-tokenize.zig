@@ -7,7 +7,7 @@
 ///  1. zig build fuzz-tokenize
 ///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
 ///
-/// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
+/// Other afl commands also available in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
 const base = @import("./base.zig");
@@ -30,8 +30,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     var buf_slice = buf[0..@intCast(len)];
 
-    var env = base.ModuleEnv.init(gpa);
-    defer env.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var env = base.ModuleEnv.init(&arena);
 
     // Initial tokenization.
     var messages: [32]tokenize.Diagnostic = undefined;
@@ -524,8 +525,8 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.TokenizedBuffer, alloc: std
             .KwInterface => {
                 try buf2.appendSlice("interface");
             },
-            .KwIs => {
-                try buf2.appendSlice("is");
+            .KwMatch => {
+                try buf2.appendSlice("match");
             },
             .KwModule => {
                 try buf2.appendSlice("module");
@@ -545,14 +546,8 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.TokenizedBuffer, alloc: std
             .KwRequires => {
                 try buf2.appendSlice("requires");
             },
-            .KwThen => {
-                try buf2.appendSlice("then");
-            },
             .KwTo => {
                 try buf2.appendSlice("to");
-            },
-            .KwWhen => {
-                try buf2.appendSlice("when");
             },
             .KwWhere => {
                 try buf2.appendSlice("where");

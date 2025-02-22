@@ -144,6 +144,18 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.push(']');
         },
+        .tuple => |t| {
+            fmt.push('(');
+            var i: usize = 0;
+            for (t.items) |item| {
+                fmt.formatExpr(item);
+                if (i < (t.items.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(')');
+        },
         .lambda => |l| {
             fmt.push('|');
             var i: usize = 0;
@@ -172,6 +184,24 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.pushAll(" else ");
             fmt.formatBody(i.@"else");
         },
+        .match => |m| {
+            fmt.pushAll("match ");
+            fmt.formatExpr(m.expr);
+            fmt.pushAll(" {");
+            fmt.curr_indent += 1;
+            for (m.branches) |b| {
+                const branch = fmt.ast.store.getBranch(b);
+                fmt.newline();
+                fmt.pushIndent();
+                fmt.formatPattern(branch.pattern);
+                fmt.pushAll(" -> ");
+                fmt.formatBody(branch.body);
+            }
+            fmt.curr_indent -= 1;
+            fmt.newline();
+            fmt.pushIndent();
+            fmt.push('}');
+        },
         .dbg => |d| {
             fmt.pushAll("dbg ");
             fmt.formatExpr(d.expr);
@@ -188,11 +218,82 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .ident => |i| {
             fmt.formatIdent(i.ident_tok, null);
         },
+        .tag => |t| {
+            fmt.formatIdent(t.tag_tok, null);
+        },
+        .string => |s| {
+            fmt.formatIdent(s.string_tok, null);
+        },
+        .number => |n| {
+            fmt.formatIdent(n.number_tok, null);
+        },
+        .record => |r| {
+            fmt.pushAll("{ ");
+            var i: usize = 0;
+            for (r.fields) |field_idx| {
+                const field = fmt.ast.store.getPatternRecordField(field_idx);
+                if (field.rest) {
+                    fmt.pushAll("..");
+                    if (field.name != 0) {
+                        fmt.pushTokenText(field.name);
+                    }
+                    continue;
+                }
+                fmt.pushTokenText(field.name);
+                if (field.value) |v| {
+                    fmt.pushAll(": ");
+                    fmt.formatPattern(v);
+                }
+                if (i < (r.fields.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.pushAll(" }");
+        },
+        .list => |l| {
+            fmt.push('[');
+            var i: usize = 0;
+            for (l.patterns) |p| {
+                fmt.formatPattern(p);
+                if (i < (l.patterns.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(']');
+        },
+        .tuple => |t| {
+            fmt.push('(');
+            var i: usize = 0;
+            for (t.patterns) |p| {
+                fmt.formatPattern(p);
+                if (i < (t.patterns.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(')');
+        },
+        .list_rest => |r| {
+            fmt.pushAll("..");
+            if (r.name) |n| {
+                fmt.pushAll(" as ");
+                fmt.pushTokenText(n);
+            }
+        },
         .underscore => |_| {
             fmt.push('_');
         },
-        else => {
-            std.debug.panic("TODO: Handle formatting {s}", .{@tagName(pattern)});
+        .alternatives => |a| {
+            var i: usize = 0;
+            for (a.patterns) |p| {
+                fmt.formatPattern(p);
+                if (i < (a.patterns.len - 1)) {
+                    fmt.pushAll(" | ");
+                }
+                i += 1;
+            }
         },
     }
 }
@@ -239,7 +340,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
 
 fn formatBody(fmt: *Formatter, bi: BodyIdx) void {
     const body = fmt.ast.store.getBody(bi);
-    if (body.whitespace != null and body.statements.len > 0) {
+    if (body.whitespace != null and body.statements.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append('{') catch exitOnOom();
         for (body.statements) |s| {
@@ -318,13 +419,22 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
 
 fn moduleFmtsSame(source: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var env = base.ModuleEnv.init(std.testing.allocator);
-    defer env.deinit();
-    var test_ast = parse(&env, std.testing.allocator, source);
-    defer test_ast.deinit();
-    defer std.testing.allocator.free(test_ast.errors);
-    try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
-    var formatter = Formatter.init(test_ast, std.testing.allocator);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
+    var parse_ast = parse(&env, std.testing.allocator, source);
+    defer parse_ast.deinit();
+
+    // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
+    // and then they are cleaned up when the arena is deinitialized at the end of program compilation
+    // or included in the cached build
+    defer std.testing.allocator.free(parse_ast.errors);
+
+    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
     defer formatter.deinit();
     const result = formatter.formatFile();
     defer std.testing.allocator.free(result);
@@ -333,13 +443,14 @@ fn moduleFmtsSame(source: []const u8) !void {
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var env = base.ModuleEnv.init(std.testing.allocator);
-    defer env.deinit();
-    var test_ast = parse(&env, std.testing.allocator, source);
-    defer test_ast.deinit();
-    defer std.testing.allocator.free(test_ast.errors);
-    try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
-    var formatter = Formatter.init(test_ast, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var env = base.ModuleEnv.init(&arena);
+    var parse_ast = parse(&env, std.testing.allocator, source);
+    defer parse_ast.deinit();
+    defer std.testing.allocator.free(parse_ast.errors);
+    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
     defer formatter.deinit();
     const result = formatter.formatFile();
     defer std.testing.allocator.free(result);
@@ -426,8 +537,27 @@ test "Syntax grab bag" {
         \\        dbg some_func()
         \\        0
         \\    } else {
+        \\        dbg 123
         \\        other
         \\    }
+        \\}
+        \\
+        \\match_time = |a| match a {
+        \\    Blue | Green | Red -> {
+        \\        x = 12
+        \\        x
+        \\    }
+        \\    lower -> 1
+        \\    "foo" -> 100
+        \\    "foo" | "bar" -> 200
+        \\    [1, 2, 3, .. as rest] -> 123
+        \\    [1, 2 | 5, 3, .. as rest] -> 123
+        \\    3.14 -> 314
+        \\    3.14 | 6.28 -> 314
+        \\    (1, 2, 3) -> 123
+        \\    (1, 2 | 5, 3) -> 123
+        \\    { foo: 1, bar: 2, ..rest } -> 12
+        \\    { foo: 1, bar: 2 | 7 } -> 12
         \\}
         \\
         \\main! = |_| {

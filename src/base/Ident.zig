@@ -56,17 +56,12 @@ pub const Store = struct {
     exposing_modules: std.ArrayList(ModuleImport.Idx),
     next_unique_name: u32,
 
-    pub fn init(allocator: std.mem.Allocator) Store {
+    pub fn init(arena: *std.heap.ArenaAllocator) Store {
         return Store{
-            .interner = SmallStringInterner.init(allocator),
-            .exposing_modules = std.ArrayList(ModuleImport.Idx).init(allocator),
+            .interner = SmallStringInterner.init(arena),
+            .exposing_modules = std.ArrayList(ModuleImport.Idx).init(arena.allocator()),
             .next_unique_name = 0,
         };
-    }
-
-    pub fn deinit(self: *Store) void {
-        self.interner.deinit();
-        self.exposing_modules.deinit();
     }
 
     pub fn insert(self: *Store, ident: Ident, region: Region) Idx {

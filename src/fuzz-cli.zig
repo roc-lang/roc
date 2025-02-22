@@ -7,7 +7,7 @@
 ///  1. zig build fuzz-cli
 ///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/cli/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
 ///
-/// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
+/// Other afl commands also available in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
 const cli = @import("cli.zig");

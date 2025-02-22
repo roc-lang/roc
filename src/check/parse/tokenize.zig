@@ -125,16 +125,14 @@ pub const Token = struct {
         KwImport,
         KwImports,
         KwInterface,
-        KwIs,
+        KwMatch,
         KwModule,
         KwPackage,
         KwPackages,
         KwPlatform,
         KwProvides,
         KwRequires,
-        KwThen,
         KwTo,
-        KwWhen,
         KwWhere,
         KwWith,
 
@@ -157,16 +155,14 @@ pub const Token = struct {
         .{ "import", .KwImport },
         .{ "imports", .KwImports },
         .{ "interface", .KwInterface },
-        .{ "is", .KwIs },
+        .{ "match", .KwMatch },
         .{ "module", .KwModule },
         .{ "package", .KwPackage },
         .{ "packages", .KwPackages },
         .{ "platform", .KwPlatform },
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
-        .{ "then", .KwThen },
         .{ "to", .KwTo },
-        .{ "when", .KwWhen },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
     });
@@ -203,15 +199,14 @@ pub const Token = struct {
             .KwImport,
             .KwImports,
             .KwInterface,
-            .KwIs,
+            .KwMatch,
+            .KwModule,
             .KwPackage,
             .KwPackages,
             .KwPlatform,
             .KwProvides,
             .KwRequires,
-            .KwThen,
             .KwTo,
-            .KwWhen,
             .KwWhere,
             .KwWith,
             => true,
@@ -992,7 +987,7 @@ pub const Tokenizer = struct {
                 '(' => {
                     self.cursor.pos += 1;
                     self.stack.append(.Round) catch exitOnOom();
-                    self.output.pushTokenNormal(if (sp) .NoSpaceOpenRound else .OpenRound, start, 1);
+                    self.output.pushTokenNormal(if (sp) .OpenRound else .NoSpaceOpenRound, start, 1);
                 },
                 '[' => {
                     self.cursor.pos += 1;
@@ -1264,8 +1259,12 @@ pub const Tokenizer = struct {
 
 fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
     var tokenizer = Tokenizer.init(&env, input, &messages, allocator);
     defer tokenizer.deinit();
 
@@ -1298,4 +1297,5 @@ test "tokenizer" {
     try testTokenization(gpa, "3...4", &[_]Token.Tag{ .Int, .TripleDot, .Int });
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
+    try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
 }

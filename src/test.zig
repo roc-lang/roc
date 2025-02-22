@@ -19,11 +19,7 @@ test {
     testing.refAllDeclsRecursive(@import("base/ModuleEnv.zig"));
     testing.refAllDeclsRecursive(@import("base/Package.zig"));
     testing.refAllDeclsRecursive(@import("base/Region.zig"));
-    testing.refAllDeclsRecursive(@import("base/TagName.zig"));
-    testing.refAllDeclsRecursive(@import("base/FieldName.zig"));
-    testing.refAllDeclsRecursive(@import("base/TypeVarName.zig"));
     testing.refAllDeclsRecursive(@import("base/StringLiteral.zig"));
-    testing.refAllDeclsRecursive(@import("base/name_store.zig"));
     testing.refAllDeclsRecursive(@import("coordinate.zig"));
     testing.refAllDeclsRecursive(@import("fmt.zig"));
     testing.refAllDeclsRecursive(@import("check/parse.zig"));
