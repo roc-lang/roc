@@ -1,6 +1,7 @@
 // Spec here https://github.com/roc-lang/roc/issues/7517
 const builtin = @import("builtin");
 const std = @import("std");
+const testing = std.testing;
 const Allocator = std.mem.Allocator;
 
 pub const CompilerCacheFile = struct {
@@ -78,7 +79,11 @@ fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_c
             allocator.free(base_dir);
         }
     }
-    const roc_cache_parts = [_][]const u8{ base_dir, "roc" };
+    const roc_cache_parts = [_][]const u8{
+        base_dir,
+        "roc",
+        "compiler",
+    };
     const roc_cache_folder = try std.fs.path.join(allocator, &roc_cache_parts);
     defer allocator.free(roc_cache_folder);
 
@@ -111,14 +116,32 @@ fn create_test_cache_folder() !void {
 }
 
 fn delete_test_cache_folder() void {
-    //const cwd = std.fs.cwd();
-    //cwd.deleteTree(test_cache_folder) catch @panic("Failed to delete test cache folder!");
+    const cwd = std.fs.cwd();
+    cwd.deleteTree(test_cache_folder) catch @panic("Failed to delete test cache folder!");
 }
+
+fn make_test_cache_file_path(allocator: Allocator, relative_path: []const u8) ![]u8 {
+    const parts = [_][]const u8{ test_cache_folder, "roc", relative_path };
+    return try std.fs.path.join(allocator, &parts);
+}
+
 test "Cache folder is correct" {
+    const allocator = testing.allocator;
     try create_test_cache_folder();
     defer delete_test_cache_folder();
-    try saveToCache(std.testing.allocator, RocCacheFile{ .compiler = .{
+    const cache_file = CompilerCacheFile{
         .version_name = "1.0.0",
-        .binary = "Str.concat(\"Hi \", \"there.\")",
-    } }, test_cache_folder);
+        .binary = "A roc compiler binary",
+    };
+    try saveToCache(allocator, RocCacheFile{ .compiler = cache_file }, test_cache_folder);
+    const expected_cache_file_local = try make_test_cache_file_path(allocator, "compiler/1.0.0");
+    defer allocator.free(expected_cache_file_local);
+
+    const file = try std.fs.cwd().openFile(expected_cache_file_local, .{ .mode = .read_only });
+    defer file.close();
+    const buf = try allocator.alloc(u8, cache_file.binary.len + 10);
+    defer allocator.free(buf);
+    const total_bytes = try file.readAll(buf);
+    try testing.expectEqual(cache_file.binary.len, total_bytes);
+    try testing.expectEqualStrings(cache_file.binary, buf[0..total_bytes]);
 }
