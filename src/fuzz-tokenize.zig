@@ -7,7 +7,7 @@
 ///  1. zig build fuzz-tokenize
 ///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
 ///
-/// Other afl commands also avilable in `./zig-out/AFLplusplus/bin`
+/// Other afl commands also available in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
 const base = @import("./base.zig");
@@ -30,8 +30,9 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     var buf_slice = buf[0..@intCast(len)];
 
-    var env = base.ModuleEnv.init(gpa);
-    defer env.deinit();
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    var env = base.ModuleEnv.init(&arena);
 
     // Initial tokenization.
     var messages: [32]tokenize.Diagnostic = undefined;

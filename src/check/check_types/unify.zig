@@ -1,8 +1,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const base = @import("../../base.zig");
+
 const Type = @import("../../types/type.zig").Type;
-const TypeVarName = @import("../../base/TypeVarName.zig");
-const ModuleEnv = @import("../../base/ModuleEnv.zig");
+const Ident = base.Ident;
+const ModuleEnv = base.ModuleEnv;
 
 const UnificationResult = struct {
     mismatches: std.ArrayList(TypeMismatch),
@@ -89,7 +91,7 @@ fn unifyFlex(
     env: *ModuleEnv,
     result: *UnificationResult,
     first: Type.Idx,
-    opt_name: ?TypeVarName.Idx,
+    opt_name: ?Ident.Idx,
     second: Type.Idx,
     second_type: Type,
 ) void {

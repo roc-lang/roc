@@ -5,7 +5,6 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
-const FieldName = base.FieldName;
 const StringLiteral = base.StringLiteral;
 const Problem = problem.Problem;
 
@@ -50,12 +49,12 @@ pub fn deinit(self: *Self) void {
 }
 
 pub const Type = union(enum) {
-    Primitive: types.Primitive,
-    Box: Type.Idx,
-    List: Type.Idx,
-    Struct: Type.NonEmptySlice,
-    TagUnion: Type.NonEmptySlice,
-    Func: struct {
+    primitive: types.Primitive,
+    box: Type.Idx,
+    list: Type.Idx,
+    @"struct": Type.NonEmptySlice,
+    tag_union: Type.NonEmptySlice,
+    func: struct {
         ret_then_args: Type.NonEmptySlice,
     },
 
@@ -66,48 +65,48 @@ pub const Type = union(enum) {
 };
 
 pub const Expr = union(enum) {
-    Let: Def,
-    Str: StringLiteral,
-    Number: base.Literal.Num,
-    List: struct {
+    let: Def,
+    str: StringLiteral,
+    number: base.Literal.Num,
+    list: struct {
         elem_type: Type.Idx,
         elems: Expr.Slice,
     },
-    Lookup: struct {
+    lookup: struct {
         ident: Ident.Idx,
         type: Type.Idx,
     },
 
-    Call: struct {
+    call: struct {
         fn_type: Type.Idx,
         fn_expr: Expr.Idx,
         args: Expr.Typed.Slice,
     },
 
-    FunctionPack: struct {
+    function_pack: struct {
         ident: Ident.Idx,
         // empty slice means no captures
         captures: Expr.Slice,
     },
 
-    Unit,
+    unit,
 
-    Struct: Expr.NonEmptySlice,
+    @"struct": Expr.NonEmptySlice,
 
-    StructAccess: struct {
+    struct_access: struct {
         record_expr: Expr.Idx,
         record_type: Type.Idx,
         field_type: Type.Idx,
-        field_id: FieldName.Idx,
+        field_id: Ident.Idx,
     },
 
-    Tag: struct {
+    tag: struct {
         discriminant: u16,
         tag_union_type: Type.Idx,
         args: Expr.Typed.Slice,
     },
 
-    When: struct {
+    when: struct {
         /// The value being matched on
         value: Expr.Idx,
         /// The type of the value being matched on
@@ -118,7 +117,7 @@ pub const Expr = union(enum) {
         branches: WhenBranch.NonEmptySlice,
     },
 
-    CompilerBug: Problem.Compiler.LiftFunctions,
+    compiler_bug: Problem.Compiler,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
@@ -166,7 +165,7 @@ pub const Function = struct {
 
 pub const StructDestruct = struct {
     ident: Ident.Idx,
-    field: FieldName.Idx,
+    field: Ident.Idx,
     kind: Kind,
 
     pub const Kind = union(enum) {
@@ -179,24 +178,24 @@ pub const StructDestruct = struct {
 };
 
 pub const Pattern = union(enum) {
-    Identifier: Ident.Idx,
-    As: struct {
+    identifier: Ident.Idx,
+    as: struct {
         pattern: Pattern.Idx,
         ident: Ident.Idx,
     },
-    StrLiteral: StringLiteral.Idx,
-    NumberLiteral: base.Literal.Num,
-    AppliedTag: struct {
+    str_literal: StringLiteral.Idx,
+    number_literal: base.Literal.Num,
+    applied_tag: struct {
         tag_union_type: Type.Idx,
         tag_name: Ident.Idx,
         args: Pattern.Slice,
     },
-    StructDestructure: struct {
+    struct_destructure: struct {
         struct_type: Type.Idx,
         destructs: StructDestruct.Slice,
         opt_spread: ?Pattern.Typed,
     },
-    List: struct {
+    list: struct {
         elem_type: Type.Idx,
         patterns: Pattern.Slice,
 
@@ -205,8 +204,8 @@ pub const Pattern = union(enum) {
             name: ?Ident.Idx,
         },
     },
-    Underscore,
-    CompilerBug: Problem.Compiler.LiftFunctions,
+    underscore,
+    compiler_bug: Problem.Compiler,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;

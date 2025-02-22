@@ -419,13 +419,22 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
 
 fn moduleFmtsSame(source: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var env = base.ModuleEnv.init(std.testing.allocator);
-    defer env.deinit();
-    var test_ast = parse(&env, std.testing.allocator, source);
-    defer test_ast.deinit();
-    defer std.testing.allocator.free(test_ast.errors);
-    try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
-    var formatter = Formatter.init(test_ast, std.testing.allocator);
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
+    var parse_ast = parse(&env, std.testing.allocator, source);
+    defer parse_ast.deinit();
+
+    // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
+    // and then they are cleaned up when the arena is deinitialized at the end of program compilation
+    // or included in the cached build
+    defer std.testing.allocator.free(parse_ast.errors);
+
+    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
     defer formatter.deinit();
     const result = formatter.formatFile();
     defer std.testing.allocator.free(result);
@@ -434,13 +443,14 @@ fn moduleFmtsSame(source: []const u8) !void {
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var env = base.ModuleEnv.init(std.testing.allocator);
-    defer env.deinit();
-    var test_ast = parse(&env, std.testing.allocator, source);
-    defer test_ast.deinit();
-    defer std.testing.allocator.free(test_ast.errors);
-    try std.testing.expectEqualSlices(IR.Diagnostic, test_ast.errors, &[_]IR.Diagnostic{});
-    var formatter = Formatter.init(test_ast, std.testing.allocator);
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var env = base.ModuleEnv.init(&arena);
+    var parse_ast = parse(&env, std.testing.allocator, source);
+    defer parse_ast.deinit();
+    defer std.testing.allocator.free(parse_ast.errors);
+    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
     defer formatter.deinit();
     const result = formatter.formatFile();
     defer std.testing.allocator.free(result);

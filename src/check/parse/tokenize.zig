@@ -1259,8 +1259,12 @@ pub const Tokenizer = struct {
 
 fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
     var tokenizer = Tokenizer.init(&env, input, &messages, allocator);
     defer tokenizer.deinit();
 

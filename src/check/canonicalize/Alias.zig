@@ -5,12 +5,11 @@ const problem_mod = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Region = base.Region;
-const TagName = base.TagName;
-const TypeVarName = base.TypeVarName;
 const Problem = problem_mod.Problem;
 const TypeVar = types.TypeVar;
+const Ident = base.Ident;
 
-name: TagName.Idx,
+name: Ident.Idx,
 region: Region,
 /// Aliases for types that are defined in Zig instead of Roc,
 /// like List and Box.
@@ -32,7 +31,7 @@ pub const Kind = union(enum) {
 
 pub const Custom = struct {
     type_variables: Var.Slice,
-    recursion_variables: std.AutoHashMap(TypeVar, TypeVarName.Idx),
+    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
 };
 
 pub const Structural = struct {
@@ -44,7 +43,7 @@ pub const Malformed = struct {
 };
 
 pub const Var = struct {
-    name: TypeVarName.Idx,
+    name: Ident.Idx,
     region: Region,
     type_var: TypeVar,
 

@@ -48,9 +48,10 @@ test "solves for uncaptured functions" {
     // It will then run `solveFunctions` on that IR and assert that the
     // resulting FunctionSet.List correctly labels each function
 
-    const ally = testing.allocator;
-    var store = base.Ident.Store.init(ally);
-    defer store.deinit();
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+
+    _ = base.Ident.Store.init(&arena);
 
     try testing.expect(true);
 }

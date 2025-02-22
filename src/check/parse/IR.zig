@@ -381,7 +381,7 @@ pub const Node = struct {
         // TODO: Add the rest of the expressions
 
         /// A block of statements
-        /// Main token is newline preceeding the block
+        /// Main token is newline preceding the block
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
@@ -1400,7 +1400,7 @@ pub const NodeStore = struct {
     pub const Body = struct {
         /// The statements that constitute the block
         statements: []const StatementIdx,
-        /// The token that represents the newline preceeding this block, if any
+        /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
     };
 

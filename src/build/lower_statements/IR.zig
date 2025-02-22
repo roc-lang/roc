@@ -5,8 +5,6 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Ident = base.Ident;
-const TagName = base.TagName;
-const FieldName = base.FieldName;
 const StringLiteral = base.StringLiteral;
 
 const Self = @This();
@@ -53,13 +51,13 @@ pub const Procedure = struct {
 pub const TagIdIntType = u16;
 
 pub const Layout = union(enum) {
-    Primitive: types.Primitive,
-    Box: Layout.Idx,
-    List: Layout.Idx,
-    Struct: Layout.NonEmptySlice,
-    TagUnion: Layout.NonEmptySlice,
+    primitive: types.Primitive,
+    box: Layout.Idx,
+    list: Layout.Idx,
+    @"struct": Layout.NonEmptySlice,
+    tag_union: Layout.NonEmptySlice,
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
-    Unit,
+    unit,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
@@ -93,67 +91,67 @@ pub const UnionLayout = union(enum) {
 };
 
 pub const Expr = union(enum) {
-    Literal: base.Literal,
+    literal: base.Literal,
 
     // Functions
-    Call: Call,
+    call: Call,
 
-    Tag: struct {
+    tag: struct {
         // TODO: should this be an index instead?
         tag_layout: UnionLayout,
         tag_id: TagIdIntType,
         arguments: collections.SafeList(Ident.Idx).Slice,
     },
-    Struct: collections.SafeList(Ident.Idx).NonEmptySlice,
-    NullPointer,
-    StructAtIndex: struct {
+    @"struct": collections.SafeList(Ident.Idx).NonEmptySlice,
+    null_pointer,
+    struct_at_index: struct {
         index: u64,
         field_layouts: Layout.Slice,
         structure: Ident.Idx,
     },
 
-    GetTagId: struct {
+    get_gag_id: struct {
         structure: Ident.Idx,
         union_layout: UnionLayout,
     },
 
-    UnionAtIndex: struct {
+    union_at_index: struct {
         structure: Ident.Idx,
         tag_id: TagIdIntType,
         union_layout: UnionLayout,
         index: u64,
     },
 
-    GetElementPointer: struct {
+    get_element_pointer: struct {
         structure: Ident.Idx,
         union_layout: UnionLayout,
         indices: []u64,
     },
 
-    Array: struct {
+    array: struct {
         elem_layout: Layout.Idx,
         elems: ListLiteralElem.Slice,
     },
 
-    EmptyArray,
+    empty_array,
 
     /// Returns a pointer to the given function.
-    FunctionPointer: struct {
+    function_pointer: struct {
         module_ident: Ident.Idx,
     },
 
-    Alloca: struct {
+    alloca: struct {
         element_layout: Layout.Idx,
         initializer: ?Ident.Idx,
     },
 
-    Reset: struct {
+    reset: struct {
         module_ident: Ident.Idx,
     },
 
     // Just like Reset, but does not recursively decrement the children.
     // Used in reuse analysis to replace a decref with a resetRef to avoid decrementing when the dec ref didn't.
-    ResetRef: struct {
+    reset_ref: struct {
         module_ident: Ident.Idx,
     },
 
@@ -164,9 +162,9 @@ pub const Expr = union(enum) {
 };
 
 pub const ListLiteralElem = union(enum) {
-    StringLiteralId: []const u8,
-    Number: base.Literal.Num,
-    Ident: Ident.Idx,
+    string_literal_id: []const u8,
+    number: base.Literal.Num,
+    ident: Ident.Idx,
 
     pub const List = collections.SafeList(@This());
     pub const Slice = List.Slice;
@@ -177,21 +175,21 @@ pub const Call = struct {
     arguments: IdentWithLayout.Slice,
 
     pub const Kind = union(enum) {
-        ByName: struct {
+        by_name: struct {
             ident: Ident.Idx,
             ret_layout: Layout.Idx,
             arg_layouts: Layout.Slice,
         },
-        ByPointer: struct {
+        by_pointer: struct {
             pointer: Ident.Idx,
             ret_layout: Layout.Idx,
             arg_layouts: []Layout.Idx,
         },
-        // Foreign: struct {
+        // foreign: struct {
         //     foreign_symbol: usize, //ForeignSymbol.Idx,
         //     ret_layout: Layout.Idx,
         // },
-        // LowLevel: struct {
+        // low_level: struct {
         //     op: usize, //LowLevel,
         // },
         // TODO: presumably these should be removed in an earlier stage
@@ -200,13 +198,13 @@ pub const Call = struct {
 };
 
 pub const Stmt = union(enum) {
-    Let: struct {
+    let: struct {
         ident: Ident.Idx,
         expr: Expr.Idx,
         layout: Expr.Idx,
         continuation: Stmt.Idx,
     },
-    Switch: struct {
+    @"switch": struct {
         /// This *must* stand for an integer, because Switch potentially compiles to a jump table.
         cond_ident: Ident.Idx,
         // TODO: can we make this layout a number type?
@@ -222,9 +220,9 @@ pub const Stmt = union(enum) {
         /// Each branch must return a value of this type.
         ret_layout: Layout.Idx,
     },
-    Ret: Ident.Idx,
+    ret: Ident.Idx,
     /// a join point `join f <params> = <continuation> in remainder`
-    Join: struct {
+    join: struct {
         id: JoinPoint.Idx,
         parameters: IdentWithLayout.Slice,
         /// body of the join point
@@ -233,11 +231,11 @@ pub const Stmt = union(enum) {
         /// what happens after _defining_ the join point
         remainder: Stmt.Idx,
     },
-    Jump: struct {
+    jump: struct {
         join_point: JoinPoint.Idx,
         idents: collections.SafeList(Ident.Idx).Slice,
     },
-    Crash: struct {
+    crash: struct {
         message: Ident.Idx,
     },
 
@@ -254,17 +252,17 @@ pub const Branch = struct {
 
     /// in the block below, symbol `scrutinee` is assumed be be of shape `tag_id`
     pub const Kind = union(enum) {
-        None,
-        Constructor: struct {
+        none,
+        constructor: struct {
             scrutinee: Ident.Idx,
             layout: Layout.Idx,
             tag_id: TagIdIntType,
         },
-        List: struct {
+        list: struct {
             scrutinee: Ident.Idx,
             len: u64,
         },
-        Unique: struct {
+        unique: struct {
             scrutinee: Ident.Idx,
             unique: bool,
         },
