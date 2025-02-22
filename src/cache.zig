@@ -25,7 +25,7 @@ pub const RocCacheFile = union(RocCacheFileTag) {
 
 fn getDefaultCacheFolder(allocator: Allocator) ![]u8 {
     const target_os = builtin.target.os.tag;
-    return blk: {
+    return {
         switch (target_os) {
             .macos, .linux => {
                 const home_dir = try std.process.getEnvVarOwned(std.testing.allocator, "HOME");
@@ -35,12 +35,12 @@ fn getDefaultCacheFolder(allocator: Allocator) ![]u8 {
                     ".cache",
                 };
                 const default_cache_folder = try std.fs.path.join(allocator, &default_cache_folder_parts);
-                break :blk default_cache_folder;
+                return default_cache_folder;
             },
             .windows => {
                 const default_cache_folder_parts = [_][]const u8{"%APPDATA%"};
                 const default_cache_folder = try std.fs.path.join(allocator, &default_cache_folder_parts);
-                break :blk default_cache_folder;
+                return default_cache_folder;
             },
             else => {
                 // SKILL_ISSUE: I want to include the os name in the error message, but
@@ -53,17 +53,42 @@ fn getDefaultCacheFolder(allocator: Allocator) ![]u8 {
     };
 }
 
+fn getBaseRocCacheFolder(allocator: Allocator, xdg_cache_home: ?[]const u8, sub_path: []const u8) ![]u8 {
+    const base_dir = if (xdg_cache_home) |x| try allocator.dupe(u8, x) else try getDefaultCacheFolder(allocator);
+    defer allocator.free(base_dir);
+    const roc_cache_parts = [_][]const u8{
+        base_dir,
+        "roc",
+        sub_path,
+    };
+    return try std.fs.path.join(allocator, &roc_cache_parts);
+}
+
+fn getCompilerPath(allocator: Allocator, xdg_cache_home: ?[]const u8, version_name: []const u8) ![]u8 {
+    const sub_path_parts = [_][]const u8{ "compiler", version_name };
+    const sub_path = try std.fs.path.join(allocator, &sub_path_parts);
+    defer allocator.free(sub_path);
+    return try getBaseRocCacheFolder(allocator, xdg_cache_home, sub_path);
+}
+
+fn getXdgCacheHome(allocator: Allocator) ?[]u8 {
+    return std.process.getEnvVarOwned(allocator, "XDG_CACHE_HOME") catch null;
+}
+
 const SaveCacheFileError = error{
     FailedToMakeCacheFolder,
     FailedToMakeCacheFile,
     FailedToWriteToCacheFile,
 };
 
-fn saveCacheFile(roc_cache_folder: []const u8, file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void {
+fn saveCacheFile(file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void {
     const cwd = std.fs.cwd();
-    cwd.makePath(roc_cache_folder) catch {
-        return SaveCacheFileError.FailedToMakeCacheFolder;
-    };
+    const roc_cache_folder = std.fs.path.dirname(file_cache_path);
+    if (roc_cache_folder) |x| {
+        cwd.makePath(x) catch {
+            return SaveCacheFileError.FailedToMakeCacheFolder;
+        };
+    }
     const file = cwd.createFile(file_cache_path, .{}) catch {
         return SaveCacheFileError.FailedToMakeCacheFile;
     };
@@ -72,27 +97,18 @@ fn saveCacheFile(roc_cache_folder: []const u8, file_cache_path: []const u8, file
     };
 }
 
-fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]const u8, comptime save: fn (roc_cache_folder: []const u8, file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void) !void {
-    const base_dir = xdg_cache_home orelse try getDefaultCacheFolder(allocator);
-    defer {
-        if (xdg_cache_home == null) {
-            allocator.free(base_dir);
-        }
-    }
-    const roc_cache_parts = [_][]const u8{
-        base_dir,
-        "roc",
-        "compiler",
-    };
-    const roc_cache_folder = try std.fs.path.join(allocator, &roc_cache_parts);
-    defer allocator.free(roc_cache_folder);
-
-    const file_path_parts = switch (roc_cache_file) {
-        .compiler => |value| [_][]const u8{ roc_cache_folder, value.version_name },
+fn saveToCacheInternal(
+    // SKILL_ISSUE: force my formatter to put the arguments in a vertical line
+    allocator: Allocator,
+    roc_cache_file: RocCacheFile,
+    xdg_cache_home: ?[]const u8,
+    comptime save: fn (file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void,
+) !void {
+    const file_cache_path = switch (roc_cache_file) {
+        .compiler => |value| try getCompilerPath(allocator, xdg_cache_home, value.version_name),
         else => @panic("FIX ME!!!!!!"),
     };
 
-    const file_cache_path = try std.fs.path.join(allocator, &file_path_parts);
     defer allocator.free(file_cache_path);
 
     const file_binary = switch (roc_cache_file) {
@@ -100,12 +116,19 @@ fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_c
         else => @panic("FIX ME!!!!!!"),
     };
 
-    try save(roc_cache_folder, file_cache_path, file_binary);
+    try save(file_cache_path, file_binary);
 }
 
-pub fn saveToCache(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]const u8) !void {
+pub fn saveToCache(allocator: Allocator, roc_cache_file: RocCacheFile) !void {
+    const xdg_cache_home = getXdgCacheHome(allocator);
+    defer allocator.free(xdg_cache_home);
     try saveToCacheInternal(allocator, roc_cache_file, xdg_cache_home, saveCacheFile);
 }
+
+//pub fn setRocCompiler(allocator: Allocator, compilerCacheFile: CompilerCacheFile) !void {
+//const parts = [_][]const u8{ test_cache_folder, "roc", relative_path };
+//const sss = try std.fs.path.join(allocator, &parts);
+//}
 
 const test_cache_folder = "./test-cache";
 fn create_test_cache_folder() !void {
@@ -125,7 +148,7 @@ fn make_test_cache_file_path(allocator: Allocator, relative_path: []const u8) ![
     return try std.fs.path.join(allocator, &parts);
 }
 
-test "Cache folder is correct" {
+test "Compiler cache should save in the correct place with the correct data" {
     const allocator = testing.allocator;
     try create_test_cache_folder();
     defer delete_test_cache_folder();
@@ -133,15 +156,19 @@ test "Cache folder is correct" {
         .version_name = "1.0.0",
         .binary = "A roc compiler binary",
     };
-    try saveToCache(allocator, RocCacheFile{ .compiler = cache_file }, test_cache_folder);
+    // SKILL_ISSUE: I'm not sure how to set the environment variable in a
+    // cross-platform way so my tests don't call this function
+    try saveToCacheInternal(allocator, RocCacheFile{ .compiler = cache_file }, test_cache_folder, saveCacheFile);
     const expected_cache_file_local = try make_test_cache_file_path(allocator, "compiler/1.0.0");
     defer allocator.free(expected_cache_file_local);
 
     const file = try std.fs.cwd().openFile(expected_cache_file_local, .{ .mode = .read_only });
     defer file.close();
-    const buf = try allocator.alloc(u8, cache_file.binary.len + 10);
+
+    const file_size = try file.getEndPos();
+    const buf = try allocator.alloc(u8, file_size);
     defer allocator.free(buf);
-    const total_bytes = try file.readAll(buf);
-    try testing.expectEqual(cache_file.binary.len, total_bytes);
-    try testing.expectEqualStrings(cache_file.binary, buf[0..total_bytes]);
+    _ = try file.readAll(buf);
+    try testing.expectEqual(cache_file.binary.len, buf.len);
+    try testing.expectEqualStrings(cache_file.binary, buf);
 }
