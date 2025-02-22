@@ -327,7 +327,9 @@ fn moduleFmtsSame(source: []const u8) !void {
     var parse_ast = parse(&env, std.testing.allocator, source);
     defer parse_ast.deinit();
 
-    // Shouldn't this be owned by PARSE IR and free'd in deinit?
+    // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
+    // and then they are cleaned up when the arena is deinitialized at the end of program compilation
+    // or included in the cached build
     defer std.testing.allocator.free(parse_ast.errors);
 
     try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});

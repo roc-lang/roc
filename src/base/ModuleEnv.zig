@@ -26,7 +26,6 @@ type_store: Type.Store,
 arena: *std.heap.ArenaAllocator,
 
 pub fn init(arena: *std.heap.ArenaAllocator) Self {
-    // var arena = std.heap.ArenaAllocator.init(allocator);
     var ident_store = Ident.Store.init(arena);
 
     return Self{
