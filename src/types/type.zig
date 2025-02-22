@@ -1,7 +1,9 @@
 const std = @import("std");
 const testing = std.testing;
 const collections = @import("../collections.zig");
-const TypeVarName = @import("../base/TypeVarName.zig");
+const base = @import("../base.zig");
+
+const Ident = base.Ident;
 
 pub const Type = union(enum) {
     /// Builtin `Bool` type
@@ -17,10 +19,10 @@ pub const Type = union(enum) {
     frac: Frac,
 
     /// A type variable which the user did not name in an annotation
-    flex_var: ?TypeVarName.Idx,
+    flex_var: ?Ident.Idx,
 
     /// Name given in a user-written annotation
-    rigid_var: TypeVarName.Idx,
+    rigid_var: Ident.Idx,
 
     /// Function application
     func: Func,

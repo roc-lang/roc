@@ -25,42 +25,20 @@ outer_ids_per_string_index: std.AutoHashMap(u32, std.ArrayList(Idx)),
 /// to the same underlying string
 outer_indices: std.ArrayList(u32),
 regions: std.ArrayList(Region),
-allocator: std.mem.Allocator,
+arena: *std.heap.ArenaAllocator,
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
 
-pub fn init(allocator: std.mem.Allocator) Self {
+pub fn init(arena: *std.heap.ArenaAllocator) Self {
     return Self{
-        .strings = std.ArrayList([]u8).init(allocator),
-        .string_indices_per_hash = std.AutoHashMap(u32, std.ArrayList(u32)).init(allocator),
-        .outer_ids_per_string_index = std.AutoHashMap(u32, std.ArrayList(Idx)).init(allocator),
-        .outer_indices = std.ArrayList(u32).init(allocator),
-        .regions = std.ArrayList(Region).init(allocator),
-        .allocator = allocator,
+        .strings = std.ArrayList([]u8).init(arena.allocator()),
+        .string_indices_per_hash = std.AutoHashMap(u32, std.ArrayList(u32)).init(arena.allocator()),
+        .outer_ids_per_string_index = std.AutoHashMap(u32, std.ArrayList(Idx)).init(arena.allocator()),
+        .outer_indices = std.ArrayList(u32).init(arena.allocator()),
+        .regions = std.ArrayList(Region).init(arena.allocator()),
+        .arena = arena,
     };
-}
-
-pub fn deinit(self: *Self) void {
-    var string_indices_iter = self.string_indices_per_hash.valueIterator();
-    while (string_indices_iter.next()) |index_list| {
-        index_list.deinit();
-    }
-
-    var outer_ids_iter = self.outer_ids_per_string_index.valueIterator();
-    while (outer_ids_iter.next()) |outer_id_list| {
-        outer_id_list.deinit();
-    }
-
-    for (self.strings.items) |string| {
-        self.strings.allocator.free(string);
-    }
-
-    self.strings.deinit();
-    self.string_indices_per_hash.deinit();
-    self.outer_ids_per_string_index.deinit();
-    self.outer_indices.deinit();
-    self.regions.deinit();
 }
 
 /// Add a string to this interner, returning a unique, serial index.
@@ -75,7 +53,7 @@ pub fn insert(self: *Self, string: []const u8, region: Region) Idx {
         }
     }
 
-    const copied_string = self.strings.allocator.alloc(u8, string.len) catch exitOnOom();
+    const copied_string = self.arena.allocator().alloc(u8, string.len) catch exitOnOom();
     std.mem.copyForwards(u8, copied_string, string);
 
     const strings_len: u32 = @truncate(self.strings.items.len);
@@ -87,7 +65,7 @@ pub fn insert(self: *Self, string: []const u8, region: Region) Idx {
 fn stringIndicesForHash(self: *Self, hash: u32) *std.ArrayList(u32) {
     const res = self.string_indices_per_hash.getOrPut(hash) catch exitOnOom();
     if (!res.found_existing) {
-        res.value_ptr.* = std.ArrayList(u32).init(self.allocator);
+        res.value_ptr.* = std.ArrayList(u32).init(self.arena.allocator());
     }
 
     return res.value_ptr;
@@ -100,7 +78,7 @@ fn addOuterIdForStringIndex(self: *Self, string_index: u32, region: Region) Idx 
 
     const res = self.outer_ids_per_string_index.getOrPut(string_index) catch exitOnOom();
     if (!res.found_existing) {
-        res.value_ptr.* = std.ArrayList(Idx).init(self.allocator);
+        res.value_ptr.* = std.ArrayList(Idx).init(self.arena.allocator());
     }
 
     res.value_ptr.append(len) catch exitOnOom();

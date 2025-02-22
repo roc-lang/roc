@@ -32,20 +32,20 @@ pub const Idx = List.Idx;
 pub const Store = struct {
     modules: List,
     ident_store: *Ident.Store,
-    allocator: std.mem.Allocator,
+    arena: *std.heap.ArenaAllocator,
 
     pub const LookupResult = struct {
         module_idx: Idx,
         was_present: bool,
     };
 
-    pub fn init(allocator: std.mem.Allocator, ident_store: *Ident.Store) Store {
-        var modules = collections.SafeMultiList(Module).init(allocator);
+    pub fn init(arena: *std.heap.ArenaAllocator, ident_store: *Ident.Store) Store {
+        var modules = collections.SafeMultiList(Module).init(arena.allocator());
         _ = modules.append(Module{
             .name = &.{},
             .package_shorthand = null,
             .is_builtin = false,
-            .exposed_idents = collections.SafeList(Ident.Idx).init(allocator),
+            .exposed_idents = collections.SafeList(Ident.Idx).init(arena.allocator()),
         });
 
         // TODO: insert builtins automatically?
@@ -53,7 +53,7 @@ pub const Store = struct {
         return Store{
             .modules = modules,
             .ident_store = ident_store,
-            .allocator = allocator,
+            .arena = arena,
         };
     }
 
@@ -109,7 +109,7 @@ pub const Store = struct {
                 .name = name,
                 .package_shorthand = package_shorthand,
                 .is_builtin = false,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(self.allocator),
+                .exposed_idents = collections.SafeList(Ident.Idx).init(self.arena.allocator()),
             });
 
             return LookupResult{ .module_idx = idx, .was_present = false };

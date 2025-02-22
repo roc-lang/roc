@@ -8,7 +8,6 @@ const Alias = @import("./Alias.zig");
 const Ident = base.Ident;
 const Region = base.Region;
 const Module = base.Module;
-const TagName = base.TagName;
 const Problem = problem_mod.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -18,21 +17,21 @@ env: *base.ModuleEnv,
 /// The custom alias that this file is centered around, if one has been defined.
 focused_custom_alias: ?Alias.Idx,
 // TODO: handle renaming, e.g. `CustomType := [ExportedName as LocalName]`
-custom_tags: std.AutoHashMap(TagName.Idx, Alias.Idx),
+custom_tags: std.AutoHashMap(Ident.Idx, Alias.Idx),
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
 allocator: std.mem.Allocator,
 
 pub fn init(
     env: *base.ModuleEnv,
-    builtin_aliases: []const struct { alias: Alias.Idx, name: TagName.Idx },
+    builtin_aliases: []const struct { alias: Alias.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
     allocator: std.mem.Allocator,
 ) Self {
     var scope = Self{
         .env = env,
         .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(TagName.Idx, Alias.Idx).init(allocator),
+        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
         .levels = Levels.init(env, allocator),
         .allocator = allocator,
     };
@@ -107,7 +106,7 @@ pub const Level = struct {
     pub fn ItemName(comptime item_kind: ItemKind) type {
         return switch (item_kind) {
             .ident => Ident.Idx,
-            .alias => TagName.Idx,
+            .alias => Ident.Idx,
         };
     }
 
@@ -124,7 +123,7 @@ pub const Level = struct {
     };
 
     pub const AliasInScope = struct {
-        scope_name: TagName.Idx,
+        scope_name: Ident.Idx,
         alias: Alias.Idx,
     };
 
@@ -164,7 +163,9 @@ pub const Levels = struct {
 
     pub fn exit(self: *Levels) void {
         if (self.levels.items.len <= 1) {
-            self.env.problems.append(Problem.Compiler.Canonicalize.make(.ExitedTopScopeLevel)) catch exitOnOom();
+            self.env.problems.append(Problem.Compiler.make(.{
+                .canonicalize = .exited_top_scope_level,
+            })) catch exitOnOom();
         } else {
             _ = self.levels.pop();
         }
@@ -181,17 +182,8 @@ pub const Levels = struct {
     ) ?Level.Item(item_kind) {
         var items_in_scope = Iterator(item_kind).new(self);
         while (items_in_scope.nextData()) |item_in_scope| {
-            switch (item_kind) {
-                .ident => {
-                    if (self.env.idents.identsHaveSameText(name, item_in_scope.scope_name)) {
-                        return item_in_scope;
-                    }
-                },
-                .alias => {
-                    if (self.env.tag_names.namesHaveSameText(name, item_in_scope.scope_name)) {
-                        return item_in_scope;
-                    }
-                },
+            if (self.env.idents.identsHaveSameText(name, item_in_scope.scope_name)) {
+                return item_in_scope;
             }
         }
 
@@ -220,7 +212,7 @@ pub const Levels = struct {
             },
             .alias => {
                 const all_aliases_in_scope = self.levels.iter(.alias);
-                const options = self.env.tag_name_ids_for_slicing.extendFromIter(all_aliases_in_scope);
+                const options = self.env.ident_ids_for_slicing.extendFromIter(all_aliases_in_scope);
 
                 problem = Problem.Canonicalize.make(.{ .AliasNotInScope = .{
                     .name = name,
@@ -354,7 +346,7 @@ fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInSco
     var scope = Self{
         .env = &env,
         .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(TagName.Idx, Alias.Idx).init(allocator),
+        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
         .levels = Levels.init(&env, allocator),
         .allocator = allocator,
     };

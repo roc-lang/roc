@@ -4,12 +4,13 @@ const collections = @import("collections.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
-const TagName = base.TagName;
 
 pub const Problem = union(enum) {
-    Canonicalize: Canonicalize,
-    Compiler: Compiler,
+    canonicalize: Canonicalize,
+    compiler: Compiler,
 
+    // User error preventing canonicalize from completing fully
+    // For example a variable that was used but not defined
     pub const Canonicalize = union(enum) {
         DuplicateImport: struct {
             duplicate_import_region: Region,
@@ -19,61 +20,46 @@ pub const Problem = union(enum) {
             duplicate_exposes: Ident.Idx,
         },
         AliasNotInScope: struct {
-            name: TagName.Idx,
-            suggestions: collections.SafeList(TagName.Idx).Slice,
+            name: Ident.Idx,
+            suggestions: collections.SafeList(Ident.Idx).Slice,
         },
         IdentNotInScope: struct {
             ident: Ident.Idx,
             suggestions: collections.SafeList(Ident.Idx).Slice,
         },
         AliasAlreadyInScope: struct {
-            original_name: TagName.Idx,
-            shadow: TagName.Idx,
+            original_name: Ident.Idx,
+            shadow: Ident.Idx,
         },
         IdentAlreadyInScope: struct {
             original_ident: Ident.Idx,
             shadow: Ident.Idx,
         },
 
-        pub fn make(problem: Canonicalize) Problem {
-            return Problem{ .Canonicalize = problem };
+        pub fn make(can_problem: @This()) Problem {
+            return Problem{ .canonicalize = can_problem };
         }
     };
 
+    // Internal compiler error due to a bug in the compiler implementation
     pub const Compiler = union(enum) {
-        Canonicalize: Compiler.Canonicalize,
-        ResolveImports: Compiler.ResolveImports,
-        TypeCheck: Compiler.TypeCheck,
-        SpecializeTypes: Compiler.SpecializeTypes,
-        LiftFunctions: Compiler.LiftFunctions,
-        SolveFunctions: Compiler.SolveFunctions,
-        SpecializeFunctions: Compiler.SpecializeFunctions,
-        LowerStatements: Compiler.LowerStatements,
-        ReferenceCount: Compiler.ReferenceCount,
+        canonicalize: enum {
+            exited_top_scope_level,
+        },
+        resolve_imports,
+        type_check,
+        specialize_types,
+        lift_functions,
+        solve_functions,
+        specialize_functions,
+        lower_statements,
+        reference_count,
 
-        pub fn make(problem: Compiler) Problem {
-            return Problem{ .Compiler = problem };
+        pub fn make(compiler_error: @This()) Problem {
+            return Problem{ .compiler = compiler_error };
         }
-
-        pub const Parse = union(enum) {};
-
-        pub const Canonicalize = union(enum) {
-            ExitedTopScopeLevel,
-
-            pub fn make(problem: Compiler.Canonicalize) Problem {
-                return Compiler.make(.{ .Canonicalize = problem });
-            }
-        };
-
-        pub const ResolveImports = union(enum) {};
-        pub const TypeCheck = union(enum) {};
-        pub const SpecializeTypes = union(enum) {};
-        pub const LiftFunctions = union(enum) {};
-        pub const SolveFunctions = union(enum) {};
-        pub const SpecializeFunctions = union(enum) {};
-        pub const LowerStatements = union(enum) {};
-        pub const ReferenceCount = union(enum) {};
     };
 
-    // pub const List = std.ArrayList(Problem);
+    pub const List = collections.SafeList(@This());
+    pub const Idx = List.Idx;
 };

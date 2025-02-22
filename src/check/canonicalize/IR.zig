@@ -1,6 +1,7 @@
 const std = @import("std");
 const base = @import("../../base.zig");
 const types = @import("../../types.zig");
+const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Alias = @import("./Alias.zig");
@@ -8,11 +9,9 @@ const Alias = @import("./Alias.zig");
 const Ident = base.Ident;
 const Region = base.Region;
 const Module = base.Module;
-const TagName = base.TagName;
-const FieldName = base.FieldName;
-const TypeVarName = base.TypeVarName;
 const StringLiteral = base.StringLiteral;
 const TypeVar = types.TypeVar;
+const Problem = problem.Problem;
 
 const Self = @This();
 
@@ -27,41 +26,35 @@ patterns: Pattern.List,
 patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
 type_vars: collections.SafeList(TypeVar),
-type_var_names: TypeVarName.Store,
+// type_var_names: Ident.Store,
 ingested_files: IngestedFile.List,
 
-pub fn init(allocator: std.mem.Allocator) Self {
+/// Initialize the IR for a module's canonicalization info.
+///
+/// When caching the can IR for a siloed module, we can avoid
+/// manual deserialization of the cached data into IR by putting
+/// the entirety of the IR into an arena that holds nothing besides
+/// the IR. We can then load the cached binary data back into memory
+/// with only 2 syscalls.
+///
+/// Since the can IR holds indices into the `ModuleEnv`, we need
+/// the `ModuleEnv` to also be owned by the can IR to cache it.
+pub fn init(arena: *std.heap.ArenaAllocator) Self {
     return Self{
-        .env = base.ModuleEnv.init(allocator),
-        .aliases = Alias.List.init(allocator),
-        .defs = Def.List.init(allocator),
-        .exprs = Expr.List.init(allocator),
-        .exprs_at_regions = ExprAtRegion.List.init(allocator),
-        .typed_exprs_at_regions = TypedExprAtRegion.List.init(allocator),
-        .when_branches = WhenBranch.List.init(allocator),
-        .patterns = Pattern.List.init(allocator),
-        .patterns_at_regions = PatternAtRegion.List.init(allocator),
-        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(allocator),
-        .type_vars = collections.SafeList(TypeVar).init(allocator),
-        .type_var_names = TypeVarName.Store.init(allocator),
-        .ingested_files = IngestedFile.List.init(allocator),
+        .env = base.ModuleEnv.init(arena),
+        .aliases = Alias.List.init(arena.allocator()),
+        .defs = Def.List.init(arena.allocator()),
+        .exprs = Expr.List.init(arena.allocator()),
+        .exprs_at_regions = ExprAtRegion.List.init(arena.allocator()),
+        .typed_exprs_at_regions = TypedExprAtRegion.List.init(arena.allocator()),
+        .when_branches = WhenBranch.List.init(arena.allocator()),
+        .patterns = Pattern.List.init(arena.allocator()),
+        .patterns_at_regions = PatternAtRegion.List.init(arena.allocator()),
+        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(arena.allocator()),
+        .type_vars = collections.SafeList(TypeVar).init(arena.allocator()),
+        // .type_var_names = Ident.Store.init(arena.allocator()),
+        .ingested_files = IngestedFile.List.init(arena.allocator()),
     };
-}
-
-pub fn deinit(self: *Self) void {
-    self.env.deinit();
-    self.aliases.deinit();
-    self.defs.deinit();
-    self.exprs.deinit();
-    self.exprs_at_regions.deinit();
-    self.typed_exprs_at_regions.deinit();
-    self.when_branches.deinit();
-    self.patterns.deinit();
-    self.patterns_at_regions.deinit();
-    self.typed_patterns_at_regions.deinit();
-    self.type_vars.deinit();
-    self.type_var_names.deinit();
-    self.ingested_files.deinit();
 }
 
 pub const RigidVariables = struct {
@@ -81,7 +74,7 @@ pub const Expr = union(enum) {
 
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
-    Num: struct {
+    num: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
@@ -89,47 +82,47 @@ pub const Expr = union(enum) {
     },
 
     // Int and Float store a variable to generate better error messages
-    Int: struct {
+    int: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
-    Float: struct {
+    float: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
     },
-    Str: StringLiteral.Idx,
+    str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
-    SingleQuote: struct {
+    single_quote: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
         bound: types.num.Bound.SingleQuote,
     },
-    List: struct {
+    list: struct {
         elem_var: TypeVar,
         elems: ExprAtRegion.Slice,
     },
 
-    Var: struct {
+    @"var": struct {
         ident: Ident.Idx,
         type_var: TypeVar,
     },
 
-    When: When.Idx,
-    If: struct {
+    when: When.Idx,
+    @"if": struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Slice,
         final_else: ExprAtRegion.Idx,
     },
 
-    Let: struct {
+    let: struct {
         defs: Def.Slice,
         cont: ExprAtRegion.Idx,
         // cycle_mark: IllegalCycleMark,
@@ -137,7 +130,7 @@ pub const Expr = union(enum) {
 
     /// This is *only* for calling functions, not for tag application.
     /// The Tag variant contains any applied values inside it.
-    Call: struct {
+    call: struct {
         // TODO:
         // Box<(Variable, Loc<Expr>, Variable, Variable)>,
         args: TypedExprAtRegion.Slice,
@@ -147,23 +140,23 @@ pub const Expr = union(enum) {
     // Closure: ClosureData,
 
     // Product Types
-    Record: struct {
+    record: struct {
         record_var: TypeVar,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
     },
 
     /// Empty record constant
-    EmptyRecord,
+    empty_record,
 
     /// The "crash" keyword
-    Crash: struct {
+    crash: struct {
         msg: ExprAtRegion.Idx,
         ret_var: TypeVar,
     },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
-    RecordAccess: struct {
+    record_access: struct {
         record_var: TypeVar,
         ext_var: TypeVar,
         field_var: TypeVar,
@@ -172,14 +165,14 @@ pub const Expr = union(enum) {
     },
 
     // Sum Types
-    Tag: struct {
+    tag: struct {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
-        name: FieldName.Idx,
+        name: Ident.Idx,
         arguments: TypedExprAtRegion.Slice,
     },
 
-    ZeroArgumentTag: struct {
+    zero_argument_tag: struct {
         closure_name: Ident.Idx,
         variant_var: TypeVar,
         ext_var: TypeVar,
@@ -187,7 +180,7 @@ pub const Expr = union(enum) {
     },
 
     /// Compiles, but will crash if reached
-    // RuntimeError: RuntimeError,
+    RuntimeError: Problem.Idx,
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
@@ -242,7 +235,7 @@ pub const IntValue = struct {
     bytes: [16]u8,
     kind: Kind,
 
-    pub const Kind = enum { I128, U128 };
+    pub const Kind = enum { i128, u128 };
 };
 
 pub const ExprAtRegion = struct {
@@ -322,50 +315,50 @@ pub const WhenBranch = struct {
 /// A pattern, including possible problems (e.g. shadowing) so that
 /// codegen can generate a runtime error if this pattern is reached.
 pub const Pattern = union(enum) {
-    Identifier: Module.Idx,
-    As: struct {
+    identifier: Module.Idx,
+    as: struct {
         pattern: Pattern.Idx,
         region: Region,
         ident: Ident.Idx,
     },
-    AppliedTag: struct {
+    applied_tag: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
         tag_name: Ident.Idx,
         arguments: TypedPatternAtRegion.Slice,
     },
-    RecordDestructure: struct {
+    record_destructure: struct {
         whole_var: TypeVar,
         ext_var: TypeVar,
         destructs: RecordDestruct.Slice,
     },
-    List: struct {
+    list: struct {
         list_var: TypeVar,
         elem_var: TypeVar,
         patterns: Pattern.List,
     },
-    NumLiteral: struct {
+    num_literal: struct {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Num,
     },
-    IntLiteral: struct {
+    int_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
-    FloatLiteral: struct {
+    float_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
     },
-    StrLiteral: StringLiteral.Idx,
-    CharLiteral: struct {
+    str_literal: StringLiteral.Idx,
+    char_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
@@ -433,9 +426,9 @@ pub const Content = union(enum) {
     ///
     /// When we auto-generate a type var name, e.g. the "a" in (a -> a), we
     /// change the Option in here from None to Some.
-    FlexVar: ?TypeVarName.Idx,
+    FlexVar: ?Ident.Idx,
     /// name given in a user-written annotation
-    RigidVar: TypeVarName.Idx,
+    RigidVar: Ident.Idx,
     /// name given to a recursion variable
     RecursionVar: struct {
         structure: TypeVar,
@@ -480,7 +473,7 @@ pub const FlatType = union(enum) {
     // ///   x -> A x : a -> [A a, B a, C a]
     // /// or a tag `[A, B, C]`
     // FunctionOrTagUnion: struct {
-    //     name: TagName.Idx,
+    //     name: Ident.Idx,
     //     ident: Ident.Idx,
     //     ext: TagExt,
     // },

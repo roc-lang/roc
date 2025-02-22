@@ -2,10 +2,7 @@ pub const Ident = @import("base/Ident.zig");
 pub const Module = @import("base/Module.zig");
 pub const Region = @import("base/Region.zig");
 pub const Package = @import("base/Package.zig");
-pub const TagName = @import("base/TagName.zig");
-pub const FieldName = @import("base/FieldName.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
-pub const TypeVarName = @import("base/TypeVarName.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
 
 pub const Recursive = enum {
