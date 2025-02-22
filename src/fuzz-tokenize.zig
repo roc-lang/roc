@@ -525,8 +525,8 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.TokenizedBuffer, alloc: std
             .KwInterface => {
                 try buf2.appendSlice("interface");
             },
-            .KwIs => {
-                try buf2.appendSlice("is");
+            .KwMatch => {
+                try buf2.appendSlice("match");
             },
             .KwModule => {
                 try buf2.appendSlice("module");
@@ -546,14 +546,8 @@ fn rebuild_buffer(buf: []const u8, tokens: *tokenize.TokenizedBuffer, alloc: std
             .KwRequires => {
                 try buf2.appendSlice("requires");
             },
-            .KwThen => {
-                try buf2.appendSlice("then");
-            },
             .KwTo => {
                 try buf2.appendSlice("to");
-            },
-            .KwWhen => {
-                try buf2.appendSlice("when");
             },
             .KwWhere => {
                 try buf2.appendSlice("where");
