@@ -34,7 +34,6 @@ fn getDefaultCacheFolder(allocator: Allocator) ![]u8 {
                     ".cache",
                 };
                 const default_cache_folder = try std.fs.path.join(allocator, &default_cache_folder_parts);
-                std.debug.print("{s}\n", .{default_cache_folder});
                 break :blk default_cache_folder;
             },
             .windows => {
@@ -53,8 +52,26 @@ fn getDefaultCacheFolder(allocator: Allocator) ![]u8 {
     };
 }
 
-// , comptime my_fun: fn (str: []const u8) void
-fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]const u8) !void {
+const SaveCacheFileError = error{
+    FailedToMakeCacheFolder,
+    FailedToMakeCacheFile,
+    FailedToWriteToCacheFile,
+};
+
+fn saveCacheFile(roc_cache_folder: []const u8, file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void {
+    const cwd = std.fs.cwd();
+    cwd.makePath(roc_cache_folder) catch {
+        return SaveCacheFileError.FailedToMakeCacheFolder;
+    };
+    const file = cwd.createFile(file_cache_path, .{}) catch {
+        return SaveCacheFileError.FailedToMakeCacheFile;
+    };
+    file.writeAll(file_binary) catch {
+        return SaveCacheFileError.FailedToWriteToCacheFile;
+    };
+}
+
+fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]const u8, comptime save: fn (roc_cache_folder: []const u8, file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void) !void {
     const base_dir = xdg_cache_home orelse try getDefaultCacheFolder(allocator);
     defer {
         if (xdg_cache_home == null) {
@@ -78,18 +95,13 @@ fn saveToCacheInternal(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_c
         else => @panic("FIX ME!!!!!!"),
     };
 
-    const cwd = std.fs.cwd();
-    try cwd.makePath(roc_cache_folder);
-    const file = try cwd.createFile(file_cache_path, .{});
-
-    std.debug.print("{s}\n", .{file_cache_path});
-    try file.writeAll(file_binary);
+    try save(roc_cache_folder, file_cache_path, file_binary);
 }
 
-//fn s(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]u8) void {
-//}
-//
-//
+pub fn saveToCache(allocator: Allocator, roc_cache_file: RocCacheFile, xdg_cache_home: ?[]const u8) !void {
+    try saveToCacheInternal(allocator, roc_cache_file, xdg_cache_home, saveCacheFile);
+}
+
 const test_cache_folder = "./test-cache";
 fn create_test_cache_folder() !void {
     const cwd = std.fs.cwd();
@@ -105,7 +117,7 @@ fn delete_test_cache_folder() void {
 test "Cache folder is correct" {
     try create_test_cache_folder();
     defer delete_test_cache_folder();
-    try saveToCacheInternal(std.testing.allocator, RocCacheFile{ .compiler = .{
+    try saveToCache(std.testing.allocator, RocCacheFile{ .compiler = .{
         .version_name = "1.0.0",
         .binary = "Str.concat(\"Hi \", \"there.\")",
     } }, test_cache_folder);
