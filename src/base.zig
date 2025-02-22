@@ -4,6 +4,7 @@ pub const Region = @import("base/Region.zig");
 pub const Package = @import("base/Package.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
+pub const SExpr = @import("base/SExpr.zig");
 
 pub const Recursive = enum {
     NotRecursive,

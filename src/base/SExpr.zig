@@ -254,16 +254,6 @@ pub fn Generator(comptime T: type, comptime V: type) type {
     };
 }
 
-pub fn freeTokens(allocator: Allocator, tokens: []Token) void {
-    for (tokens) |token| {
-        switch (token) {
-            .ident, .value => |str| allocator.free(str),
-            .lparen, .rparen => {},
-        }
-    }
-    allocator.free(tokens);
-}
-
 const TestContext = struct {
     allocator: Allocator,
     value_strings: std.ArrayList([]u8),

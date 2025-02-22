@@ -25,6 +25,7 @@ test {
     testing.refAllDeclsRecursive(@import("check/parse.zig"));
     testing.refAllDeclsRecursive(@import("check/parse/IR.zig"));
     testing.refAllDeclsRecursive(@import("check/parse/tokenize.zig"));
+    testing.refAllDeclsRecursive(@import("check/parse/SExpr.zig"));
     testing.refAllDeclsRecursive(@import("check/resolve_imports.zig"));
     testing.refAllDeclsRecursive(@import("check/check_types.zig"));
     testing.refAllDeclsRecursive(@import("check/canonicalize.zig"));

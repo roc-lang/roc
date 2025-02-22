@@ -487,8 +487,6 @@ pub const NodeStore = struct {
 
     // Idx types
 
-    /// An index for a File node.  Should not be constructed externally.
-    pub const FileIdx = struct { id: u32 };
     /// An index for a Body node.  Should not be constructed externally.
     pub const BodyIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
@@ -522,7 +520,7 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
-    pub fn addFile(store: *NodeStore, file: File) FileIdx {
+    pub fn addFile(store: *NodeStore, file: File) void {
         const start = store.extra_data.items.len;
         store.extra_data.append(file.header.id) catch exitOnOom();
         for (file.statements) |statement| {
@@ -537,8 +535,6 @@ pub const NodeStore = struct {
                 .rhs = @as(u32, @intCast(file.statements.len + 1)),
             },
         });
-
-        return FileIdx{ .id = 0 };
     }
 
     pub fn addBody(store: *NodeStore, body: Body) BodyIdx {
@@ -964,8 +960,8 @@ pub const NodeStore = struct {
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
 
-    pub fn getFile(store: *NodeStore, file: FileIdx) File {
-        const node = store.nodes.get(@enumFromInt(file.id));
+    pub fn getFile(store: *NodeStore) File {
+        const node = store.nodes.get(@enumFromInt(0));
         const header = store.extra_data.items[node.data.lhs];
         const stmt_idxs = store.extra_data.items[(node.data.lhs + 1)..(node.data.lhs + node.data.rhs)];
         std.debug.assert(store.scratch_statements.items.len == 0);
