@@ -3,6 +3,7 @@
 
 const std = @import("std");
 
+// Should blake3Hash be here?
 /// Hashes the given data using the BLAKE3 algorithm.
 pub fn blake3Hash(data: []const u8) [32]u8 {
     var digest: [32]u8 = undefined;

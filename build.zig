@@ -73,12 +73,14 @@ pub fn build(b: *std.Build) void {
     });
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
+    const test_filters = b.option([]const []const u8, "test-filter", "Skip tests that do not match any filter") orelse &[0][]const u8{};
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
+        .filters = test_filters,
     });
     all_tests.root_module.addOptions("build_options", build_options);
 
