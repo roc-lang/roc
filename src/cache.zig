@@ -100,8 +100,8 @@ fn saveCacheFile(file_cache_path: []const u8, file_binary: []const u8) SaveCache
 fn saveToCacheInternal(
     // SKILL_ISSUE: force my formatter to put the arguments in a vertical line
     allocator: Allocator,
-    roc_cache_file: RocCacheFile,
     xdg_cache_home: ?[]const u8,
+    roc_cache_file: RocCacheFile,
     comptime save: fn (file_cache_path: []const u8, file_binary: []const u8) SaveCacheFileError!void,
 ) !void {
     const file_cache_path = switch (roc_cache_file) {
@@ -122,12 +122,15 @@ fn saveToCacheInternal(
 pub fn saveToCache(allocator: Allocator, roc_cache_file: RocCacheFile) !void {
     const xdg_cache_home = getXdgCacheHome(allocator);
     defer allocator.free(xdg_cache_home);
-    try saveToCacheInternal(allocator, roc_cache_file, xdg_cache_home, saveCacheFile);
+    try saveToCacheInternal(allocator, xdg_cache_home, roc_cache_file, saveCacheFile);
 }
 
-//pub fn setRocCompiler(allocator: Allocator, compilerCacheFile: CompilerCacheFile) !void {
-//const parts = [_][]const u8{ test_cache_folder, "roc", relative_path };
-//const sss = try std.fs.path.join(allocator, &parts);
+//pub fn setRocCompilerInternal(allocator: Allocator, version_name: []const u8) !void {
+//}
+//pub fn setRocCompiler(allocator: Allocator, version_name: []const u8) !void {
+//const xdg_cache_home = getXdgCacheHome(allocator);
+//defer allocator.free(xdg_cache_home);
+//try setRocCompilerInternal(allocator, roc_cache_file, xdg_cache_home, saveCacheFile);
 //}
 
 const test_cache_folder = "./test-cache";
@@ -158,7 +161,7 @@ test "Compiler cache should save in the correct place with the correct data" {
     };
     // SKILL_ISSUE: I'm not sure how to set the environment variable in a
     // cross-platform way so my tests don't call this function
-    try saveToCacheInternal(allocator, RocCacheFile{ .compiler = cache_file }, test_cache_folder, saveCacheFile);
+    try saveToCacheInternal(allocator, test_cache_folder, RocCacheFile{ .compiler = cache_file }, saveCacheFile);
     const expected_cache_file_local = try make_test_cache_file_path(allocator, "compiler/1.0.0");
     defer allocator.free(expected_cache_file_local);
 
