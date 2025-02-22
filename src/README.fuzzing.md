@@ -50,14 +50,14 @@ If the test case is complex or interesting, it likely is worthwhile to add a sna
 
 For better fuzzing performance you will want to modify `std.mem.backend_can_use_eql_bytes` to return false, otherwise AFL++ will not be able to observe char-by-char string comparisons and its fuzzing capabilities will be greatly reduced.
 
-This means modifying your copy of the Zig stdlib. If you have ZLS you can simply write `std.mem` anywhere in your code and goto definiton, otherwise you can invoke `zig env` and modify `$std_dir/mem.zig`.
+This means modifying your copy of the Zig stdlib. If you have ZLS you can simply write `std.mem` anywhere in your code and goto definition, otherwise you can invoke `zig env` and modify `$std_dir/mem.zig`.
 
 **Also don't forget to revert this change after you're done!**
 
 ## Advanced Usage
 
 afl++ has a ton of bells and whistle to get way more performance and better results out of it.
-The largest one is probably [running multiple copies of afl (preferrably with different configs)](https://aflplus.plus/docs/fuzzing_in_depth/#c-using-multiple-cores) to use all your compute power.
+The largest one is probably [running multiple copies of afl (preferably with different configs)](https://aflplus.plus/docs/fuzzing_in_depth/#c-using-multiple-cores) to use all your compute power.
 
 Probably the largest other gain is in keeping around and managing a corpus of examples.
 This enables the fuzzer to build up more and more information about the target executable of different execution sessions.

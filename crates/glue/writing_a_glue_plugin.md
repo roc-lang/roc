@@ -1,6 +1,6 @@
 # Writing a glue plugin
 
-In order to write a platform, the language the platform is written in must know how to interoperate with Roc. As Roc is statically typed, the required FFI wrapper code must be tailored to the datatypes that form the FFI boundry between the host and the Roc application. Handily, the `roc glue` subcommand will take these types as defined in a `platform.roc` file and turn them into layout information. A glue plugin then in turn uses this to generate the appropriate source code in a target language. This layout information comes in the form of a data structure that requires some additional explanation.
+In order to write a platform, the language the platform is written in must know how to interoperate with Roc. As Roc is statically typed, the required FFI wrapper code must be tailored to the datatypes that form the FFI boundary between the host and the Roc application. Handily, the `roc glue` subcommand will take these types as defined in a `platform.roc` file and turn them into layout information. A glue plugin then in turn uses this to generate the appropriate source code in a target language. This layout information comes in the form of a data structure that requires some additional explanation.
 
 - [Writing a glue plugin](#writing-a-glue-plugin)
 - [The Types data structure](#the-types-data-structure)
@@ -30,7 +30,7 @@ In order to write a platform, the language the platform is written in must know 
 
 # The Types data structure
 
-`Types` is a data structure that stores the layout information of all types on the host-application FFI boundry for a specific architecture. This includes these types' size, alignment, order of declaration, and their `Shape`.
+`Types` is a data structure that stores the layout information of all types on the host-application FFI boundary for a specific architecture. This includes these types' size, alignment, order of declaration, and their `Shape`.
 
 # The Shape data structure
 
@@ -51,7 +51,7 @@ A number type. Either a signed integer (I8 through I128), an unsigned integer (U
 ## RocStr, RocList, RocDict, RocSet, RocBox
 
 Roc builtin datatypes. The Roc compiler is planned to expose parts of the standard library to glue code via C FFI to avoid having the reimplement them by hand in every host language. In the meantime:
-- The authoratitive Zig implementations for Roc builtins can be found under `crates/compiler/builtins/bitcode/src`. These are more made for use by the compiler, and thus are better used for reference than for human use.
+- The authoritative Zig implementations for Roc builtins can be found under `crates/compiler/builtins/bitcode/src`. These are more made for use by the compiler, and thus are better used for reference than for human use.
 - Rust implementations of the `Str`, `List`, and `Box` datatypes can be found under `crates/roc_std`. These are made for use by humans, and as such are a better example for what their wrapper APIs might look like. Do note that these are not guaranteed to be in sync with their Zig implementations.
 
 ## Struct
@@ -154,7 +154,7 @@ Color : [Red, Green, Blue]
 ```roc
 # shape reported by `roc glue`
 TagUnion (Enumeration {
-    name: "Expr", 
+    name: "Expr",
     size: 1,
     tags: ["Blue", "Green", "Red"]
 })
@@ -343,7 +343,7 @@ ConsList : [
 ```roc
 # shape reported by `roc glue`
 TagUnion (NullableUnwrapped {
-    name: "ConsList", 
+    name: "ConsList",
     nonNullPayload: (@TypeId 3), # == TagUnionPayload { name: ConsList_Cons, .. }
     nonNullTag: "Cons",
     nullTag: "Nil",
@@ -418,7 +418,7 @@ Color [
     name: "Color_Rgb",
     fields: (HasNoClosure [
         # `@TypeId 1` == `Num U8`
-        {id: (@TypeId 1), name: "0"}, 
+        {id: (@TypeId 1), name: "0"},
         {id: (@TypeId 1), name: "1"},
         {id: (@TypeId 1), name: "2"}
     ]),

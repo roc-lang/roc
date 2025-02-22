@@ -4,7 +4,7 @@ pub const num = @import("types/num.zig");
 /// for type unification.
 pub const TypeVar = enum(u32) { _ };
 
-/// Lowest level of the type system, representing the most fundemental or atomic types
+/// Lowest level of the type system, representing the most fundamental or atomic types
 pub const Primitive = union(enum) {
     Int: Int,
     Float: Float,
