@@ -1,4 +1,6 @@
+const base = @import("../../base.zig");
 const IR = @This();
+const Ident = base.Ident;
 
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
@@ -1513,6 +1515,18 @@ pub const NodeStore = struct {
             patterns: []const PatternIdx,
             region: Region,
         },
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
+            _ = fmt;
+            switch (self) {
+                .ident => |ident| {
+                    const token = ir.tokens.tokens.get(ident.ident_tok);
+                    const text = env.idents.getText(token.extra.interned);
+                    try writer.print("{s}", .{text});
+                },
+                else => @panic("formatting for this pattern not yet implemented"),
+            }
+        }
     };
 
     /// Represents an expression.
@@ -1662,3 +1676,44 @@ const TokenizedBuffer = tokenize.TokenizedBuffer;
 const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+
+pub fn toStr(ir: *@This(), env: *base.ModuleEnv, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
+    _ = fmt;
+
+    try writer.print("(parse_ast ", .{});
+
+    const file = ir.store.getFile();
+    const header = ir.store.getHeader(file.header);
+    // const header = self.
+
+    switch (header) {
+        .module => |module| {
+            try writer.print("(header \"module\" (exposes (", .{});
+
+            for (module.exposes) |exposed_idx| {
+                // TODO how to get the token??
+                _ = exposed_idx;
+                try writer.print("exposed_token", .{});
+            }
+
+            try writer.print(")))", .{});
+        },
+        else => @panic("not implemented"),
+    }
+
+    try writer.print(" (statements ", .{});
+    for (file.statements) |stmt_id| {
+        const stmt = ir.store.getStatement(stmt_id);
+        switch (stmt) {
+            .decl => |decl| {
+                const pattern = ir.store.getPattern(decl.pattern);
+                // try writer.print("(decl {})", .{pattern});
+                try pattern.toStr(env, ir, "{}", .{}, writer);
+            },
+            else => @panic("format for this statement not implemented yet"),
+        }
+        try writer.print("(statement)", .{});
+    }
+
+    try writer.print("))", .{});
+}

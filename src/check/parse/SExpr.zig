@@ -6,13 +6,24 @@ const parse = @import("../parse.zig").parse;
 const SExpr = base.SExpr;
 
 const Ident = union(enum) {
+    root,
     header: IR.NodeStore.Header,
     statement: IR.NodeStore.Statement,
 
     fn identToString(ident: @This()) []const u8 {
         switch (ident) {
-            .header => {
-                return "header";
+            .root => {
+                return "parse_ast";
+            },
+            .header => |header| {
+                switch (header) {
+                    .module => |module| {
+                        _ = module;
+                        // module.
+                        return "header \"module\" (exposes ())";
+                    },
+                    else => @panic("not implemented yet"),
+                }
             },
             .statement => {
                 return "statement";
@@ -39,14 +50,20 @@ pub fn toStr(allocator: std.mem.Allocator, parse_ast: *IR) ![]u8 {
     const header = parse_ast.store.getHeader(file.header);
 
     try tokens.append(.lparen);
+    try tokens.append(.{ .ident = .root });
+
+    try tokens.append(.lparen);
     try tokens.append(.{ .ident = .{ .header = header } });
     // TODO push tokens for header "arguments/children"
+    try tokens.append(.rparen);
 
+    try tokens.append(.lparen);
     for (file.statements) |stmt_id| {
         const stmt = parse_ast.store.getStatement(stmt_id);
         try tokens.append(.{ .ident = .{ .statement = stmt } });
         // TODO push tokens for statement "arguments/children"
     }
+    try tokens.append(.rparen);
     try tokens.append(.rparen);
 
     const generate_fns = SExpr.Generator(Ident, Value).GenerateFns{
@@ -69,10 +86,11 @@ fn testHelper(allocator: std.mem.Allocator, source: []const u8, expected: []cons
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
-    const actual = try toStr(testing.allocator, &parse_ast);
-    defer testing.allocator.free(actual);
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    defer buf.deinit();
 
-    try std.testing.expectEqualStrings(expected, actual);
+    try parse_ast.toStr(&env, "{}", .{}, buf.writer().any());
+    try testing.expectEqualStrings(expected, buf.items[0..]);
 }
 
 test "example s-expr" {
@@ -82,7 +100,7 @@ test "example s-expr" {
         \\foo = "bar"
     ;
     const expected =
-        \\(header statement)
+        \\(parse_ast (header) (statement))
     ;
 
     try testHelper(testing.allocator, source, expected);
