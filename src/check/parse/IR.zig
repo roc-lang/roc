@@ -1392,6 +1392,23 @@ pub const NodeStore = struct {
         header: HeaderIdx,
         statements: []const StatementIdx,
         region: Region,
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+            const header = ir.store.getHeader(self.header);
+            try header.toStr(env, ir, writer);
+
+            try writer.print(" (statements ", .{});
+            for (self.statements, 0..) |stmt_id, i| {
+                const stmt = ir.store.getStatement(stmt_id);
+                try stmt.toStr(env, ir, writer);
+
+                if (i < self.statements.len - 1) {
+                    try writer.print(" ", .{});
+                }
+            }
+
+            try writer.print("))", .{});
+        }
     };
 
     /// Represents a Body, or a block of statements.
@@ -1400,6 +1417,21 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
+            try writer.print("(body (", .{});
+
+            for (self.statements, 0..) |stmt_idx, i| {
+                const stmt = ir.store.getStatement(stmt_idx);
+                try stmt.toStr(env, ir, writer);
+
+                if (i + 1 < self.statements.len) {
+                    try writer.print(" ", .{});
+                }
+            }
+
+            try writer.print("))", .{});
+        }
     };
 
     /// Represents a module header.
@@ -1430,6 +1462,27 @@ pub const NodeStore = struct {
         },
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
+            switch (self) {
+                .module => |module| {
+                    try writer.print("(header \"module\" (exposes (", .{});
+
+                    for (module.exposes, 0..) |exposed_idx, i| {
+                        const token = ir.tokens.tokens.get(exposed_idx);
+                        const text = env.idents.getText(token.extra.interned);
+                        try writer.print("\"{s}\"", .{text});
+
+                        if (i + 1 < module.exposes.len) {
+                            try writer.print(" ", .{});
+                        }
+                    }
+
+                    try writer.print(")))", .{});
+                },
+                else => @panic("not implemented"),
+            }
+        }
     };
 
     /// Represents a statement.  Not all statements are valid in all positions.
@@ -1472,6 +1525,39 @@ pub const NodeStore = struct {
             exposes: []const TokenIdx,
             region: Region,
         };
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+            switch (self) {
+                .decl => |decl| {
+                    try writer.print("(decl ", .{});
+
+                    // pattern
+                    const pattern = ir.store.getPattern(decl.pattern);
+                    try pattern.toStr(env, ir, writer);
+
+                    try writer.print(" ", .{});
+
+                    // body
+                    const body = ir.store.getBody(decl.body);
+                    try body.toStr(env, ir, writer);
+
+                    try writer.print(")", .{});
+                },
+                .expr => |expr_stmt| {
+                    try writer.print("(expr ", .{});
+
+                    // expression
+                    const expr = ir.store.getExpr(expr_stmt.expr);
+                    try expr.toStr(env, ir, writer);
+
+                    try writer.print(")", .{});
+                },
+                else => {
+                    std.log.err("format for statement {}", .{self});
+                    @panic("not implemented");
+                },
+            }
+        }
     };
 
     /// Represents a Pattern used in pattern matching.
@@ -1516,16 +1602,18 @@ pub const NodeStore = struct {
             region: Region,
         },
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
-            _ = fmt;
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
+            try writer.print("(pattern ", .{});
             switch (self) {
                 .ident => |ident| {
+                    try writer.print("(ident ", .{});
                     const token = ir.tokens.tokens.get(ident.ident_tok);
                     const text = env.idents.getText(token.extra.interned);
-                    try writer.print("{s}", .{text});
+                    try writer.print("\"{s}\")", .{text});
                 },
                 else => @panic("formatting for this pattern not yet implemented"),
             }
+            try writer.print(")", .{});
         }
     };
 
@@ -1613,6 +1701,23 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
+
+        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+            _ = env;
+            switch (self) {
+                .string => |str| {
+                    const token = ir.tokens.tokens.get(str.token);
+                    const length = token.extra.length;
+                    const start = token.offset;
+                    const text = ir.source[start..(start + length)];
+                    try writer.print("{s}", .{text});
+                },
+                else => {
+                    std.log.err("expression {}", .{self});
+                    @panic("not implemented yet");
+                },
+            }
+        }
     };
 
     pub const PatternRecordField = struct {
@@ -1677,43 +1782,10 @@ const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
-pub fn toStr(ir: *@This(), env: *base.ModuleEnv, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
-    _ = fmt;
-
+pub fn toStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     try writer.print("(parse_ast ", .{});
 
     const file = ir.store.getFile();
-    const header = ir.store.getHeader(file.header);
-    // const header = self.
 
-    switch (header) {
-        .module => |module| {
-            try writer.print("(header \"module\" (exposes (", .{});
-
-            for (module.exposes) |exposed_idx| {
-                // TODO how to get the token??
-                _ = exposed_idx;
-                try writer.print("exposed_token", .{});
-            }
-
-            try writer.print(")))", .{});
-        },
-        else => @panic("not implemented"),
-    }
-
-    try writer.print(" (statements ", .{});
-    for (file.statements) |stmt_id| {
-        const stmt = ir.store.getStatement(stmt_id);
-        switch (stmt) {
-            .decl => |decl| {
-                const pattern = ir.store.getPattern(decl.pattern);
-                // try writer.print("(decl {})", .{pattern});
-                try pattern.toStr(env, ir, "{}", .{}, writer);
-            },
-            else => @panic("format for this statement not implemented yet"),
-        }
-        try writer.print("(statement)", .{});
-    }
-
-    try writer.print("))", .{});
+    try file.toStr(env, ir, writer);
 }

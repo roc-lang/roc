@@ -89,3 +89,45 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
         }
     }
 }
+
+// TODO move this somewhere better, for now it's here to keep it simple.
+fn testSExprHelper(allocator: std.mem.Allocator, source: []const u8, expected: []const u8) !void {
+
+    // arena for the env
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
+    // parse our source
+    var parse_ast = parse(&env, testing.allocator, source);
+    defer parse_ast.deinit();
+
+    // shouldn't be required in future
+    parse_ast.store.emptyScratch();
+
+    // buffer to write our SExpr to
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    // convert the AST to our SExpr
+    try parse_ast.toStr(&env, buf.writer().any());
+
+    // TODO in future we should just write the SExpr to a file and snapshot it
+    // for now we are comparing strings to keep it simple
+    try testing.expectEqualStrings(expected, buf.items[0..]);
+}
+
+test "example s-expr" {
+    const source =
+        \\module [foo, bar]
+        \\
+        \\foo = "hey"
+        \\bar = "yo"
+    ;
+    const expected =
+        \\(parse_ast (header "module" (exposes ("foo" "bar"))) (statements (decl (pattern (ident "foo")) (body ((expr "hey")))) (decl (pattern (ident "bar")) (body ((expr "yo"))))))
+    ;
+
+    try testSExprHelper(testing.allocator, source, expected);
+}
