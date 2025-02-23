@@ -23,6 +23,15 @@ pub const Diagnostic = struct {
         missing_header,
         list_not_closed,
         missing_arrow,
+        expected_provides_open_square,
+        expected_provides,
+        expected_provides_close_square,
+        expected_package_platform_open_curly,
+        expected_package_or_platform_name,
+        expected_package_or_platform_colon,
+        expected_platform_string,
+        expected_package_or_platform_string,
+        expected_package_platform_close_curly,
     };
 };
 
@@ -246,6 +255,11 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         float,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        string_part,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -592,7 +606,7 @@ pub const NodeStore = struct {
                     .num_provides = @as(u22, @intCast(app.provides.len)),
                 }));
 
-                store.extra_data.append(app.platform) catch exitOnOom();
+                store.extra_data.append(app.platform.id) catch exitOnOom();
 
                 for (app.packages) |p| {
                     store.extra_data.append(p.id) catch exitOnOom();
@@ -703,6 +717,7 @@ pub const NodeStore = struct {
             .string => |s| {
                 node.tag = .string_patt;
                 node.main_token = s.string_tok;
+                node.data.lhs = s.expr.id;
             },
             .record => |r| {
                 node.tag = .record_patt;
@@ -772,6 +787,10 @@ pub const NodeStore = struct {
             },
             .float => |e| {
                 node.tag = .float;
+                node.main_token = e.token;
+            },
+            .string_part => |e| {
+                node.tag = .string_part;
                 node.main_token = e.token;
             },
             .string => |e| {
@@ -990,7 +1009,7 @@ pub const NodeStore = struct {
                 const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
                 const data = store.extra_data.items[extra_data_start..(extra_data_start + rhs.num_packages + rhs.num_provides + 1)];
                 var position: u32 = 0;
-                const platform = data[0];
+                const platform = .{ .id = data[0] };
                 position += 1;
                 std.debug.assert(store.scratch_statements.items.len == 0);
                 const scratch_rf_top = store.scratch_record_fields.items.len;
@@ -1109,6 +1128,7 @@ pub const NodeStore = struct {
                 return .{ .string = .{
                     .string_tok = node.main_token,
                     .region = emptyRegion(),
+                    .expr = .{ .id = node.data.lhs },
                 } };
             },
             .number_patt => {
@@ -1236,23 +1256,22 @@ pub const NodeStore = struct {
                     .token = node.main_token,
                 } };
             },
+            .string_part => {
+                return .{ .string_part = .{
+                    .region = emptyRegion(),
+                    .token = node.main_token,
+                } };
+            },
             .string => {
-                if (node.data.rhs > 0) {
-                    const scratch_top = store.scratch_exprs.items.len;
-                    for (store.extra_data.items[node.data.lhs..(node.data.lhs + node.data.rhs)]) |d| {
-                        store.scratch_exprs.append(.{ .id = d }) catch exitOnOom();
-                    }
-                    const parts = store.scratch_exprs.items[scratch_top..];
-                    store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-                    return .{ .string = .{
-                        .token = node.main_token,
-                        .parts = parts,
-                        .region = emptyRegion(),
-                    } };
+                const scratch_top = store.scratch_exprs.items.len;
+                for (store.extra_data.items[node.data.lhs..(node.data.lhs + node.data.rhs)]) |d| {
+                    store.scratch_exprs.append(.{ .id = d }) catch exitOnOom();
                 }
+                const parts = store.scratch_exprs.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
                 return .{ .string = .{
                     .token = node.main_token,
-                    .parts = &.{},
+                    .parts = parts,
                     .region = emptyRegion(),
                 } };
             },
@@ -1408,7 +1427,7 @@ pub const NodeStore = struct {
     pub const Header = union(enum) {
         app: struct {
             provides: []const TokenIdx, // This should probably be a Interned Ident token
-            platform: TokenIdx,
+            platform: ExprIdx,
             platform_name: TokenIdx,
             packages: []const RecordFieldIdx,
             region: Region,
@@ -1493,6 +1512,7 @@ pub const NodeStore = struct {
         string: struct {
             string_tok: TokenIdx,
             region: Region,
+            expr: ExprIdx,
         },
         record: struct {
             fields: []const PatternRecordFieldIdx,
@@ -1526,6 +1546,10 @@ pub const NodeStore = struct {
             region: Region,
         },
         float: struct {
+            token: TokenIdx,
+            region: Region,
+        },
+        string_part: struct { // TODO: this should be more properly represented in its own union enum
             token: TokenIdx,
             region: Region,
         },
