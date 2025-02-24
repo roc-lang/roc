@@ -153,9 +153,7 @@ const Context = struct {
             .type = ty,
         };
 
-        // TODO union
-        self.env.type_store.set(self.first, desc);
-        self.env.type_store.set(self.second, desc);
+        self.env.type_store.merge(self.first, self.second, desc);
         self.result.has_changed = true;
     }
 };
