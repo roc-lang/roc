@@ -1609,21 +1609,18 @@ pub const NodeStore = struct {
         },
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            var children = std.ArrayList(sexpr.Node).init(env.arena.allocator());
             switch (self) {
                 .ident => |ident| {
                     const token = ir.tokens.tokens.get(ident.ident_tok);
-
-                    // TODO why does using this text value cause a segfault?
-                    // it must be a lifetime issue...
                     const text = env.idents.getText(token.extra.interned);
-                    _ = text;
+
+                    try children.append(.{ .string = text });
 
                     return .{
                         .node = .{
                             .value = "ident",
-                            .children = &.{
-                                .{ .string = "TODO" },
-                            },
+                            .children = children.items,
                         },
                     };
                 },

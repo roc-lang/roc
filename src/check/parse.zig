@@ -126,7 +126,7 @@ test "example s-expr" {
         \\bar = "yo"
     ;
     const expected =
-        \\(file (header 'foo' 'bar') (decl (ident 'TODO') (body (expr '"hey"'))) (decl (ident 'TODO') (body (expr '"yo"'))))
+        \\(file (header 'foo' 'bar') (decl (ident 'foo') (body (expr '"hey"'))) (decl (ident 'bar') (body (expr '"yo"'))))
     ;
 
     try testSExprHelper(testing.allocator, source, expected);
