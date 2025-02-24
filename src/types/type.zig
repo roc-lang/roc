@@ -118,14 +118,6 @@ pub const Type = union(enum) {
         }
     }
 
-    const Slot = packed struct {
-        tag: enum(u1) { root, redirect },
-        value: u31,
-
-        const UNINITIALIZED: Slot = .{ .tag = .root, .value = 0 };
-        const List = std.ArrayList(Slot);
-    };
-
     pub const Idx = enum(u32) { _ };
 
     pub const Store = struct {
@@ -133,6 +125,14 @@ pub const Type = union(enum) {
         pending: usize,
         slots: Slot.List,
         descriptors: Descriptor.List,
+
+        const Slot = packed struct {
+            tag: enum(u1) { root, redirect },
+            value: u31,
+
+            const UNINITIALIZED: Slot = .{ .tag = .root, .value = 0 };
+            const List = std.ArrayList(Slot);
+        };
 
         pub fn init(allocator: std.mem.Allocator) Store {
             var store = Store{
