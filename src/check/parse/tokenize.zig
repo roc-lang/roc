@@ -101,6 +101,7 @@ pub const Token = struct {
         TripleDot,
         OpColon,
         OpArrow,
+        OpFatArrow,
         OpBackslash,
 
         // Keywords
@@ -1038,6 +1039,9 @@ pub const Tokenizer = struct {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
                         self.output.pushTokenNormal(.OpEquals, start, 2);
+                    } else if (self.cursor.peekAt(1) == '>') {
+                        self.cursor.pos += 2;
+                        self.output.pushTokenNormal(.OpFatArrow, start, 2);
                     } else {
                         self.cursor.pos += 1;
                         self.output.pushTokenNormal(.OpAssign, start, 1);
@@ -1690,6 +1694,11 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .OpArrow => {
                 std.debug.assert(length == 2);
                 try buf2.append('-');
+                try buf2.append('>');
+            },
+            .OpFatArrow => {
+                std.debug.assert(length == 2);
+                try buf2.append('=');
                 try buf2.append('>');
             },
             .OpBackslash => {

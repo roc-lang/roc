@@ -50,28 +50,48 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     fmt.ast.store.emptyScratch();
     const file = fmt.ast.store.getFile(FileIdx{ .id = 0 });
     fmt.formatHeader(file.header);
+    var newline_behavior: NewlineBehavior = .extra_newline_needed;
     for (file.statements) |s| {
         fmt.ensureNewline();
-        fmt.newline();
-        fmt.formatStatement(s);
+        if (newline_behavior == .extra_newline_needed) {
+            fmt.newline();
+        }
+        newline_behavior = fmt.formatStatement(s);
     }
     return fmt.buffer.toOwnedSlice() catch exitOnOom();
 }
 
-fn formatStatement(fmt: *Formatter, si: StatementIdx) void {
+const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
+
+fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
     const statement = fmt.ast.store.getStatement(si);
     switch (statement) {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(" = ") catch exitOnOom();
             fmt.formatBody(d.body);
+            return .extra_newline_needed;
         },
         .expr => |e| {
             fmt.formatExpr(e.expr);
+            return .extra_newline_needed;
         },
         .import => |i| {
             fmt.buffer.appendSlice("import ") catch exitOnOom();
             fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
+            return .extra_newline_needed;
+        },
+        .type_decl => |d| {
+            fmt.formatTypeHeader(d.header);
+            fmt.pushAll(" : ");
+            fmt.formatTypeAnno(d.anno);
+            return .extra_newline_needed;
+        },
+        .type_anno => |t| {
+            fmt.pushTokenText(t.name);
+            fmt.pushAll(" : ");
+            fmt.formatTypeAnno(t.anno);
+            return .no_extra_newline;
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}\n", .{@tagName(statement)});
@@ -220,6 +240,18 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         },
         .tag => |t| {
             fmt.formatIdent(t.tag_tok, null);
+            if (t.args.len > 0) {
+                fmt.push('(');
+                var i: usize = 0;
+                for (t.args) |arg| {
+                    fmt.formatPattern(arg);
+                    if (i < (t.args.len - 1)) {
+                        fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                fmt.push(')');
+            }
         },
         .string => |s| {
             fmt.formatExpr(s.expr);
@@ -346,16 +378,122 @@ fn formatBody(fmt: *Formatter, bi: BodyIdx) void {
         for (body.statements) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
-            fmt.formatStatement(s);
+            _ = fmt.formatStatement(s);
         }
         fmt.ensureNewline();
         fmt.curr_indent -= 1;
         fmt.pushIndent();
         fmt.buffer.append('}') catch exitOnOom();
     } else if (body.statements.len == 1) {
-        fmt.formatStatement(body.statements[0]);
+        _ = fmt.formatStatement(body.statements[0]);
     } else {
         fmt.pushAll("{}");
+    }
+}
+
+fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) void {
+    const h = fmt.ast.store.getTypeHeader(header);
+    fmt.pushTokenText(h.name);
+    if (h.args.len > 0) {
+        fmt.push(' ');
+        var i: usize = 0;
+        for (h.args) |arg| {
+            fmt.pushTokenText(arg);
+            if (i < (h.args.len - 1)) {
+                fmt.push(' ');
+            }
+            i += 1;
+        }
+    }
+}
+
+fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
+    const a = fmt.ast.store.getTypeAnno(anno);
+    switch (a) {
+        .ty_var => |v| {
+            fmt.pushTokenText(v.tok);
+        },
+        .tag => |t| {
+            fmt.pushTokenText(t.tok);
+            if (t.args.len > 0) {
+                fmt.push('(');
+                var i: usize = 0;
+                for (t.args) |arg| {
+                    fmt.formatTypeAnno(arg);
+                    if (i < (t.args.len - 1)) {
+                        fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                fmt.push(')');
+            }
+        },
+        .tuple => |t| {
+            fmt.push('(');
+            var i: usize = 0;
+            for (t.annos) |an| {
+                fmt.formatTypeAnno(an);
+                if (i < (t.annos.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(')');
+        },
+        .record => |r| {
+            if (r.fields.len == 0) {
+                fmt.pushAll("{}");
+                return;
+            }
+            fmt.pushAll("{ ");
+            var i: usize = 0;
+            for (r.fields) |idx| {
+                const field = fmt.ast.store.getAnnoRecordField(idx);
+                fmt.pushTokenText(field.name);
+                fmt.pushAll(" : ");
+                fmt.formatTypeAnno(field.ty);
+                if (i < (r.fields.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.pushAll(" }");
+        },
+        .tag_union => |t| {
+            fmt.push('[');
+            var i: usize = 0;
+            for (t.tags) |tag| {
+                fmt.formatTypeAnno(tag);
+                if (i < (t.tags.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.push(']');
+        },
+        .@"fn" => |f| {
+            var i: usize = 0;
+            for (f.args) |idx| {
+                fmt.formatTypeAnno(idx);
+                if (i < (f.args.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.pushAll(" -> ");
+            fmt.formatTypeAnno(f.ret);
+        },
+        .parens => |p| {
+            fmt.push('(');
+            fmt.formatTypeAnno(p.anno);
+            fmt.push(')');
+        },
+        .star => |_| {
+            fmt.push('*');
+        },
+        .underscore => |_| {
+            fmt.push('_');
+        },
     }
 }
 
@@ -529,8 +667,19 @@ test "Syntax grab bag" {
         \\
         \\import pf.Stdout
         \\
+        \\Map a b : List(a), (a -> b) -> List(b)
+        \\
+        \\Foo : (Bar, Baz)
+        \\
+        \\Some a : { foo : Ok(a), bar : Something }
+        \\
+        \\Maybe a : [Some(a), None]
+        \\
+        \\SomeFunc a : Maybe(a), a -> Maybe(a)
+        \\
         \\add_one_oneline = |num| if num 2 else 5
         \\
+        \\add_one : (U64 -> U64)
         \\add_one = |num| {
         \\    other = 1
         \\    if num {
@@ -558,8 +707,12 @@ test "Syntax grab bag" {
         \\    (1, 2 | 5, 3) -> 123
         \\    { foo: 1, bar: 2, ..rest } -> 12
         \\    { foo: 1, bar: 2 | 7 } -> 12
+        \\    Ok(123) -> 123
+        \\    Ok(Some(dude)) -> dude
+        \\    TwoArgs("hello", Some("world")) -> 1000
         \\}
         \\
+        \\main! : List(String) -> Result({}, _)
         \\main! = |_| {
         \\    world = "World"
         \\    number = 123

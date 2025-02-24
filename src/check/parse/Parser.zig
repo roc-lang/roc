@@ -69,11 +69,26 @@ pub fn advanceOne(self: *Parser) void {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
 }
 
+const ExpectError = error{expected_not_found};
+
+pub fn expect(self: *Parser, expected: Token.Tag) !void {
+    if (self.peek() != expected) {
+        return ExpectError.expected_not_found;
+    }
+    self.advance();
+}
+
 pub fn peek(self: *Parser) Token.Tag {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
 
+pub fn peekLast(self: Parser) ?Token.Tag {
+    if (self.pos == 0) {
+        return null;
+    }
+    return self.tok_buf.tokens.items(.tag)[self.pos - 1];
+}
 pub fn peekNext(self: Parser) Token.Tag {
     const next = self.pos + 1;
     if (next >= self.tok_buf.tokens.len) {
@@ -135,10 +150,18 @@ pub fn parseFile(self: *Parser) void {
     });
 }
 
-fn parseCollection(comptime T: type, self: *Parser, end_token: Token.Tag, parser: fn (*Parser) T) void {
-    _ = self;
-    _ = end_token;
-    _ = parser;
+fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratch: *std.ArrayList(T), parser: fn (*Parser) T) ExpectError!usize {
+    const scratch_top = scratch.items.len;
+    while (self.peek() != end_token) {
+        scratch.append(parser(self)) catch exitOnOom();
+        self.expect(.Comma) catch {
+            break;
+        };
+    }
+    self.expect(end_token) catch {
+        return ExpectError.expected_not_found;
+    };
+    return scratch_top;
 }
 
 /// Parses a module header using the following grammar:
@@ -339,8 +362,8 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {
-                self.advance();
-                self.advance();
+                self.advance(); // Advance past LowerIdent
+                self.advance(); // Advance past OpAssign
                 const idx = self.parseBody();
                 const patt_idx = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
@@ -355,6 +378,16 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                     self.advance();
                 }
                 return statement_idx;
+            } else if (self.peekNext() == .OpColon) {
+                self.advance(); // Advance past LowerIdent
+                self.advance(); // Advance past OpColon
+                const anno = self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = self.store.addStatement(.{ .type_anno = .{
+                    .anno = anno,
+                    .name = start,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
             } else {
                 // If not a decl
                 const expr = self.parseExpr();
@@ -368,7 +401,31 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                 return statement_idx;
             }
         },
+        .UpperIdent => {
+            const start = self.pos;
+            if (self.peekNext() == .OpColon or self.peekNext() == .LowerIdent) {
+                const header = self.parseTypeHeader();
+                if (self.peek() != .OpColon) {
+                    return self.pushMalformed(IR.NodeStore.StatementIdx, .unexpected_token);
+                }
+                self.advance();
+                const anno = self.parseTypeAnno(.not_looking_for_args);
+                const statement_idx = self.store.addStatement(.{ .type_decl = .{
+                    .header = header,
+                    .anno = anno,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                return statement_idx;
+            }
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .expr = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
         .KwExpect => {
+            self.advance();
             return null;
         },
         else => {
@@ -408,11 +465,37 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 self.advance();
             },
             .UpperIdent => {
-                pattern = self.store.addPattern(.{ .tag = .{
-                    .region = .{ .start = start, .end = self.pos },
-                    .tag_tok = start,
-                } });
-                self.advance();
+                if (self.peekNext() != .NoSpaceOpenRound) {
+                    pattern = self.store.addPattern(.{ .tag = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .args = &.{},
+                        .tag_tok = start,
+                    } });
+                    self.advance();
+                } else {
+                    self.advance(); // Advance past Upperident
+                    self.advance(); // Advance past NoSpaceOpenRound
+                    // Parse args
+                    const scratch_top = self.store.scratch_patterns.items.len;
+                    defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                    while (self.peek() != .CloseRound) {
+                        self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                        if (self.peek() != .Comma) {
+                            break;
+                        }
+                        self.advance();
+                    }
+                    if (self.peek() != .CloseRound) {
+                        return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                    }
+                    self.advance();
+                    const args = self.store.scratch_patterns.items[scratch_top..];
+                    pattern = self.store.addPattern(.{ .tag = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .args = args,
+                        .tag_tok = start,
+                    } });
+                }
             },
             .StringStart => {
                 pattern = self.parseStringPattern();
@@ -542,7 +625,6 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
         }
     }
     if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
-        std.debug.print("Tokens:\n{any}\n", .{self.tok_buf.tokens.items(.tag)[self.pos..]});
         std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}", .{ self.pos, @tagName(self.peek()) });
     }
     const patterns = self.store.scratch_patterns.items[patterns_scratch_top..];
@@ -550,6 +632,10 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
         .region = .{ .start = outer_start, .end = self.pos },
         .patterns = patterns,
     } });
+}
+
+fn parsePatternNoAlts(self: *Parser) IR.NodeStore.PatternIdx {
+    return self.parsePattern(.alternatives_forbidden);
 }
 
 pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternRecordFieldIdx {
@@ -670,23 +756,13 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             } });
         },
         .OpBar => {
-            const scratch_top = self.store.scratch_patterns.items.len;
-            defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
             self.advance();
-            while (self.peek() != .OpBar) {
-                self.store.scratch_patterns.append(self.parsePattern(.alternatives_forbidden)) catch exitOnOom();
-                if (self.peek() != .Comma) {
-                    break;
-                }
-                self.advance();
-            }
-            if (self.peek() != .OpBar) {
-                // self.addProblem()
-                std.debug.print("Tokens:\n{any}\n", .{self.tok_buf.tokens.items(.tag)[self.pos..]});
+            const scratch_top = self.parseCollection(IR.NodeStore.PatternIdx, .OpBar, &self.store.scratch_patterns, parsePatternNoAlts) catch {
                 std.debug.panic("TODO: Add problem for unclosed args, got {s}\n", .{@tagName(self.peek())});
-            }
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            };
+            defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
             const args = self.store.scratch_patterns.items[scratch_top..];
-            self.advance();
             const body = self.parseBody();
             expr = self.store.addExpr(.{ .lambda = .{
                 .body = body,
@@ -714,10 +790,9 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             self.advance();
             const e = self.parseExpr();
 
-            if (self.peek() != .OpenCurly) {
+            self.expect(.OpenCurly) catch {
                 return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
-            }
-            self.advance();
+            };
             const scratch_top = self.store.scratch_when_branches.items.len;
             defer self.store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
             while (self.peek() != .CloseCurly) {
@@ -752,28 +827,18 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
         var expression = e;
         // Check for an apply...
         if (self.peek() == .NoSpaceOpenRound) {
-            const scratch_top = self.store.scratch_exprs.items.len;
             self.advance();
-            while (self.peek() != .CloseRound) {
-                const arg_expression = self.parseExpr();
-                self.store.scratch_exprs.append(arg_expression) catch exitOnOom();
-                if (self.peek() != .Comma) {
-                    break;
-                }
-                self.advance();
-            }
-            if (self.peek() != .CloseRound) {
-                // Problem
-                std.debug.panic("TODO: malformed apply @ {d}, got {s}", .{ self.pos, @tagName(self.peek()) });
-            }
-            self.advance();
+            const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            };
+            defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
             const args = self.store.scratch_exprs.items[scratch_top..];
+
             expression = self.store.addExpr(.{ .apply = .{
                 .args = args,
                 .@"fn" = e,
                 .region = .{ .start = start, .end = self.pos },
             } });
-            self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
         }
         if (self.peek() == .NoSpaceOpQuestion) {
             expression = self.store.addExpr(.{ .suffix_single_question = .{
@@ -891,6 +956,215 @@ pub fn parseBody(self: *Parser) IR.NodeStore.BodyIdx {
         const body = self.store.addBody(.{ .statements = &.{statement}, .whitespace = null });
         return body;
     }
+}
+
+pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {
+    const start = self.pos;
+    std.debug.assert(self.peek() == .UpperIdent);
+    self.advance(); // Advance past UpperIdent
+    if (self.peek() != .LowerIdent) {
+        return self.store.addTypeHeader(.{
+            .name = start,
+            .args = &.{},
+            .region = .{ .start = start, .end = start },
+        });
+    }
+    const scratch_top = self.store.scratch_tokens.items.len;
+    defer self.store.scratch_tokens.shrinkRetainingCapacity(scratch_top);
+    while (self.peek() == .LowerIdent) {
+        self.store.scratch_tokens.append(self.pos) catch exitOnOom();
+        self.advance(); // Advance past LowerIdent
+    }
+    const args = self.store.scratch_tokens.items[scratch_top..];
+    return self.store.addTypeHeader(.{
+        .name = start,
+        .args = args,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
+const TyFnArgs = enum {
+    not_looking_for_args,
+    looking_for_args,
+};
+
+pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.TypeAnnoIdx {
+    const start = self.pos;
+    var anno: ?IR.NodeStore.TypeAnnoIdx = null;
+
+    switch (self.peek()) {
+        .UpperIdent => {
+            if (self.peekNext() != .NoSpaceOpenRound) {
+                anno = self.store.addTypeAnno(.{ .tag = .{
+                    .tok = self.pos,
+                    .args = &.{},
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+                self.advance(); // Advance past UpperIdent
+            } else {
+                self.advance(); // Advance past UpperIdent
+                self.advance(); // Advance past NoSpaceOpenRound
+                const scratch_top = self.parseCollection(IR.NodeStore.TypeAnnoIdx, .CloseRound, &self.store.scratch_type_annos, parseTypeAnnoInCollection) catch {
+                    return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+                };
+                defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                const args = self.store.scratch_type_annos.items[scratch_top..];
+                anno = self.store.addTypeAnno(.{ .tag = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .tok = start,
+                    .args = args,
+                } });
+            }
+        },
+        .LowerIdent => {
+            anno = self.store.addTypeAnno(.{ .ty_var = .{
+                .tok = self.pos,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance(); // Advance past LowerIdent
+        },
+        .OpenRound => {
+            // Probably a tuple
+            self.advance(); // Advance past OpenRound
+            const after_round = self.pos;
+            const scratch_top = self.store.scratch_type_annos.items.len;
+            defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+            while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow) {
+                // Looking for args here so that we don't capture an un-parenthesized fn's args
+                self.store.scratch_type_annos.append(self.parseTypeAnno(.looking_for_args)) catch exitOnOom();
+                if (self.peek() != .Comma) {
+                    break;
+                }
+                self.advance(); // Advance past Comma
+            }
+            if (self.peek() == .OpArrow or self.peek() == .OpFatArrow) {
+                // use the scratch for the args for the func, advance, get the ret and set this to be a fn
+                // since it's a function, as long as we find the CloseRound we can just return here.
+                const args = self.store.scratch_type_annos.items[scratch_top..];
+                self.advance();
+                const ret = self.parseTypeAnno(.not_looking_for_args);
+                if (self.peek() != .CloseRound) {
+                    return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+                }
+                const function = self.store.addTypeAnno(.{ .@"fn" = .{
+                    .args = args,
+                    .ret = ret,
+                    .region = .{ .start = after_round, .end = self.pos },
+                } });
+                self.advance();
+                return self.store.addTypeAnno(.{ .parens = .{
+                    .anno = function,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            }
+            if (self.peek() != .CloseRound) {
+                return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+            }
+            self.advance(); // Advance past CloseRound
+            const annos = self.store.scratch_type_annos.items[scratch_top..];
+            anno = self.store.addTypeAnno(.{ .tuple = .{
+                .region = .{ .start = start, .end = self.pos },
+                .annos = annos,
+            } });
+        },
+        .OpenCurly => {
+            self.advance(); // Advance past OpenCurly
+            const scratch_top = self.parseCollection(IR.NodeStore.AnnoRecordFieldIdx, .CloseCurly, &self.store.scratch_anno_record_fields, parseAnnoRecordField) catch {
+                return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+            };
+            defer self.store.scratch_anno_record_fields.shrinkRetainingCapacity(scratch_top);
+            const fields = self.store.scratch_anno_record_fields.items[scratch_top..];
+            anno = self.store.addTypeAnno(.{ .record = .{
+                .region = .{ .start = start, .end = self.pos },
+                .fields = fields,
+            } });
+        },
+        .OpenSquare => {
+            self.advance(); // Advance past OpenSquare
+            const scratch_top = self.parseCollection(IR.NodeStore.TypeAnnoIdx, .CloseSquare, &self.store.scratch_type_annos, parseTypeAnnoInCollection) catch {
+                return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+            };
+            defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+            const tags = self.store.scratch_type_annos.items[scratch_top..];
+            anno = self.store.addTypeAnno(.{ .tag_union = .{
+                .region = .{ .start = start, .end = self.pos },
+                .open_anno = null,
+                .tags = tags,
+            } });
+        },
+        .OpStar => {
+            anno = self.store.addTypeAnno(.{ .star = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance(); // Advance past OpStar
+        },
+        .Underscore => {
+            anno = self.store.addTypeAnno(.{ .underscore = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance(); // Advance past Underscore
+        },
+        else => {
+            std.debug.panic("Could not parse type annotation, got {s}@{d}", .{ @tagName(self.peek()), self.pos });
+        },
+    }
+
+    if (anno) |an| {
+        if ((looking_for_args == .not_looking_for_args) and (self.peek() == .Comma or self.peek() == .OpArrow or self.peek() == .OpFatArrow)) {
+            const scratch_top = self.store.scratch_type_annos.items.len;
+            defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+            self.store.scratch_type_annos.append(an) catch exitOnOom();
+            while (self.peek() == .Comma) {
+                self.advance(); // Advance past Comma
+                self.store.scratch_type_annos.append(self.parseTypeAnno(.looking_for_args)) catch exitOnOom();
+            }
+            const args = self.store.scratch_type_annos.items[scratch_top..];
+            if (self.peek() != .OpArrow and self.peek() != .OpFatArrow) {
+                return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .unexpected_token);
+            }
+            self.advance(); // Advance past arrow
+            // TODO: Handle thin vs fat arrow
+            const ret = self.parseTypeAnno(.not_looking_for_args);
+            return self.store.addTypeAnno(.{ .@"fn" = .{
+                .region = .{ .start = start, .end = self.pos },
+                .args = args,
+                .ret = ret,
+            } });
+        }
+        return an;
+    }
+
+    std.debug.panic("Never handled type annotation", .{});
+}
+
+pub fn parseTypeAnnoInCollection(self: *Parser) IR.NodeStore.TypeAnnoIdx {
+    return self.parseTypeAnno(.looking_for_args);
+}
+
+pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
+    const field_start = self.pos;
+    if (self.peek() != .LowerIdent) {
+        while (self.peek() != .CloseCurly and self.peek() != .Comma) {
+            self.advance(); // Advance until we end this field or the record
+        }
+        return self.pushMalformed(IR.NodeStore.AnnoRecordFieldIdx, .unexpected_token);
+    }
+    const name = self.pos;
+    self.advance(); // Advance past LowerIdent
+    if (self.peek() != .OpColon) {
+        while (self.peek() != .CloseCurly and self.peek() != .Comma) {
+            self.advance(); // Advance until we end this field or the record
+        }
+        return self.pushMalformed(IR.NodeStore.AnnoRecordFieldIdx, .unexpected_token);
+    }
+    self.advance(); // Advance past OpColon
+    const ty = self.parseTypeAnno(.looking_for_args);
+
+    return self.store.addAnnoRecordField(.{
+        .region = .{ .start = field_start, .end = self.pos },
+        .name = name,
+        .ty = ty,
+    });
 }
 
 pub fn addProblem(self: *Parser, diagnostic: IR.Diagnostic) void {

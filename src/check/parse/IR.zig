@@ -155,6 +155,11 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
+        ty_var,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_tag,
         /// DESCRIPTION
         /// Example: EXAMPLE
@@ -176,8 +181,35 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         ty_fn,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_star,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_underscore,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_parens,
+
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_record_field,
+
+        // Type Header
+
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_header,
 
         // Patterns
 
@@ -428,6 +460,8 @@ pub const NodeStore = struct {
     scratch_record_fields: std.ArrayList(RecordFieldIdx),
     scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIdx),
     scratch_when_branches: std.ArrayList(WhenBranchIdx),
+    scratch_type_annos: std.ArrayList(TypeAnnoIdx),
+    scratch_anno_record_fields: std.ArrayList(AnnoRecordFieldIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
@@ -444,6 +478,8 @@ pub const NodeStore = struct {
             .scratch_record_fields = std.ArrayList(RecordFieldIdx).init(gpa),
             .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIdx).init(gpa),
             .scratch_when_branches = std.ArrayList(WhenBranchIdx).init(gpa),
+            .scratch_type_annos = std.ArrayList(TypeAnnoIdx).init(gpa),
+            .scratch_anno_record_fields = std.ArrayList(AnnoRecordFieldIdx).init(gpa),
         };
 
         store.nodes.ensureTotalCapacity(capacity);
@@ -460,6 +496,8 @@ pub const NodeStore = struct {
         store.scratch_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
         store.scratch_pattern_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
         store.scratch_when_branches.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
+        store.scratch_type_annos.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
+        store.scratch_anno_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
 
         return store;
     }
@@ -485,6 +523,8 @@ pub const NodeStore = struct {
         store.scratch_record_fields.deinit();
         store.scratch_pattern_record_fields.deinit();
         store.scratch_when_branches.deinit();
+        store.scratch_type_annos.deinit();
+        store.scratch_anno_record_fields.deinit();
     }
 
     /// Ensures that all scratch buffers in the store
@@ -497,9 +537,11 @@ pub const NodeStore = struct {
         store.scratch_record_fields.shrinkRetainingCapacity(0);
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
         store.scratch_when_branches.shrinkRetainingCapacity(0);
+        store.scratch_type_annos.shrinkRetainingCapacity(0);
+        store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
     }
 
-    // Idx types
+    // Node Type Idx types
 
     /// An index for a File node.  Should not be constructed externally.
     pub const FileIdx = struct { id: u32 };
@@ -521,6 +563,12 @@ pub const NodeStore = struct {
     pub const RecordFieldIdx = struct { id: u32 };
     /// An index for a PatternRecordField node.  Should not be constructed externally.
     pub const PatternRecordFieldIdx = struct { id: u32 };
+    /// An index for a TypeHeader node.  Should not be constructed externally.
+    pub const TypeHeaderIdx = struct { id: u32 };
+    /// An index for a TypeAnno node.  Should not be constructed externally.
+    pub const TypeAnnoIdx = struct { id: u32 };
+    /// An index for a AnnoRecordField node.  Should not be constructed externally.
+    pub const AnnoRecordFieldIdx = struct { id: u32 };
 
     // ------------------------------------------------------------------------
     // Creation API - All nodes should be added using these functions
@@ -685,8 +733,16 @@ pub const NodeStore = struct {
                     store.extra_data.append(@as(u32, @intCast(e))) catch exitOnOom();
                 }
             },
-            .type_decl => |_| {},
-            .type_anno => |_| {},
+            .type_decl => |d| {
+                node.tag = .type_decl;
+                node.data.lhs = d.header.id;
+                node.data.rhs = d.anno.id;
+            },
+            .type_anno => |a| {
+                node.tag = .type_anno;
+                node.data.lhs = a.name;
+                node.data.rhs = a.anno.id;
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -709,6 +765,12 @@ pub const NodeStore = struct {
             .tag => |t| {
                 node.tag = .tag_patt;
                 node.main_token = t.tag_tok;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.args.len));
+
+                for (t.args) |a| {
+                    store.extra_data.append(a.id) catch exitOnOom();
+                }
             },
             .number => |n| {
                 node.tag = .number_patt;
@@ -979,6 +1041,122 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
+    pub fn addTypeHeader(store: *NodeStore, header: TypeHeader) TypeHeaderIdx {
+        var node = Node{
+            .tag = .ty_header,
+            .main_token = header.name,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+        };
+
+        node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+        node.data.rhs = @as(u32, @intCast(header.args.len));
+
+        for (header.args) |arg| {
+            store.extra_data.append(arg) catch exitOnOom();
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addAnnoRecordField(store: *NodeStore, field: AnnoRecordField) AnnoRecordFieldIdx {
+        const node = Node{
+            .tag = .ty_record_field,
+            .main_token = 0,
+            .data = .{
+                .lhs = @as(u32, @intCast(field.name)),
+                .rhs = @as(u32, @intCast(field.ty.id)),
+            },
+        };
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
+        var node = Node{
+            .tag = .branch,
+            .main_token = 0,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+        };
+
+        switch (anno) {
+            .ty_var => |v| {
+                node.tag = .ty_var;
+                node.main_token = v.tok;
+            },
+            .star => |_| {
+                node.tag = .ty_star;
+            },
+            .underscore => |_| {
+                node.tag = .ty_underscore;
+            },
+            .tag => |t| {
+                node.tag = .ty_tag;
+                node.main_token = t.tok;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.args.len));
+                for (t.args) |arg| {
+                    store.extra_data.append(arg.id) catch exitOnOom();
+                }
+            },
+            .tag_union => |tu| {
+                node.tag = .ty_union;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                var rhs = TypeAnno.TagUnionRhs{
+                    .open = 0,
+                    .tags_len = @as(u31, @intCast(tu.tags.len)),
+                };
+                for (tu.tags) |tag| {
+                    store.extra_data.append(tag.id) catch exitOnOom();
+                }
+                if (tu.open_anno) |a| {
+                    rhs.open = 1;
+                    store.extra_data.append(a.id) catch exitOnOom();
+                }
+                node.data.rhs = @as(u32, @bitCast(rhs));
+            },
+            .tuple => |t| {
+                node.tag = .ty_tuple;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.annos.len));
+                for (t.annos) |ta| {
+                    store.extra_data.append(ta.id) catch exitOnOom();
+                }
+            },
+            .record => |r| {
+                node.tag = .ty_record;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(r.fields.len));
+                for (r.fields) |field| {
+                    store.extra_data.append(field.id) catch exitOnOom();
+                }
+            },
+            .@"fn" => |f| {
+                node.tag = .ty_fn;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(f.args.len));
+                for (f.args) |arg| {
+                    store.extra_data.append(arg.id) catch exitOnOom();
+                }
+                store.extra_data.append(f.ret.id) catch exitOnOom();
+            },
+            .parens => |p| {
+                node.tag = .ty_parens;
+                node.data.lhs = p.anno.id;
+            },
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
     // ------------------------------------------------------------------------
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
@@ -1103,6 +1281,20 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .type_decl => {
+                return .{ .type_decl = .{
+                    .region = emptyRegion(),
+                    .header = .{ .id = node.data.lhs },
+                    .anno = .{ .id = node.data.rhs },
+                } };
+            },
+            .type_anno => {
+                return .{ .type_anno = .{
+                    .region = emptyRegion(),
+                    .name = node.data.lhs,
+                    .anno = .{ .id = node.data.rhs },
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1119,8 +1311,21 @@ pub const NodeStore = struct {
                 } };
             },
             .tag_patt => {
+                const scratch_top = store.scratch_patterns.items.len;
+                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                const f_start = @as(usize, @intCast(node.data.lhs));
+                const f_end = f_start + @as(usize, @intCast(node.data.rhs));
+
+                const ed = store.extra_data.items[f_start..f_end];
+
+                for (ed) |d| {
+                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                }
+
+                const args = store.scratch_patterns.items[scratch_top..];
                 return .{ .tag = .{
                     .tag_tok = node.main_token,
+                    .args = args,
                     .region = emptyRegion(),
                 } };
             },
@@ -1404,6 +1609,148 @@ pub const NodeStore = struct {
         };
     }
 
+    pub fn getTypeHeader(store: *NodeStore, header: TypeHeaderIdx) TypeHeader {
+        const node = store.nodes.get(@enumFromInt(header.id));
+        std.debug.assert(node.tag == .ty_header);
+        const ed_start = @as(usize, @intCast(node.data.lhs));
+        const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+        const args = store.extra_data.items[ed_start..ed_end];
+        return .{
+            .region = emptyRegion(),
+            .name = node.main_token,
+            .args = args,
+        };
+    }
+
+    pub fn getAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) AnnoRecordField {
+        const node = store.nodes.get(@enumFromInt(idx.id));
+        return .{
+            .region = emptyRegion(),
+            .name = node.data.lhs,
+            .ty = .{ .id = node.data.rhs },
+        };
+    }
+
+    pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
+        const node = store.nodes.get(@enumFromInt(anno.id));
+
+        switch (node.tag) {
+            .ty_var => {
+                return .{ .ty_var = .{
+                    .tok = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_star => {
+                return .{ .star = .{
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_underscore => {
+                return .{ .underscore = .{
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_tag => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const args = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tag = .{
+                    .tok = node.main_token,
+                    .args = args,
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_union => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const rhs = @as(TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
+                var tags_ed_end = ed_start + @as(usize, @intCast(rhs.tags_len));
+                if (rhs.open == 1) {
+                    tags_ed_end -= 1;
+                }
+                const tags_ed = store.extra_data.items[ed_start..tags_ed_end];
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (tags_ed) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                var open_anno: ?TypeAnnoIdx = null;
+                if (rhs.open == 1) {
+                    open_anno = .{ .id = store.extra_data.items[tags_ed_end] };
+                }
+                const tags = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tag_union = .{
+                    .region = emptyRegion(),
+                    .open_anno = open_anno,
+                    .tags = tags,
+                } };
+            },
+            .ty_tuple => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const items = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tuple = .{
+                    .region = emptyRegion(),
+                    .annos = items,
+                } };
+            },
+            .ty_record => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_anno_record_fields.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_anno_record_fields.append(.{ .id = d }) catch exitOnOom();
+                }
+                const fields = store.scratch_anno_record_fields.items[scratch_top..];
+                return .{ .record = .{
+                    .region = emptyRegion(),
+                    .fields = fields,
+                } };
+            },
+            .ty_fn => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const args_ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const args_ed = store.extra_data.items[ed_start..args_ed_end];
+                std.debug.assert(args_ed.len == @as(usize, @intCast(node.data.rhs)));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (args_ed) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const ret = .{ .id = store.extra_data.items[args_ed_end] };
+                const args = store.scratch_type_annos.items[scratch_top..];
+                return .{ .@"fn" = .{
+                    .region = emptyRegion(),
+                    .ret = ret,
+                    .args = args,
+                } };
+            },
+            .ty_parens => {
+                return .{ .parens = .{
+                    .region = emptyRegion(),
+                    .anno = .{ .id = node.data.lhs },
+                } };
+            },
+            else => {
+                std.debug.panic("Expected a valid type annotation node, found {s}", .{@tagName(node.tag)});
+            },
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
     // ------------------------------------------------------------------------
     // Node types - these are the constituent types used in the Node Store API
     // ------------------------------------------------------------------------
@@ -1478,11 +1825,13 @@ pub const NodeStore = struct {
         },
         import: Import,
         type_decl: struct {
-            // TODO: complete this
+            header: TypeHeaderIdx,
+            anno: TypeAnnoIdx,
             region: Region,
         },
         type_anno: struct {
-            // TODO: complete this
+            name: TokenIdx,
+            anno: TypeAnnoIdx,
             region: Region,
         },
 
@@ -1495,6 +1844,60 @@ pub const NodeStore = struct {
         };
     };
 
+    pub const TypeHeader = struct {
+        name: TokenIdx,
+        args: []const TokenIdx,
+        region: Region,
+    };
+
+    pub const TypeAnno = union(enum) {
+        ty_var: struct {
+            tok: TokenIdx,
+            region: Region,
+        },
+        star: struct {
+            region: Region,
+        },
+        underscore: struct {
+            region: Region,
+        },
+        tag: struct {
+            tok: TokenIdx,
+            args: []const TypeAnnoIdx,
+            region: Region,
+        },
+        tag_union: struct {
+            tags: []const TypeAnnoIdx,
+            open_anno: ?TypeAnnoIdx,
+            region: Region,
+        },
+        tuple: struct {
+            annos: []const TypeAnnoIdx,
+            region: Region,
+        },
+        record: struct {
+            fields: []const AnnoRecordFieldIdx,
+            region: Region,
+        },
+        @"fn": struct {
+            args: []const TypeAnnoIdx,
+            ret: TypeAnnoIdx,
+            region: Region,
+        },
+        parens: struct {
+            anno: TypeAnnoIdx,
+            region: Region,
+        },
+
+        const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+    };
+
+    pub const AnnoRecordField = struct {
+        name: TokenIdx,
+        ty: TypeAnnoIdx,
+        region: Region,
+    };
+
     /// Represents a Pattern used in pattern matching.
     pub const Pattern = union(enum) {
         ident: struct {
@@ -1503,6 +1906,7 @@ pub const NodeStore = struct {
         },
         tag: struct {
             tag_tok: TokenIdx,
+            args: []const PatternIdx,
             region: Region,
         },
         number: struct {
