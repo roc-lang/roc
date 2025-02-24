@@ -103,27 +103,27 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.push(')');
         },
+        .string_part => |s| {
+            fmt.pushTokenText(s.token);
+        },
         .string => |s| {
-            if (s.parts.len == 0) {
-                fmt.pushTokenText(s.token);
-                return;
-            }
-
+            fmt.push('"');
             var i: usize = 0;
             while (i < s.parts.len) {
                 const e = fmt.ast.store.getExpr(s.parts[i]);
                 switch (e) {
-                    .string => |str| {
+                    .string_part => |str| {
                         fmt.pushTokenText(str.token);
                     },
                     else => {
-                        fmt.pushAll("{");
+                        fmt.pushAll("${");
                         fmt.formatExpr(s.parts[i]);
                         fmt.push('}');
                     },
                 }
                 i += 1;
             }
+            fmt.push('"');
         },
         .ident => |i| {
             fmt.formatIdent(i.token, i.qualifier);
@@ -221,7 +221,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
             fmt.formatIdent(t.tag_tok, null);
         },
         .string => |s| {
-            fmt.formatIdent(s.string_tok, null);
+            fmt.formatExpr(s.expr);
         },
         .number => |n| {
             fmt.formatIdent(n.number_tok, null);
@@ -314,7 +314,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.pushAll("] { ");
             fmt.pushTokenText(a.platform_name);
             fmt.pushAll(": platform ");
-            fmt.pushTokenText(a.platform);
+            fmt.formatExpr(a.platform);
             fmt.pushAll(" }");
             fmt.newline();
         },
@@ -432,7 +432,7 @@ fn moduleFmtsSame(source: []const u8) !void {
     // or included in the cached build
     defer std.testing.allocator.free(parse_ast.errors);
 
-    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+    try std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors);
     var formatter = Formatter.init(parse_ast, std.testing.allocator);
     defer formatter.deinit();
     const result = formatter.formatFile();
