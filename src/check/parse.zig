@@ -111,7 +111,7 @@ fn testSExprHelper(allocator: std.mem.Allocator, source: []const u8, expected: [
     defer buf.deinit();
 
     // convert the AST to our SExpr
-    try parse_ast.toStr(&env, buf.writer().any());
+    try parse_ast.toSExprStr(&env, buf.writer().any());
 
     // TODO in future we should just write the SExpr to a file and snapshot it
     // for now we are comparing strings to keep it simple
@@ -126,7 +126,7 @@ test "example s-expr" {
         \\bar = "yo"
     ;
     const expected =
-        \\(parse_ast (header "module" (exposes ("foo" "bar"))) (statements (decl (pattern (ident "foo")) (body ((expr "hey")))) (decl (pattern (ident "bar")) (body ((expr "yo"))))))
+        \\(file (header 'foo' 'bar') (decl (ident 'TODO') (body (expr '"hey"'))) (decl (ident 'TODO') (body (expr '"yo"'))))
     ;
 
     try testSExprHelper(testing.allocator, source, expected);

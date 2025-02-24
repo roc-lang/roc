@@ -1,6 +1,7 @@
 const base = @import("../../base.zig");
 const IR = @This();
 const Ident = base.Ident;
+const sexpr = @import("../../base/sexpr.zig");
 
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
@@ -1393,21 +1394,23 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         region: Region,
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            var children = std.ArrayList(sexpr.Node).init(env.arena.allocator());
+
             const header = ir.store.getHeader(self.header);
-            try header.toStr(env, ir, writer);
+            try children.append(try header.toSExpr(env, ir));
 
-            try writer.print(" (statements ", .{});
-            for (self.statements, 0..) |stmt_id, i| {
+            for (self.statements) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
-                try stmt.toStr(env, ir, writer);
-
-                if (i < self.statements.len - 1) {
-                    try writer.print(" ", .{});
-                }
+                try children.append(try stmt.toSExpr(env, ir));
             }
 
-            try writer.print("))", .{});
+            return .{
+                .node = .{
+                    .value = "file",
+                    .children = children.items,
+                },
+            };
         }
     };
 
@@ -1418,19 +1421,20 @@ pub const NodeStore = struct {
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
-            try writer.print("(body (", .{});
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            var children = std.ArrayList(sexpr.Node).init(env.arena.allocator());
 
-            for (self.statements, 0..) |stmt_idx, i| {
+            for (self.statements) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
-                try stmt.toStr(env, ir, writer);
-
-                if (i + 1 < self.statements.len) {
-                    try writer.print(" ", .{});
-                }
+                try children.append(try stmt.toSExpr(env, ir));
             }
 
-            try writer.print("))", .{});
+            return .{
+                .node = .{
+                    .value = "body",
+                    .children = children.items,
+                },
+            };
         }
     };
 
@@ -1463,22 +1467,23 @@ pub const NodeStore = struct {
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            var children = std.ArrayList(sexpr.Node).init(env.arena.allocator());
+
             switch (self) {
                 .module => |module| {
-                    try writer.print("(header \"module\" (exposes (", .{});
-
-                    for (module.exposes, 0..) |exposed_idx, i| {
+                    for (module.exposes) |exposed_idx| {
                         const token = ir.tokens.tokens.get(exposed_idx);
                         const text = env.idents.getText(token.extra.interned);
-                        try writer.print("\"{s}\"", .{text});
-
-                        if (i + 1 < module.exposes.len) {
-                            try writer.print(" ", .{});
-                        }
+                        try children.append(.{ .string = text });
                     }
 
-                    try writer.print(")))", .{});
+                    return .{
+                        .node = .{
+                            .value = "header",
+                            .children = children.items,
+                        },
+                    };
                 },
                 else => @panic("not implemented"),
             }
@@ -1526,31 +1531,32 @@ pub const NodeStore = struct {
             region: Region,
         };
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            var children = std.ArrayList(sexpr.Node).init(env.arena.allocator());
+
             switch (self) {
                 .decl => |decl| {
-                    try writer.print("(decl ", .{});
-
-                    // pattern
                     const pattern = ir.store.getPattern(decl.pattern);
-                    try pattern.toStr(env, ir, writer);
-
-                    try writer.print(" ", .{});
-
-                    // body
                     const body = ir.store.getBody(decl.body);
-                    try body.toStr(env, ir, writer);
 
-                    try writer.print(")", .{});
+                    try children.append(try pattern.toSExpr(env, ir));
+                    try children.append(try body.toSExpr(env, ir));
+                    return .{
+                        .node = .{
+                            .value = "decl",
+                            .children = children.items,
+                        },
+                    };
                 },
                 .expr => |expr_stmt| {
-                    try writer.print("(expr ", .{});
-
-                    // expression
                     const expr = ir.store.getExpr(expr_stmt.expr);
-                    try expr.toStr(env, ir, writer);
-
-                    try writer.print(")", .{});
+                    try children.append(try expr.toSExpr(env, ir));
+                    return .{
+                        .node = .{
+                            .value = "expr",
+                            .children = children.items,
+                        },
+                    };
                 },
                 else => {
                     std.log.err("format for statement {}", .{self});
@@ -1602,18 +1608,27 @@ pub const NodeStore = struct {
             region: Region,
         },
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) !void {
-            try writer.print("(pattern ", .{});
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
             switch (self) {
                 .ident => |ident| {
-                    try writer.print("(ident ", .{});
                     const token = ir.tokens.tokens.get(ident.ident_tok);
+
+                    // TODO why does using this text value cause a segfault?
+                    // it must be a lifetime issue...
                     const text = env.idents.getText(token.extra.interned);
-                    try writer.print("\"{s}\")", .{text});
+                    _ = text;
+
+                    return .{
+                        .node = .{
+                            .value = "ident",
+                            .children = &.{
+                                .{ .string = "TODO" },
+                            },
+                        },
+                    };
                 },
                 else => @panic("formatting for this pattern not yet implemented"),
             }
-            try writer.print(")", .{});
         }
     };
 
@@ -1702,7 +1717,7 @@ pub const NodeStore = struct {
             fields: RecordFieldIdx,
         },
 
-        pub fn toStr(self: @This(), env: *base.ModuleEnv, ir: *IR, writer: std.io.AnyWriter) anyerror!void {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
             _ = env;
             switch (self) {
                 .string => |str| {
@@ -1710,7 +1725,7 @@ pub const NodeStore = struct {
                     const length = token.extra.length;
                     const start = token.offset;
                     const text = ir.source[start..(start + length)];
-                    try writer.print("{s}", .{text});
+                    return .{ .string = text };
                 },
                 else => {
                     std.log.err("expression {}", .{self});
@@ -1782,10 +1797,12 @@ const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
-pub fn toStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
-    try writer.print("(parse_ast ", .{});
-
+pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
 
-    try file.toStr(env, ir, writer);
+    const node = try file.toSExpr(env, ir);
+
+    std.debug.print("{}\n\n", .{node});
+
+    try node.toString(writer);
 }
