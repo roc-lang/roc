@@ -1,4 +1,7 @@
 const std = @import("std");
+const fmt = @import("fmt.zig");
+const parse = @import("check/parse.zig");
+const base = @import("base.zig");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const RocCmd = @import("cli.zig").RocCmd;
@@ -7,7 +10,7 @@ const RocOpt = @import("cli.zig").RocOpt;
 const coordinate = @import("coordinate.zig");
 
 const usage =
-    \\Usage:    
+    \\Usage:
     \\
     \\  roc [command] [options] [roc_file] [args]
     \\
@@ -120,11 +123,28 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
 }
 
 fn rocFormat(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
+    _ = opt;
+    const path = args[0];
+    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer file.close();
 
-    std.debug.print("TODO roc format\n{}\n{s}\n\n", .{ opt, args });
+    const contents = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
 
-    fatal("not implemented", .{});
+    var arena = std.heap.ArenaAllocator.init(allocator);
+    defer arena.deinit();
+
+    var env = base.ModuleEnv.init(&arena);
+
+    var parse_ast = parse.parse(&env, allocator, contents);
+    defer parse_ast.deinit();
+
+    var formatter = fmt.init(parse_ast, allocator);
+
+    const formatted_output = formatter.formatFile();
+
+    const new_file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
+    defer new_file.close();
+    _ = try new_file.write(formatted_output);
 }
 
 fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
