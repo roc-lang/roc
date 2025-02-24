@@ -6,11 +6,11 @@ name: Test latest nightly releases for macOS and Linux
 
 jobs:
   test-nightly:
-    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
