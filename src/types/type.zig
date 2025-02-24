@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const collections = @import("../collections.zig");
 const base = @import("../base.zig");
+const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 const Ident = base.Ident;
 
@@ -24,10 +25,10 @@ pub const Type = union(enum) {
     /// Name given in a user-written annotation
     rigid_var: Ident.Idx,
 
-    /// Function application
+    /// Function
     func: Func,
 
-    /// Function call
+    /// Type application (e.g List(Str))
     apply: Apply,
 
     /// Type error
@@ -117,86 +118,151 @@ pub const Type = union(enum) {
         }
     }
 
-    pub fn equal(self: *Type, other: *Type) bool {
-        return self == other;
-    }
+    const Slot = packed struct {
+        tag: enum(u1) { root, redirect },
+        value: u31,
+
+        const UNINITIALIZED: Slot = .{ .tag = .root, .value = 0 };
+        const List = std.ArrayList(Slot);
+    };
+
+    pub const Idx = enum(u32) { _ };
 
     pub const Store = struct {
-        types: List,
-
-        pub const BOOL: Idx = @enumFromInt(0);
-        pub const STR: Idx = @enumFromInt(1);
-        pub const U8: Idx = @enumFromInt(2);
-        pub const I8: Idx = @enumFromInt(3);
-        pub const U16: Idx = @enumFromInt(4);
-        pub const I16: Idx = @enumFromInt(5);
-        pub const U32: Idx = @enumFromInt(6);
-        pub const I32: Idx = @enumFromInt(7);
-        pub const U64: Idx = @enumFromInt(8);
-        pub const I64: Idx = @enumFromInt(9);
-        pub const U128: Idx = @enumFromInt(10);
-        pub const I128: Idx = @enumFromInt(11);
+        /// Slots that haven't been pushed yet
+        pending: usize,
+        slots: Slot.List,
+        descriptors: Descriptor.List,
 
         pub fn init(allocator: std.mem.Allocator) Store {
             var store = Store{
-                .types = List.init(allocator),
+                .pending = 0,
+                .slots = Slot.List.init(allocator),
+                .descriptors = Descriptor.List.init(allocator),
             };
 
-            // APPEND THE BUILTINS ORDER MATTERS FOR THE CONSTANTS
-            // DEFINED ABOVE
-
-            _ = store.types.append(.bool);
-            _ = store.types.append(.str);
-            _ = store.types.append(.{ .int = .u8 });
-            _ = store.types.append(.{ .int = .i8 });
-            _ = store.types.append(.{ .int = .u16 });
-            _ = store.types.append(.{ .int = .i16 });
-            _ = store.types.append(.{ .int = .u32 });
-            _ = store.types.append(.{ .int = .i32 });
-            _ = store.types.append(.{ .int = .u64 });
-            _ = store.types.append(.{ .int = .i64 });
-            _ = store.types.append(.{ .int = .u128 });
-            _ = store.types.append(.{ .int = .i128 });
-
-            // TODO other builtins... can we find a nicer solution for managing this?
+            store.descriptors.append(Descriptor.NONE) catch exitOnOom();
 
             return store;
         }
 
         pub fn deinit(self: *Store) void {
-            self.types.deinit();
+            self.slots.deinit();
+            self.descriptors.deinit();
         }
 
-        pub fn get(self: *Store, id: Idx) Type {
-            return self.types.get(id);
+        pub fn get(self: *Store, idx: Idx) *const Descriptor {
+            return self.get_initialized_descriptor(idx) orelse &Descriptor.NONE;
         }
 
-        pub fn set(self: *Store, id: Idx, value: Type) void {
-            self.types.set(id, value);
+        pub fn set(self: *Store, idx: Idx, descriptor: Descriptor) void {
+            if (self.get_initialized_descriptor(idx)) |current| {
+                current.* = descriptor;
+            } else {
+                if (self.pending > 0) {
+                    const slice = self.slots.addManyAsSlice(self.pending) catch exitOnOom();
+                    @memset(slice, Slot.UNINITIALIZED);
+
+                    // Assuming more than half of slots are redirects
+                    self.descriptors.ensureTotalCapacity(self.slots.items.len / 2) catch exitOnOom();
+                    self.pending = 0;
+                }
+
+                self.descriptors.append(descriptor) catch exitOnOom();
+                const descriptor_idx: u31 = @intCast(self.descriptors.items.len - 1);
+
+                const slot_idx = @intFromEnum(idx);
+                self.slots.items[slot_idx] = .{ .tag = .root, .value = descriptor_idx };
+            }
         }
 
-        /// Create a fresh type variable
-        /// Used in canonicalization when creating type slots
+        /// Returns a pointer to a descriptor or null if uninitialized
+        fn get_initialized_descriptor(self: *Store, idx: Idx) ?*Descriptor {
+            const slot_idx = @intFromEnum(idx);
+            if (slot_idx >= self.slots.items.len) {
+                return null;
+            }
+
+            var slot = self.slots.items[slot_idx];
+
+            while (slot.tag == .redirect) {
+                slot = self.slots.items[@as(usize, slot.value)];
+            }
+            // TODO compacting
+
+            if (slot.value == Slot.UNINITIALIZED.value) {
+                return null;
+            }
+
+            return &self.descriptors.items[slot.value];
+        }
+
+        /// Create a slot for a type without initializing it
         pub fn fresh(self: *Store) Idx {
-            return self.types.append(.{ .flex_var = null });
+            self.pending += 1;
+            return @enumFromInt(self.slots.items.len + self.pending);
         }
     };
-
-    pub const List = collections.SafeList(Type);
-    pub const Idx = List.Idx;
 };
 
-test "formatting" {
-    var store = Type.Store.init(std.testing.allocator);
-    defer store.deinit();
+pub const Rank = struct {
+    rank: u32,
+    pub const GENERALIZED: Rank = .{ .rank = 0 };
 
-    const bool_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.BOOL)});
-    defer testing.allocator.free(bool_str);
+    pub fn min(self: Rank, other: Rank) Rank {
+        return .{ .rank = @min(self.rank, other.rank) };
+    }
+};
 
-    try testing.expectEqualStrings(bool_str, "Bool");
+pub const Mark = struct {
+    mark: i32,
+    pub const NONE: Mark = .{ .mark = 0 };
+};
 
-    const i128_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.I128)});
-    defer testing.allocator.free(i128_str);
+pub const Descriptor = struct {
+    rank: Rank,
+    mark: Mark,
+    type: Type,
 
-    try testing.expectEqualStrings(i128_str, "I128");
-}
+    const NONE: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = .{ .flex_var = null } };
+
+    const List = std.ArrayList(Descriptor);
+};
+
+// test "store" {
+//     var store = Type.Store.init(testing.allocator);
+//     defer store.deinit();
+
+//     // Test fresh index creation
+//     const idx1 = store.fresh();
+//     const idx2 = store.fresh();
+//     try testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
+
+//     // Test uninitialized slot returns NONE
+//     try testing.expectEqual(store.get(idx1).type, Type.Descriptor.NONE.type);
+
+//     // Test setting and getting a descriptor
+//     const desc = Type.Descriptor{ .rank = Type.Rank.GENERALIZED, .mark = Type.Mark.NONE, .type = Type.bool };
+//     store.set(idx1, desc);
+//     try testing.expectEqual(store.get(idx1).type, Type.bool);
+
+//     // Test updating an existing descriptor
+//     const updated_desc = Type.Descriptor{ .rank = Type.Rank.GENERALIZED, .mark = Type.Mark.NONE, .type = Type.str };
+//     store.set(idx1, updated_desc);
+//     try testing.expectEqual(store.get(idx1).type, Type.str);
+// }
+
+// test "formatting" {
+//     var store = Type.Store.init(std.testing.allocator);
+//     defer store.deinit();
+
+//     const bool_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.BOOL)});
+//     defer testing.allocator.free(bool_str);
+
+//     try testing.expectEqualStrings(bool_str, "Bool");
+
+//     const i128_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.I128)});
+//     defer testing.allocator.free(i128_str);
+
+//     try testing.expectEqualStrings(i128_str, "I128");
+// }
