@@ -342,6 +342,7 @@ pub const Levels = struct {
 fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Self {
     const gpa = std.testing.allocator;
     var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
     var scope = Self{
         .env = &env,

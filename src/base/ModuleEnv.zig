@@ -38,9 +38,9 @@ pub fn init(gpa: std.mem.Allocator) Self {
 }
 
 pub fn deinit(self: *Self) void {
+    self.modules.deinit();
     self.idents.deinit();
     self.ident_ids_for_slicing.deinit();
-    self.modules.deinit();
     self.strings.deinit();
     self.problems.deinit();
     self.type_store.deinit();

@@ -64,7 +64,6 @@ pub const Store = struct {
             module.exposed_idents.deinit();
         }
         self.modules.deinit();
-        self.ident_store.deinit();
     }
 
     /// Search for a module that's visible to the main module.
