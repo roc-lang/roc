@@ -3,7 +3,6 @@
 #  - update `channel = "RUST_VERSION"`
 #  - update `channel = "RUST_VERSION"` in examples/platform-switching/rust-platform/rust-toolchain.toml
 #  - update `channel = "RUST_VERSION"` in examples/glue/rust-platform/rust-toolchain.toml
-#  - update FROM rust:RUST_VERSION-slim-buster in Earthfile 
 #  - to update the nightly version:
 #     - Find the latest nightly release that matches RUST_VERSION here: https://github.com/oxalica/rust-overlay/tree/master/manifests/nightly/2024
 #     - update `channel = "nightly-OLD_DATE"` below
