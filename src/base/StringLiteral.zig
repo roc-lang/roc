@@ -32,9 +32,9 @@ pub const Store = struct {
     /// continues to the previous byte
     buffer: std.ArrayList(u8),
 
-    pub fn init(allocator: std.mem.Allocator) Store {
+    pub fn init(gpa: std.mem.Allocator) Store {
         return Store{
-            .buffer = std.ArrayList(u8).init(allocator),
+            .buffer = std.ArrayList(u8).init(gpa),
         };
     }
 

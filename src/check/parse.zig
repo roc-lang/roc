@@ -101,10 +101,10 @@ test "example s-expr" {
         \\
         \\foo = "bar"
     ;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var env = base.ModuleEnv.init(&arena);
-    var parse_ir = parse(&env, testing.allocator, source);
+    const gpa = testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+    var parse_ir = parse(&env, gpa, source);
     defer parse_ir.deinit();
 
     // std.debug.print("{}", .{parse_ir});
