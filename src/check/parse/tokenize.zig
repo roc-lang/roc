@@ -1251,15 +1251,13 @@ pub const Tokenizer = struct {
     }
 };
 
-fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
+fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
-    var env = base.ModuleEnv.init(&arena);
-
-    var tokenizer = Tokenizer.init(&env, input, &messages, allocator);
+    var tokenizer = Tokenizer.init(&env, input, &messages, gpa);
     defer tokenizer.deinit();
 
     tokenizer.tokenize();
@@ -1269,17 +1267,16 @@ fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: [
     try std.testing.expectEqual(tokens[tokens.len - 1], Token.Tag.EndOfFile);
     try std.testing.expectEqualSlices(Token.Tag, expected[0..expected.len], tokens[0 .. tokens.len - 1]);
 
-    checkTokenizerInvariants(allocator, input, true);
+    checkTokenizerInvariants(gpa, input, true);
 }
 
-pub fn checkTokenizerInvariants(allocator: std.mem.Allocator, input: []const u8, debug: bool) void {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    var env = base.ModuleEnv.init(&arena);
+pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
     // Initial tokenization.
     var messages: [32]Diagnostic = undefined;
-    var tokenizer = Tokenizer.init(&env, input, &messages, allocator);
+    var tokenizer = Tokenizer.init(&env, input, &messages, gpa);
     tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
     defer output.tokens.deinit();
@@ -1303,7 +1300,7 @@ pub fn checkTokenizerInvariants(allocator: std.mem.Allocator, input: []const u8,
         return;
     }
 
-    const buf2 = rebuildBufferForTesting(input, &output.tokens, allocator) catch |err| switch (err) {
+    const buf2 = rebuildBufferForTesting(input, &output.tokens, gpa) catch |err| switch (err) {
         error.Unsupported => return,
         error.OutOfMemory => std.debug.panic("OOM", .{}),
     };
@@ -1314,7 +1311,7 @@ pub fn checkTokenizerInvariants(allocator: std.mem.Allocator, input: []const u8,
     }
 
     // Second tokenization.
-    tokenizer = Tokenizer.init(&env, buf2.items, &messages, allocator);
+    tokenizer = Tokenizer.init(&env, buf2.items, &messages, gpa);
     tokenizer.tokenize();
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();

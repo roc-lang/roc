@@ -20,20 +20,20 @@ focused_custom_alias: ?Alias.Idx,
 custom_tags: std.AutoHashMap(Ident.Idx, Alias.Idx),
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 
 pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []const struct { alias: Alias.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
 ) Self {
     var scope = Self{
         .env = env,
         .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
-        .levels = Levels.init(env, allocator),
-        .allocator = allocator,
+        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(gpa),
+        .levels = Levels.init(env, gpa),
+        .gpa = gpa,
     };
 
     scope.levels.enter();
@@ -127,10 +127,10 @@ pub const Level = struct {
         alias: Alias.Idx,
     };
 
-    pub fn init(allocator: std.mem.Allocator) Level {
+    pub fn init(gpa: std.mem.Allocator) Level {
         return Level{
-            .idents = std.ArrayList(IdentInScope).init(allocator),
-            .aliases = std.ArrayList(AliasInScope).init(allocator),
+            .idents = std.ArrayList(IdentInScope).init(gpa),
+            .aliases = std.ArrayList(AliasInScope).init(gpa),
         };
     }
 
@@ -143,13 +143,13 @@ pub const Level = struct {
 pub const Levels = struct {
     env: *base.ModuleEnv,
     levels: std.ArrayList(Level),
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
 
-    pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Levels {
+    pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Levels {
         return Levels{
             .env = env,
-            .levels = std.ArrayList(Level).init(allocator),
-            .allocator = allocator,
+            .levels = std.ArrayList(Level).init(gpa),
+            .gpa = gpa,
         };
     }
 
@@ -158,7 +158,7 @@ pub const Levels = struct {
     }
 
     pub fn enter(self: *Levels) void {
-        self.levels.append(Level.init(self.allocator)) catch exitOnOom();
+        self.levels.append(Level.init(self.gpa)) catch exitOnOom();
     }
 
     pub fn exit(self: *Levels) void {
@@ -340,16 +340,17 @@ pub const Levels = struct {
 };
 
 fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Self {
-    const allocator = std.testing.allocator;
-    var env = base.ModuleEnv.init(allocator);
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
 
     var scope = Self{
         .env = &env,
         .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
-        .levels = Levels.init(&env, allocator),
-        .allocator = allocator,
+        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(gpa),
+        .levels = Levels.init(&env, gpa),
+        .gpa = gpa,
     };
+    scope.deinit();
 
     const max_level = @min(idents.len, aliases.len);
     for (0..max_level) |_| {

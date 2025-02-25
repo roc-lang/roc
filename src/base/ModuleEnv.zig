@@ -23,20 +23,27 @@ modules: Module.Store,
 strings: StringLiteral.Store,
 problems: std.ArrayList(Problem),
 type_store: Type.Store,
-arena: *std.heap.ArenaAllocator,
 
-pub fn init(arena: *std.heap.ArenaAllocator) Self {
-    var ident_store = Ident.Store.init(arena);
+pub fn init(gpa: std.mem.Allocator) Self {
+    var ident_store = Ident.Store.init(gpa);
 
     return Self{
         .idents = ident_store,
-        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(arena.allocator()),
-        .modules = Module.Store.init(arena, &ident_store),
-        .strings = StringLiteral.Store.init(arena.allocator()),
-        .problems = std.ArrayList(Problem).init(arena.allocator()),
-        .type_store = Type.Store.init(arena.allocator()),
-        .arena = arena,
+        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(gpa),
+        .modules = Module.Store.init(gpa, &ident_store),
+        .strings = StringLiteral.Store.init(gpa),
+        .problems = std.ArrayList(Problem).init(gpa),
+        .type_store = Type.Store.init(gpa),
     };
+}
+
+pub fn deinit(self: *Self) void {
+    self.idents.deinit();
+    self.ident_ids_for_slicing.deinit();
+    self.modules.deinit();
+    self.strings.deinit();
+    self.problems.deinit();
+    self.type_store.deinit();
 }
 
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {

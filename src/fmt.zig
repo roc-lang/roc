@@ -558,10 +558,10 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
 fn moduleFmtsSame(source: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
 
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
+    const gpa = std.testing.allocator;
 
-    var env = base.ModuleEnv.init(&arena);
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
     var parse_ast = parse(&env, std.testing.allocator, source);
     defer parse_ast.deinit();
@@ -581,9 +581,9 @@ fn moduleFmtsSame(source: []const u8) !void {
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    var env = base.ModuleEnv.init(&arena);
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
     var parse_ast = parse(&env, std.testing.allocator, source);
     defer parse_ast.deinit();
     defer std.testing.allocator.free(parse_ast.errors);
