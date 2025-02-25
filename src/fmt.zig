@@ -11,7 +11,6 @@ const NodeStore = IR.NodeStore;
 const FileIdx = NodeStore.FileIdx;
 const ExprIdx = NodeStore.ExprIdx;
 const PatternIdx = NodeStore.PatternIdx;
-const BodyIdx = NodeStore.BodyIdx;
 const HeaderIdx = NodeStore.HeaderIdx;
 const StatementIdx = NodeStore.StatementIdx;
 
@@ -69,7 +68,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(" = ") catch exitOnOom();
-            fmt.formatBody(d.body);
+            fmt.formatExpr(d.body);
             return .extra_newline_needed;
         },
         .expr => |e| {
@@ -176,6 +175,23 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.push(')');
         },
+        .record => |r| {
+            fmt.pushAll("{ ");
+            var i: usize = 0;
+            for (r.fields) |fieldIdx| {
+                const field = fmt.ast.store.getRecordField(fieldIdx);
+                fmt.pushTokenText(field.name);
+                if (field.value) |v| {
+                    fmt.pushAll(if (field.optional) "? " else ": ");
+                    fmt.formatExpr(v);
+                }
+                if (i < (r.fields.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.pushAll(" }");
+        },
         .lambda => |l| {
             fmt.push('|');
             var i: usize = 0;
@@ -187,7 +203,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 i += 1;
             }
             fmt.pushAll("| ");
-            fmt.formatBody(l.body);
+            fmt.formatExpr(l.body);
         },
         .suffix_single_question => |s| {
             fmt.formatExpr(s.expr);
@@ -200,9 +216,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.pushAll("if ");
             fmt.formatExpr(i.condition);
             fmt.push(' ');
-            fmt.formatBody(i.then);
+            fmt.formatExpr(i.then);
             fmt.pushAll(" else ");
-            fmt.formatBody(i.@"else");
+            fmt.formatExpr(i.@"else");
         },
         .match => |m| {
             fmt.pushAll("match ");
@@ -215,7 +231,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 fmt.pushIndent();
                 fmt.formatPattern(branch.pattern);
                 fmt.pushAll(" -> ");
-                fmt.formatBody(branch.body);
+                fmt.formatExpr(branch.body);
             }
             fmt.curr_indent -= 1;
             fmt.newline();
@@ -225,6 +241,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .dbg => |d| {
             fmt.pushAll("dbg ");
             fmt.formatExpr(d.expr);
+        },
+        .block => |b| {
+            fmt.formatBody(b);
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
@@ -370,8 +389,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
     }
 }
 
-fn formatBody(fmt: *Formatter, bi: BodyIdx) void {
-    const body = fmt.ast.store.getBody(bi);
+fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (body.whitespace != null and body.statements.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append('{') catch exitOnOom();
@@ -720,6 +738,8 @@ test "Syntax grab bag" {
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
         \\    list = [add_one(number), 456, 789]
+        \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+        \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
         \\    Stdout.line!(interpolated)?
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}

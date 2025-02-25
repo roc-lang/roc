@@ -242,7 +242,6 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     const scratch_top = self.store.scratch_tokens.items.len;
     defer self.store.scratch_tokens.shrinkRetainingCapacity(scratch_top);
     while (self.peek() != .CloseSquare) {
-        std.debug.print("peek1: {s}\n", .{@tagName(self.peek())});
         if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides);
         }
@@ -288,7 +287,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             }
             platform = self.parseStringExpr();
             platform_name = name_tok;
-            std.debug.print("Tokens after string: {s}\n", .{@tagName(self.peek())});
+            // std.debug.print("Tokens after string: {s}\n", .{@tagName(self.peek())});
         } else {
             if (self.peek() != .StringStart) {
                 return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_or_platform_string);
@@ -364,7 +363,7 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
             if (self.peekNext() == .OpAssign) {
                 self.advance(); // Advance past LowerIdent
                 self.advance(); // Advance past OpAssign
-                const idx = self.parseBody();
+                const idx = self.parseExpr();
                 const patt_idx = self.store.addPattern(.{ .ident = .{
                     .ident_tok = start,
                     .region = .{ .start = start, .end = start },
@@ -755,6 +754,60 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
                 .region = .{ .start = start, .end = self.pos },
             } });
         },
+        .OpenRound => {
+            self.advance();
+            // TODO: Parenthesized expressions
+            const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
+                while (self.peek() != .CloseRound) {
+                    self.advance();
+                }
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            };
+            defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+            const items = self.store.scratch_exprs.items[scratch_top..];
+            expr = self.store.addExpr(.{ .tuple = .{
+                .items = items,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        },
+        .OpenCurly => {
+            self.advance();
+            // Is this a Record or a Block?
+            if (self.peek() == .LowerIdent and (self.peekNext() == .OpColon or self.peekNext() == .Comma)) {
+                // This is the best guesstimation of this being a Record for now.  I believe we have to have a NoSpaceOpColon
+                // for this to be full-proof without backtracking.
+                const scratch_top = self.parseCollection(IR.NodeStore.RecordFieldIdx, .CloseCurly, &self.store.scratch_record_fields, parseRecordField) catch {
+                    return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+                };
+                defer self.store.scratch_record_fields.shrinkRetainingCapacity(scratch_top);
+                const fields = self.store.scratch_record_fields.items[scratch_top..];
+                expr = self.store.addExpr(.{ .record = .{
+                    .fields = fields,
+                    .region = .{ .start = start, .end = self.pos },
+                } });
+            } else {
+                const scratch_top = self.store.scratch_statements.items.len;
+                defer self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+
+                while (true) {
+                    const statement = self.parseStmt() orelse break;
+                    self.store.scratch_statements.append(statement) catch exitOnOom();
+                    if (self.peek() == .CloseCurly) {
+                        self.advance();
+                        break;
+                    }
+                }
+
+                const statements = self.store.scratch_statements.items[scratch_top..];
+
+                const body = .{
+                    .statements = statements,
+                    .whitespace = self.pos - 1,
+                    .region = .{ .start = start, .end = self.pos },
+                };
+                expr = self.store.addExpr(.{ .block = body });
+            }
+        },
         .OpBar => {
             self.advance();
             const scratch_top = self.parseCollection(IR.NodeStore.PatternIdx, .OpBar, &self.store.scratch_patterns, parsePatternNoAlts) catch {
@@ -763,7 +816,7 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             };
             defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
             const args = self.store.scratch_patterns.items[scratch_top..];
-            const body = self.parseBody();
+            const body = self.parseExpr();
             expr = self.store.addExpr(.{ .lambda = .{
                 .body = body,
                 .args = args,
@@ -773,12 +826,12 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
         .KwIf => {
             self.advance();
             const condition = self.parseExpr();
-            const then = self.parseBody();
+            const then = self.parseExpr();
             if (self.peek() != .KwElse) {
                 std.debug.panic("TODO: problem for no else", .{});
             }
             self.advance();
-            const else_idx = self.parseBody();
+            const else_idx = self.parseExpr();
             expr = self.store.addExpr(.{ .if_then_else = .{
                 .region = .{ .start = start, .end = self.pos },
                 .condition = condition,
@@ -853,13 +906,33 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
 }
 
+pub fn parseRecordField(self: *Parser) IR.NodeStore.RecordFieldIdx {
+    const start = self.pos;
+    self.expect(.LowerIdent) catch {
+        return self.pushMalformed(IR.NodeStore.RecordFieldIdx, .unexpected_token);
+    };
+    const name = start;
+    var value: ?IR.NodeStore.ExprIdx = null;
+    if (self.peek() == .OpColon) {
+        self.advance();
+        value = self.parseExpr();
+    }
+
+    return self.store.addRecordField(.{
+        .name = name,
+        .value = value,
+        .optional = false,
+        .region = .{ .start = start, .end = self.pos },
+    });
+}
+
 pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
     if (self.peek() == .OpArrow) {
         self.advance();
     }
-    const b = self.parseBody();
+    const b = self.parseExpr();
     return self.store.addWhenBranch(.{
         .region = .{ .start = start, .end = self.pos },
         .pattern = p,
@@ -925,37 +998,6 @@ pub fn parseStringPattern(self: *Parser) IR.NodeStore.PatternIdx {
         .expr = inner,
     } });
     return patt_idx;
-}
-
-pub fn parseBody(self: *Parser) IR.NodeStore.BodyIdx {
-    if (self.peek() == .OpenCurly) {
-        self.advance();
-        const scratch_top = self.store.scratch_statements.items.len;
-        defer self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
-
-        while (true) {
-            const statement = self.parseStmt() orelse break;
-            self.store.scratch_statements.append(statement) catch exitOnOom();
-            if (self.peek() == .CloseCurly) {
-                self.advance();
-                break;
-            }
-        }
-
-        const statements = self.store.scratch_statements.items[scratch_top..];
-
-        const body = self.store.addBody(.{ .statements = statements, .whitespace = self.pos - 1 });
-        return body;
-    } else {
-        const start = self.pos;
-        const expr = self.parseExpr();
-        const statement = self.store.addStatement(.{ .expr = .{
-            .expr = expr,
-            .region = .{ .start = start, .end = self.pos },
-        } });
-        const body = self.store.addBody(.{ .statements = &.{statement}, .whitespace = null });
-        return body;
-    }
 }
 
 pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {

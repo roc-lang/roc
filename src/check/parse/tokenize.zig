@@ -1280,19 +1280,20 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     tokenizer.tokenize();
     var output = tokenizer.finish_and_deinit();
     defer output.tokens.deinit();
+    _ = debug;
 
-    if (debug) {
-        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
-    }
+    // if (debug) {
+    //     std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+    // }
 
-    if (debug) {
-        std.debug.print("Before:\n", .{});
-        for (0..output.tokens.tokens.len) |token_index| {
-            const token = output.tokens.tokens.get(token_index);
-            std.debug.print("\t{any}\n", .{token});
-        }
-        std.debug.print("\n\n", .{});
-    }
+    // if (debug) {
+    //     std.debug.print("Before:\n", .{});
+    //     for (0..output.tokens.tokens.len) |token_index| {
+    //         const token = output.tokens.tokens.get(token_index);
+    //         std.debug.print("\t{any}\n", .{token});
+    //     }
+    //     std.debug.print("\n\n", .{});
+    // }
 
     // TODO: apply errors from messages to buffer below.
     // For now, just skip on tokenizer finding a failure.
@@ -1306,9 +1307,9 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     };
     defer buf2.deinit();
 
-    if (debug) {
-        std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
-    }
+    // if (debug) {
+    //     std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
+    // }
 
     // Second tokenization.
     tokenizer = Tokenizer.init(&env, buf2.items, &messages, gpa);
@@ -1316,14 +1317,14 @@ pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug
     var output2 = tokenizer.finish_and_deinit();
     defer output2.tokens.deinit();
 
-    if (debug) {
-        std.debug.print("After:\n", .{});
-        for (0..output2.tokens.tokens.len) |token_index| {
-            const token = output2.tokens.tokens.get(token_index);
-            std.debug.print("\t{any}\n", .{token});
-        }
-        std.debug.print("\n\n", .{});
-    }
+    // if (debug) {
+    //     std.debug.print("After:\n", .{});
+    //     for (0..output2.tokens.tokens.len) |token_index| {
+    //         const token = output2.tokens.tokens.get(token_index);
+    //         std.debug.print("\t{any}\n", .{token});
+    //     }
+    //     std.debug.print("\n\n", .{});
+    // }
     // Assert same.
     var same = output.tokens.tokens.len == output2.tokens.tokens.len;
     for (0..output.tokens.tokens.len) |token_index| {
