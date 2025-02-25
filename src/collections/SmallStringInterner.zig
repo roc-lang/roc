@@ -87,17 +87,17 @@ pub fn indicesHaveSameText(
     first_idx: Idx,
     second_idx: Idx,
 ) bool {
-    const first_string_index = self.outer_indices.items[@as(usize, @intFromEnum(first_idx))];
-    const second_string_index = self.outer_indices.items[@as(usize, @intFromEnum(second_idx))];
+    const first_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(first_idx))];
+    const second_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(second_idx))];
 
-    return first_string_index == second_string_index;
+    return first_string_offset == second_string_offset;
 }
 
 /// Get a reference to the text for an interned string.
 pub fn getText(self: *Self, idx: Idx) []u8 {
-    const string_index = self.outer_indices.items[@as(usize, @intFromEnum(idx))];
+    const string_offset = self.outer_indices.items[@as(usize, @intFromEnum(idx))];
 
-    return std.mem.sliceTo(self.bytes.items[string_index..], 0);
+    return std.mem.sliceTo(self.bytes.items[string_offset..], 0);
 }
 
 /// Get the region for an interned string.
