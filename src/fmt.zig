@@ -53,7 +53,9 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     const file = fmt.ast.store.getFile(FileIdx{ .id = 0 });
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
-    for (file.statements) |s| {
+    const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch exitOnOom();
+    defer fmt.gpa.free(statements);
+    for (statements) |s| {
         fmt.ensureNewline();
         if (newline_behavior == .extra_newline_needed) {
             fmt.newline();
@@ -805,11 +807,16 @@ test "Syntax grab bag" {
         \\    TwoArgs("hello", Some("world")) -> 1000
         \\}
         \\
+        \\expect blah == 1
+        \\
         \\main! : List(String) -> Result({}, _)
         \\main! = |_| {
         \\    world = "World"
         \\    number = 123
+        \\    expect blah == 1
         \\    tag = Blue
+        \\    return tag
+        \\    crash "Unreachable!"
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
         \\    list = [add_one(number), 456, 789]
@@ -820,13 +827,10 @@ test "Syntax grab bag" {
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}
         \\
-        \\expect foo == 1
-        \\
-        \\expect (Bool.false != Bool.false) == Bool.false
-        \\
         \\expect {
         \\    foo = 1
-        \\    foo == 1
+        \\    blah = 1
+        \\    blah == foo
         \\}
     );
 }

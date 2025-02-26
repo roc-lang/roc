@@ -287,7 +287,6 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             }
             platform = self.parseStringExpr();
             platform_name = name_tok;
-            // std.debug.print("Tokens after string: {s}\n", .{@tagName(self.peek())});
         } else {
             if (self.peek() != .StringStart) {
                 return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_or_platform_string);
@@ -358,6 +357,45 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
             }
             return null;
         },
+        .KwExpect => {
+            const start = self.pos;
+            self.advance();
+            const body = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .expect = .{
+                .body = body,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
+        .KwCrash => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .crash = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
+        .KwReturn => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .@"return" = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {
@@ -418,36 +456,6 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
             }
             const expr = self.parseExpr();
             const statement_idx = self.store.addStatement(.{ .expr = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
-        },
-        .KwExpect => {
-            const start = self.pos;
-            self.advance();
-            const body = self.parseExpr();
-            const statement_idx = self.store.addStatement(.{ .expect = .{
-                .body = body,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
-        },
-        .KwCrash => {
-            const start = self.pos;
-            self.advance();
-            const expr = self.parseExpr();
-            const statement_idx = self.store.addStatement(.{ .crash = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
-        },
-        .KwReturn => {
-            const start = self.pos;
-            self.advance();
-            const expr = self.parseExpr();
-            const statement_idx = self.store.addStatement(.{ .@"return" = .{
                 .expr = expr,
                 .region = .{ .start = start, .end = self.pos },
             } });
@@ -858,7 +866,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const condition = self.parseExpr();
             const then = self.parseExpr();
             if (self.peek() != .KwElse) {
-                std.debug.panic("TODO: problem for no else", .{});
+                std.debug.panic("TODO: problem for no else {s}@{d}", .{ @tagName(self.peek()), self.pos });
             }
             self.advance();
             const else_idx = self.parseExpr();
