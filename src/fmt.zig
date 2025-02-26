@@ -803,6 +803,7 @@ test "Syntax grab bag" {
         \\    list = [add_one(number), 456, 789]
         \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
         \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+        \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
         \\    Stdout.line!(interpolated)?
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}
