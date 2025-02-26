@@ -6,7 +6,7 @@ concurrency:
     cancel-in-progress: true
     
 on:
-#  pull_request:
+  pull_request:
 
 jobs:
   check-changes:
