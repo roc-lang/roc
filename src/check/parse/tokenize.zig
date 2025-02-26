@@ -129,6 +129,7 @@ pub const Token = struct {
         KwPlatform,
         KwProvides,
         KwRequires,
+        KwReturn,
         KwTo,
         KwWhere,
         KwWith,
@@ -161,6 +162,7 @@ pub const Token = struct {
         .{ "platform", .KwPlatform },
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
+        .{ "return", .KwReturn },
         .{ "to", .KwTo },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
@@ -205,6 +207,7 @@ pub const Token = struct {
             .KwPlatform,
             .KwProvides,
             .KwRequires,
+            .KwReturn,
             .KwTo,
             .KwWhere,
             .KwWith,
@@ -1781,6 +1784,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwRequires => {
                 try buf2.appendSlice("requires");
+            },
+            .KwReturn => {
+                try buf2.appendSlice("return");
             },
             .KwTo => {
                 try buf2.appendSlice("to");

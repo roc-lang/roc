@@ -95,8 +95,20 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             fmt.formatTypeAnno(t.anno);
             return .no_extra_newline;
         },
-        else => {
-            std.debug.panic("TODO: Handle formatting {s}\n", .{@tagName(statement)});
+        .expect => |e| {
+            fmt.pushAll("expect ");
+            fmt.formatExpr(e.body);
+            return .extra_newline_needed;
+        },
+        .crash => |c| {
+            fmt.pushAll("crash ");
+            fmt.formatExpr(c.expr);
+            return .extra_newline_needed;
+        },
+        .@"return" => |r| {
+            fmt.pushAll("return ");
+            fmt.formatExpr(r.expr);
+            return .extra_newline_needed;
         },
     }
 }
@@ -806,6 +818,15 @@ test "Syntax grab bag" {
         \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
         \\    Stdout.line!(interpolated)?
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
+        \\}
+        \\
+        \\expect foo == 1
+        \\
+        \\expect (Bool.false != Bool.false) == Bool.false
+        \\
+        \\expect {
+        \\    foo = 1
+        \\    foo == 1
         \\}
     );
 }

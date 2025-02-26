@@ -424,8 +424,34 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
             return statement_idx;
         },
         .KwExpect => {
+            const start = self.pos;
             self.advance();
-            return null;
+            const body = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .expect = .{
+                .body = body,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
+        .KwCrash => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .crash = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
+        },
+        .KwReturn => {
+            const start = self.pos;
+            self.advance();
+            const expr = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .@"return" = .{
+                .expr = expr,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            return statement_idx;
         },
         else => {
             const start = self.pos;

@@ -1211,6 +1211,24 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .expect => {
+                return .{ .expect = .{
+                    .body = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .crash => {
+                return .{ .crash = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .@"return" => {
+                return .{ .@"return" = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
             .type_decl => {
                 return .{ .type_decl = .{
                     .region = emptyRegion(),
