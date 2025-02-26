@@ -66,19 +66,3 @@ jobs:
       - name: prep and run basic tests
         run: |
           ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (x86_64)
-        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
-        run: |
-          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
-          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_x86_64-")) | .browser_download_url')
-          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (arm64)
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
-          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_arm64-")) | .browser_download_url')
-          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz

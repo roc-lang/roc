@@ -49,15 +49,3 @@ jobs:
       - name: prep and run basic tests
         run: |
           ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (x86_64)
-        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
-        run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (arm64)
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_arm64-latest.tar.gz -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz
