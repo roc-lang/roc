@@ -29,10 +29,6 @@ jobs:
       - name: Delete everything except ci folder to test the release like a real user would
         run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
 
-      - name: install z3 on macOS
-        if: startsWith(matrix.os, 'macos')
-        run: brew install z3
-
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
         run: |
