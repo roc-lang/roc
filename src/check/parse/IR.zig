@@ -346,42 +346,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        bin_op_add,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_sub,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_div,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_mul,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_or,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_and,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_dbl_question,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_single_question,
+        bin_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -879,43 +844,9 @@ pub const NodeStore = struct {
             },
             .record_updater => |_| {},
             .field_access => |_| {},
-            .bin_op_add => |op| {
-                node.tag = .bin_op_add;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_sub => |op| {
-                node.tag = .bin_op_sub;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_div => |op| {
-                node.tag = .bin_op_div;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_mul => |op| {
-                node.tag = .bin_op_mul;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_or => |op| {
-                node.tag = .bin_op_or;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_and => |op| {
-                node.tag = .bin_op_and;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_dbl_question => |op| {
-                node.tag = .bin_op_dbl_question;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_single_question => |op| {
-                node.tag = .bin_op_single_question;
+            .bin_op => |op| {
+                node.tag = .bin_op;
+                node.main_token = op.operator;
                 node.data.lhs = op.left.id;
                 node.data.rhs = op.right.id;
             },
@@ -1606,6 +1537,14 @@ pub const NodeStore = struct {
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
+            .bin_op => {
+                return .{ .bin_op = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
             .block => {
                 const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
                 const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
@@ -2040,14 +1979,7 @@ pub const NodeStore = struct {
             @"struct": ExprIdx,
             region: Region,
         },
-        bin_op_add: BinOp,
-        bin_op_sub: BinOp,
-        bin_op_div: BinOp,
-        bin_op_mul: BinOp,
-        bin_op_or: BinOp,
-        bin_op_and: BinOp,
-        bin_op_dbl_question: BinOp,
-        bin_op_single_question: BinOp,
+        bin_op: BinOp,
         suffix_single_question: Unary,
         unary_neg: Unary,
         unary_not: Unary,
@@ -2105,6 +2037,7 @@ pub const NodeStore = struct {
     pub const BinOp = struct {
         left: ExprIdx,
         right: ExprIdx,
+        operator: TokenIdx,
         region: Region,
     };
     pub const Unary = struct {

@@ -14,10 +14,13 @@ const PatternIdx = NodeStore.PatternIdx;
 const HeaderIdx = NodeStore.HeaderIdx;
 const StatementIdx = NodeStore.StatementIdx;
 
+const FormatFlags = enum { debug_binop, no_debug };
+
 ast: IR,
 gpa: std.mem.Allocator,
 buffer: std.ArrayList(u8),
 curr_indent: u32,
+flags: FormatFlags = .no_debug,
 
 const Formatter = @This();
 
@@ -204,6 +207,19 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.pushAll("| ");
             fmt.formatExpr(l.body);
+        },
+        .bin_op => |op| {
+            if (fmt.flags == .debug_binop) {
+                fmt.push('(');
+            }
+            fmt.formatExpr(op.left);
+            fmt.push(' ');
+            fmt.pushTokenText(op.operator);
+            fmt.push(' ');
+            fmt.formatExpr(op.right);
+            if (fmt.flags == .debug_binop) {
+                fmt.push(')');
+            }
         },
         .suffix_single_question => |s| {
             fmt.formatExpr(s.expr);
@@ -597,6 +613,53 @@ fn moduleFmtsSame(source: []const u8) !void {
     try std.testing.expectEqualSlices(u8, source, result);
 }
 
+const tokenize = @import("check/parse/tokenize.zig");
+
+fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
+    try exprFmtsTo(source, source, flags);
+}
+fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
+    const Parser = @import("check/parse/Parser.zig").Parser;
+
+    const gpa = std.testing.allocator;
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+    var messages: [1]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice, gpa);
+    tokenizer_.tokenize();
+    const result = tokenizer_.finish_and_deinit();
+
+    var parser = Parser.init(gpa, result.tokens);
+    defer parser.deinit();
+
+    const expr = parser.parseExpr();
+
+    const errors = parser.diagnostics.toOwnedSlice() catch exitOnOom();
+
+    var parse_ast = IR{
+        .source = source,
+        .tokens = result.tokens,
+        .store = parser.store,
+        .errors = errors,
+    };
+    defer parse_ast.deinit();
+    defer std.testing.allocator.free(parse_ast.errors);
+
+    std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors) catch {
+        std.debug.print("Tokens:\n{any}", .{result.tokens.tokens.items(.tag)});
+        std.debug.panic("Test failed with parse errors", .{});
+    };
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
+    formatter.flags = flags;
+    defer formatter.deinit();
+    formatter.formatExpr(expr);
+    const fmt_result = formatter.buffer.toOwnedSlice() catch exitOnOom();
+    defer std.testing.allocator.free(fmt_result);
+    try std.testing.expectEqualSlices(u8, expected, fmt_result);
+}
+
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
     const gpa = std.testing.allocator;
@@ -744,4 +807,26 @@ test "Syntax grab bag" {
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}
     );
+}
+
+test "First BinOp" {
+    const expr = "1 + 2";
+    try exprFmtsSame(expr, .no_debug);
+}
+
+test "BinOp with higher BP right" {
+    const expr = "1 + 2 * 3";
+    try exprFmtsSame(expr, .no_debug);
+    try exprFmtsTo(expr, "(1 + (2 * 3))", .debug_binop);
+    // try exprBinOpIs(expr, .OpStar);
+}
+
+test "BinOp omnibus" {
+    const expr = "Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5";
+    const expr_sloppy = "Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5";
+    const formatted = "((((Err(foo) ?? 12) > (5 * 5)) or (((13 + 2) < 5) and ((10 - 1) >= 16))) or (12 <= (3 / 5)))";
+    try exprFmtsSame(expr, .no_debug);
+    try exprFmtsTo(expr_sloppy, expr, .no_debug);
+    try exprFmtsTo(expr, formatted, .debug_binop);
+    try exprFmtsTo(expr_sloppy, formatted, .debug_binop);
 }

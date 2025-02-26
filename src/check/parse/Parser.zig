@@ -683,6 +683,10 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.Nod
 }
 
 pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
+    return self.parseExprWithBp(0);
+}
+
+pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
     const start = self.pos;
     var expr: ?IR.NodeStore.ExprIdx = null;
     switch (self.peek()) {
@@ -900,7 +904,23 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
             } });
             self.advance();
         }
-        // Check for try suffix...
+        while (getTokenBP(self.peek())) |bp| {
+            if (bp.left < min_bp) {
+                break;
+            }
+            const opPos = self.pos;
+
+            self.advance();
+
+            const nextExpr = self.parseExprWithBp(bp.right);
+
+            expression = self.store.addExpr(.{ .bin_op = .{
+                .left = expression,
+                .right = nextExpr,
+                .operator = opPos,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+        }
         return expression;
     }
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
@@ -1211,4 +1231,30 @@ pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
 
 pub fn addProblem(self: *Parser, diagnostic: IR.Diagnostic) void {
     self.diagnostics.append(diagnostic) catch exitOnOom();
+}
+
+/// Binding power of the lhs and rhs of a particular operator.
+const BinOpBp = struct { left: u8, right: u8 };
+
+/// Get the binding power for a Token if it's a operator token, else return null.
+fn getTokenBP(tok: Token.Tag) ?BinOpBp {
+    return switch (tok) {
+        .OpStar => .{ .left = 31, .right = 30 }, // 31 LEFT
+        .OpSlash => .{ .left = 29, .right = 28 }, // 29 LEFT
+        .OpDoubleSlash => .{ .left = 27, .right = 26 }, // 27 LEFT
+        .OpPercent => .{ .left = 25, .right = 24 }, // 25 LEFT
+        .OpPlus => .{ .left = 23, .right = 22 }, // 23 LEFT
+        .OpBinaryMinus => .{ .left = 21, .right = 20 }, // 21 LEFT
+        .OpDoubleQuestion => .{ .left = 19, .right = 18 }, // 19 LEFT
+        .OpQuestion => .{ .left = 17, .right = 16 }, // 17 LEFT
+        .OpEquals => .{ .left = 15, .right = 15 }, // 15 NOASSOC
+        .OpNotEquals => .{ .left = 13, .right = 13 }, // 13 NOASSOC
+        .OpLessThan => .{ .left = 11, .right = 11 }, // 11 NOASSOC
+        .OpGreaterThan => .{ .left = 9, .right = 9 }, // 9 NOASSOC
+        .OpLessThanOrEq => .{ .left = 7, .right = 7 }, // 7 NOASSOC
+        .OpGreaterThanOrEq => .{ .left = 5, .right = 5 }, // 5 NOASSOC
+        .OpAnd => .{ .left = 3, .right = 4 }, // 3 RIGHT
+        .OpOr => .{ .left = 1, .right = 2 }, // 1 RIGHT
+        else => null,
+    };
 }
