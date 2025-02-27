@@ -910,6 +910,12 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
                 .expr = e,
             } });
         },
+        .TripleDot => {
+            expr = self.store.addExpr(.{ .ellipsis = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance();
+        },
         else => {
             return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
         },

@@ -283,6 +283,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .block => |b| {
             fmt.formatBody(b);
         },
+        .ellipsis => |_| {
+            fmt.pushAll("...");
+        },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
         },
@@ -821,6 +824,8 @@ test "Syntax grab bag" {
         \\    expect blah == 1
         \\    tag = Blue
         \\    return tag
+        \\    ...
+        \\    match_time(...)
         \\    crash "Unreachable!"
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
