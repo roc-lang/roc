@@ -165,6 +165,11 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .ident => |i| {
             fmt.formatIdent(i.token, i.qualifier);
         },
+        .field_access => |fa| {
+            fmt.formatExpr(fa.left);
+            fmt.push('.');
+            fmt.formatExpr(fa.right);
+        },
         .int => |i| {
             fmt.pushTokenText(i.token);
         },
@@ -221,6 +226,10 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.pushAll("| ");
             fmt.formatExpr(l.body);
+        },
+        .unary_op => |op| {
+            fmt.pushTokenText(op.operator);
+            fmt.formatExpr(op.expr);
         },
         .bin_op => |op| {
             if (fmt.flags == .debug_binop) {
@@ -823,6 +832,7 @@ test "Syntax grab bag" {
         \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
         \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
         \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+        \\    static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
         \\    Stdout.line!(interpolated)?
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}
@@ -855,4 +865,9 @@ test "BinOp omnibus" {
     try exprFmtsTo(expr_sloppy, expr, .no_debug);
     try exprFmtsTo(expr, formatted, .debug_binop);
     try exprFmtsTo(expr_sloppy, formatted, .debug_binop);
+}
+
+test "Dot access super test" {
+    const expr = "some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?";
+    try exprFmtsSame(expr, .no_debug);
 }

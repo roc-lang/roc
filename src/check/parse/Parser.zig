@@ -915,28 +915,26 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         },
     }
     if (expr) |e| {
-        var expression = e;
-        // Check for an apply...
-        if (self.peek() == .NoSpaceOpenRound) {
-            self.advance();
-            const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
-                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
-            };
-            defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-            const args = self.store.scratch_exprs.items[scratch_top..];
-
-            expression = self.store.addExpr(.{ .apply = .{
-                .args = args,
-                .@"fn" = e,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-        }
-        if (self.peek() == .NoSpaceOpQuestion) {
-            expression = self.store.addExpr(.{ .suffix_single_question = .{
-                .expr = expression,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            self.advance();
+        var expression = self.parseExprSuffix(start, e);
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent) {
+            const tok = self.peek();
+            if (tok == .NoSpaceDotInt) { // NoSpaceDotInt
+            } else { // NoSpaceDotLowerIdent
+                const s = self.pos;
+                const ident = self.store.addExpr(.{ .ident = .{
+                    .region = .{ .start = self.pos, .end = self.pos },
+                    .token = self.pos,
+                    .qualifier = null,
+                } });
+                self.advance();
+                const ident_suffixed = self.parseExprSuffix(s, ident);
+                expression = self.store.addExpr(.{ .field_access = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .operator = start,
+                    .left = expression,
+                    .right = ident_suffixed,
+                } });
+            }
         }
         while (getTokenBP(self.peek())) |bp| {
             if (bp.left < min_bp) {
@@ -958,6 +956,34 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         return expression;
     }
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+}
+
+fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeStore.ExprIdx {
+    var expression = e;
+    // Check for an apply...
+    if (self.peek() == .NoSpaceOpenRound) {
+        self.advance();
+        const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
+            return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+        };
+        defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+        const args = self.store.scratch_exprs.items[scratch_top..];
+
+        expression = self.store.addExpr(.{ .apply = .{
+            .args = args,
+            .@"fn" = e,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+    }
+    if (self.peek() == .NoSpaceOpQuestion) {
+        expression = self.store.addExpr(.{ .suffix_single_question = .{
+            .expr = expression,
+            .operator = start,
+            .region = .{ .start = start, .end = self.pos },
+        } });
+        self.advance();
+    }
+    return expression;
 }
 
 pub fn parseRecordField(self: *Parser) IR.NodeStore.RecordFieldIdx {

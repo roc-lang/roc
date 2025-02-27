@@ -356,12 +356,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        unary_neg,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - node index of expr
-        /// * rhs - ignored
-        unary_not,
+        unary_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - node index of expr
@@ -843,7 +838,11 @@ pub const NodeStore = struct {
                 }
             },
             .record_updater => |_| {},
-            .field_access => |_| {},
+            .field_access => |fa| {
+                node.tag = .field_access;
+                node.data.lhs = fa.left.id;
+                node.data.rhs = fa.right.id;
+            },
             .bin_op => |op| {
                 node.tag = .bin_op;
                 node.main_token = op.operator;
@@ -854,8 +853,11 @@ pub const NodeStore = struct {
                 node.tag = .suffix_single_question;
                 node.data.lhs = op.expr.id;
             },
-            .unary_neg => |_| {},
-            .unary_not => |_| {},
+            .unary_op => |u| {
+                node.tag = .unary_op;
+                node.main_token = u.operator;
+                node.data.lhs = u.expr.id;
+            },
             .if_then_else => |i| {
                 node.tag = .if_then_else;
                 node.data.lhs = i.condition.id;
@@ -1475,6 +1477,14 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .field_access => {
+                return .{ .field_access = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
             .lambda => {
                 var extra_data_pos = @as(usize, @intCast(node.data.lhs));
                 const body_len = 1;
@@ -1516,6 +1526,7 @@ pub const NodeStore = struct {
             .suffix_single_question => {
                 return .{ .suffix_single_question = .{
                     .region = emptyRegion(),
+                    .operator = node.main_token,
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
@@ -1992,15 +2003,10 @@ pub const NodeStore = struct {
             token: TokenIdx,
             region: Region,
         },
-        field_access: struct {
-            ident_tok: TokenIdx,
-            @"struct": ExprIdx,
-            region: Region,
-        },
+        field_access: BinOp,
         bin_op: BinOp,
         suffix_single_question: Unary,
-        unary_neg: Unary,
-        unary_not: Unary,
+        unary_op: Unary,
         if_then_else: struct {
             condition: ExprIdx,
             then: ExprIdx,
@@ -2059,6 +2065,7 @@ pub const NodeStore = struct {
         region: Region,
     };
     pub const Unary = struct {
+        operator: TokenIdx,
         expr: ExprIdx,
         region: Region,
     };
