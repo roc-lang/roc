@@ -40,7 +40,7 @@ pub const Resolved = struct {
 pub const Store = struct {
     imports: List,
     ident_store: *Ident.Store,
-    arena: *std.heap.ArenaAllocator,
+    gpa: std.mem.Allocator,
 
     pub const primary_idx: Idx = @enumFromInt(0);
 
@@ -52,14 +52,14 @@ pub const Store = struct {
     pub fn init(
         builtin_names: []const []const u8,
         ident_store: *Ident.Store,
-        arena: *std.heap.ArenaAllocator,
+        gpa: std.mem.Allocator,
     ) Store {
-        var modules = List.init(arena);
+        var modules = List.init(gpa);
         _ = modules.append(Self{
             .name = &.{},
             .package_shorthand = null,
             .is_builtin = false,
-            .exposed_idents = collections.SafeList(Ident.Idx).init(arena),
+            .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
         });
 
         for (builtin_names) |builtin| {
@@ -67,14 +67,14 @@ pub const Store = struct {
                 .name = builtin,
                 .package_shorthand = null,
                 .is_builtin = true,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(arena),
+                .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
             });
         }
 
         return Store{
             .imports = modules,
             .ident_store = ident_store,
-            .arena = arena,
+            .gpa = gpa,
         };
     }
 
@@ -123,7 +123,7 @@ pub const Store = struct {
                 .name = name,
                 .package_shorthand = package_shorthand,
                 .is_builtin = false,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(self.arena.allocator()),
+                .exposed_idents = collections.SafeList(Ident.Idx).init(self.gpa),
             });
 
             return LookupResult{ .import_idx = idx, .was_present = false };

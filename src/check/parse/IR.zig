@@ -23,6 +23,15 @@ pub const Diagnostic = struct {
         missing_header,
         list_not_closed,
         missing_arrow,
+        expected_provides_open_square,
+        expected_provides,
+        expected_provides_close_square,
+        expected_package_platform_open_curly,
+        expected_package_or_platform_name,
+        expected_package_or_platform_colon,
+        expected_platform_string,
+        expected_package_or_platform_string,
+        expected_package_platform_close_curly,
     };
 };
 
@@ -146,6 +155,11 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
+        ty_var,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_tag,
         /// DESCRIPTION
         /// Example: EXAMPLE
@@ -167,8 +181,35 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         ty_fn,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_star,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         ty_underscore,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_parens,
+
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_record_field,
+
+        // Type Header
+
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_header,
 
         // Patterns
 
@@ -250,6 +291,11 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
+        string_part,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
         string,
         /// DESCRIPTION
         /// Example: EXAMPLE
@@ -300,42 +346,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        bin_op_add,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_sub,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_div,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_mul,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_or,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_and,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_dbl_question,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_single_question,
+        bin_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -345,12 +356,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        unary_neg,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - node index of expr
-        /// * rhs - ignored
-        unary_not,
+        unary_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - node index of expr
@@ -378,18 +384,11 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         record_builder,
-        // TODO: Add the rest of the expressions
-
         /// A block of statements
         /// Main token is newline preceding the block
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
-        /// The end of a block of states
-        /// Main token is final newline of block
-        /// * lhs - ignored
-        /// * rhs - ignored
-        block_end,
 
         /// A branch is a when expression
         /// Main token is ignored
@@ -414,6 +413,8 @@ pub const NodeStore = struct {
     scratch_record_fields: std.ArrayList(RecordFieldIdx),
     scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIdx),
     scratch_when_branches: std.ArrayList(WhenBranchIdx),
+    scratch_type_annos: std.ArrayList(TypeAnnoIdx),
+    scratch_anno_record_fields: std.ArrayList(AnnoRecordFieldIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
@@ -430,6 +431,8 @@ pub const NodeStore = struct {
             .scratch_record_fields = std.ArrayList(RecordFieldIdx).init(gpa),
             .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIdx).init(gpa),
             .scratch_when_branches = std.ArrayList(WhenBranchIdx).init(gpa),
+            .scratch_type_annos = std.ArrayList(TypeAnnoIdx).init(gpa),
+            .scratch_anno_record_fields = std.ArrayList(AnnoRecordFieldIdx).init(gpa),
         };
 
         store.nodes.ensureTotalCapacity(capacity);
@@ -446,6 +449,8 @@ pub const NodeStore = struct {
         store.scratch_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
         store.scratch_pattern_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
         store.scratch_when_branches.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
+        store.scratch_type_annos.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
+        store.scratch_anno_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
 
         return store;
     }
@@ -471,6 +476,8 @@ pub const NodeStore = struct {
         store.scratch_record_fields.deinit();
         store.scratch_pattern_record_fields.deinit();
         store.scratch_when_branches.deinit();
+        store.scratch_type_annos.deinit();
+        store.scratch_anno_record_fields.deinit();
     }
 
     /// Ensures that all scratch buffers in the store
@@ -483,14 +490,14 @@ pub const NodeStore = struct {
         store.scratch_record_fields.shrinkRetainingCapacity(0);
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
         store.scratch_when_branches.shrinkRetainingCapacity(0);
+        store.scratch_type_annos.shrinkRetainingCapacity(0);
+        store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
     }
 
-    // Idx types
+    // Node Type Idx types
 
     /// An index for a File node.  Should not be constructed externally.
     pub const FileIdx = struct { id: u32 };
-    /// An index for a Body node.  Should not be constructed externally.
-    pub const BodyIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
     pub const HeaderIdx = struct { id: u32 };
     /// An index for a Statement node.  Should not be constructed externally.
@@ -507,6 +514,12 @@ pub const NodeStore = struct {
     pub const RecordFieldIdx = struct { id: u32 };
     /// An index for a PatternRecordField node.  Should not be constructed externally.
     pub const PatternRecordFieldIdx = struct { id: u32 };
+    /// An index for a TypeHeader node.  Should not be constructed externally.
+    pub const TypeHeaderIdx = struct { id: u32 };
+    /// An index for a TypeAnno node.  Should not be constructed externally.
+    pub const TypeAnnoIdx = struct { id: u32 };
+    /// An index for a AnnoRecordField node.  Should not be constructed externally.
+    pub const AnnoRecordFieldIdx = struct { id: u32 };
 
     // ------------------------------------------------------------------------
     // Creation API - All nodes should be added using these functions
@@ -541,31 +554,6 @@ pub const NodeStore = struct {
         return FileIdx{ .id = 0 };
     }
 
-    pub fn addBody(store: *NodeStore, body: Body) BodyIdx {
-        const start = store.extra_data.items.len;
-        const len = @as(u31, @intCast(body.statements.len));
-        if (body.whitespace) |ws| {
-            store.extra_data.append(ws) catch exitOnOom();
-        }
-        for (body.statements) |statement| {
-            store.extra_data.append(statement.id) catch exitOnOom();
-        }
-
-        const rhs = BodyRhs{
-            .has_whitespace = if (body.whitespace != null) 1 else 0,
-            .num_statements = len,
-        };
-        const nid = store.nodes.append(.{
-            .tag = .block,
-            .main_token = 0,
-            .data = .{
-                .lhs = @as(u32, @intCast(start)),
-                .rhs = @as(u32, @bitCast(rhs)),
-            },
-        });
-        return .{ .id = @intFromEnum(nid) };
-    }
-
     pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
         var node = Node{
             .tag = .statement,
@@ -592,7 +580,7 @@ pub const NodeStore = struct {
                     .num_provides = @as(u22, @intCast(app.provides.len)),
                 }));
 
-                store.extra_data.append(app.platform) catch exitOnOom();
+                store.extra_data.append(app.platform.id) catch exitOnOom();
 
                 for (app.packages) |p| {
                     store.extra_data.append(p.id) catch exitOnOom();
@@ -671,8 +659,16 @@ pub const NodeStore = struct {
                     store.extra_data.append(@as(u32, @intCast(e))) catch exitOnOom();
                 }
             },
-            .type_decl => |_| {},
-            .type_anno => |_| {},
+            .type_decl => |d| {
+                node.tag = .type_decl;
+                node.data.lhs = d.header.id;
+                node.data.rhs = d.anno.id;
+            },
+            .type_anno => |a| {
+                node.tag = .type_anno;
+                node.data.lhs = a.name;
+                node.data.rhs = a.anno.id;
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -695,6 +691,12 @@ pub const NodeStore = struct {
             .tag => |t| {
                 node.tag = .tag_patt;
                 node.main_token = t.tag_tok;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.args.len));
+
+                for (t.args) |a| {
+                    store.extra_data.append(a.id) catch exitOnOom();
+                }
             },
             .number => |n| {
                 node.tag = .number_patt;
@@ -703,6 +705,7 @@ pub const NodeStore = struct {
             .string => |s| {
                 node.tag = .string_patt;
                 node.main_token = s.string_tok;
+                node.data.lhs = s.expr.id;
             },
             .record => |r| {
                 node.tag = .record_patt;
@@ -774,6 +777,10 @@ pub const NodeStore = struct {
                 node.tag = .float;
                 node.main_token = e.token;
             },
+            .string_part => |e| {
+                node.tag = .string_part;
+                node.main_token = e.token;
+            },
             .string => |e| {
                 node.tag = .string;
                 node.main_token = e.token;
@@ -792,8 +799,22 @@ pub const NodeStore = struct {
                     store.extra_data.append(item.id) catch exitOnOom();
                 }
             },
-            .tuple => |_| {},
-            .record => |_| {},
+            .tuple => |t| {
+                node.tag = .tuple;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.items.len));
+                for (t.items) |item| {
+                    store.extra_data.append(item.id) catch exitOnOom();
+                }
+            },
+            .record => |r| {
+                node.tag = .record;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(r.fields.len));
+                for (r.fields) |field| {
+                    store.extra_data.append(field.id) catch exitOnOom();
+                }
+            },
             .tag => |e| {
                 node.tag = .tag;
                 node.main_token = e.token;
@@ -817,44 +838,14 @@ pub const NodeStore = struct {
                 }
             },
             .record_updater => |_| {},
-            .field_access => |_| {},
-            .bin_op_add => |op| {
-                node.tag = .bin_op_add;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
+            .field_access => |fa| {
+                node.tag = .field_access;
+                node.data.lhs = fa.left.id;
+                node.data.rhs = fa.right.id;
             },
-            .bin_op_sub => |op| {
-                node.tag = .bin_op_sub;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_div => |op| {
-                node.tag = .bin_op_div;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_mul => |op| {
-                node.tag = .bin_op_mul;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_or => |op| {
-                node.tag = .bin_op_or;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_and => |op| {
-                node.tag = .bin_op_and;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_dbl_question => |op| {
-                node.tag = .bin_op_dbl_question;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_single_question => |op| {
-                node.tag = .bin_op_single_question;
+            .bin_op => |op| {
+                node.tag = .bin_op;
+                node.main_token = op.operator;
                 node.data.lhs = op.left.id;
                 node.data.rhs = op.right.id;
             },
@@ -862,8 +853,11 @@ pub const NodeStore = struct {
                 node.tag = .suffix_single_question;
                 node.data.lhs = op.expr.id;
             },
-            .unary_neg => |_| {},
-            .unary_not => |_| {},
+            .unary_op => |u| {
+                node.tag = .unary_op;
+                node.main_token = u.operator;
+                node.data.lhs = u.expr.id;
+            },
             .if_then_else => |i| {
                 node.tag = .if_then_else;
                 node.data.lhs = i.condition.id;
@@ -893,6 +887,25 @@ pub const NodeStore = struct {
                 node.data.lhs = d.expr.id;
             },
             .record_builder => |_| {},
+            .block => |body| {
+                const start = store.extra_data.items.len;
+                const len = @as(u31, @intCast(body.statements.len));
+                if (body.whitespace) |ws| {
+                    store.extra_data.append(ws) catch exitOnOom();
+                }
+                for (body.statements) |statement| {
+                    store.extra_data.append(statement.id) catch exitOnOom();
+                }
+
+                const rhs = BodyRhs{
+                    .has_whitespace = if (body.whitespace != null) 1 else 0,
+                    .num_statements = len,
+                };
+                node.tag = .block;
+                node.main_token = 0;
+                node.data.lhs = @as(u32, @intCast(start));
+                node.data.rhs = @as(u32, @bitCast(rhs));
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -960,6 +973,122 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
+    pub fn addTypeHeader(store: *NodeStore, header: TypeHeader) TypeHeaderIdx {
+        var node = Node{
+            .tag = .ty_header,
+            .main_token = header.name,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+        };
+
+        node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+        node.data.rhs = @as(u32, @intCast(header.args.len));
+
+        for (header.args) |arg| {
+            store.extra_data.append(arg) catch exitOnOom();
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addAnnoRecordField(store: *NodeStore, field: AnnoRecordField) AnnoRecordFieldIdx {
+        const node = Node{
+            .tag = .ty_record_field,
+            .main_token = 0,
+            .data = .{
+                .lhs = @as(u32, @intCast(field.name)),
+                .rhs = @as(u32, @intCast(field.ty.id)),
+            },
+        };
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
+        var node = Node{
+            .tag = .branch,
+            .main_token = 0,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+        };
+
+        switch (anno) {
+            .ty_var => |v| {
+                node.tag = .ty_var;
+                node.main_token = v.tok;
+            },
+            .star => |_| {
+                node.tag = .ty_star;
+            },
+            .underscore => |_| {
+                node.tag = .ty_underscore;
+            },
+            .tag => |t| {
+                node.tag = .ty_tag;
+                node.main_token = t.tok;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.args.len));
+                for (t.args) |arg| {
+                    store.extra_data.append(arg.id) catch exitOnOom();
+                }
+            },
+            .tag_union => |tu| {
+                node.tag = .ty_union;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                var rhs = TypeAnno.TagUnionRhs{
+                    .open = 0,
+                    .tags_len = @as(u31, @intCast(tu.tags.len)),
+                };
+                for (tu.tags) |tag| {
+                    store.extra_data.append(tag.id) catch exitOnOom();
+                }
+                if (tu.open_anno) |a| {
+                    rhs.open = 1;
+                    store.extra_data.append(a.id) catch exitOnOom();
+                }
+                node.data.rhs = @as(u32, @bitCast(rhs));
+            },
+            .tuple => |t| {
+                node.tag = .ty_tuple;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.annos.len));
+                for (t.annos) |ta| {
+                    store.extra_data.append(ta.id) catch exitOnOom();
+                }
+            },
+            .record => |r| {
+                node.tag = .ty_record;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(r.fields.len));
+                for (r.fields) |field| {
+                    store.extra_data.append(field.id) catch exitOnOom();
+                }
+            },
+            .@"fn" => |f| {
+                node.tag = .ty_fn;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(f.args.len));
+                for (f.args) |arg| {
+                    store.extra_data.append(arg.id) catch exitOnOom();
+                }
+                store.extra_data.append(f.ret.id) catch exitOnOom();
+            },
+            .parens => |p| {
+                node.tag = .ty_parens;
+                node.data.lhs = p.anno.id;
+            },
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
     // ------------------------------------------------------------------------
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
@@ -990,7 +1119,7 @@ pub const NodeStore = struct {
                 const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
                 const data = store.extra_data.items[extra_data_start..(extra_data_start + rhs.num_packages + rhs.num_provides + 1)];
                 var position: u32 = 0;
-                const platform = data[0];
+                const platform = .{ .id = data[0] };
                 position += 1;
                 std.debug.assert(store.scratch_statements.items.len == 0);
                 const scratch_rf_top = store.scratch_record_fields.items.len;
@@ -1084,6 +1213,38 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .expect => {
+                return .{ .expect = .{
+                    .body = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .crash => {
+                return .{ .crash = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .@"return" => {
+                return .{ .@"return" = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .type_decl => {
+                return .{ .type_decl = .{
+                    .region = emptyRegion(),
+                    .header = .{ .id = node.data.lhs },
+                    .anno = .{ .id = node.data.rhs },
+                } };
+            },
+            .type_anno => {
+                return .{ .type_anno = .{
+                    .region = emptyRegion(),
+                    .name = node.data.lhs,
+                    .anno = .{ .id = node.data.rhs },
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1100,8 +1261,21 @@ pub const NodeStore = struct {
                 } };
             },
             .tag_patt => {
+                const scratch_top = store.scratch_patterns.items.len;
+                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
+                const f_start = @as(usize, @intCast(node.data.lhs));
+                const f_end = f_start + @as(usize, @intCast(node.data.rhs));
+
+                const ed = store.extra_data.items[f_start..f_end];
+
+                for (ed) |d| {
+                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                }
+
+                const args = store.scratch_patterns.items[scratch_top..];
                 return .{ .tag = .{
                     .tag_tok = node.main_token,
+                    .args = args,
                     .region = emptyRegion(),
                 } };
             },
@@ -1109,6 +1283,7 @@ pub const NodeStore = struct {
                 return .{ .string = .{
                     .string_tok = node.main_token,
                     .region = emptyRegion(),
+                    .expr = .{ .id = node.data.lhs },
                 } };
             },
             .number_patt => {
@@ -1236,23 +1411,22 @@ pub const NodeStore = struct {
                     .token = node.main_token,
                 } };
             },
+            .string_part => {
+                return .{ .string_part = .{
+                    .region = emptyRegion(),
+                    .token = node.main_token,
+                } };
+            },
             .string => {
-                if (node.data.rhs > 0) {
-                    const scratch_top = store.scratch_exprs.items.len;
-                    for (store.extra_data.items[node.data.lhs..(node.data.lhs + node.data.rhs)]) |d| {
-                        store.scratch_exprs.append(.{ .id = d }) catch exitOnOom();
-                    }
-                    const parts = store.scratch_exprs.items[scratch_top..];
-                    store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-                    return .{ .string = .{
-                        .token = node.main_token,
-                        .parts = parts,
-                        .region = emptyRegion(),
-                    } };
+                const scratch_top = store.scratch_exprs.items.len;
+                for (store.extra_data.items[node.data.lhs..(node.data.lhs + node.data.rhs)]) |d| {
+                    store.scratch_exprs.append(.{ .id = d }) catch exitOnOom();
                 }
+                const parts = store.scratch_exprs.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
                 return .{ .string = .{
                     .token = node.main_token,
-                    .parts = &.{},
+                    .parts = parts,
                     .region = emptyRegion(),
                 } };
             },
@@ -1272,12 +1446,51 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .tuple => {
+                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
+                const extra_data_end = extra_data_pos + node.data.rhs;
+                const scratch_top = store.scratch_exprs.items.len;
+                while (extra_data_pos < extra_data_end) {
+                    store.scratch_exprs.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    extra_data_pos += 1;
+                }
+                const items = store.scratch_exprs.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+
+                return .{ .tuple = .{
+                    .items = items,
+                    .region = emptyRegion(),
+                } };
+            },
+            .record => {
+                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
+                const extra_data_end = extra_data_pos + node.data.rhs;
+                const scratch_top = store.scratch_record_fields.items.len;
+                while (extra_data_pos < extra_data_end) {
+                    store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    extra_data_pos += 1;
+                }
+                const fields = store.scratch_record_fields.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+                return .{ .record = .{
+                    .fields = fields,
+                    .region = emptyRegion(),
+                } };
+            },
+            .field_access => {
+                return .{ .field_access = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
             .lambda => {
                 var extra_data_pos = @as(usize, @intCast(node.data.lhs));
                 const body_len = 1;
                 const args_len = @as(usize, @intCast(node.data.rhs));
                 const extra_data_end = extra_data_pos + args_len + body_len;
-                const body = BodyIdx{
+                const body = ExprIdx{
                     .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])),
                 };
                 extra_data_pos += 1;
@@ -1313,6 +1526,7 @@ pub const NodeStore = struct {
             .suffix_single_question => {
                 return .{ .suffix_single_question = .{
                     .region = emptyRegion(),
+                    .operator = node.main_token,
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
@@ -1352,27 +1566,47 @@ pub const NodeStore = struct {
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
+            .bin_op => {
+                return .{ .bin_op = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .block => {
+                const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
+                const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
+                const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
+                const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
+                const scratch_top = store.scratch_statements.items.len;
+                for (statement_data) |i| {
+                    store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
+                }
+                const statements = store.scratch_statements.items[scratch_top..];
+                store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+                return .{ .block = .{
+                    .statements = statements,
+                    .whitespace = whitespace,
+                    .region = emptyRegion(),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
         }
     }
 
-    pub fn getBody(store: *NodeStore, body: BodyIdx) Body {
-        const node = store.nodes.get(@enumFromInt(body.id));
-        const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
-        const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
-        const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
-        const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
-        const scratch_top = store.scratch_statements.items.len;
-        for (statement_data) |i| {
-            store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
-        }
-        const statements = store.scratch_statements.items[scratch_top..];
-        store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+    pub fn getRecordField(store: *NodeStore, fieldIdx: RecordFieldIdx) RecordField {
+        const node = store.nodes.get(@enumFromInt(fieldIdx.id));
+        const name = node.main_token;
+        const value = if (node.data.lhs > 0) ExprIdx{ .id = node.data.lhs } else null;
+        const optional = node.data.rhs == 1;
         return .{
-            .statements = statements,
-            .whitespace = whitespace,
+            .name = name,
+            .value = value,
+            .optional = optional,
+            .region = emptyRegion(),
         };
     }
 
@@ -1383,6 +1617,148 @@ pub const NodeStore = struct {
             .pattern = .{ .id = node.data.lhs },
             .body = .{ .id = node.data.rhs },
         };
+    }
+
+    pub fn getTypeHeader(store: *NodeStore, header: TypeHeaderIdx) TypeHeader {
+        const node = store.nodes.get(@enumFromInt(header.id));
+        std.debug.assert(node.tag == .ty_header);
+        const ed_start = @as(usize, @intCast(node.data.lhs));
+        const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+        const args = store.extra_data.items[ed_start..ed_end];
+        return .{
+            .region = emptyRegion(),
+            .name = node.main_token,
+            .args = args,
+        };
+    }
+
+    pub fn getAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) AnnoRecordField {
+        const node = store.nodes.get(@enumFromInt(idx.id));
+        return .{
+            .region = emptyRegion(),
+            .name = node.data.lhs,
+            .ty = .{ .id = node.data.rhs },
+        };
+    }
+
+    pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
+        const node = store.nodes.get(@enumFromInt(anno.id));
+
+        switch (node.tag) {
+            .ty_var => {
+                return .{ .ty_var = .{
+                    .tok = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_star => {
+                return .{ .star = .{
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_underscore => {
+                return .{ .underscore = .{
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_tag => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const args = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tag = .{
+                    .tok = node.main_token,
+                    .args = args,
+                    .region = emptyRegion(),
+                } };
+            },
+            .ty_union => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const rhs = @as(TypeAnno.TagUnionRhs, @bitCast(node.data.rhs));
+                var tags_ed_end = ed_start + @as(usize, @intCast(rhs.tags_len));
+                if (rhs.open == 1) {
+                    tags_ed_end -= 1;
+                }
+                const tags_ed = store.extra_data.items[ed_start..tags_ed_end];
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (tags_ed) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                var open_anno: ?TypeAnnoIdx = null;
+                if (rhs.open == 1) {
+                    open_anno = .{ .id = store.extra_data.items[tags_ed_end] };
+                }
+                const tags = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tag_union = .{
+                    .region = emptyRegion(),
+                    .open_anno = open_anno,
+                    .tags = tags,
+                } };
+            },
+            .ty_tuple => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const items = store.scratch_type_annos.items[scratch_top..];
+                return .{ .tuple = .{
+                    .region = emptyRegion(),
+                    .annos = items,
+                } };
+            },
+            .ty_record => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_anno_record_fields.shrinkRetainingCapacity(scratch_top);
+                for (store.extra_data.items[ed_start..ed_end]) |d| {
+                    store.scratch_anno_record_fields.append(.{ .id = d }) catch exitOnOom();
+                }
+                const fields = store.scratch_anno_record_fields.items[scratch_top..];
+                return .{ .record = .{
+                    .region = emptyRegion(),
+                    .fields = fields,
+                } };
+            },
+            .ty_fn => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const args_ed_end = ed_start + @as(usize, @intCast(node.data.rhs));
+                const args_ed = store.extra_data.items[ed_start..args_ed_end];
+                std.debug.assert(args_ed.len == @as(usize, @intCast(node.data.rhs)));
+                const scratch_top = store.scratch_type_annos.items.len;
+                defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
+                for (args_ed) |d| {
+                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                }
+                const ret = .{ .id = store.extra_data.items[args_ed_end] };
+                const args = store.scratch_type_annos.items[scratch_top..];
+                return .{ .@"fn" = .{
+                    .region = emptyRegion(),
+                    .ret = ret,
+                    .args = args,
+                } };
+            },
+            .ty_parens => {
+                return .{ .parens = .{
+                    .region = emptyRegion(),
+                    .anno = .{ .id = node.data.lhs },
+                } };
+            },
+            else => {
+                std.debug.panic("Expected a valid type annotation node, found {s}", .{@tagName(node.tag)});
+            },
+        }
+
+        const nid = store.nodes.append(node);
+        return .{ .id = @intFromEnum(nid) };
     }
 
     // ------------------------------------------------------------------------
@@ -1402,13 +1778,14 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
+        region: Region,
     };
 
     /// Represents a module header.
     pub const Header = union(enum) {
         app: struct {
             provides: []const TokenIdx, // This should probably be a Interned Ident token
-            platform: TokenIdx,
+            platform: ExprIdx,
             platform_name: TokenIdx,
             packages: []const RecordFieldIdx,
             region: Region,
@@ -1438,7 +1815,7 @@ pub const NodeStore = struct {
     pub const Statement = union(enum) {
         decl: struct {
             pattern: PatternIdx,
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         expr: struct {
@@ -1450,7 +1827,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         expect: struct {
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         @"return": struct {
@@ -1459,11 +1836,13 @@ pub const NodeStore = struct {
         },
         import: Import,
         type_decl: struct {
-            // TODO: complete this
+            header: TypeHeaderIdx,
+            anno: TypeAnnoIdx,
             region: Region,
         },
         type_anno: struct {
-            // TODO: complete this
+            name: TokenIdx,
+            anno: TypeAnnoIdx,
             region: Region,
         },
 
@@ -1476,6 +1855,60 @@ pub const NodeStore = struct {
         };
     };
 
+    pub const TypeHeader = struct {
+        name: TokenIdx,
+        args: []const TokenIdx,
+        region: Region,
+    };
+
+    pub const TypeAnno = union(enum) {
+        ty_var: struct {
+            tok: TokenIdx,
+            region: Region,
+        },
+        star: struct {
+            region: Region,
+        },
+        underscore: struct {
+            region: Region,
+        },
+        tag: struct {
+            tok: TokenIdx,
+            args: []const TypeAnnoIdx,
+            region: Region,
+        },
+        tag_union: struct {
+            tags: []const TypeAnnoIdx,
+            open_anno: ?TypeAnnoIdx,
+            region: Region,
+        },
+        tuple: struct {
+            annos: []const TypeAnnoIdx,
+            region: Region,
+        },
+        record: struct {
+            fields: []const AnnoRecordFieldIdx,
+            region: Region,
+        },
+        @"fn": struct {
+            args: []const TypeAnnoIdx,
+            ret: TypeAnnoIdx,
+            region: Region,
+        },
+        parens: struct {
+            anno: TypeAnnoIdx,
+            region: Region,
+        },
+
+        const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+    };
+
+    pub const AnnoRecordField = struct {
+        name: TokenIdx,
+        ty: TypeAnnoIdx,
+        region: Region,
+    };
+
     /// Represents a Pattern used in pattern matching.
     pub const Pattern = union(enum) {
         ident: struct {
@@ -1484,6 +1917,7 @@ pub const NodeStore = struct {
         },
         tag: struct {
             tag_tok: TokenIdx,
+            args: []const PatternIdx,
             region: Region,
         },
         number: struct {
@@ -1493,6 +1927,7 @@ pub const NodeStore = struct {
         string: struct {
             string_tok: TokenIdx,
             region: Region,
+            expr: ExprIdx,
         },
         record: struct {
             fields: []const PatternRecordFieldIdx,
@@ -1529,6 +1964,10 @@ pub const NodeStore = struct {
             token: TokenIdx,
             region: Region,
         },
+        string_part: struct { // TODO: this should be more properly represented in its own union enum
+            token: TokenIdx,
+            region: Region,
+        },
         string: struct {
             token: TokenIdx,
             region: Region,
@@ -1544,6 +1983,7 @@ pub const NodeStore = struct {
         },
         record: struct {
             fields: []const RecordFieldIdx,
+            region: Region,
         },
         tag: struct {
             token: TokenIdx,
@@ -1551,7 +1991,7 @@ pub const NodeStore = struct {
         },
         lambda: struct {
             args: []const PatternIdx,
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         apply: struct {
@@ -1563,26 +2003,14 @@ pub const NodeStore = struct {
             token: TokenIdx,
             region: Region,
         },
-        field_access: struct {
-            ident_tok: TokenIdx,
-            @"struct": ExprIdx,
-            region: Region,
-        },
-        bin_op_add: BinOp,
-        bin_op_sub: BinOp,
-        bin_op_div: BinOp,
-        bin_op_mul: BinOp,
-        bin_op_or: BinOp,
-        bin_op_and: BinOp,
-        bin_op_dbl_question: BinOp,
-        bin_op_single_question: BinOp,
+        field_access: BinOp,
+        bin_op: BinOp,
         suffix_single_question: Unary,
-        unary_neg: Unary,
-        unary_not: Unary,
+        unary_op: Unary,
         if_then_else: struct {
             condition: ExprIdx,
-            then: BodyIdx,
-            @"else": BodyIdx,
+            then: ExprIdx,
+            @"else": ExprIdx,
             region: Region,
         },
         match: struct {
@@ -1603,6 +2031,7 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
+        block: Body,
     };
 
     pub const PatternRecordField = struct {
@@ -1620,21 +2049,23 @@ pub const NodeStore = struct {
 
     pub const IfElse = struct {
         condition: ExprIdx,
-        body: BodyIdx,
+        body: ExprIdx,
         region: Region,
     };
     pub const WhenBranch = struct {
         pattern: PatternIdx,
-        body: BodyIdx,
+        body: ExprIdx,
         region: Region,
     };
 
     pub const BinOp = struct {
         left: ExprIdx,
         right: ExprIdx,
+        operator: TokenIdx,
         region: Region,
     };
     pub const Unary = struct {
+        operator: TokenIdx,
         expr: ExprIdx,
         region: Region,
     };

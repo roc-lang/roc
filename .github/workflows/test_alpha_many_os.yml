@@ -6,16 +6,16 @@ name: Test latest alpha releases for macOS and Linux
 
 jobs:
   test-alpha:
-    name: test alpha macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    name: test alpha macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
-      - uses: goto-bus-stop/setup-zig@v2
+      - uses: mlugg/setup-zig@v1
         with:
           version: 0.13.0
 
@@ -28,10 +28,6 @@ jobs:
 
       - name: Delete everything except ci folder to test the release like a real user would
         run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
-
-      - name: install z3 on macOS
-        if: startsWith(matrix.os, 'macos')
-        run: brew install z3
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
@@ -65,20 +61,4 @@ jobs:
 
       - name: prep and run basic tests
         run: |
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (x86_64)
-        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
-        run: |
-          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
-          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_x86_64-")) | .browser_download_url')
-          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (arm64)
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
-          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-old_linux_arm64-")) | .browser_download_url')
-          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz

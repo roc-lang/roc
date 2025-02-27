@@ -39,22 +39,38 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(arena: *std.heap.ArenaAllocator) Self {
+pub fn init(gpa: std.mem.Allocator) Self {
     return Self{
-        .env = base.ModuleEnv.init(arena),
-        .aliases = Alias.List.init(arena.allocator()),
-        .defs = Def.List.init(arena.allocator()),
-        .exprs = Expr.List.init(arena.allocator()),
-        .exprs_at_regions = ExprAtRegion.List.init(arena.allocator()),
-        .typed_exprs_at_regions = TypedExprAtRegion.List.init(arena.allocator()),
-        .when_branches = WhenBranch.List.init(arena.allocator()),
-        .patterns = Pattern.List.init(arena.allocator()),
-        .patterns_at_regions = PatternAtRegion.List.init(arena.allocator()),
-        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(arena.allocator()),
-        .type_vars = collections.SafeList(TypeVar).init(arena.allocator()),
-        // .type_var_names = Ident.Store.init(arena.allocator()),
-        .ingested_files = IngestedFile.List.init(arena.allocator()),
+        .env = base.ModuleEnv.init(gpa),
+        .aliases = Alias.List.init(gpa),
+        .defs = Def.List.init(gpa),
+        .exprs = Expr.List.init(gpa),
+        .exprs_at_regions = ExprAtRegion.List.init(gpa),
+        .typed_exprs_at_regions = TypedExprAtRegion.List.init(gpa),
+        .when_branches = WhenBranch.List.init(gpa),
+        .patterns = Pattern.List.init(gpa),
+        .patterns_at_regions = PatternAtRegion.List.init(gpa),
+        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(gpa),
+        .type_vars = collections.SafeList(TypeVar).init(gpa),
+        // .type_var_names = Ident.Store.init(gpa),
+        .ingested_files = IngestedFile.List.init(gpa),
     };
+}
+
+pub fn deinit(self: *Self) void {
+    self.env.deinit();
+    self.aliases.deinit();
+    self.defs.deinit();
+    self.exprs.deinit();
+    self.exprs_at_regions.deinit();
+    self.typed_exprs_at_regions.deinit();
+    self.when_branches.deinit();
+    self.patterns.deinit();
+    self.patterns_at_regions.deinit();
+    self.typed_patterns_at_regions.deinit();
+    self.type_vars.deinit();
+    // self.type_var_names.deinit();
+    self.ingested_files.deinit();
 }
 
 pub const RigidVariables = struct {

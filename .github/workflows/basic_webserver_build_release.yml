@@ -14,7 +14,7 @@ env:
 
 jobs:
   fetch-releases:
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v4
 
@@ -30,7 +30,7 @@ jobs:
           path: roc_nightly-*
 
   build-linux-x86_64-files:
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v4
@@ -85,8 +85,6 @@ jobs:
       - name: Download the previously uploaded roc_nightly archives
         uses: actions/download-artifact@v4
 
-      - run: brew install z3
-
       - run: ./ci/build_basic_webserver.sh macos_x86_64
 
       - name: Save .a files
@@ -124,7 +122,7 @@ jobs:
         build-macos-apple-silicon-files,
       ]
     name: create release archive
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v4
 

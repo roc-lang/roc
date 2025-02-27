@@ -24,26 +24,19 @@ pub const Token = struct {
 
         // primitives
         Float,
-        String,
+        StringStart, // the " that starts a string
+        StringEnd, // the " that ends a string
+        MultilineStringStart, // the """ that starts a multiline string
+        MultilineStringEnd, // the """ that ends a multiline string
+        StringPart,
         SingleQuote,
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
 
-        // a part of a string interpolation; generally you'll see something like:
-        // StringBegin, OpenCurly, <expr>, CloseCurly, StringPart, OpenCurly, <expr>, CloseCurly, StringEnd
-        StringBegin,
-        StringPart,
-        StringEnd,
-
         // Should be treated as StringPart in the parser, but we forward the error to the ast
         MalformedInvalidUnicodeEscapeSequence,
         MalformedInvalidEscapeSequence,
-
-        // These are not technically valid, but we can have the formatter fix them up.
-        SingleQuoteBegin,
-        SingleQuotePart,
-        SingleQuoteEnd,
 
         UpperIdent,
         LowerIdent,
@@ -71,6 +64,8 @@ pub const Token = struct {
         CloseSquare,
         OpenCurly,
         CloseCurly,
+        OpenStringInterpolation,
+        CloseStringInterpolation,
         NoSpaceOpenRound,
         // NoSpaceOpenCurly,
 
@@ -85,6 +80,7 @@ pub const Token = struct {
         OpAnd,
         OpAmpersand,
         OpQuestion,
+        OpDoubleQuestion,
         OpOr,
         OpBar,
         OpDoubleSlash,
@@ -106,6 +102,7 @@ pub const Token = struct {
         TripleDot,
         OpColon,
         OpArrow,
+        OpFatArrow,
         OpBackslash,
 
         // Keywords
@@ -132,6 +129,7 @@ pub const Token = struct {
         KwPlatform,
         KwProvides,
         KwRequires,
+        KwReturn,
         KwTo,
         KwWhere,
         KwWith,
@@ -140,6 +138,7 @@ pub const Token = struct {
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
+        .{ "and", .OpAnd },
         .{ "app", .KwApp },
         .{ "as", .KwAs },
         .{ "crash", .KwCrash },
@@ -157,11 +156,13 @@ pub const Token = struct {
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
+        .{ "or", .OpOr },
         .{ "package", .KwPackage },
         .{ "packages", .KwPackages },
         .{ "platform", .KwPlatform },
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
+        .{ "return", .KwReturn },
         .{ "to", .KwTo },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
@@ -206,6 +207,7 @@ pub const Token = struct {
             .KwPlatform,
             .KwProvides,
             .KwRequires,
+            .KwReturn,
             .KwTo,
             .KwWhere,
             .KwWith,
@@ -241,6 +243,7 @@ pub const TokenizedBuffer = struct {
             .LowerIdent,
             .DotLowerIdent,
             .NoSpaceDotLowerIdent,
+            .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
             .DotUpperIdent,
             .NoSpaceDotUpperIdent,
@@ -261,14 +264,6 @@ pub const TokenizedBuffer = struct {
             .tag = tag,
             .offset = tok_offset,
             .extra = .{ .length = length },
-        }) catch exitOnOom();
-    }
-
-    pub fn pushTokenInterned(self: *TokenizedBuffer, tag: Token.Tag, tok_offset: u32, interned: base.Ident.Idx) void {
-        self.tokens.append(self.gpa, .{
-            .tag = tag,
-            .offset = tok_offset,
-            .extra = .{ .interned = interned },
         }) catch exitOnOom();
     }
 
@@ -657,6 +652,69 @@ pub const Cursor = struct {
             }
         }
     }
+
+    pub fn chompEscapeSequence(self: *Cursor, ch: u8) void {
+        std.debug.assert(self.peek() == ch);
+        switch (ch) {
+            '\\', '"', '\'', 'n', 'r', 't', '$' => {
+                self.pos += 1;
+            },
+            'u' => {
+                self.pos += 1;
+                self.require('(', .InvalidUnicodeEscapeSequence);
+                while (true) {
+                    if (self.peek() == ')') {
+                        self.pos += 1;
+                        break;
+                    } else if (self.peek() != null) {
+                        const next = self.peek() orelse 0;
+                        if ((next >= '0' and next <= '9') or
+                            (next >= 'a' and next <= 'f') or
+                            (next >= 'A' and next <= 'F'))
+                        {
+                            self.pos += 1;
+                        } else {
+                            self.pushMessageHere(.InvalidUnicodeEscapeSequence);
+                            break;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+            },
+            else => {
+                self.pushMessageHere(.InvalidEscapeSequence);
+                self.pos += 1;
+            },
+        }
+    }
+
+    pub fn chompSingleQuoteLiteral(self: *Cursor) void {
+        std.debug.assert(self.peek() == '\'');
+        const start = self.pos;
+        // Skip the initial quote.
+        self.pos += 1;
+        var escape: bool = false;
+        while (self.pos < self.buf.len) {
+            const c = self.buf[self.pos];
+            if (escape) {
+                escape = false;
+                self.chompEscapeSequence(c);
+            } else {
+                if (c == '\\') {
+                    escape = true;
+                    self.pos += 1;
+                } else if (c == '\n') {
+                    self.pushMessage(.UnclosedSingleQuote, @intCast(start), @intCast(self.pos));
+                } else if (c == '\'') {
+                    self.pos += 1;
+                } else {
+                    self.pos += 1;
+                }
+            }
+        }
+        self.pushMessage(.UnclosedSingleQuote, start, self.pos);
+    }
 };
 
 /// The output of the tokenizer.
@@ -666,16 +724,18 @@ pub const TokenOutput = struct {
     extra_messages_dropped: usize,
 };
 
-const BraceKind = enum {
-    Round,
-    Square,
-    Curly,
-    StringInterpolation,
-    StringInterpolationMultiline,
-    SingleQuoteInterpolation,
-    SingleQuoteInterpolationMultiline,
+const BraceKind = union(enum) {
+    round,
+    square,
+    curly,
+    string_interpolation: StringKind,
 
     const List = collections.SafeList(@This());
+};
+
+const StringKind = enum {
+    single_line,
+    multi_line,
 };
 
 /// The tokenizer that uses a Cursor and produces a TokenizedBuffer.
@@ -713,6 +773,24 @@ pub const Tokenizer = struct {
         };
     }
 
+    fn pushTokenInternedHere(
+        self: *Tokenizer,
+        tag: Token.Tag,
+        tok_offset: u32,
+        text_offset: u32,
+    ) void {
+        const text = self.cursor.buf[text_offset..self.cursor.pos];
+        const id = self.env.idents.insert(
+            base.Ident.for_text(text),
+            base.Region{ .start = base.Region.Position{ .offset = tok_offset }, .end = base.Region.Position{ .offset = self.cursor.pos } },
+        );
+        self.output.tokens.append(self.output.gpa, .{
+            .tag = tag,
+            .offset = tok_offset,
+            .extra = .{ .interned = id },
+        }) catch exitOnOom();
+    }
+
     fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) void {
         std.debug.assert(self.cursor.peek() == close_curly or self.cursor.peek() == ']' or self.cursor.peek() == ')');
         if (self.stack.items.len == 0) {
@@ -720,28 +798,37 @@ pub const Tokenizer = struct {
             self.cursor.pos += 1;
             return;
         }
-        const last = self.stack.items[self.stack.items.len - 1];
-        if (last == brace) {
-            self.stack.items = self.stack.items[0 .. self.stack.items.len - 1];
-        } else {
-            self.cursor.pushMessageHere(.MismatchedBrace);
-        }
-        self.cursor.pos += 1;
-        const start = self.cursor.pos;
-        if (self.stack.items.len > 0) {
-            const brace_kind = self.stack.items[self.stack.items.len - 1];
-            const term: u8 = switch (brace_kind) {
-                .StringInterpolation, .StringInterpolationMultiline => '"',
-                .SingleQuoteInterpolation, .SingleQuoteInterpolationMultiline => '\'',
-                else => return,
-            };
-            const kind: StringKind = switch (brace_kind) {
-                .StringInterpolationMultiline, .SingleQuoteInterpolationMultiline => .multi_line,
-                else => .single_line,
-            };
-            _ = self.stack.pop();
-            const tok = self.tokenizeStringLikeLiteralBody(.after_interpolation, kind, term, start);
-            self.output.pushTokenNormal(tok, start, self.cursor.pos - start);
+        const last = self.stack.pop();
+        switch (last) {
+            .round => {
+                if (brace != .round) {
+                    self.cursor.pushMessageHere(.MismatchedBrace);
+                }
+                self.output.pushTokenNormal(.CloseRound, self.cursor.pos, 1);
+                self.cursor.pos += 1;
+            },
+            .square => {
+                if (brace != .square) {
+                    self.cursor.pushMessageHere(.MismatchedBrace);
+                }
+                self.output.pushTokenNormal(.CloseSquare, self.cursor.pos, 1);
+                self.cursor.pos += 1;
+            },
+            .curly => {
+                if (brace != .curly) {
+                    self.cursor.pushMessageHere(.MismatchedBrace);
+                }
+                self.output.pushTokenNormal(.CloseCurly, self.cursor.pos, 1);
+                self.cursor.pos += 1;
+            },
+            .string_interpolation => |kind| {
+                if (brace != .curly) {
+                    self.cursor.pushMessageHere(.MismatchedBrace);
+                }
+                self.output.pushTokenNormal(.CloseStringInterpolation, self.cursor.pos, 1);
+                self.cursor.pos += 1;
+                self.tokenizeStringLikeLiteralBody(kind);
+            },
         }
     }
 
@@ -786,12 +873,7 @@ pub const Tokenizer = struct {
                             if (!self.cursor.chompIdentGeneral()) {
                                 tag = .MalformedDotUnicodeIdent;
                             }
-                            const text = self.cursor.buf[text_start..self.cursor.pos];
-                            const id = self.env.idents.insert(
-                                base.Ident.for_text(text),
-                                base.Region{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = self.cursor.pos } },
-                            );
-                            self.output.pushTokenInterned(tag, start, id);
+                            self.pushTokenInternedHere(tag, start, text_start);
                         } else if (n >= 'A' and n <= 'Z') {
                             var tag: Token.Tag = if (sp) .DotUpperIdent else .NoSpaceDotUpperIdent;
                             self.cursor.pos += 1;
@@ -799,16 +881,12 @@ pub const Tokenizer = struct {
                             if (!self.cursor.chompIdentGeneral()) {
                                 tag = .MalformedDotUnicodeIdent;
                             }
-                            const text = self.cursor.buf[text_start..self.cursor.pos];
-                            const id = self.env.idents.insert(
-                                base.Ident.for_text(text),
-                                base.Region{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = self.cursor.pos } },
-                            );
-                            self.output.pushTokenInterned(tag, start, id);
+                            self.pushTokenInternedHere(tag, start, text_start);
                         } else if (n >= 0x80 and n <= 0xff) {
                             self.cursor.pos += 1;
+                            const text_start = self.cursor.pos;
                             _ = self.cursor.chompIdentGeneral();
-                            self.output.pushTokenNormal(.MalformedDotUnicodeIdent, start, self.cursor.pos - start);
+                            self.pushTokenInternedHere(.MalformedDotUnicodeIdent, start, text_start);
                         } else if (n == open_curly) {
                             self.cursor.pos += 1;
                             self.output.pushTokenNormal(.Dot, start, 1);
@@ -878,8 +956,13 @@ pub const Tokenizer = struct {
 
                 // Question mark (?)
                 '?' => {
-                    self.cursor.pos += 1;
-                    self.output.pushTokenNormal(if (sp) .OpQuestion else .NoSpaceOpQuestion, start, 1);
+                    if (self.cursor.peekAt(1) == '?') {
+                        self.cursor.pos += 2;
+                        self.output.pushTokenNormal(.OpDoubleQuestion, start, 2);
+                    } else {
+                        self.cursor.pos += 1;
+                        self.output.pushTokenNormal(if (sp) .OpQuestion else .NoSpaceOpQuestion, start, 1);
+                    }
                 },
 
                 // Pipe (|)
@@ -967,6 +1050,9 @@ pub const Tokenizer = struct {
                     if (self.cursor.peekAt(1) == '=') {
                         self.cursor.pos += 2;
                         self.output.pushTokenNormal(.OpEquals, start, 2);
+                    } else if (self.cursor.peekAt(1) == '>') {
+                        self.cursor.pos += 2;
+                        self.output.pushTokenNormal(.OpFatArrow, start, 2);
                     } else {
                         self.cursor.pos += 1;
                         self.output.pushTokenNormal(.OpAssign, start, 1);
@@ -986,31 +1072,28 @@ pub const Tokenizer = struct {
 
                 '(' => {
                     self.cursor.pos += 1;
-                    self.stack.append(.Round) catch exitOnOom();
+                    self.stack.append(.round) catch exitOnOom();
                     self.output.pushTokenNormal(if (sp) .OpenRound else .NoSpaceOpenRound, start, 1);
                 },
                 '[' => {
                     self.cursor.pos += 1;
-                    self.stack.append(.Square) catch exitOnOom();
+                    self.stack.append(.square) catch exitOnOom();
                     self.output.pushTokenNormal(.OpenSquare, start, 1);
                 },
                 open_curly => {
                     self.cursor.pos += 1;
-                    self.stack.append(.Curly) catch exitOnOom();
+                    self.stack.append(.curly) catch exitOnOom();
                     self.output.pushTokenNormal(.OpenCurly, start, 1);
                 },
 
                 ')' => {
-                    self.output.pushTokenNormal(.CloseRound, start, 1);
-                    self.consumeBraceCloseAndContinueStringInterp(.Round);
+                    self.consumeBraceCloseAndContinueStringInterp(.round);
                 },
                 ']' => {
-                    self.output.pushTokenNormal(.CloseSquare, start, 1);
-                    self.consumeBraceCloseAndContinueStringInterp(.Square);
+                    self.consumeBraceCloseAndContinueStringInterp(.square);
                 },
                 close_curly => {
-                    self.output.pushTokenNormal(.CloseCurly, start, 1);
-                    self.consumeBraceCloseAndContinueStringInterp(.Curly);
+                    self.consumeBraceCloseAndContinueStringInterp(.curly);
                 },
 
                 '_' => {
@@ -1066,13 +1149,8 @@ pub const Tokenizer = struct {
                 'a'...'z' => {
                     const tag = self.cursor.chompIdentLower();
                     const len = self.cursor.pos - start;
-                    if (tag == .LowerIdent) {
-                        const text = self.cursor.buf[start..][0..len];
-                        const id = self.env.idents.insert(
-                            base.Ident.for_text(text),
-                            base.Region{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = self.cursor.pos } },
-                        );
-                        self.output.pushTokenInterned(tag, start, id);
+                    if (tag == .LowerIdent or tag == .MalformedUnicodeIdent) {
+                        self.pushTokenInternedHere(tag, start, start);
                     } else {
                         self.output.pushTokenNormal(tag, start, len);
                     }
@@ -1084,27 +1162,24 @@ pub const Tokenizer = struct {
                     if (!self.cursor.chompIdentGeneral()) {
                         tag = .MalformedUnicodeIdent;
                     }
-                    const text = self.cursor.buf[start..self.cursor.pos];
-                    const id = self.env.idents.insert(
-                        base.Ident.for_text(text),
-                        base.Region{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = self.cursor.pos } },
-                    );
-                    self.output.pushTokenInterned(tag, start, id);
+                    self.pushTokenInternedHere(tag, start, start);
                 },
 
-                // String-like literal starting with a single or double quote
-                '"', '\'' => {
-                    // Note this may return StringBegin/StringPart instead of String,
+                '\'' => {
+                    self.cursor.chompSingleQuoteLiteral();
+                    self.output.pushTokenNormal(.SingleQuote, start, self.cursor.pos - start);
+                },
+
+                '"' => {
+                    // Note this may return StringStart/StringPart instead of String,
                     // in the case of a string interpolation.
-                    const tok = self.tokenizeStringLikeLiteral(b);
-                    self.output.pushTokenNormal(tok, start, self.cursor.pos - start);
+                    self.tokenizeStringLikeLiteral();
                 },
 
                 // first byte of a UTF-8 sequence
                 0x80...0xff => {
                     _ = self.cursor.chompIdentGeneral();
-                    const len = self.cursor.pos - start;
-                    self.output.pushTokenNormal(.MalformedUnicodeIdent, start, len);
+                    self.pushTokenInternedHere(.MalformedUnicodeIdent, start, start);
                 },
 
                 // TODO: emit a MalformedOpToken for invalid combinations of operator-like characters
@@ -1121,151 +1196,79 @@ pub const Tokenizer = struct {
         self.output.pushTokenNormal(.EndOfFile, self.cursor.pos, 0);
     }
 
-    pub fn tokenizeStringLikeLiteral(self: *Tokenizer, term: u8) Token.Tag {
+    pub fn tokenizeStringLikeLiteral(self: *Tokenizer) void {
         const start = self.cursor.pos;
-        // Skip the initial quote.
+        std.debug.assert(self.cursor.peek() == '"');
         self.cursor.pos += 1;
         var kind: StringKind = .single_line;
-        if (self.cursor.peek() == term and self.cursor.peekAt(1) == term) {
+        if (self.cursor.peek() == '"' and self.cursor.peekAt(1) == '"') {
             self.cursor.pos += 2;
             kind = .multi_line;
+            self.output.pushTokenNormal(.MultilineStringStart, start, 3);
+        } else {
+            self.output.pushTokenNormal(.StringStart, start, 1);
         }
-        return self.tokenizeStringLikeLiteralBody(.start, kind, term, start);
+        self.tokenizeStringLikeLiteralBody(kind);
     }
-
-    const StringState = enum {
-        start,
-        after_interpolation,
-    };
-
-    const StringKind = enum {
-        single_line,
-        multi_line,
-    };
 
     // Moving curly chars to constants because some editors hate them inline.
     const open_curly = '{';
     const close_curly = '}';
 
-    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, state: StringState, kind: StringKind, term: u8, start: u32) Token.Tag {
+    pub fn tokenizeStringLikeLiteralBody(self: *Tokenizer, kind: StringKind) void {
+        const start = self.cursor.pos;
         var escape: bool = false;
         while (self.cursor.pos < self.cursor.buf.len) {
             const c = self.cursor.buf[self.cursor.pos];
             if (escape) {
-                switch (c) {
-                    '\\', '"', '\'', 'n', 'r', 't' => {
-                        escape = false;
-                        self.cursor.pos += 1;
-                    },
-                    'u' => {
-                        escape = false;
-                        self.cursor.pos += 1;
-                        self.cursor.require('(', .InvalidUnicodeEscapeSequence);
-                        while (true) {
-                            if (self.cursor.peek() == ')') {
-                                self.cursor.pos += 1;
-                                break;
-                            } else if (self.cursor.peek() != null) {
-                                const next = self.cursor.peek() orelse 0;
-                                if ((next >= '0' and next <= '9') or
-                                    (next >= 'a' and next <= 'f') or
-                                    (next >= 'A' and next <= 'F'))
-                                {
-                                    self.cursor.pos += 1;
-                                } else {
-                                    self.cursor.pushMessageHere(.InvalidUnicodeEscapeSequence);
-                                    break;
-                                }
-                            } else {
-                                break;
-                            }
-                        }
-                    },
-                    else => {
-                        self.cursor.pushMessageHere(.InvalidEscapeSequence);
-                        escape = false;
-                        self.cursor.pos += 1;
-                    },
-                }
+                escape = false;
+                self.cursor.chompEscapeSequence(c);
             } else {
-                if (c == '\\') {
-                    escape = true;
-                    self.cursor.pos += 1;
-                } else if (c == '$' and self.cursor.peekAt(1) == open_curly) {
-                    self.cursor.pos += 1;
-                    var brace: BraceKind = undefined;
-                    if (term == '"') {
-                        switch (kind) {
-                            .multi_line => brace = .StringInterpolationMultiline,
-                            .single_line => brace = .StringInterpolation,
-                        }
-                    } else {
-                        switch (kind) {
-                            .multi_line => brace = .SingleQuoteInterpolationMultiline,
-                            .single_line => brace = .SingleQuoteInterpolation,
-                        }
-                    }
-                    self.stack.append(brace) catch exitOnOom();
-                    switch (term) {
-                        '"' => {
-                            switch (state) {
-                                .start => return .StringBegin,
-                                .after_interpolation => return .StringPart,
-                            }
-                        },
-                        '\'' => {
-                            std.debug.assert(term == '\'');
-                            switch (state) {
-                                .start => return .SingleQuoteBegin,
-                                .after_interpolation => return .SingleQuotePart,
-                            }
-                        },
-                        else => std.debug.assert(false),
-                    }
+                if (c == '$' and self.cursor.peekAt(1) == open_curly) {
+                    self.output.pushTokenNormal(.StringPart, start, self.cursor.pos - start);
+                    const dollar_start = self.cursor.pos;
+                    self.cursor.pos += 2;
+                    self.output.pushTokenNormal(.OpenStringInterpolation, dollar_start, self.cursor.pos - dollar_start);
+                    self.stack.append(.{ .string_interpolation = kind }) catch exitOnOom();
+                    return;
                 } else if (c == '\n') {
+                    self.output.pushTokenNormal(.StringPart, start, self.cursor.pos - start);
                     if (kind == .single_line) {
                         self.cursor.pushMessage(.UnclosedString, @intCast(start), @intCast(self.cursor.pos));
-                        return .StringBegin;
-                    } else {
-                        self.cursor.pos += 1;
+                        self.output.pushTokenNormal(.StringEnd, self.cursor.pos, 0);
                     }
+                    return;
+                } else if (kind == .single_line and c == '"') {
+                    self.output.pushTokenNormal(.StringPart, start, self.cursor.pos - start);
+                    self.output.pushTokenNormal(.StringEnd, self.cursor.pos, 1);
+                    self.cursor.pos += 1;
+                    return;
+                } else if (kind == .multi_line and c == '"' and self.cursor.peekAt(1) == '"' and self.cursor.peekAt(2) == '"') {
+                    self.output.pushTokenNormal(.StringPart, start, self.cursor.pos - start);
+                    const quote_start = self.cursor.pos;
+                    self.cursor.pos += 3;
+                    self.output.pushTokenNormal(.MultilineStringEnd, quote_start, self.cursor.pos - quote_start);
+                    return;
                 } else {
-                    if (kind == .single_line and c == term) {
-                        self.cursor.pos += 1;
-                        switch (state) {
-                            .start => return .String,
-                            .after_interpolation => return .StringEnd,
-                        }
-                    } else if (kind == .multi_line and c == term and self.cursor.peekAt(1) == term and self.cursor.peekAt(2) == term) {
-                        self.cursor.pos += 3;
-                        switch (state) {
-                            .start => return .String,
-                            .after_interpolation => return .StringEnd,
-                        }
-                    }
+                    escape = c == '\\';
                     self.cursor.pos += 1;
                 }
             }
         }
-        const diag: Diagnostic.Tag = if (term == '"') .UnclosedString else .UnclosedSingleQuote;
-        self.cursor.pushMessage(diag, start, self.cursor.pos);
-        if (state == .after_interpolation) {
-            return if (term == '"') .StringEnd else .SingleQuoteEnd;
-        } else {
-            return if (term == '"') .String else .SingleQuote;
+        if (kind == .single_line) {
+            self.cursor.pushMessage(.UnclosedString, start, self.cursor.pos);
         }
+        self.output.pushTokenNormal(.StringPart, start, self.cursor.pos - start);
     }
 };
 
-fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
+fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const Token.Tag) !void {
     var messages: [10]Diagnostic = undefined;
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
-    var env = base.ModuleEnv.init(&arena);
-
-    var tokenizer = Tokenizer.init(&env, input, &messages, allocator);
+    var tokenizer = Tokenizer.init(&env, input, &messages, gpa);
     defer tokenizer.deinit();
 
     tokenizer.tokenize();
@@ -1273,12 +1276,550 @@ fn testTokenization(allocator: std.mem.Allocator, input: []const u8, expected: [
     const tokens = tokenizedBuffer.tokens.items(.tag);
 
     try std.testing.expectEqual(tokens[tokens.len - 1], Token.Tag.EndOfFile);
+    try std.testing.expectEqualSlices(Token.Tag, expected[0..expected.len], tokens[0 .. tokens.len - 1]);
 
-    try std.testing.expectEqual(@as(usize, expected.len), tokens.len - 1);
+    checkTokenizerInvariants(gpa, input, false);
+}
 
-    for (expected[0..expected.len], tokens[0 .. tokens.len - 1]) |exp, actual| {
-        try std.testing.expectEqual(exp, actual);
+pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    // Initial tokenization.
+    var messages: [32]Diagnostic = undefined;
+    var tokenizer = Tokenizer.init(&env, input, &messages, gpa);
+    tokenizer.tokenize();
+    var output = tokenizer.finish_and_deinit();
+    defer output.tokens.deinit();
+
+    if (debug) {
+        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
     }
+
+    if (debug) {
+        std.debug.print("Before:\n", .{});
+        for (0..output.tokens.tokens.len) |token_index| {
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+    }
+
+    // TODO: apply errors from messages to buffer below.
+    // For now, just skip on tokenizer finding a failure.
+    if (output.messages.len != 0) {
+        return;
+    }
+
+    const buf2 = rebuildBufferForTesting(input, &output.tokens, gpa) catch |err| switch (err) {
+        error.Unsupported => return,
+        error.OutOfMemory => std.debug.panic("OOM", .{}),
+    };
+    defer buf2.deinit();
+
+    if (debug) {
+        std.debug.print("Intermediate:\n==========\n{s}\n==========\n\n", .{buf2.items});
+    }
+
+    // Second tokenization.
+    tokenizer = Tokenizer.init(&env, buf2.items, &messages, gpa);
+    tokenizer.tokenize();
+    var output2 = tokenizer.finish_and_deinit();
+    defer output2.tokens.deinit();
+
+    if (debug) {
+        std.debug.print("After:\n", .{});
+        for (0..output2.tokens.tokens.len) |token_index| {
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\t{any}\n", .{token});
+        }
+        std.debug.print("\n\n", .{});
+    }
+    // Assert same.
+    var same = output.tokens.tokens.len == output2.tokens.tokens.len;
+    for (0..output.tokens.tokens.len) |token_index| {
+        if (token_index >= output2.tokens.tokens.len) {
+            same = false;
+            break;
+        }
+        const token = output.tokens.tokens.get(token_index);
+        const token2 = output2.tokens.tokens.get(token_index);
+        const region1 = output.tokens.resolve(@intCast(token_index));
+        const region2 = output2.tokens.resolve(@intCast(token_index));
+        const length1 = region1.end.offset - region1.start.offset;
+        const length2 = region2.end.offset - region2.start.offset;
+        same = same and (token.tag == token2.tag);
+        same = same and (token.offset == token2.offset);
+        same = same and (length1 == length2);
+    }
+
+    if (!same) {
+        var prefix_len: usize = 0;
+        var suffix_len: usize = 0;
+        while (prefix_len < output.tokens.tokens.len and prefix_len < output2.tokens.tokens.len) : (prefix_len += 1) {
+            const token = output.tokens.tokens.get(prefix_len);
+            const token2 = output2.tokens.tokens.get(prefix_len);
+            if (token.tag != token2.tag or token.offset != token2.offset) {
+                break;
+            }
+        }
+
+        while (suffix_len < output.tokens.tokens.len - prefix_len and suffix_len < output2.tokens.tokens.len - prefix_len) : (suffix_len += 1) {
+            const token = output.tokens.tokens.get(output.tokens.tokens.len - suffix_len - 1);
+            const token2 = output2.tokens.tokens.get(output2.tokens.tokens.len - suffix_len - 1);
+            if (token.tag != token2.tag or token.offset != token2.offset) {
+                break;
+            }
+        }
+
+        std.debug.print("...\n", .{});
+        for (prefix_len..output.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output.tokens.resolve(@intCast(token_index));
+            const token = output.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[31m\t- {any}\x1b[0m: {s}\n", .{ token, input[token.offset..region.end.offset] });
+        }
+        for (prefix_len..output2.tokens.tokens.len - suffix_len) |token_index| {
+            const region = output2.tokens.resolve(@intCast(token_index));
+            const token = output2.tokens.tokens.get(token_index);
+            std.debug.print("\x1b[32m\t+ {any}\x1b[0m: {s}\n", .{ token, buf2.items[token.offset..region.end.offset] });
+        }
+        std.debug.print("...\n", .{});
+
+        std.debug.assert(same);
+    }
+}
+
+fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std.mem.Allocator) !std.ArrayList(u8) {
+    // Create an arraylist to store the new buffer.
+    var buf2 = try std.ArrayList(u8).initCapacity(alloc, buf.len);
+    errdefer buf2.deinit();
+
+    // Dump back to buffer.
+    // Here we are just printing in the simplest way possible.
+    var last_end: usize = 0;
+    var prev_token_tag: Token.Tag = .EndOfFile; // placeholder
+    for (0..tokens.tokens.len) |token_index| {
+        const token = tokens.tokens.get(token_index);
+        // EndOfFile and NewLine are special, handle them early.
+        // Unlike other tokens they do not store a correct offset and length
+        // EndOfFile consumes the entire file. Newline stores the indentation level of the next line.
+        if (token.tag == .Newline) {
+            // Newlines will be copied with other whitespace
+            continue;
+        }
+
+        // Copy over limited whitespace.
+        // TODO: Long term, we should switch to dummy whitespace, but currently, Roc still has WSS.
+        for (last_end..token.offset) |i| {
+            // Leave tabs and newlines alone, they are special to roc.
+            // Replace everything else with spaces.
+            if (buf[i] != '\t' and buf[i] != '\r' and buf[i] != '\n' and buf[i] != '#') {
+                try buf2.append(' ');
+            } else {
+                try buf2.append(buf[i]);
+            }
+        }
+        if (token.tag == .EndOfFile) {
+            break;
+        }
+        const region = tokens.resolve(@intCast(token_index));
+        std.debug.assert(region.start.offset == token.offset);
+        std.debug.assert(region.end.offset >= region.start.offset);
+        std.debug.assert(region.end.offset <= buf.len);
+        std.debug.assert(region.start.offset >= last_end);
+        last_end = region.end.offset;
+        const length = region.end.offset - region.start.offset;
+        switch (token.tag) {
+            .EndOfFile, .Newline => unreachable,
+
+            .Float => {
+                try buf2.append('0');
+                try buf2.append('.');
+                for (2..length) |_| {
+                    try buf2.append('1');
+                }
+            },
+            .SingleQuote => {
+                try buf2.append('\'');
+                for (1..length) |_| {
+                    try buf2.append('~');
+                }
+                try buf2.append('\'');
+            },
+            .StringStart, .StringEnd => {
+                try buf2.append('"');
+            },
+            .MultilineStringStart, .MultilineStringEnd => {
+                try buf2.append('"');
+                try buf2.append('"');
+                try buf2.append('"');
+            },
+            .StringPart => {
+                for (0..length) |_| {
+                    try buf2.append('~');
+                }
+            },
+            .OpenStringInterpolation => {
+                std.debug.assert(length == 2);
+                try buf2.append('$');
+                try buf2.append('{');
+            },
+            .CloseStringInterpolation => {
+                std.debug.assert(length == 1);
+                try buf2.append('}');
+            },
+
+            .UpperIdent => {
+                try buf2.append('Z');
+                for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .LowerIdent => {
+                for (0..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .Underscore => {
+                std.debug.assert(length == 1);
+                try buf2.append('_');
+            },
+            .DotInt => {
+                try buf2.append('.');
+                for (1..length) |_| {
+                    try buf2.append('1');
+                }
+            },
+            .DotLowerIdent => {
+                try buf2.append('.');
+                for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .DotUpperIdent => {
+                try buf2.append('.');
+                try buf2.append('Z');
+                for (2..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .NoSpaceDotInt => {
+                try buf2.append('.');
+                for (1..length) |_| {
+                    try buf2.append('1');
+                }
+            },
+            .NoSpaceDotLowerIdent => {
+                try buf2.append('.');
+                for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .NoSpaceDotUpperIdent => {
+                try buf2.append('.');
+                try buf2.append('Z');
+                for (2..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .NoSpaceOpenRound => {
+                try buf2.append('(');
+            },
+
+            .NamedUnderscore => {
+                try buf2.append('_');
+                for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .OpaqueName => {
+                try buf2.append('@');
+                for (1..length) |_| {
+                    try buf2.append('z');
+                }
+            },
+            .Int => {
+                for (0..length) |_| {
+                    try buf2.append('1');
+                }
+            },
+
+            .OpenRound => {
+                std.debug.assert(length == 1);
+                try buf2.append('(');
+            },
+            .CloseRound => {
+                std.debug.assert(length == 1);
+                try buf2.append(')');
+            },
+            .OpenSquare => {
+                std.debug.assert(length == 1);
+                try buf2.append('[');
+            },
+            .CloseSquare => {
+                std.debug.assert(length == 1);
+                try buf2.append(']');
+            },
+            .OpenCurly => {
+                std.debug.assert(length == 1);
+                try buf2.append('{');
+            },
+            .CloseCurly => {
+                std.debug.assert(length == 1);
+                try buf2.append('}');
+            },
+
+            .OpPlus => {
+                std.debug.assert(length == 1);
+                try buf2.append('+');
+            },
+            .OpStar => {
+                std.debug.assert(length == 1);
+                try buf2.append('*');
+            },
+            .OpPizza => {
+                std.debug.assert(length == 2);
+                try buf2.append('|');
+                try buf2.append('>');
+            },
+            .OpAssign => {
+                std.debug.assert(length == 1);
+                try buf2.append('=');
+            },
+            .OpBinaryMinus => {
+                std.debug.assert(length == 1);
+                try buf2.append('-');
+            },
+            .OpUnaryMinus => {
+                std.debug.assert(length == 1);
+                try buf2.append('-');
+            },
+            .OpNotEquals => {
+                std.debug.assert(length == 2);
+                try buf2.append('!');
+                try buf2.append('=');
+            },
+            .OpBang => {
+                std.debug.assert(length == 1);
+                try buf2.append('!');
+            },
+            .OpAnd => {
+                std.debug.assert(length == 2);
+                try buf2.append('&');
+                try buf2.append('&');
+            },
+            .OpAmpersand => {
+                std.debug.assert(length == 1);
+                try buf2.append('&');
+            },
+            .OpQuestion, .NoSpaceOpQuestion => {
+                std.debug.assert(length == 1);
+                try buf2.append('?');
+            },
+            .OpDoubleQuestion => {
+                std.debug.assert(length == 2);
+                try buf2.append('?');
+                try buf2.append('?');
+            },
+            .OpOr => {
+                std.debug.assert(length == 2);
+                try buf2.append('|');
+                try buf2.append('|');
+            },
+            .OpBar => {
+                std.debug.assert(length == 1);
+                try buf2.append('|');
+            },
+            .OpDoubleSlash => {
+                std.debug.assert(length == 2);
+                try buf2.append('/');
+                try buf2.append('/');
+            },
+            .OpSlash => {
+                std.debug.assert(length == 1);
+                try buf2.append('/');
+            },
+            .OpPercent => {
+                std.debug.assert(length == 1);
+                try buf2.append('%');
+            },
+            .OpCaret => {
+                std.debug.assert(length == 1);
+                try buf2.append('^');
+            },
+            .OpGreaterThanOrEq => {
+                std.debug.assert(length == 2);
+                try buf2.append('>');
+                try buf2.append('=');
+            },
+            .OpGreaterThan => {
+                std.debug.assert(length == 1);
+                try buf2.append('>');
+            },
+            .OpLessThanOrEq => {
+                std.debug.assert(length == 2);
+                try buf2.append('<');
+                try buf2.append('=');
+            },
+            .OpBackArrow => {
+                std.debug.assert(length == 2);
+                try buf2.append('<');
+                try buf2.append('-');
+            },
+            .OpLessThan => {
+                std.debug.assert(length == 1);
+                try buf2.append('<');
+            },
+            .OpEquals => {
+                std.debug.assert(length == 2);
+                try buf2.append('=');
+                try buf2.append('=');
+            },
+            .OpColonEqual => {
+                std.debug.assert(length == 2);
+                try buf2.append(':');
+                try buf2.append('=');
+            },
+
+            .Comma => {
+                std.debug.assert(length == 1);
+                try buf2.append(',');
+            },
+            .Dot => {
+                std.debug.assert(length == 1);
+                try buf2.append('.');
+            },
+            .DoubleDot => {
+                std.debug.assert(length == 2);
+                try buf2.append('.');
+                try buf2.append('.');
+            },
+            .TripleDot => {
+                std.debug.assert(length == 3);
+                try buf2.append('.');
+                try buf2.append('.');
+                try buf2.append('.');
+            },
+            .OpColon => {
+                std.debug.assert(length == 1);
+                try buf2.append(':');
+            },
+            .OpArrow => {
+                std.debug.assert(length == 2);
+                try buf2.append('-');
+                try buf2.append('>');
+            },
+            .OpFatArrow => {
+                std.debug.assert(length == 2);
+                try buf2.append('=');
+                try buf2.append('>');
+            },
+            .OpBackslash => {
+                std.debug.assert(length == 1);
+                try buf2.append('\\');
+            },
+
+            .KwApp => {
+                try buf2.appendSlice("app");
+            },
+            .KwAs => {
+                try buf2.appendSlice("as");
+            },
+            .KwCrash => {
+                try buf2.appendSlice("crash");
+            },
+            .KwDbg => {
+                try buf2.appendSlice("dbg");
+            },
+            .KwDebug => {
+                try buf2.appendSlice("debug");
+            },
+            .KwElse => {
+                try buf2.appendSlice("else");
+            },
+            .KwExpect => {
+                try buf2.appendSlice("expect");
+            },
+            .KwExposes => {
+                try buf2.appendSlice("exposes");
+            },
+            .KwGenerates => {
+                try buf2.appendSlice("generates");
+            },
+            .KwHas => {
+                try buf2.appendSlice("has");
+            },
+            .KwHosted => {
+                try buf2.appendSlice("hosted");
+            },
+            .KwIf => {
+                try buf2.appendSlice("if");
+            },
+            .KwImplements => {
+                try buf2.appendSlice("implements");
+            },
+            .KwImport => {
+                try buf2.appendSlice("import");
+            },
+            .KwImports => {
+                try buf2.appendSlice("imports");
+            },
+            .KwInterface => {
+                try buf2.appendSlice("interface");
+            },
+            .KwModule => {
+                try buf2.appendSlice("module");
+            },
+            .KwPackage => {
+                try buf2.appendSlice("package");
+            },
+            .KwPackages => {
+                try buf2.appendSlice("packages");
+            },
+            .KwPlatform => {
+                try buf2.appendSlice("platform");
+            },
+            .KwProvides => {
+                try buf2.appendSlice("provides");
+            },
+            .KwRequires => {
+                try buf2.appendSlice("requires");
+            },
+            .KwReturn => {
+                try buf2.appendSlice("return");
+            },
+            .KwTo => {
+                try buf2.appendSlice("to");
+            },
+            .KwMatch => {
+                try buf2.appendSlice("match");
+            },
+            .KwWhere => {
+                try buf2.appendSlice("where");
+            },
+            .KwWith => {
+                try buf2.appendSlice("with");
+            },
+
+            // If the input has malformed tokens, we don't want to assert anything about it (yet)
+            .MalformedNumberBadSuffix,
+            .MalformedInvalidUnicodeEscapeSequence,
+            .MalformedInvalidEscapeSequence,
+            .MalformedUnicodeIdent,
+            .MalformedDotUnicodeIdent,
+            .MalformedNoSpaceDotUnicodeIdent,
+            .MalformedUnknownToken,
+            .MalformedNumberUnicodeSuffix,
+            .MalformedNamedUnderscoreUnicode,
+            .MalformedOpaqueNameUnicode,
+            .MalformedOpaqueNameWithoutName,
+            => {
+                return error.Unsupported;
+            },
+        }
+        prev_token_tag = token.tag;
+    }
+    return buf2;
 }
 
 test "tokenizer" {
@@ -1298,4 +1839,51 @@ test "tokenizer" {
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
+    try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });
+    try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{ .StringStart, .StringPart, .StringEnd });
+    try testTokenization(gpa, "\"a${b}c\"", &[_]Token.Tag{
+        .StringStart,
+        .StringPart,
+        .OpenStringInterpolation,
+        .LowerIdent,
+        .CloseStringInterpolation,
+        .StringPart,
+        .StringEnd,
+    });
+    try testTokenization(
+        gpa,
+        \\"""abc
+    ,
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        \\"""abc
+        \\"""def
+    ,
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .Newline, .MultilineStringStart, .StringPart },
+    );
+    try testTokenization(
+        gpa,
+        \\"""abc"""
+    ,
+        &[_]Token.Tag{ .MultilineStringStart, .StringPart, .MultilineStringEnd },
+    );
+    try testTokenization(
+        gpa,
+        \\"""a${b}c
+        \\"""def
+    ,
+        &[_]Token.Tag{
+            .MultilineStringStart,
+            .StringPart,
+            .OpenStringInterpolation,
+            .LowerIdent,
+            .CloseStringInterpolation,
+            .StringPart,
+            .Newline,
+            .MultilineStringStart,
+            .StringPart,
+        },
+    );
 }

@@ -56,12 +56,17 @@ pub const Store = struct {
     exposing_modules: std.ArrayList(ModuleImport.Idx),
     next_unique_name: u32,
 
-    pub fn init(arena: *std.heap.ArenaAllocator) Store {
+    pub fn init(gpa: std.mem.Allocator) Store {
         return Store{
-            .interner = SmallStringInterner.init(arena),
-            .exposing_modules = std.ArrayList(ModuleImport.Idx).init(arena.allocator()),
+            .interner = SmallStringInterner.init(gpa),
+            .exposing_modules = std.ArrayList(Module.Idx).init(gpa),
             .next_unique_name = 0,
         };
+    }
+
+    pub fn deinit(self: *Store) void {
+        self.interner.deinit();
+        self.exposing_modules.deinit();
     }
 
     pub fn insert(self: *Store, ident: Ident, region: Region) Idx {
@@ -138,11 +143,5 @@ pub const Store = struct {
     /// module is zero because it hasn't been set yet or if it's actually zero.
     pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: ModuleImport.Idx) void {
         self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
-    }
-
-    /// Look up text in this store, returning a slice of all string interner IDs
-    /// that match this ident's text.
-    pub fn lookup(self: *Store, string: []u8) []SmallStringInterner.Idx {
-        return self.interner.lookup(string);
     }
 };
