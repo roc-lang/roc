@@ -384,6 +384,11 @@ pub const Node = struct {
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ellipsis,
 
         /// A branch is a when expression
         /// Main token is ignored
@@ -900,6 +905,9 @@ pub const NodeStore = struct {
                 node.main_token = 0;
                 node.data.lhs = @as(u32, @intCast(start));
                 node.data.rhs = @as(u32, @bitCast(rhs));
+            },
+            .ellipsis => |_| {
+                node.tag = .ellipsis;
             },
         }
         const nid = store.nodes.append(node);
@@ -1583,6 +1591,11 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .ellipsis => {
+                return .{ .ellipsis = .{
+                    .region = emptyRegion(),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -2014,6 +2027,9 @@ pub const NodeStore = struct {
         record_builder: struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
+        },
+        ellipsis: struct {
+            region: Region,
         },
         block: Body,
     };
