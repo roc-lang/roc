@@ -1201,7 +1201,7 @@ from_str = |str|
     @Username(str)
 
 to_str : Username -> Str
-to_str = \@Username(str) ->
+to_str = |@Username(str)|
     str
 ```
 
@@ -1313,7 +1313,7 @@ Sometimes you may want to write a function that accepts configuration options. T
 For example:
 
 ```roc
-table = \{ height, width, title ?? "oak", description ?? "a wooden table" } ->
+table = |{ height, width, title ?? "oak", description ?? "a wooden table" }| ...
 ```
 
 This is using _default value field destructuring_ to destructure a record while
