@@ -1949,7 +1949,7 @@ For example:
 stoplight_str : Str
 stoplight_str =
     stoplight_color =
-        if this_ss_a_bad_time then
+        if this_is_a_bad_time then
             return "Hey, listen, I just don't want to do this."
         else
             previous_stop_light_color
