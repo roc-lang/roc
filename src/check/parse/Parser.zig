@@ -1214,12 +1214,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
                 .tags = tags,
             } });
         },
-        .OpStar => {
-            anno = self.store.addTypeAnno(.{ .star = .{
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            self.advance(); // Advance past OpStar
-        },
         .Underscore => {
             anno = self.store.addTypeAnno(.{ .underscore = .{
                 .region = .{ .start = start, .end = self.pos },
