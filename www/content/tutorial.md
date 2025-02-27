@@ -682,7 +682,7 @@ We can use tags with payloads to make a list that contains a mixture of differen
 List.map([StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3], |elem|
     when elem is
         NumElem(num) -> Num.is_negative(num)
-        StrElem(str) -> Str.starts_with(str) "A"
+        StrElem(str) -> Str.starts_with(str, "A")
 )
 # returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
