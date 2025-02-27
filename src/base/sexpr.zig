@@ -54,6 +54,19 @@ pub const Node = union(enum) {
             .float => |f| try writer.print("{any}", .{f}),
         }
     }
+
+    pub fn deinit(self: *const Node) void {
+        switch (self.*) {
+            .node => |n| {
+                for (n.children) |child| {
+                    child.deinit();
+                }
+            },
+            .string, .signed_int, .unsigned_int, .float => {
+                // no-op - notinh to deinit
+            },
+        }
+    }
 };
 
 test "s-expression" {
