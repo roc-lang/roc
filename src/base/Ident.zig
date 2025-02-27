@@ -1,14 +1,13 @@
 //! Stores attributes for an identifier like the raw_text, is it effectful, ignored, or reassignable.
 //! An example of an identifier is the name of a top-level function like `main!` or a variable like `x_`.
 const std = @import("std");
-const utils = @import("../collections/utils.zig");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
-const Region = @import("./Region.zig");
-const Module = @import("./Module.zig");
+const Region = @import("Region.zig");
+const ModuleImport = @import("ModuleImport.zig");
 
 const SmallStringInterner = collections.SmallStringInterner;
-const exitOnOom = utils.exitOnOom;
+const exitOnOom = collections.utils.exitOnOom;
 
 const Ident = @This();
 
@@ -54,7 +53,7 @@ pub const Store = struct {
     /// By default, this is set to index 0, the primary module being compiled.
     /// This needs to be set when the ident is first seen during canonicalization
     /// before doing anything else.
-    exposing_modules: std.ArrayList(Module.Idx),
+    exposing_modules: std.ArrayList(ModuleImport.Idx),
     next_unique_name: u32,
 
     pub fn init(gpa: std.mem.Allocator) Store {
@@ -133,16 +132,16 @@ pub const Store = struct {
         return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
     }
 
-    pub fn getExposingModule(self: *Store, idx: Idx) Module.Idx {
+    pub fn getExposingModule(self: *Store, idx: Idx) ModuleImport.Idx {
         return self.exposing_modules.items[@as(usize, idx.idx)];
     }
 
-    /// Set the module that exposes this ident.
+    /// Set the module import that exposes this ident.
     ///
     /// NOTE: This should be called as soon as an ident is encountered during
     /// canonicalization to make sure that we don't have to worry if the exposing
     /// module is zero because it hasn't been set yet or if it's actually zero.
-    pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: Module.Idx) void {
+    pub fn setExposingModule(self: *Store, idx: Idx, exposing_module: ModuleImport.Idx) void {
         self.exposing_modules.items[@as(usize, idx.idx)] = exposing_module;
     }
 };
