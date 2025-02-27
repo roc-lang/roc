@@ -545,9 +545,6 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
             fmt.formatTypeAnno(p.anno);
             fmt.push(')');
         },
-        .star => |_| {
-            fmt.push('*');
-        },
         .underscore => |_| {
             fmt.push('_');
         },
