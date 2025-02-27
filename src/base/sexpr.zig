@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
 pub const Node = union(enum) {
@@ -55,14 +56,16 @@ pub const Node = union(enum) {
         }
     }
 
-    pub fn deinit(self: *const Node) void {
+    pub fn deinit(self: *const Node, gpa: Allocator) void {
         switch (self.*) {
             .node => |n| {
+                gpa.free(n.value);
                 for (n.children) |child| {
-                    child.deinit();
+                    child.deinit(gpa);
                 }
             },
-            .string, .signed_int, .unsigned_int, .float => {
+            .string => |str| gpa.free(str),
+            .signed_int, .unsigned_int, .float => {
                 // no-op - notinh to deinit
             },
         }
