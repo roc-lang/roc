@@ -284,6 +284,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .block => |b| {
             fmt.formatBody(b);
         },
+        .ellipsis => |_| {
+            fmt.pushAll("...");
+        },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
         },
@@ -544,9 +547,6 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
             fmt.push('(');
             fmt.formatTypeAnno(p.anno);
             fmt.push(')');
-        },
-        .star => |_| {
-            fmt.push('*');
         },
         .underscore => |_| {
             fmt.push('_');
@@ -825,6 +825,8 @@ test "Syntax grab bag" {
         \\    expect blah == 1
         \\    tag = Blue
         \\    return tag
+        \\    ...
+        \\    match_time(...)
         \\    crash "Unreachable!"
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
