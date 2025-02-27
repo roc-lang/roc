@@ -11,14 +11,16 @@ const NodeStore = IR.NodeStore;
 const FileIdx = NodeStore.FileIdx;
 const ExprIdx = NodeStore.ExprIdx;
 const PatternIdx = NodeStore.PatternIdx;
-const BodyIdx = NodeStore.BodyIdx;
 const HeaderIdx = NodeStore.HeaderIdx;
 const StatementIdx = NodeStore.StatementIdx;
+
+const FormatFlags = enum { debug_binop, no_debug };
 
 ast: IR,
 gpa: std.mem.Allocator,
 buffer: std.ArrayList(u8),
 curr_indent: u32,
+flags: FormatFlags = .no_debug,
 
 const Formatter = @This();
 
@@ -51,7 +53,9 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     const file = fmt.ast.store.getFile(FileIdx{ .id = 0 });
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
-    for (file.statements) |s| {
+    const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch exitOnOom();
+    defer fmt.gpa.free(statements);
+    for (statements) |s| {
         fmt.ensureNewline();
         if (newline_behavior == .extra_newline_needed) {
             fmt.newline();
@@ -69,7 +73,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(" = ") catch exitOnOom();
-            fmt.formatBody(d.body);
+            fmt.formatExpr(d.body);
             return .extra_newline_needed;
         },
         .expr => |e| {
@@ -93,8 +97,20 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             fmt.formatTypeAnno(t.anno);
             return .no_extra_newline;
         },
-        else => {
-            std.debug.panic("TODO: Handle formatting {s}\n", .{@tagName(statement)});
+        .expect => |e| {
+            fmt.pushAll("expect ");
+            fmt.formatExpr(e.body);
+            return .extra_newline_needed;
+        },
+        .crash => |c| {
+            fmt.pushAll("crash ");
+            fmt.formatExpr(c.expr);
+            return .extra_newline_needed;
+        },
+        .@"return" => |r| {
+            fmt.pushAll("return ");
+            fmt.formatExpr(r.expr);
+            return .extra_newline_needed;
         },
     }
 }
@@ -149,6 +165,11 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .ident => |i| {
             fmt.formatIdent(i.token, i.qualifier);
         },
+        .field_access => |fa| {
+            fmt.formatExpr(fa.left);
+            fmt.push('.');
+            fmt.formatExpr(fa.right);
+        },
         .int => |i| {
             fmt.pushTokenText(i.token);
         },
@@ -176,6 +197,23 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             }
             fmt.push(')');
         },
+        .record => |r| {
+            fmt.pushAll("{ ");
+            var i: usize = 0;
+            for (r.fields) |fieldIdx| {
+                const field = fmt.ast.store.getRecordField(fieldIdx);
+                fmt.pushTokenText(field.name);
+                if (field.value) |v| {
+                    fmt.pushAll(if (field.optional) "? " else ": ");
+                    fmt.formatExpr(v);
+                }
+                if (i < (r.fields.len - 1)) {
+                    fmt.pushAll(", ");
+                }
+                i += 1;
+            }
+            fmt.pushAll(" }");
+        },
         .lambda => |l| {
             fmt.push('|');
             var i: usize = 0;
@@ -187,7 +225,24 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 i += 1;
             }
             fmt.pushAll("| ");
-            fmt.formatBody(l.body);
+            fmt.formatExpr(l.body);
+        },
+        .unary_op => |op| {
+            fmt.pushTokenText(op.operator);
+            fmt.formatExpr(op.expr);
+        },
+        .bin_op => |op| {
+            if (fmt.flags == .debug_binop) {
+                fmt.push('(');
+            }
+            fmt.formatExpr(op.left);
+            fmt.push(' ');
+            fmt.pushTokenText(op.operator);
+            fmt.push(' ');
+            fmt.formatExpr(op.right);
+            if (fmt.flags == .debug_binop) {
+                fmt.push(')');
+            }
         },
         .suffix_single_question => |s| {
             fmt.formatExpr(s.expr);
@@ -200,9 +255,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.pushAll("if ");
             fmt.formatExpr(i.condition);
             fmt.push(' ');
-            fmt.formatBody(i.then);
+            fmt.formatExpr(i.then);
             fmt.pushAll(" else ");
-            fmt.formatBody(i.@"else");
+            fmt.formatExpr(i.@"else");
         },
         .match => |m| {
             fmt.pushAll("match ");
@@ -215,7 +270,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 fmt.pushIndent();
                 fmt.formatPattern(branch.pattern);
                 fmt.pushAll(" -> ");
-                fmt.formatBody(branch.body);
+                fmt.formatExpr(branch.body);
             }
             fmt.curr_indent -= 1;
             fmt.newline();
@@ -225,6 +280,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .dbg => |d| {
             fmt.pushAll("dbg ");
             fmt.formatExpr(d.expr);
+        },
+        .block => |b| {
+            fmt.formatBody(b);
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
@@ -370,8 +428,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
     }
 }
 
-fn formatBody(fmt: *Formatter, bi: BodyIdx) void {
-    const body = fmt.ast.store.getBody(bi);
+fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (body.whitespace != null and body.statements.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append('{') catch exitOnOom();
@@ -579,6 +636,53 @@ fn moduleFmtsSame(source: []const u8) !void {
     try std.testing.expectEqualSlices(u8, source, result);
 }
 
+const tokenize = @import("check/parse/tokenize.zig");
+
+fn exprFmtsSame(source: []const u8, flags: FormatFlags) !void {
+    try exprFmtsTo(source, source, flags);
+}
+fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !void {
+    const Parser = @import("check/parse/Parser.zig").Parser;
+
+    const gpa = std.testing.allocator;
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+    var messages: [1]tokenize.Diagnostic = undefined;
+    const msg_slice = messages[0..];
+    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice, gpa);
+    tokenizer_.tokenize();
+    const result = tokenizer_.finish_and_deinit();
+
+    var parser = Parser.init(gpa, result.tokens);
+    defer parser.deinit();
+
+    const expr = parser.parseExpr();
+
+    const errors = parser.diagnostics.toOwnedSlice() catch exitOnOom();
+
+    var parse_ast = IR{
+        .source = source,
+        .tokens = result.tokens,
+        .store = parser.store,
+        .errors = errors,
+    };
+    defer parse_ast.deinit();
+    defer std.testing.allocator.free(parse_ast.errors);
+
+    std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors) catch {
+        std.debug.print("Tokens:\n{any}", .{result.tokens.tokens.items(.tag)});
+        std.debug.panic("Test failed with parse errors", .{});
+    };
+    var formatter = Formatter.init(parse_ast, std.testing.allocator);
+    formatter.flags = flags;
+    defer formatter.deinit();
+    formatter.formatExpr(expr);
+    const fmt_result = formatter.buffer.toOwnedSlice() catch exitOnOom();
+    defer std.testing.allocator.free(fmt_result);
+    try std.testing.expectEqualSlices(u8, expected, fmt_result);
+}
+
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
     const gpa = std.testing.allocator;
@@ -712,16 +816,58 @@ test "Syntax grab bag" {
         \\    TwoArgs("hello", Some("world")) -> 1000
         \\}
         \\
+        \\expect blah == 1
+        \\
         \\main! : List(String) -> Result({}, _)
         \\main! = |_| {
         \\    world = "World"
         \\    number = 123
+        \\    expect blah == 1
         \\    tag = Blue
+        \\    return tag
+        \\    crash "Unreachable!"
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
         \\    list = [add_one(number), 456, 789]
+        \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
+        \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+        \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
+        \\    static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
         \\    Stdout.line!(interpolated)?
         \\    Stdout.line!("How about ${Num.toStr(number)} as a string?")
         \\}
+        \\
+        \\expect {
+        \\    foo = 1
+        \\    blah = 1
+        \\    blah == foo
+        \\}
     );
+}
+
+test "First BinOp" {
+    const expr = "1 + 2";
+    try exprFmtsSame(expr, .no_debug);
+}
+
+test "BinOp with higher BP right" {
+    const expr = "1 + 2 * 3";
+    try exprFmtsSame(expr, .no_debug);
+    try exprFmtsTo(expr, "(1 + (2 * 3))", .debug_binop);
+    // try exprBinOpIs(expr, .OpStar);
+}
+
+test "BinOp omnibus" {
+    const expr = "Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5";
+    const expr_sloppy = "Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5";
+    const formatted = "((((Err(foo) ?? 12) > (5 * 5)) or (((13 + 2) < 5) and ((10 - 1) >= 16))) or (12 <= (3 / 5)))";
+    try exprFmtsSame(expr, .no_debug);
+    try exprFmtsTo(expr_sloppy, expr, .no_debug);
+    try exprFmtsTo(expr, formatted, .debug_binop);
+    try exprFmtsTo(expr_sloppy, formatted, .debug_binop);
+}
+
+test "Dot access super test" {
+    const expr = "some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?";
+    try exprFmtsSame(expr, .no_debug);
 }

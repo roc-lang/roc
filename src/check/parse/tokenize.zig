@@ -80,6 +80,7 @@ pub const Token = struct {
         OpAnd,
         OpAmpersand,
         OpQuestion,
+        OpDoubleQuestion,
         OpOr,
         OpBar,
         OpDoubleSlash,
@@ -128,6 +129,7 @@ pub const Token = struct {
         KwPlatform,
         KwProvides,
         KwRequires,
+        KwReturn,
         KwTo,
         KwWhere,
         KwWith,
@@ -136,6 +138,7 @@ pub const Token = struct {
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
+        .{ "and", .OpAnd },
         .{ "app", .KwApp },
         .{ "as", .KwAs },
         .{ "crash", .KwCrash },
@@ -153,11 +156,13 @@ pub const Token = struct {
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
+        .{ "or", .OpOr },
         .{ "package", .KwPackage },
         .{ "packages", .KwPackages },
         .{ "platform", .KwPlatform },
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
+        .{ "return", .KwReturn },
         .{ "to", .KwTo },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
@@ -202,6 +207,7 @@ pub const Token = struct {
             .KwPlatform,
             .KwProvides,
             .KwRequires,
+            .KwReturn,
             .KwTo,
             .KwWhere,
             .KwWith,
@@ -950,8 +956,13 @@ pub const Tokenizer = struct {
 
                 // Question mark (?)
                 '?' => {
-                    self.cursor.pos += 1;
-                    self.output.pushTokenNormal(if (sp) .OpQuestion else .NoSpaceOpQuestion, start, 1);
+                    if (self.cursor.peekAt(1) == '?') {
+                        self.cursor.pos += 2;
+                        self.output.pushTokenNormal(.OpDoubleQuestion, start, 2);
+                    } else {
+                        self.cursor.pos += 1;
+                        self.output.pushTokenNormal(if (sp) .OpQuestion else .NoSpaceOpQuestion, start, 1);
+                    }
                 },
 
                 // Pipe (|)
@@ -1267,7 +1278,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     try std.testing.expectEqual(tokens[tokens.len - 1], Token.Tag.EndOfFile);
     try std.testing.expectEqualSlices(Token.Tag, expected[0..expected.len], tokens[0 .. tokens.len - 1]);
 
-    checkTokenizerInvariants(gpa, input, true);
+    checkTokenizerInvariants(gpa, input, false);
 }
 
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
@@ -1605,6 +1616,11 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 std.debug.assert(length == 1);
                 try buf2.append('?');
             },
+            .OpDoubleQuestion => {
+                std.debug.assert(length == 2);
+                try buf2.append('?');
+                try buf2.append('?');
+            },
             .OpOr => {
                 std.debug.assert(length == 2);
                 try buf2.append('|');
@@ -1768,6 +1784,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwRequires => {
                 try buf2.appendSlice("requires");
+            },
+            .KwReturn => {
+                try buf2.appendSlice("return");
             },
             .KwTo => {
                 try buf2.appendSlice("to");

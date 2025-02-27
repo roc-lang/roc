@@ -346,42 +346,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        bin_op_add,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_sub,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_div,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_mul,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_or,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_and,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_dbl_question,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        bin_op_single_question,
+        bin_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -391,12 +356,7 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        unary_neg,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - node index of expr
-        /// * rhs - ignored
-        unary_not,
+        unary_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - node index of expr
@@ -424,18 +384,11 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         record_builder,
-        // TODO: Add the rest of the expressions
-
         /// A block of statements
         /// Main token is newline preceding the block
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
-        /// The end of a block of states
-        /// Main token is final newline of block
-        /// * lhs - ignored
-        /// * rhs - ignored
-        block_end,
 
         /// A branch is a when expression
         /// Main token is ignored
@@ -545,8 +498,6 @@ pub const NodeStore = struct {
 
     /// An index for a File node.  Should not be constructed externally.
     pub const FileIdx = struct { id: u32 };
-    /// An index for a Body node.  Should not be constructed externally.
-    pub const BodyIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
     pub const HeaderIdx = struct { id: u32 };
     /// An index for a Statement node.  Should not be constructed externally.
@@ -601,31 +552,6 @@ pub const NodeStore = struct {
         });
 
         return FileIdx{ .id = 0 };
-    }
-
-    pub fn addBody(store: *NodeStore, body: Body) BodyIdx {
-        const start = store.extra_data.items.len;
-        const len = @as(u31, @intCast(body.statements.len));
-        if (body.whitespace) |ws| {
-            store.extra_data.append(ws) catch exitOnOom();
-        }
-        for (body.statements) |statement| {
-            store.extra_data.append(statement.id) catch exitOnOom();
-        }
-
-        const rhs = BodyRhs{
-            .has_whitespace = if (body.whitespace != null) 1 else 0,
-            .num_statements = len,
-        };
-        const nid = store.nodes.append(.{
-            .tag = .block,
-            .main_token = 0,
-            .data = .{
-                .lhs = @as(u32, @intCast(start)),
-                .rhs = @as(u32, @bitCast(rhs)),
-            },
-        });
-        return .{ .id = @intFromEnum(nid) };
     }
 
     pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
@@ -873,8 +799,22 @@ pub const NodeStore = struct {
                     store.extra_data.append(item.id) catch exitOnOom();
                 }
             },
-            .tuple => |_| {},
-            .record => |_| {},
+            .tuple => |t| {
+                node.tag = .tuple;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(t.items.len));
+                for (t.items) |item| {
+                    store.extra_data.append(item.id) catch exitOnOom();
+                }
+            },
+            .record => |r| {
+                node.tag = .record;
+                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
+                node.data.rhs = @as(u32, @intCast(r.fields.len));
+                for (r.fields) |field| {
+                    store.extra_data.append(field.id) catch exitOnOom();
+                }
+            },
             .tag => |e| {
                 node.tag = .tag;
                 node.main_token = e.token;
@@ -898,44 +838,14 @@ pub const NodeStore = struct {
                 }
             },
             .record_updater => |_| {},
-            .field_access => |_| {},
-            .bin_op_add => |op| {
-                node.tag = .bin_op_add;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
+            .field_access => |fa| {
+                node.tag = .field_access;
+                node.data.lhs = fa.left.id;
+                node.data.rhs = fa.right.id;
             },
-            .bin_op_sub => |op| {
-                node.tag = .bin_op_sub;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_div => |op| {
-                node.tag = .bin_op_div;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_mul => |op| {
-                node.tag = .bin_op_mul;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_or => |op| {
-                node.tag = .bin_op_or;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_and => |op| {
-                node.tag = .bin_op_and;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_dbl_question => |op| {
-                node.tag = .bin_op_dbl_question;
-                node.data.lhs = op.left.id;
-                node.data.rhs = op.right.id;
-            },
-            .bin_op_single_question => |op| {
-                node.tag = .bin_op_single_question;
+            .bin_op => |op| {
+                node.tag = .bin_op;
+                node.main_token = op.operator;
                 node.data.lhs = op.left.id;
                 node.data.rhs = op.right.id;
             },
@@ -943,8 +853,11 @@ pub const NodeStore = struct {
                 node.tag = .suffix_single_question;
                 node.data.lhs = op.expr.id;
             },
-            .unary_neg => |_| {},
-            .unary_not => |_| {},
+            .unary_op => |u| {
+                node.tag = .unary_op;
+                node.main_token = u.operator;
+                node.data.lhs = u.expr.id;
+            },
             .if_then_else => |i| {
                 node.tag = .if_then_else;
                 node.data.lhs = i.condition.id;
@@ -974,6 +887,25 @@ pub const NodeStore = struct {
                 node.data.lhs = d.expr.id;
             },
             .record_builder => |_| {},
+            .block => |body| {
+                const start = store.extra_data.items.len;
+                const len = @as(u31, @intCast(body.statements.len));
+                if (body.whitespace) |ws| {
+                    store.extra_data.append(ws) catch exitOnOom();
+                }
+                for (body.statements) |statement| {
+                    store.extra_data.append(statement.id) catch exitOnOom();
+                }
+
+                const rhs = BodyRhs{
+                    .has_whitespace = if (body.whitespace != null) 1 else 0,
+                    .num_statements = len,
+                };
+                node.tag = .block;
+                node.main_token = 0;
+                node.data.lhs = @as(u32, @intCast(start));
+                node.data.rhs = @as(u32, @bitCast(rhs));
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -1281,6 +1213,24 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .expect => {
+                return .{ .expect = .{
+                    .body = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .crash => {
+                return .{ .crash = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
+            .@"return" => {
+                return .{ .@"return" = .{
+                    .expr = .{ .id = node.data.lhs },
+                    .region = emptyRegion(),
+                } };
+            },
             .type_decl => {
                 return .{ .type_decl = .{
                     .region = emptyRegion(),
@@ -1496,12 +1446,51 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .tuple => {
+                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
+                const extra_data_end = extra_data_pos + node.data.rhs;
+                const scratch_top = store.scratch_exprs.items.len;
+                while (extra_data_pos < extra_data_end) {
+                    store.scratch_exprs.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    extra_data_pos += 1;
+                }
+                const items = store.scratch_exprs.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+
+                return .{ .tuple = .{
+                    .items = items,
+                    .region = emptyRegion(),
+                } };
+            },
+            .record => {
+                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
+                const extra_data_end = extra_data_pos + node.data.rhs;
+                const scratch_top = store.scratch_record_fields.items.len;
+                while (extra_data_pos < extra_data_end) {
+                    store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    extra_data_pos += 1;
+                }
+                const fields = store.scratch_record_fields.items[scratch_top..];
+                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+                return .{ .record = .{
+                    .fields = fields,
+                    .region = emptyRegion(),
+                } };
+            },
+            .field_access => {
+                return .{ .field_access = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
             .lambda => {
                 var extra_data_pos = @as(usize, @intCast(node.data.lhs));
                 const body_len = 1;
                 const args_len = @as(usize, @intCast(node.data.rhs));
                 const extra_data_end = extra_data_pos + args_len + body_len;
-                const body = BodyIdx{
+                const body = ExprIdx{
                     .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])),
                 };
                 extra_data_pos += 1;
@@ -1537,6 +1526,7 @@ pub const NodeStore = struct {
             .suffix_single_question => {
                 return .{ .suffix_single_question = .{
                     .region = emptyRegion(),
+                    .operator = node.main_token,
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
@@ -1576,27 +1566,47 @@ pub const NodeStore = struct {
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
+            .bin_op => {
+                return .{ .bin_op = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = emptyRegion(),
+                } };
+            },
+            .block => {
+                const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
+                const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
+                const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
+                const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
+                const scratch_top = store.scratch_statements.items.len;
+                for (statement_data) |i| {
+                    store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
+                }
+                const statements = store.scratch_statements.items[scratch_top..];
+                store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+                return .{ .block = .{
+                    .statements = statements,
+                    .whitespace = whitespace,
+                    .region = emptyRegion(),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
         }
     }
 
-    pub fn getBody(store: *NodeStore, body: BodyIdx) Body {
-        const node = store.nodes.get(@enumFromInt(body.id));
-        const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
-        const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
-        const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
-        const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
-        const scratch_top = store.scratch_statements.items.len;
-        for (statement_data) |i| {
-            store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
-        }
-        const statements = store.scratch_statements.items[scratch_top..];
-        store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+    pub fn getRecordField(store: *NodeStore, fieldIdx: RecordFieldIdx) RecordField {
+        const node = store.nodes.get(@enumFromInt(fieldIdx.id));
+        const name = node.main_token;
+        const value = if (node.data.lhs > 0) ExprIdx{ .id = node.data.lhs } else null;
+        const optional = node.data.rhs == 1;
         return .{
-            .statements = statements,
-            .whitespace = whitespace,
+            .name = name,
+            .value = value,
+            .optional = optional,
+            .region = emptyRegion(),
         };
     }
 
@@ -1768,6 +1778,7 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
+        region: Region,
     };
 
     /// Represents a module header.
@@ -1804,7 +1815,7 @@ pub const NodeStore = struct {
     pub const Statement = union(enum) {
         decl: struct {
             pattern: PatternIdx,
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         expr: struct {
@@ -1816,7 +1827,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         expect: struct {
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         @"return": struct {
@@ -1972,6 +1983,7 @@ pub const NodeStore = struct {
         },
         record: struct {
             fields: []const RecordFieldIdx,
+            region: Region,
         },
         tag: struct {
             token: TokenIdx,
@@ -1979,7 +1991,7 @@ pub const NodeStore = struct {
         },
         lambda: struct {
             args: []const PatternIdx,
-            body: BodyIdx,
+            body: ExprIdx,
             region: Region,
         },
         apply: struct {
@@ -1991,26 +2003,14 @@ pub const NodeStore = struct {
             token: TokenIdx,
             region: Region,
         },
-        field_access: struct {
-            ident_tok: TokenIdx,
-            @"struct": ExprIdx,
-            region: Region,
-        },
-        bin_op_add: BinOp,
-        bin_op_sub: BinOp,
-        bin_op_div: BinOp,
-        bin_op_mul: BinOp,
-        bin_op_or: BinOp,
-        bin_op_and: BinOp,
-        bin_op_dbl_question: BinOp,
-        bin_op_single_question: BinOp,
+        field_access: BinOp,
+        bin_op: BinOp,
         suffix_single_question: Unary,
-        unary_neg: Unary,
-        unary_not: Unary,
+        unary_op: Unary,
         if_then_else: struct {
             condition: ExprIdx,
-            then: BodyIdx,
-            @"else": BodyIdx,
+            then: ExprIdx,
+            @"else": ExprIdx,
             region: Region,
         },
         match: struct {
@@ -2031,6 +2031,7 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
+        block: Body,
     };
 
     pub const PatternRecordField = struct {
@@ -2048,21 +2049,23 @@ pub const NodeStore = struct {
 
     pub const IfElse = struct {
         condition: ExprIdx,
-        body: BodyIdx,
+        body: ExprIdx,
         region: Region,
     };
     pub const WhenBranch = struct {
         pattern: PatternIdx,
-        body: BodyIdx,
+        body: ExprIdx,
         region: Region,
     };
 
     pub const BinOp = struct {
         left: ExprIdx,
         right: ExprIdx,
+        operator: TokenIdx,
         region: Region,
     };
     pub const Unary = struct {
+        operator: TokenIdx,
         expr: ExprIdx,
         region: Region,
     };
