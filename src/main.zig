@@ -124,16 +124,14 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
 
 fn rocFormat(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
     _ = opt;
-    const path = args[0];
+    const path = if (args.len > 0) args[0] else "main.roc";
+
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
     defer file.close();
 
     const contents = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
 
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-
-    var env = base.ModuleEnv.init(&arena);
+    var env = base.ModuleEnv.init(allocator);
 
     var parse_ast = parse.parse(&env, allocator, contents);
     defer parse_ast.deinit();
