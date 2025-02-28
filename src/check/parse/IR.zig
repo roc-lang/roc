@@ -1775,17 +1775,17 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         region: Region,
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var file_node = sexpr.Expr.init(gpa, "file");
 
             const header = ir.store.getHeader(self.header);
-            var header_node = try header.toSExpr(gpa, env, ir);
+            var header_node = header.toSExpr(gpa, env, ir);
 
             file_node.appendNodeChild(gpa, &header_node);
 
             for (self.statements) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
-                var stmt_node = try stmt.toSExpr(gpa, env, ir);
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
                 file_node.appendNodeChild(gpa, &stmt_node);
             }
 
@@ -1802,13 +1802,13 @@ pub const NodeStore = struct {
 
         region: Region,
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var block_node = sexpr.Expr.init(gpa, "block");
 
             for (self.statements) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
-                var stmt_node = try stmt.toSExpr(gpa, env, ir);
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
 
                 block_node.appendNodeChild(gpa, &stmt_node);
             }
@@ -1846,7 +1846,7 @@ pub const NodeStore = struct {
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .module => |module| {
                     var header_node = sexpr.Expr.init(gpa, "header");
@@ -1907,7 +1907,7 @@ pub const NodeStore = struct {
             region: Region,
         };
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .decl => |decl| {
                     var decl_node = sexpr.Expr.init(gpa, "decl");
@@ -1915,8 +1915,8 @@ pub const NodeStore = struct {
                     const pattern = ir.store.getPattern(decl.pattern);
                     const body = ir.store.getExpr(decl.body);
 
-                    var pattern_node = try pattern.toSExpr(gpa, env, ir);
-                    var body_node = try body.toSExpr(gpa, env, ir);
+                    var pattern_node = pattern.toSExpr(gpa, env, ir);
+                    var body_node = body.toSExpr(gpa, env, ir);
 
                     decl_node.appendNodeChild(gpa, &pattern_node);
                     decl_node.appendNodeChild(gpa, &body_node);
@@ -1925,7 +1925,7 @@ pub const NodeStore = struct {
                 },
                 .expr => |expr_stmt| {
                     const expr = ir.store.getExpr(expr_stmt.expr);
-                    const expr_node = try expr.toSExpr(gpa, env, ir);
+                    const expr_node = expr.toSExpr(gpa, env, ir);
                     return expr_node;
                 },
                 else => {
@@ -2034,7 +2034,7 @@ pub const NodeStore = struct {
             region: Region,
         },
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .ident => |ident| {
                     var node = sexpr.Expr.init(gpa, "ident");
@@ -2138,7 +2138,7 @@ pub const NodeStore = struct {
             }
         }
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Expr {
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             // TODO -- how to get string parts working... ???
             // std.debug.print("EXPR: {}\n", .{self});
             switch (self) {
@@ -2153,7 +2153,7 @@ pub const NodeStore = struct {
                         // std.debug.print("PART: {}\n", .{part_expr});
                     }
 
-                    return error.NotImplemented;
+                    @panic("not implemented");
                 },
                 .string_part => |_| {
                     // TODO -- how to get string parts working... ???
@@ -2242,7 +2242,7 @@ const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
 
-    var node = try file.toSExpr(gpa, env, ir);
+    var node = file.toSExpr(gpa, env, ir);
     defer node.deinit(gpa);
 
     node.toStringPretty(writer, 4);
