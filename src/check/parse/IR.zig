@@ -1,4 +1,8 @@
+const base = @import("../../base.zig");
 const IR = @This();
+const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
+const sexpr = @import("../../base/sexpr.zig");
 
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
@@ -496,6 +500,8 @@ pub const NodeStore = struct {
 
     // Node Type Idx types
 
+    /// An index for a Body node.  Should not be constructed externally.
+    pub const BodyIdx = struct { id: u32 };
     /// An index for a File node.  Should not be constructed externally.
     pub const FileIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
@@ -535,7 +541,7 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
-    pub fn addFile(store: *NodeStore, file: File) FileIdx {
+    pub fn addFile(store: *NodeStore, file: File) void {
         const start = store.extra_data.items.len;
         store.extra_data.append(file.header.id) catch exitOnOom();
         for (file.statements) |statement| {
@@ -550,8 +556,6 @@ pub const NodeStore = struct {
                 .rhs = @as(u32, @intCast(file.statements.len + 1)),
             },
         });
-
-        return FileIdx{ .id = 0 };
     }
 
     pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
@@ -1093,8 +1097,8 @@ pub const NodeStore = struct {
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
 
-    pub fn getFile(store: *NodeStore, file: FileIdx) File {
-        const node = store.nodes.get(@enumFromInt(file.id));
+    pub fn getFile(store: *NodeStore) File {
+        const node = store.nodes.get(@enumFromInt(0));
         const header = store.extra_data.items[node.data.lhs];
         const stmt_idxs = store.extra_data.items[(node.data.lhs + 1)..(node.data.lhs + node.data.rhs)];
         std.debug.assert(store.scratch_statements.items.len == 0);
@@ -1770,6 +1774,23 @@ pub const NodeStore = struct {
         header: HeaderIdx,
         statements: []const StatementIdx,
         region: Region,
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var file_node = sexpr.Expr.init(gpa, "file");
+
+            const header = ir.store.getHeader(self.header);
+            var header_node = header.toSExpr(gpa, env, ir);
+
+            file_node.appendNodeChild(gpa, &header_node);
+
+            for (self.statements) |stmt_id| {
+                const stmt = ir.store.getStatement(stmt_id);
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
+                file_node.appendNodeChild(gpa, &stmt_node);
+            }
+
+            return file_node;
+        }
     };
 
     /// Represents a Body, or a block of statements.
@@ -1778,7 +1799,22 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
+
         region: Region,
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var block_node = sexpr.Expr.init(gpa, "block");
+
+            for (self.statements) |stmt_idx| {
+                const stmt = ir.store.getStatement(stmt_idx);
+
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
+
+                block_node.appendNodeChild(gpa, &stmt_node);
+            }
+
+            return block_node;
+        }
     };
 
     /// Represents a module header.
@@ -1809,6 +1845,23 @@ pub const NodeStore = struct {
         },
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .module => |module| {
+                    var header_node = sexpr.Expr.init(gpa, "header");
+
+                    for (module.exposes) |exposed_idx| {
+                        const token = ir.tokens.tokens.get(exposed_idx);
+                        const text = env.idents.getText(token.extra.interned);
+                        header_node.appendStringChild(gpa, text);
+                    }
+
+                    return header_node;
+                },
+                else => @panic("not implemented"),
+            }
+        }
     };
 
     /// Represents a statement.  Not all statements are valid in all positions.
@@ -1853,6 +1906,34 @@ pub const NodeStore = struct {
             exposes: []const TokenIdx,
             region: Region,
         };
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .decl => |decl| {
+                    var decl_node = sexpr.Expr.init(gpa, "decl");
+
+                    const pattern = ir.store.getPattern(decl.pattern);
+                    const body = ir.store.getExpr(decl.body);
+
+                    var pattern_node = pattern.toSExpr(gpa, env, ir);
+                    var body_node = body.toSExpr(gpa, env, ir);
+
+                    decl_node.appendNodeChild(gpa, &pattern_node);
+                    decl_node.appendNodeChild(gpa, &body_node);
+
+                    return decl_node;
+                },
+                .expr => |expr_stmt| {
+                    const expr = ir.store.getExpr(expr_stmt.expr);
+                    const expr_node = expr.toSExpr(gpa, env, ir);
+                    return expr_node;
+                },
+                else => {
+                    std.log.err("format for statement {}", .{self});
+                    @panic("not implemented");
+                },
+            }
+        }
     };
 
     pub const TypeHeader = struct {
@@ -1952,6 +2033,22 @@ pub const NodeStore = struct {
             patterns: []const PatternIdx,
             region: Region,
         },
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .ident => |ident| {
+                    var node = sexpr.Expr.init(gpa, "ident");
+
+                    const token = ir.tokens.tokens.get(ident.ident_tok);
+                    const text = env.idents.getText(token.extra.interned);
+
+                    node.appendStringChild(gpa, text);
+
+                    return node;
+                },
+                else => @panic("formatting for this pattern not yet implemented"),
+            }
+        }
     };
 
     /// Represents an expression.
@@ -2031,7 +2128,49 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
+
         block: Body,
+
+        pub fn as_string_part_region(self: @This()) !Region {
+            switch (self) {
+                .string_part => |part| return part.region,
+                else => return error.ExpectedStringPartRegion,
+            }
+        }
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            // TODO -- how to get string parts working... ???
+            // std.debug.print("EXPR: {}\n", .{self});
+            switch (self) {
+                .string => |str| {
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(str.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+
+                    for (str.parts) |part_id| {
+                        const part_expr = ir.store.getExpr(part_id);
+                        return part_expr.toSExpr(gpa, env, ir);
+                        // std.debug.print("PART: {}\n", .{part_expr});
+                    }
+
+                    @panic("not implemented");
+                },
+                .string_part => |_| {
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(part.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+                    const string_part_node = sexpr.Expr.init(gpa, "string_part");
+                    return string_part_node;
+                },
+                .block => |block| {
+                    return block.toSExpr(gpa, env, ir);
+                },
+                else => {
+                    std.log.err("expression {}", .{self});
+                    @panic("not implemented yet");
+                },
+            }
+        }
     };
 
     pub const PatternRecordField = struct {
@@ -2097,3 +2236,14 @@ const TokenizedBuffer = tokenize.TokenizedBuffer;
 const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+
+/// Helper function to convert an IR to a string in S-expression format
+/// and write it to the given writer.
+pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+    const file = ir.store.getFile();
+
+    var node = file.toSExpr(gpa, env, ir);
+    defer node.deinit(gpa);
+
+    node.toStringPretty(writer, 4);
+}

@@ -8,7 +8,6 @@ const exitOnOom = @import("./collections/utils.zig").exitOnOom;
 const base = @import("base.zig");
 
 const NodeStore = IR.NodeStore;
-const FileIdx = NodeStore.FileIdx;
 const ExprIdx = NodeStore.ExprIdx;
 const PatternIdx = NodeStore.PatternIdx;
 const HeaderIdx = NodeStore.HeaderIdx;
@@ -50,7 +49,7 @@ pub fn resetWith(fmt: *Formatter, ast: IR) void {
 /// The resulting string is owned by the caller.
 pub fn formatFile(fmt: *Formatter) []const u8 {
     fmt.ast.store.emptyScratch();
-    const file = fmt.ast.store.getFile(FileIdx{ .id = 0 });
+    const file = fmt.ast.store.getFile();
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
     const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch exitOnOom();
