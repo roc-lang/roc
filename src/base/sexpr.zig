@@ -63,6 +63,7 @@ pub const Node = union(enum) {
                 for (n.children) |child| {
                     child.deinit(gpa);
                 }
+                gpa.free(n.children);
             },
             .string => |str| gpa.free(str),
             .signed_int, .unsigned_int, .float => {

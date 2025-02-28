@@ -1788,8 +1788,8 @@ pub const NodeStore = struct {
 
             return .{
                 .node = .{
-                    .value = "file",
-                    .children = children.items,
+                    .value = try gpa.dupe(u8, "file"),
+                    .children = try children.toOwnedSlice(),
                 },
             };
         }
@@ -1814,8 +1814,8 @@ pub const NodeStore = struct {
 
             return .{
                 .node = .{
-                    .value = "body",
-                    .children = children.items,
+                    .value = try gpa.dupe(u8, "body"),
+                    .children = try children.toOwnedSlice(),
                 },
             };
         }
@@ -1858,13 +1858,13 @@ pub const NodeStore = struct {
                     for (module.exposes) |exposed_idx| {
                         const token = ir.tokens.tokens.get(exposed_idx);
                         const text = env.idents.getText(token.extra.interned);
-                        try children.append(.{ .string = text });
+                        try children.append(.{ .string = try gpa.dupe(u8, text) });
                     }
 
                     return .{
                         .node = .{
-                            .value = "header",
-                            .children = children.items,
+                            .value = try gpa.dupe(u8, "header"),
+                            .children = try children.toOwnedSlice(),
                         },
                     };
                 },
@@ -1928,8 +1928,8 @@ pub const NodeStore = struct {
                     try children.append(try body.toSExpr(gpa, env, ir));
                     return .{
                         .node = .{
-                            .value = "decl",
-                            .children = children.items,
+                            .value = try gpa.dupe(u8, "decl"),
+                            .children = try children.toOwnedSlice(),
                         },
                     };
                 },
@@ -1938,8 +1938,8 @@ pub const NodeStore = struct {
                     try children.append(try expr.toSExpr(gpa, env, ir));
                     return .{
                         .node = .{
-                            .value = "expr",
-                            .children = children.items,
+                            .value = try gpa.dupe(u8, "expr"),
+                            .children = try children.toOwnedSlice(),
                         },
                     };
                 },
@@ -2056,12 +2056,12 @@ pub const NodeStore = struct {
                     const token = ir.tokens.tokens.get(ident.ident_tok);
                     const text = env.idents.getText(token.extra.interned);
 
-                    try children.append(.{ .string = text });
+                    try children.append(.{ .string = try gpa.dupe(u8, text) });
 
                     return .{
                         .node = .{
-                            .value = "ident",
-                            .children = children.items,
+                            .value = try gpa.dupe(u8, "ident"),
+                            .children = try children.toOwnedSlice(),
                         },
                     };
                 },
@@ -2166,11 +2166,11 @@ pub const NodeStore = struct {
                         const last = try ir.store.getExpr(str.parts[parts_len - 1]).as_string_part_region();
                         // TODO STRING
                         const text = ir.source[first.start..last.end];
-                        return .{ .string = text };
+                        return .{ .string = try gpa.dupe(u8, text) };
                     } else {
                         const first = try ir.store.getExpr(str.parts[0]).as_string_part_region();
                         const text = ir.source[first.start..first.end];
-                        return .{ .string = text };
+                        return .{ .string = try gpa.dupe(u8, text) };
                     }
                 },
                 .block => |block| {
@@ -2252,6 +2252,7 @@ pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: st
     const file = ir.store.getFile();
 
     const node = try file.toSExpr(gpa, env, ir);
+    defer node.deinit(gpa);
 
     std.debug.print("{}\n\n", .{node});
 

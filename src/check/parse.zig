@@ -93,6 +93,7 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
 // TODO move this somewhere better, for now it's here to keep it simple.
 fn testSExprHelper(source: []const u8, expected: []const u8) !void {
     var env = base.ModuleEnv.init(testing.allocator);
+    defer env.deinit();
 
     // parse our source
     var parse_ast = parse(&env, testing.allocator, source);
@@ -107,7 +108,6 @@ fn testSExprHelper(source: []const u8, expected: []const u8) !void {
 
     // convert the AST to our SExpr
     try parse_ast.toSExprStr(testing.allocator, &env, buf.writer().any());
-    defer parse_ast.deinit();
 
     // TODO in future we should just write the SExpr to a file and snapshot it
     // for now we are comparing strings to keep it simple
