@@ -125,23 +125,76 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
 fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
     const path = if (args.len > 0) args[0] else "main.roc";
 
-    const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
-    defer file.close();
+    const input_file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    defer input_file.close();
 
-    const contents = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    const contents = try input_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(contents);
 
     var env = base.ModuleEnv.init(allocator);
+    defer env.deinit();
 
     var parse_ast = parse.parse(&env, allocator, contents);
     defer parse_ast.deinit();
 
     var formatter = fmt.init(parse_ast, allocator);
+    defer formatter.deinit();
 
     const formatted_output = formatter.formatFile();
+    defer allocator.free(formatted_output);
 
-    const new_file = try std.fs.cwd().openFile(path, .{ .mode = .write_only });
-    defer new_file.close();
-    _ = try new_file.write(formatted_output);
+    const output_file = try std.fs.cwd().createFile(path, .{});
+    defer output_file.close();
+    _ = try output_file.write(formatted_output);
+}
+
+test "format single file" {
+    const allocator = std.testing.allocator;
+    const filename = "test.roc";
+    {
+        const file = try std.fs.cwd().createFile(filename, .{});
+        defer file.close();
+        try file.writeAll(
+            \\module []
+            \\
+            \\foo =      "bar"
+        );
+    }
+    defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up temp file", .{});
+
+    // TODO: Share build step between tests
+    {
+        const result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ "zig", "build" },
+        });
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try std.testing.expectEqual(result.term.Exited, 0);
+    }
+
+    {
+        const result = try std.process.Child.run(.{
+            .allocator = allocator,
+            .argv = &[_][]const u8{ "./zig-out/bin/roc", "format", filename },
+        });
+        defer allocator.free(result.stdout);
+        defer allocator.free(result.stderr);
+        try std.testing.expectEqual(result.term.Exited, 0);
+    }
+
+    const formatted_content = blk: {
+        const file = try std.fs.cwd().openFile(filename, .{});
+        defer file.close();
+        break :blk try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    };
+    defer allocator.free(formatted_content);
+
+    try std.testing.expectEqualStrings(
+        \\module []
+        \\
+        \\foo = "bar"
+    , formatted_content);
 }
 
 fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
