@@ -123,18 +123,18 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
 }
 
 fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
-    const path = if (args.len > 0) args[0] else "main.roc";
+    const roc_file_path = if (args.len > 0) args[0] else "main.roc";
 
-    const input_file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
+    const input_file = try std.fs.cwd().openFile(roc_file_path, .{ .mode = .read_only });
     defer input_file.close();
 
     const contents = try input_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(contents);
 
-    var env = base.ModuleEnv.init(allocator);
-    defer env.deinit();
+    var module_env = base.ModuleEnv.init(allocator);
+    defer module_env.deinit();
 
-    var parse_ast = parse.parse(&env, allocator, contents);
+    var parse_ast = parse.parse(&module_env, allocator, contents);
     defer parse_ast.deinit();
 
     var formatter = fmt.init(parse_ast, allocator);
@@ -143,7 +143,7 @@ fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
     const formatted_output = formatter.formatFile();
     defer allocator.free(formatted_output);
 
-    const output_file = try std.fs.cwd().createFile(path, .{});
+    const output_file = try std.fs.cwd().createFile(roc_file_path, .{});
     defer output_file.close();
     try output_file.writeAll(formatted_output);
 }
