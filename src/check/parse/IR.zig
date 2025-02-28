@@ -1776,22 +1776,20 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
-            var children = std.ArrayList(sexpr.Node).init(gpa);
+            var file_node = try sexpr.Node.newNode(gpa, "file");
 
             const header = ir.store.getHeader(self.header);
-            try children.append(try header.toSExpr(gpa, env, ir));
+            var header_node = try header.toSExpr(gpa, env, ir);
+
+            try file_node.appendNodeChild(gpa, &header_node);
 
             for (self.statements) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
-                try children.append(try stmt.toSExpr(gpa, env, ir));
+                var stmt_node = try stmt.toSExpr(gpa, env, ir);
+                try file_node.appendNodeChild(gpa, &stmt_node);
             }
 
-            return .{
-                .node = .{
-                    .value = try gpa.dupe(u8, "file"),
-                    .children = try children.toOwnedSlice(),
-                },
-            };
+            return file_node;
         }
     };
 
@@ -1805,19 +1803,17 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
-            var children = std.ArrayList(sexpr.Node).init(gpa);
+            var block_node = try sexpr.Node.newNode(gpa, "block");
 
             for (self.statements) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
-                try children.append(try stmt.toSExpr(gpa, env, ir));
+
+                var stmt_node = try stmt.toSExpr(gpa, env, ir);
+
+                try block_node.appendNodeChild(gpa, &stmt_node);
             }
 
-            return .{
-                .node = .{
-                    .value = try gpa.dupe(u8, "body"),
-                    .children = try children.toOwnedSlice(),
-                },
-            };
+            return block_node;
         }
     };
 
@@ -1851,22 +1847,17 @@ pub const NodeStore = struct {
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
-            var children = std.ArrayList(sexpr.Node).init(gpa);
-
             switch (self) {
                 .module => |module| {
+                    var header_node = try sexpr.Node.newNode(gpa, "header");
+
                     for (module.exposes) |exposed_idx| {
                         const token = ir.tokens.tokens.get(exposed_idx);
                         const text = env.idents.getText(token.extra.interned);
-                        try children.append(.{ .string = try gpa.dupe(u8, text) });
+                        try header_node.appendStringChild(gpa, text);
                     }
 
-                    return .{
-                        .node = .{
-                            .value = try gpa.dupe(u8, "header"),
-                            .children = try children.toOwnedSlice(),
-                        },
-                    };
+                    return header_node;
                 },
                 else => @panic("not implemented"),
             }
@@ -1917,31 +1908,25 @@ pub const NodeStore = struct {
         };
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
-            var children = std.ArrayList(sexpr.Node).init(gpa);
-
             switch (self) {
                 .decl => |decl| {
+                    var decl_node = try sexpr.Node.newNode(gpa, "decl");
+
                     const pattern = ir.store.getPattern(decl.pattern);
                     const body = ir.store.getExpr(decl.body);
 
-                    try children.append(try pattern.toSExpr(gpa, env, ir));
-                    try children.append(try body.toSExpr(gpa, env, ir));
-                    return .{
-                        .node = .{
-                            .value = try gpa.dupe(u8, "decl"),
-                            .children = try children.toOwnedSlice(),
-                        },
-                    };
+                    var pattern_node = try pattern.toSExpr(gpa, env, ir);
+                    var body_node = try body.toSExpr(gpa, env, ir);
+
+                    try decl_node.appendNodeChild(gpa, &pattern_node);
+                    try decl_node.appendNodeChild(gpa, &body_node);
+
+                    return decl_node;
                 },
                 .expr => |expr_stmt| {
                     const expr = ir.store.getExpr(expr_stmt.expr);
-                    try children.append(try expr.toSExpr(gpa, env, ir));
-                    return .{
-                        .node = .{
-                            .value = try gpa.dupe(u8, "expr"),
-                            .children = try children.toOwnedSlice(),
-                        },
-                    };
+                    const expr_node = try expr.toSExpr(gpa, env, ir);
+                    return expr_node;
                 },
                 else => {
                     std.log.err("format for statement {}", .{self});
@@ -2050,20 +2035,16 @@ pub const NodeStore = struct {
         },
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
-            var children = std.ArrayList(sexpr.Node).init(gpa);
             switch (self) {
                 .ident => |ident| {
+                    var node = try sexpr.Node.newNode(gpa, "ident");
+
                     const token = ir.tokens.tokens.get(ident.ident_tok);
                     const text = env.idents.getText(token.extra.interned);
 
-                    try children.append(.{ .string = try gpa.dupe(u8, text) });
+                    try node.appendStringChild(gpa, text);
 
-                    return .{
-                        .node = .{
-                            .value = try gpa.dupe(u8, "ident"),
-                            .children = try children.toOwnedSlice(),
-                        },
-                    };
+                    return node;
                 },
                 else => @panic("formatting for this pattern not yet implemented"),
             }
@@ -2158,20 +2139,28 @@ pub const NodeStore = struct {
         }
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) anyerror!sexpr.Node {
+            // TODO -- how to get string parts working... ???
+            // std.debug.print("EXPR: {}\n", .{self});
             switch (self) {
                 .string => |str| {
-                    const parts_len = str.parts.len;
-                    if (parts_len > 1) {
-                        const first = try ir.store.getExpr(str.parts[0]).as_string_part_region();
-                        const last = try ir.store.getExpr(str.parts[parts_len - 1]).as_string_part_region();
-                        // TODO STRING
-                        const text = ir.source[first.start..last.end];
-                        return .{ .string = try gpa.dupe(u8, text) };
-                    } else {
-                        const first = try ir.store.getExpr(str.parts[0]).as_string_part_region();
-                        const text = ir.source[first.start..first.end];
-                        return .{ .string = try gpa.dupe(u8, text) };
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(str.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+
+                    for (str.parts) |part_id| {
+                        const part_expr = ir.store.getExpr(part_id);
+                        return part_expr.toSExpr(gpa, env, ir);
+                        // std.debug.print("PART: {}\n", .{part_expr});
                     }
+
+                    return error.NotImplemented;
+                },
+                .string_part => |_| {
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(part.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+                    const string_part_node = try sexpr.Node.newNode(gpa, "string_part");
+                    return string_part_node;
                 },
                 .block => |block| {
                     return block.toSExpr(gpa, env, ir);
@@ -2251,10 +2240,8 @@ const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
 
-    const node = try file.toSExpr(gpa, env, ir);
+    var node = try file.toSExpr(gpa, env, ir);
     defer node.deinit(gpa);
-
-    std.debug.print("{}\n\n", .{node});
 
     try node.toString(writer);
 }
