@@ -2237,11 +2237,13 @@ const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
+/// Helper function to convert an IR to a string in S-expression format
+/// and write it to the given writer.
 pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
 
     var node = try file.toSExpr(gpa, env, ir);
     defer node.deinit(gpa);
 
-    try node.toString(writer);
+    try node.toStringPretty(writer, 4);
 }

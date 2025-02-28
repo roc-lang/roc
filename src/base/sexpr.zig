@@ -86,19 +86,47 @@ pub const Node = union(enum) {
     }
 
     /// Write the node as an S-expression formatted string to the given writer.
-    pub fn toString(node: Node, writer: std.io.AnyWriter) !void {
+    fn toString(node: Node, writer: std.io.AnyWriter, options: struct {
+        indent: ?usize = null,
+        current_level: usize = 0,
+    }) !void {
+        const indent_level = options.indent orelse 0;
+        const has_indent = indent_level > 0;
+
         switch (node) {
             .node => |n| {
                 try writer.print("(", .{});
                 try writer.print("{s}", .{n.value});
-                try writer.print(" ", .{});
 
-                for (n.children.items, 0..) |child, i| {
-                    try child.toString(writer);
-                    if (i + 1 < n.children.items.len) {
+                if (n.children.items.len > 0) {
+                    // If we have indentation and children, format with newlines
+                    if (has_indent) {
+                        const next_level = options.current_level + 1;
+
+                        for (n.children.items) |child| {
+                            try writer.print("\n", .{});
+
+                            // Print indentation
+                            try writeIndent(writer, next_level * indent_level);
+
+                            try child.toString(writer, .{
+                                .indent = indent_level,
+                                .current_level = next_level,
+                            });
+                        }
+                    } else {
+                        // No indentation, use the original compact format
                         try writer.print(" ", .{});
+
+                        for (n.children.items, 0..) |child, i| {
+                            try child.toString(writer, .{});
+                            if (i + 1 < n.children.items.len) {
+                                try writer.print(" ", .{});
+                            }
+                        }
                     }
                 }
+
                 try writer.print(")", .{});
             },
             .string => |s| try writer.print("'{s}'", .{s}),
@@ -106,6 +134,14 @@ pub const Node = union(enum) {
             .unsigned_int => |u| try writer.print("{d}", .{u}),
             .float => |f| try writer.print("{any}", .{f}),
         }
+    }
+
+    pub fn toStringCompact(node: Node, writer: std.io.AnyWriter) !void {
+        return toString(node, writer, .{});
+    }
+
+    pub fn toStringPretty(node: Node, writer: std.io.AnyWriter, indent_size: usize) !void {
+        return toString(node, writer, .{ .indent = indent_size });
     }
 
     /// Deinitialize the node and all its children.
@@ -131,6 +167,12 @@ pub const Node = union(enum) {
     }
 };
 
+fn writeIndent(writer: std.io.AnyWriter, spaces: usize) !void {
+    for (0..spaces) |_| {
+        try writer.writeAll(" ");
+    }
+}
+
 test "s-expression" {
     const gpa = testing.allocator;
 
@@ -143,12 +185,33 @@ test "s-expression" {
     try foo.appendSignedIntChild(gpa, -123);
     try foo.appendNodeChild(gpa, &baz);
 
-    var buf = std.ArrayList(u8).init(gpa);
-    defer buf.deinit();
+    // Test compact formatting
+    {
+        var buf = std.ArrayList(u8).init(gpa);
+        defer buf.deinit();
+        try foo.toStringCompact(buf.writer().any());
+        const expected =
+            \\(foo 'bar' -123 (baz 456 7.89e2))
+        ;
+        try testing.expectEqualStrings(expected, buf.items);
+    }
 
-    try foo.toString(buf.writer().any());
-
-    try testing.expectEqualStrings("(foo 'bar' -123 (baz 456 7.89e2))", buf.items);
+    // Test pretty formatting
+    {
+        var buf = std.ArrayList(u8).init(gpa);
+        defer buf.deinit();
+        const spaces = 4;
+        try foo.toStringPretty(buf.writer().any(), spaces);
+        const expected =
+            \\(foo
+            \\    'bar'
+            \\    -123
+            \\    (baz
+            \\        456
+            \\        7.89e2))
+        ;
+        try testing.expectEqualStrings(expected, buf.items);
+    }
 
     // clean up -- foo is our root and will deinit all children
     foo.deinit(gpa);
