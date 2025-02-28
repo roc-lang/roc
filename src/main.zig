@@ -68,7 +68,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
             .roc_build => try rocBuild(arena, opt, cmd_args),
             .roc_test => try rocTest(arena, opt, cmd_args),
             .roc_repl => try rocRepl(arena, opt, cmd_args),
-            .roc_format => try rocFormat(arena, opt, cmd_args),
+            .roc_format => try rocFormat(arena, cmd_args),
             .roc_version => try rocVersion(arena, cmd_args),
             .roc_check => try rocCheck(arena, opt, cmd_args),
             .roc_docs => try rocDocs(arena, opt, cmd_args),
@@ -122,8 +122,7 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
-fn rocFormat(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = opt;
+fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
     const path = if (args.len > 0) args[0] else "main.roc";
 
     const file = try std.fs.cwd().openFile(path, .{ .mode = .read_only });
