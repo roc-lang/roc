@@ -189,11 +189,6 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        ty_star,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
         ty_underscore,
         /// DESCRIPTION
         /// Example: EXAMPLE
@@ -393,6 +388,11 @@ pub const Node = struct {
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ellipsis,
 
         /// A branch is a when expression
         /// Main token is ignored
@@ -910,6 +910,9 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(start));
                 node.data.rhs = @as(u32, @bitCast(rhs));
             },
+            .ellipsis => |_| {
+                node.tag = .ellipsis;
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -1026,9 +1029,6 @@ pub const NodeStore = struct {
             .ty_var => |v| {
                 node.tag = .ty_var;
                 node.main_token = v.tok;
-            },
-            .star => |_| {
-                node.tag = .ty_star;
             },
             .underscore => |_| {
                 node.tag = .ty_underscore;
@@ -1595,6 +1595,11 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .ellipsis => {
+                return .{ .ellipsis = .{
+                    .region = emptyRegion(),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1652,11 +1657,6 @@ pub const NodeStore = struct {
             .ty_var => {
                 return .{ .ty_var = .{
                     .tok = node.main_token,
-                    .region = emptyRegion(),
-                } };
-            },
-            .ty_star => {
-                return .{ .star = .{
                     .region = emptyRegion(),
                 } };
             },
@@ -1947,9 +1947,6 @@ pub const NodeStore = struct {
             tok: TokenIdx,
             region: Region,
         },
-        star: struct {
-            region: Region,
-        },
         underscore: struct {
             region: Region,
         },
@@ -2128,7 +2125,9 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
-
+        ellipsis: struct {
+            region: Region,
+        },
         block: Body,
 
         pub fn as_string_part_region(self: @This()) !Region {
@@ -2208,6 +2207,111 @@ pub const NodeStore = struct {
         expr: ExprIdx,
         region: Region,
     };
+
+    pub const DataSpan = struct {
+        start: u32,
+        len: u32,
+    };
+
+    pub const ExprSpan = struct { span: DataSpan };
+
+    pub fn addExprSpan(store: *NodeStore, exprs: []const ExprIdx) ExprSpan {
+        const start = @as(u32, @intCast(store.extra_data.items.len));
+        const len = @as(u32, @intCast(exprs.len));
+        for (exprs) |item| {
+            store.extra_data.append(item.id) catch exitOnOom();
+        }
+        return .{
+            .span = .{
+                .start = start,
+                .len = len,
+            },
+        };
+    }
+
+    pub fn IdIter(comptime T: anytype) type {
+        return struct {
+            iter: Iterator,
+            pub fn next(self: *@This()) ?T {
+                if (self.iter.next()) |n| {
+                    return .{ .id = n };
+                }
+                return null;
+            }
+        };
+    }
+    pub const ExprIter = IdIter(ExprIdx);
+
+    pub fn getExprIter(store: *NodeStore, span: ExprSpan) ExprIter {
+        const iter = Iterator.new(span.span, &store.extra_data);
+        return .{ .iter = iter };
+    }
+
+    const Iterator = struct {
+        start: usize,
+        end: usize,
+        pos: usize,
+        data: *std.ArrayList(u32),
+
+        pub fn new(span: DataSpan, data: *std.ArrayList(u32)) @This() {
+            const start = @as(usize, @intCast(span.start));
+            const end = start + @as(usize, @intCast(span.len));
+            return .{
+                .start = start,
+                .end = end,
+                .pos = start,
+                .data = data,
+            };
+        }
+
+        pub fn next(self: *@This()) ?u32 {
+            if (self.pos == self.end or self.data.items.len <= self.pos) {
+                return null;
+            }
+            const curr = self.data.items[self.pos];
+            self.pos += 1;
+            return curr;
+        }
+    };
+
+    test "DataSpan and Iterators" {
+        var data = try std.ArrayList(u32).initCapacity(std.testing.allocator, 20);
+        defer data.deinit();
+        var i: u32 = 0;
+        while (i < 20) {
+            try data.append(i);
+            i += 1;
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 0, .len = 3 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            try std.testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 0, .len = 30 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            var num: u32 = 0;
+            while (iter.next()) |_| {
+                num += 1;
+            }
+            try std.testing.expectEqual(20, num);
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 18, .len = 3 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            try std.testing.expectEqual(ExprIdx{ .id = 18 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 19 }, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+        }
+    }
 };
 
 pub fn resolve(self: *IR, token: TokenIdx) []const u8 {

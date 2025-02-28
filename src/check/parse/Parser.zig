@@ -910,6 +910,12 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
                 .expr = e,
             } });
         },
+        .TripleDot => {
+            expr = self.store.addExpr(.{ .ellipsis = .{
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            self.advance();
+        },
         else => {
             return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
         },
@@ -1213,12 +1219,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
                 .open_anno = null,
                 .tags = tags,
             } });
-        },
-        .OpStar => {
-            anno = self.store.addTypeAnno(.{ .star = .{
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            self.advance(); // Advance past OpStar
         },
         .Underscore => {
             anno = self.store.addTypeAnno(.{ .underscore = .{
