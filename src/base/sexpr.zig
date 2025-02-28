@@ -2,6 +2,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
 
+/// Represents a node in an S-expression tree.
 pub const Node = union(enum) {
     node: struct {
         value: []const u8,
@@ -12,6 +13,9 @@ pub const Node = union(enum) {
     unsigned_int: u128,
     float: f64,
 
+    /// Create a new node with the given value.
+    /// The value will be duplicated so that it is owned by the node
+    /// and will be freed when the node is destroyed.
     pub fn newNode(gpa: Allocator, value: []const u8) !Node {
         const owned_value = try gpa.dupe(u8, value);
         return .{
@@ -22,34 +26,43 @@ pub const Node = union(enum) {
         };
     }
 
+    // Helper function to append a child node to a parent node
     fn appendChildUnsafe(self: *Node, gpa: Allocator, child: Node) !void {
         switch (self.*) {
             .node => |*n| try n.children.append(gpa, child),
-            else => std.log.err("called appendChildUnsafe on a Node that is not a node, it is a {}", .{self}),
+            else => std.debug.panic("called appendChildUnsafe on a Node that is not a node, it is a {}", .{self}),
         }
     }
 
+    /// Helper function to append a string child
+    /// The value will be duplicated so that it is owned by the node
+    /// and will be freed when the node is destroyed.
     pub fn appendStringChild(self: *Node, gpa: Allocator, value: []const u8) !void {
         const owned_value = try gpa.dupe(u8, value);
         try self.appendChildUnsafe(gpa, .{ .string = owned_value });
     }
 
+    /// Helper function to append a signed integer child
     pub fn appendSignedIntChild(self: *Node, gpa: Allocator, value: i128) !void {
         try self.appendChildUnsafe(gpa, .{ .signed_int = value });
     }
 
+    /// Helper function to append an unsigned integer child
     pub fn appendUnsignedIntChild(self: *Node, gpa: Allocator, value: u128) !void {
         try self.appendChildUnsafe(gpa, .{ .unsigned_int = value });
     }
 
+    /// Helper function to append a float child
     pub fn appendFloatChild(self: *Node, gpa: Allocator, value: f64) !void {
         try self.appendChildUnsafe(gpa, .{ .float = value });
     }
 
+    /// Helper function to append a node child
     pub fn appendNodeChild(self: *Node, gpa: Allocator, child_node: *Node) !void {
         try self.appendChildUnsafe(gpa, child_node.*);
     }
 
+    /// Format the node as an S-expression formatted string
     pub fn format(self: Node, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         switch (self) {
             .node => |n| {
@@ -72,6 +85,7 @@ pub const Node = union(enum) {
         }
     }
 
+    /// Write the node as an S-expression formatted string to the given writer.
     pub fn toString(node: Node, writer: std.io.AnyWriter) !void {
         switch (node) {
             .node => |n| {
@@ -94,6 +108,7 @@ pub const Node = union(enum) {
         }
     }
 
+    /// Deinitialize the node and all its children.
     pub fn deinit(self: *Node, gpa: Allocator) void {
         switch (self.*) {
             .node => |*n| {
