@@ -145,7 +145,7 @@ fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
 
     const output_file = try std.fs.cwd().createFile(path, .{});
     defer output_file.close();
-    _ = try output_file.write(formatted_output);
+    try output_file.writeAll(formatted_output);
 }
 
 test "format single file" {
