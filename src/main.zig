@@ -152,9 +152,9 @@ test "format single file" {
     const allocator = std.testing.allocator;
     const filename = "test.roc";
     {
-        const file = try std.fs.cwd().createFile(filename, .{});
-        defer file.close();
-        try file.writeAll(
+        const roc_file = try std.fs.cwd().createFile(filename, .{});
+        defer roc_file.close();
+        try roc_file.writeAll(
             \\module []
             \\
             \\foo =      "bar"
@@ -164,23 +164,23 @@ test "format single file" {
 
     // TODO: Share build step between tests
     {
-        const result = try std.process.Child.run(.{
+        const build_result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{ "zig", "build" },
         });
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        try std.testing.expectEqual(result.term.Exited, 0);
+        defer allocator.free(build_result.stdout);
+        defer allocator.free(build_result.stderr);
+        try std.testing.expectEqual(build_result.term.Exited, 0);
     }
 
     {
-        const result = try std.process.Child.run(.{
+        const format_result = try std.process.Child.run(.{
             .allocator = allocator,
             .argv = &[_][]const u8{ "./zig-out/bin/roc", "format", filename },
         });
-        defer allocator.free(result.stdout);
-        defer allocator.free(result.stderr);
-        try std.testing.expectEqual(result.term.Exited, 0);
+        defer allocator.free(format_result.stdout);
+        defer allocator.free(format_result.stderr);
+        try std.testing.expectEqual(format_result.term.Exited, 0);
     }
 
     const formatted_content = blk: {
