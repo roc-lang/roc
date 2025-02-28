@@ -682,7 +682,7 @@ We can use tags with payloads to make a list that contains a mixture of differen
 List.map([StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3], |elem|
     when elem is
         NumElem(num) -> Num.is_negative(num)
-        StrElem(str) -> Str.starts_with(str) "A"
+        StrElem(str) -> Str.starts_with(str, "A")
 )
 # returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
@@ -1201,7 +1201,7 @@ from_str = |str|
     @Username(str)
 
 to_str : Username -> Str
-to_str = \@Username(str) ->
+to_str = |@Username(str)|
     str
 ```
 
@@ -1313,7 +1313,7 @@ Sometimes you may want to write a function that accepts configuration options. T
 For example:
 
 ```roc
-table = \{ height, width, title ?? "oak", description ?? "a wooden table" } ->
+table = |{ height, width, title ?? "oak", description ?? "a wooden table" }| ...
 ```
 
 This is using _default value field destructuring_ to destructure a record while
@@ -1949,7 +1949,7 @@ For example:
 stoplight_str : Str
 stoplight_str =
     stoplight_color =
-        if this_ss_a_bad_time then
+        if this_is_a_bad_time then
             return "Hey, listen, I just don't want to do this."
         else
             previous_stop_light_color

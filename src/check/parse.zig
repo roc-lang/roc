@@ -11,11 +11,6 @@ const Diagnostic = IR.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
-source: []const u8,
-tokens: TokenizedBuffer,
-store: IR.NodeStore,
-errors: []const Diagnostic,
-
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
 pub fn parse(env: *base.ModuleEnv, allocator: std.mem.Allocator, source: []const u8) IR {
@@ -95,17 +90,52 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
     }
 }
 
+// TODO move this somewhere better, for now it's here to keep it simple.
+fn testSExprHelper(source: []const u8, expected: []const u8) !void {
+    var env = base.ModuleEnv.init(testing.allocator);
+    defer env.deinit();
+
+    // parse our source
+    var parse_ast = parse(&env, testing.allocator, source);
+    defer parse_ast.deinit();
+
+    // shouldn't be required in future
+    parse_ast.store.emptyScratch();
+
+    // buffer to write our SExpr to
+    var buf = std.ArrayList(u8).init(testing.allocator);
+    defer buf.deinit();
+
+    // convert the AST to our SExpr
+    try parse_ast.toSExprStr(testing.allocator, &env, buf.writer().any());
+
+    // TODO in future we should just write the SExpr to a file and snapshot it
+    // for now we are comparing strings to keep it simple
+    try testing.expectEqualStrings(expected, buf.items[0..]);
+}
+
 test "example s-expr" {
     const source =
-        \\module []
+        \\module [foo, bar]
         \\
-        \\foo = "bar"
+        \\foo = "hey"
+        \\bar = "yo"
     ;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var env = base.ModuleEnv.init(&arena);
-    var parse_ir = parse(&env, testing.allocator, source);
-    defer parse_ir.deinit();
 
-    // std.debug.print("{}", .{parse_ir});
+    const expected =
+        \\(file
+        \\    (header
+        \\        'foo'
+        \\        'bar')
+        \\    (decl
+        \\        (ident
+        \\            'foo')
+        \\        (string_part))
+        \\    (decl
+        \\        (ident
+        \\            'bar')
+        \\        (string_part)))
+    ;
+
+    try testSExprHelper(source, expected);
 }

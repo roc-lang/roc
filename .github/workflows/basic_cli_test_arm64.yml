@@ -1,4 +1,5 @@
 on:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -52,8 +53,5 @@ jobs:
           git fetch --tags
           latestTag=$(git describe --tags $(git rev-list --tags --max-count=1))
           git checkout $latestTag
-
-      - name: Run all tests with latest roc nightly and latest basic-cli release
-        run: |
           sed -i 's/x86_64/arm64/g' ./ci/test_latest_release.sh
-          ROC=./roc_nightly/roc EXAMPLES_DIR=./basic-cli/examples/ ./ci/test_latest_release.sh
+          EXAMPLES_DIR=./examples/ ./ci/test_latest_release.sh
