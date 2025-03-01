@@ -158,7 +158,7 @@ test "format single file" {
     try roc_file.writeAll(
         \\module []
         \\
-        \\foo =      "bar"
+        \\fo =      "bar"
     );
     defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
