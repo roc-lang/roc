@@ -20,6 +20,7 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
+    const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
 
     // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
@@ -43,6 +44,24 @@ pub fn build(b: *std.Build) void {
         run_cmd.addArgs(args);
     }
     run_step.dependOn(&run_cmd.step);
+
+    // Add snapshot tool
+    const snapshot_exe = b.addExecutable(.{
+        .name = "snapshot",
+        .root_source_file = b.path("src/snapshot.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    b.installArtifact(snapshot_exe);
+
+    // Add a step to run the snapshot tool
+    const run_snapshot = b.addRunArtifact(snapshot_exe);
+    run_snapshot.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_snapshot.addArgs(args);
+    }
+    snapshot_step.dependOn(&run_snapshot.step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),

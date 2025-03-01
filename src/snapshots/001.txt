@@ -1,0 +1,23 @@
+~~~META
+description=Example to develop the snapshot methodology, includes FORMATTED section
+~~~SOURCE
+module     [
+# some crazy formatting
+ foo,
+     ]
+
+foo =
+
+    "one"
+~~~FORMATTED
+module [foo]
+
+foo = "one"
+~~~PARSE
+(file
+    (header
+        'foo')
+    (decl
+        (ident
+            'foo')
+        (string_part)))
