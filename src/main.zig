@@ -151,29 +151,29 @@ fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
 
 test "format single file" {
     const allocator = std.testing.allocator;
-    const filename = "test.roc";
+    const roc_filename = "test.roc";
 
-    const roc_file = try std.fs.cwd().createFile(filename, .{});
+    const roc_file = try std.fs.cwd().createFile(roc_filename, .{ .read = true });
     defer roc_file.close();
     try roc_file.writeAll(
         \\module []
         \\
         \\foo =      "bar"
     );
-    defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up test.roc", .{});
+    defer std.fs.cwd().deleteFile(roc_filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
-    try rocFormat(allocator, &.{filename});
+    try rocFormat(allocator, &.{roc_filename});
 
-    const file = try std.fs.cwd().openFile(filename, .{});
-    defer file.close();
-    const formatted_content = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
-    defer allocator.free(formatted_content);
+    // Reset file position to read formatted roc code
+    try roc_file.seekTo(0);
+    const formatted_code = try roc_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(formatted_code);
 
     try std.testing.expectEqualStrings(
         \\module []
         \\
         \\foo = "bar"
-    , formatted_content);
+    , formatted_code);
 }
 
 fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
