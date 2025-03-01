@@ -14,7 +14,7 @@ const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
-pub const IR = @import("./canonicalize/IR.zig");
+pub const IR = @import("canonicalize/IR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -73,7 +73,7 @@ fn bringImportIntoScope(
         .end = Region.Position.zero(),
     };
 
-    const res = ir.env.modules.getOrInsert(import_name, shorthand);
+    const res = ir.env.imports.getOrInsert(import_name, shorthand);
 
     if (res.was_present) {
         ir.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{

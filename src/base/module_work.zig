@@ -15,7 +15,7 @@ pub fn ModuleWork(comptime Work: type) type {
     return struct {
         package_idx: Package.Idx,
         module_idx: Package.Module.Idx,
-        work: *Work,
+        work: Work,
 
         pub const Store = struct {
             items: std.ArrayList(ModuleWork(Work)),
@@ -33,12 +33,12 @@ pub fn ModuleWork(comptime Work: type) type {
             pub fn insert(
                 self: *Store,
                 comptime prior_work_type: type,
-                prior_work: ModuleWork(prior_work_type),
-                work: ModuleWork(Work),
+                prior_work: *const ModuleWork(prior_work_type),
+                work: Work,
             ) ModuleWorkIdx {
                 const len: u32 = @truncate(self.items.items.len);
 
-                self.items.append(ModuleWork(prior_work_type){
+                self.items.append(ModuleWork(Work){
                     .package_idx = prior_work.package_idx,
                     .module_idx = prior_work.module_idx,
                     .work = work,

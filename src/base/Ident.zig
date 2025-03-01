@@ -59,7 +59,7 @@ pub const Store = struct {
     pub fn init(gpa: std.mem.Allocator) Store {
         return Store{
             .interner = SmallStringInterner.init(gpa),
-            .exposing_modules = std.ArrayList(Module.Idx).init(gpa),
+            .exposing_modules = std.ArrayList(ModuleImport.Idx).init(gpa),
             .next_unique_name = 0,
         };
     }

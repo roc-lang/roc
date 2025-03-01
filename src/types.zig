@@ -1,8 +1,8 @@
+const type_mod = @import("types/type.zig");
+
 pub const num = @import("types/num.zig");
 
-/// A type variable unique to an entity in Roc code, used
-/// for type unification.
-pub const TypeVar = enum(u32) { _ };
+pub const Type = type_mod.Type;
 
 /// Lowest level of the type system, representing the most fundamental or atomic types
 pub const Primitive = union(enum) {
@@ -38,7 +38,7 @@ pub const Primitive = union(enum) {
 };
 
 /// Marks whether a when branch is redundant using a variable.
-pub const RedundantMark = struct { redundant_mark: TypeVar };
+pub const RedundantMark = struct { redundant_mark: Type.Idx };
 
 /// Marks whether a when expression is exhaustive using a variable.
-pub const ExhaustiveMark = struct { exhaustive_mark: TypeVar };
+pub const ExhaustiveMark = struct { exhaustive_mark: Type.Idx };

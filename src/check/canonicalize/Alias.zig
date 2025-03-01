@@ -6,7 +6,7 @@ const collections = @import("../../collections.zig");
 
 const Region = base.Region;
 const Problem = problem_mod.Problem;
-const TypeVar = types.TypeVar;
+const TypeIdx = types.Type.Idx;
 const Ident = base.Ident;
 
 name: Ident.Idx,
@@ -31,7 +31,7 @@ pub const Kind = union(enum) {
 
 pub const Custom = struct {
     type_variables: Var.Slice,
-    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
+    recursion_variables: std.AutoHashMap(TypeIdx, Ident.Idx),
 };
 
 pub const Structural = struct {
@@ -45,7 +45,7 @@ pub const Malformed = struct {
 pub const Var = struct {
     name: Ident.Idx,
     region: Region,
-    type_var: TypeVar,
+    type_var: TypeIdx,
 
     pub const List = collections.SafeMultiList(@This());
     pub const Slice = Var.List.Slice;

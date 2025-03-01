@@ -6,7 +6,7 @@ const Self = @This();
 pub const IR = @import("./resolve_imports/IR.zig");
 
 pub fn resolveImports(
-    can_ir: *can.IR,
+    can_ir: *const can.IR,
     other_modules: *const base.ModuleWork(IR).Store,
 ) Self.IR {
     _ = can_ir;

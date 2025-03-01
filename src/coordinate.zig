@@ -1,29 +1,34 @@
 const std = @import("std");
 const base = @import("base.zig");
+const cache = @import("cache.zig");
+const types = @import("types.zig");
 const collections = @import("collections.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 const parse = @import("check/parse.zig");
 const can = @import("check/canonicalize.zig");
 const resolve = @import("check/resolve_imports.zig");
-const typecheck = @import("check/typecheck.zig");
+const check_types = @import("check/check_types.zig");
 const type_spec = @import("build/specialize_types.zig");
 const func_lift = @import("build/lift_functions.zig");
 const func_spec = @import("build/specialize_types.zig");
 const func_solve = @import("build/solve_functions.zig");
 const lower = @import("build/lower_statements.zig");
 const refcount = @import("build/reference_count.zig");
-const cache = @import("cache.zig");
 const utils = @import("coordinate/utils.zig");
+const Filesystem = @import("coordinate/Filesystem.zig");
 const ModuleGraph = @import("coordinate/ModuleGraph.zig");
 
+const Region = base.Region;
 const Package = base.Package;
+const PackageUrl = base.PackageUrl;
 const ModuleWork = base.ModuleWork;
 const ModuleWorkIdx = base.ModuleWorkIdx;
+const Type = types.Type;
+const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 
-const ResolveIR = resolve.IR;
-const TypeSpecIR = type_spec.IR;
-const RefCountIR = refcount.IR;
+const DEFAULT_MAIN_FILENAME: []const u8 = "main.roc";
+const BUILTIN_FILENAMES: []const []const u8 = &.{};
 
 // to compile:
 //
@@ -79,57 +84,89 @@ const RefCountIR = refcount.IR;
 //
 // Lastly, pass all modules together to LLVM codegen
 
-pub const TypeCheckResult = union(enum) {
-    Success: Success,
-    FailedToReadFile: struct { filepath: []u8 },
-    FailedToLoadPackage: anyerror,
-    FoundCycles: std.ArrayList(std.ArrayList(ModuleWork(can.IR))),
-    // other errors...
+// pub const CoordinateProblem = union(enum) {
+//     empty_shorthand: struct {
+//         in_package: Package.Idx,
+//         module: Package.Module.Idx,
+//         shorthand_region: Region,
+//     },
+//     duplicate_shorthand: struct {
+//         in_package: Package.Idx,
+//         module: Package.Module.Idx,
+//         first_shorthand_region: Region,
+//         shadowing_shorthand_region: Region,
+//     },
+// };
+
+pub const TypecheckResult = union(enum) {
+    success: Success,
+    err: Err,
 
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
-        resolved: ModuleWork(ResolveIR).Store,
-        typechecked: ModuleWork(ResolveIR).Store,
+        resolved: ModuleWork(resolve.IR).Store,
+        typechecked: ModuleWork(Type.Store).Store,
+    };
+
+    pub const Err = union(enum) {
+        package_root_search_err: PackageRootSearchErr,
+        discovery_err: ModuleDiscoveryResult.Err,
+        failed_to_build_module_graph: Filesystem.OpenError,
+        found_cycle: struct {
+            packages: Package.Store,
+            cycle: std.ArrayList(ModuleWork(can.IR)),
+        },
+        // other errors...
     };
 };
 
 pub fn typecheckModule(
-    filepath: []u8,
-    allocator: std.mem.Allocator,
-) TypeCheckResult {
-    const packages = switch (discoverModulesStartingFromRoot(filepath, allocator)) {
-        .Success => |store| store,
+    entry_relative_path: []const u8,
+    fs: Filesystem,
+    gpa: std.mem.Allocator,
+) TypecheckResult {
+    var packages = switch (discoverModulesStartingFromEntry(entry_relative_path, fs, gpa)) {
+        .success => |store| store,
+        .err => |err| return .{ .err = .{ .discovery_err = err } },
     };
 
-    const module_graph = ModuleGraph.fromPackages(packages, allocator);
-    const sccs = module_graph.findStronglyConnectedComponents();
+    var module_graph = switch (ModuleGraph.fromPackages(&packages, fs, gpa)) {
+        .success => |graph| graph,
+        .failed_to_open_module => |err| return .{ .err = .{ .failed_to_build_module_graph = err } },
+    };
+    defer module_graph.deinit();
 
-    const modules = switch (module_graph.putModulesInCompilationOrder(sccs, allocator)) {
-        .Ordered => |modules| modules,
-        .FoundCycles => |cycles| {
-            return .{ .FoundCycles = cycles };
+    const sccs = module_graph.findStronglyConnectedComponents(gpa);
+    defer sccs.groups.deinit();
+
+    const modules = switch (module_graph.putModulesInCompilationOrder(&sccs, gpa)) {
+        .ordered => |modules| modules,
+        .found_cycle => |cycle| {
+            return .{ .err = .{ .found_cycle = .{
+                .packages = packages,
+                .cycle = cycle,
+            } } };
         },
     };
 
-    sccs.groups.deinit();
-
-    const resolve_irs = ModuleWork(ResolveIR).Store.init(allocator);
+    var resolve_irs = ModuleWork(resolve.IR).Store.init(gpa);
     for (modules.items) |module| {
-        const resolved = resolve.resolveImports(module.work, &resolve_irs);
-        resolve_irs.append(resolved) catch exitOnOom();
+        const resolved = resolve.resolveImports(&module.work, &resolve_irs);
+        _ = resolve_irs.insert(can.IR, &module, resolved);
     }
 
-    const typecheck_irs = ModuleWork(TypeCheckResult).Store.init(allocator);
-    for (modules.items) |module| {
-        const resolved = typecheck.checkTypes(module.work, &resolve_irs);
-        typecheck_irs.insert(resolved) catch exitOnOom();
+    var typecheck_irs = ModuleWork(Type.Store).Store.init(gpa);
+    for (resolve_irs.items.items) |module| {
+        const type_store = check_types.checkTypes(&module.work, &resolve_irs, &typecheck_irs);
+        _ = typecheck_irs.insert(resolve.IR, &module, type_store);
     }
 
-    return TypeCheckResult{
-        .Success = .{
+    return .{
+        .success = .{
             .packages = packages,
-            // .main_module =
+            // TODO: set this based on the actual main module idx
+            .main_module_idx = @enumFromInt(0),
             .resolved = resolve_irs,
             .typechecked = typecheck_irs,
         },
@@ -140,123 +177,260 @@ pub fn typecheckModule(
 
 // pub fn prepareModuleForCodegen(
 //     filepath: []u8,
-//     allocator: std.mem.Allocator,
+//     gpa: std.mem.Allocator,
 // ) BuildResult {
-//     const typecheck_result = switch (typecheckModule(filepath, allocator)) {
+//     const typecheck_result = switch (typecheckModule(filepath, gpa)) {
 //         .Success => |data| data,
 //         else => {},
 //     };
 // }
 
 pub const ModuleDiscoveryResult = union(enum) {
-    Success: Package.Store,
-    FailedToReadRootFile: utils.FileReadError,
-    InvalidAbsPathForPackageRoot: std.fs.Dir.RealPathError,
-    PackageContainedNonFile: std.fs.Dir.Entry,
+    success: Package.Store,
+    err: Err,
+
+    pub const Err = union(enum) {
+        package_root_search_err: PackageRootSearchErr,
+        failed_to_open_root_dir: Filesystem.OpenError,
+        init_packages: Package.Store.InitResult.Err,
+        parse_deps: ParsePackageDepsErr,
+        // TODO: model this error union
+        failed_to_walk_files: anyerror,
+        failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
+        failed_to_read_root_file: Filesystem.OpenError,
+    };
 };
 
-fn discoverModulesStartingFromRoot(
-    root_relative_path: []u8,
-    allocator: std.mem.Allocator,
+const DesiredPackageDep = struct {
+    parent_package: Package.Idx,
+    shorthand: []const u8,
+    shorthand_region: Region,
+    url: []const u8,
+    url_region: Region,
+};
+
+fn discoverModulesStartingFromEntry(
+    entry_relative_path: []const u8,
+    fs: Filesystem,
+    gpa: std.mem.Allocator,
 ) ModuleDiscoveryResult {
-    const contents = utils.readFile(root_relative_path, allocator) catch |err| {
-        return .{ .FailedToReadRootFile = err };
+    var root = findRootOfPackage(entry_relative_path, fs, gpa) catch |err| {
+        return .{ .err = .{ .package_root_search_err = err } };
     };
-    const parsed_ir = parse.parse(allocator, contents);
-    _ = parsed_ir;
+    defer root.deinit();
 
-    const root_abs_path = std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
-        return ModuleDiscoveryResult{ .InvalidAbsPathForPackageRoot = err };
+    var root_dir = fs.openDir(root.absolute_dir) catch |err| {
+        return .{ .err = .{ .failed_to_open_root_dir = err } };
+    };
+    defer root_dir.close();
+
+    var string_arena = std.heap.ArenaAllocator.init(gpa);
+    const relative_paths = root_dir.findAllFilesRecursively(gpa, &string_arena) catch |err|
+        return .{ .err = .{ .failed_to_walk_files = err } };
+
+    var builtins = std.ArrayList([]const u8).initCapacity(gpa, BUILTIN_FILENAMES.len) catch exitOnOom();
+    builtins.appendSlice(BUILTIN_FILENAMES) catch exitOnOom();
+
+    var package_store = switch (Package.Store.init(
+        root.absolute_dir,
+        root.root_filepath(),
+        relative_paths,
+        builtins,
+        gpa,
+    )) {
+        .success => |store| store,
+        .err => |err| return .{ .err = .{ .init_packages = err } },
     };
 
-    // TODO: check if this is the root of a package/app/platform or not,
-    // AKA whether this file has other files and packages as dependencies
-    //
-    // If no (e.g. this is a one-off module), return success early with no deps
-    const main_filepath = findMainRocRecursively(root_abs_path, allocator) orelse
-        return ModuleDiscoveryResult{ .Success = Package.Store.init(root_abs_path, &.{}, allocator) };
+    var desired_dep_queue = std.ArrayList(DesiredPackageDep).init(gpa);
 
-    const relative_paths = switch (findAllFilesWithinPackageDir(main_filepath, allocator)) {
-        .RelativeFiles => |paths| paths,
-        .NonFileFound => |entry| return .{ .PackageContainedNonFile = entry },
-    };
+    if (parseDependenciesFromPackageRoot(
+        &root_dir,
+        root,
+        Package.Store.primary_idx,
+        &desired_dep_queue,
+        fs,
+        gpa,
+    )) |err| return .{ .err = .{ .parse_deps = err } };
 
-    const package_store = Package.Store.init(root_abs_path, relative_paths, allocator);
-    // const imported_packages: [0]ImportedPackage = undefined;
+    while (desired_dep_queue.popOrNull()) |next_dep| {
+        const dep_package_idx = if (package_store.findWithUrl(next_dep.url)) |dep_idx|
+            dep_idx
+        else blk: {
+            const url_data = Package.Url.parse(next_dep.url) catch |err| {
+                // TODO: save a CoordinationError?
+                _ = err catch {};
 
-    for (imported_packages) |imported_package| {
-        const package = switch (Package.Store.parseFromUrl(imported_package.url)) {
-            .Success => |pkg| pkg,
+                continue;
+            };
+            const root_absdir = cache.getPackageRootAbsDir(url_data, gpa);
+            defer gpa.free(root_absdir);
+
+            var dir = fs.openDir(root_absdir) catch |err| {
+                // TODO: save a CoordinationError?
+                _ = err catch {};
+
+                continue;
+            };
+            defer dir.close();
+
+            const rel_paths = dir.findAllFilesRecursively(gpa, &string_arena) catch |err| {
+                // TODO: save a CoordinationError?
+                _ = err catch {};
+
+                continue;
+            };
+
+            break :blk package_store.add(
+                url_data,
+                root_absdir,
+                DEFAULT_MAIN_FILENAME,
+                rel_paths,
+                gpa,
+            ) catch |err| {
+                // TODO: save a CoordinationError?
+                _ = err catch {};
+
+                continue;
+            };
         };
-        const idx = package_store.insert(package);
+
+        package_store.addDependencyToPackage(
+            next_dep.parent_package,
+            dep_package_idx,
+            next_dep.shorthand,
+            next_dep.shorthand_region,
+        );
     }
 
-    return ModuleDiscoveryResult{ .Success = package_store };
+    return .{ .success = package_store };
 }
 
-const DEFAULT_MAIN_FILENAME = "main.roc";
+const PackageRoot = struct {
+    absolute_dir: []const u8,
+    entry_relative_path: []const u8,
+    has_root_main_file: bool,
+    gpa: std.mem.Allocator,
 
-// TODO: implement
-fn findMainRocRecursively(target_path: []u8, allocator: std.mem.Allocator) ?[]u8 {
-    _ = target_path;
-    _ = allocator;
+    pub fn root_filepath(self: *const PackageRoot) []const u8 {
+        return if (self.has_root_main_file) DEFAULT_MAIN_FILENAME else self.entry_relative_path;
+    }
 
-    // while (true) {
-    //     // const joined = std.fs.path.join(allocator: Allocator, paths: []const []const u8)
-    //     const canonical = std.fs.cwd().realpathAlloc(allocator, DEFAULT_MAIN_FILENAME);
-    //     // src_dir.join(DEFAULT_MAIN_NAME).canonicalize() {
-    //     switch (canonical) {
-
-    //         // Ok(main_roc) => break Some(main_roc),
-    //         // Err(_) => {
-    //         //     if !src_dir.pop() {
-    //         //         // reached the root, no main.roc found
-    //         //         *src_dir = original_src_dir;
-    //         //         break None;
-    //         //     }
-    //         // }
-    //     }
-    // }
-
-    return null;
-}
-
-pub const WalkPackageFilesResult = union(enum) {
-    RelativeFiles: std.ArrayList([]u8),
-    NonFileFound: std.fs.Dir.Entry,
+    pub fn deinit(self: *PackageRoot) void {
+        self.gpa.free(self.absolute_dir);
+        self.gpa.free(self.entry_relative_path);
+    }
 };
 
-fn findAllFilesWithinPackageDir(
-    package_root_abspath: []u8,
-    allocator: std.mem.Allocator,
-) WalkPackageFilesResult {
-    const dir = try std.fs.openDirAbsolute(package_root_abspath, .{
-        .access_sub_paths = true,
-        .iterate = true,
-        // packages should have no symlinks, so don't follow them for better security!
-        // (prevents reading files outside the package's tree)
-        .no_follow = true,
-    });
+pub const PackageRootSearchErr = error{
+    invalid_abs_path_for_entry,
+    entry_not_in_a_directory,
+    could_not_find_entry_in_package,
+};
 
-    var files = std.ArrayList([]u8).init(allocator);
+fn findRootOfPackage(
+    entry_relative_path: []const u8,
+    fs: Filesystem,
+    gpa: std.mem.Allocator,
+) PackageRootSearchErr!PackageRoot {
+    const entry_abs_path = fs.canonicalize(entry_relative_path, gpa) catch
+        return error.invalid_abs_path_for_entry;
+    defer gpa.free(entry_abs_path);
 
-    var dir_iter = dir.iterate();
-    while (try dir_iter.next()) |entry| {
-        switch (entry.kind) {
-            .file => {
-                // TODO: make sure name is relative to package root
-                const name = allocator.dupe(u8, entry.name) catch exitOnOom();
-                files.append(name) catch exitOnOom();
-            },
-            .directory => {
-                // ignore
-            },
-            else => {
-                const name = allocator.dupe(u8, entry.name) catch exitOnOom();
-                return .{ .NonFileFound = .{ .name = name, .kind = entry.kind } };
-            },
+    const entry_dirpath = fs.dirName(entry_abs_path) orelse
+        return error.entry_not_in_a_directory;
+
+    var current_dirpath = gpa.dupe(u8, entry_dirpath) catch exitOnOom();
+    while (true) {
+        var dir = fs.openDir(current_dirpath) catch break;
+        const has_main = dir.hasFile(DEFAULT_MAIN_FILENAME) catch break;
+        dir.close();
+
+        if (has_main) {
+            const entry_relative_to_dir = gpa.alloc(u8, entry_abs_path.len - current_dirpath.len) catch exitOnOom();
+            std.mem.copyForwards(u8, entry_relative_to_dir, entry_abs_path[current_dirpath.len..]);
+
+            return PackageRoot{
+                .absolute_dir = current_dirpath,
+                .entry_relative_path = entry_relative_to_dir,
+                .has_root_main_file = true,
+                .gpa = gpa,
+            };
+        } else {
+            const parent_dirpath = std.fs.path.resolve(gpa, &.{ current_dirpath, ".." }) catch break;
+            gpa.free(current_dirpath);
+            current_dirpath = parent_dirpath;
         }
     }
 
-    return .{ .RelativeFiles = files };
+    // cannot naively reuse this since it may have been set to a parent dir
+    gpa.free(current_dirpath);
+
+    const alloced_entry_dirpath = gpa.dupe(u8, entry_dirpath) catch exitOnOom();
+    const entry_filename = gpa.dupe(u8, entry_abs_path[entry_dirpath.len..]) catch exitOnOom();
+
+    return PackageRoot{
+        .absolute_dir = alloced_entry_dirpath,
+        .entry_relative_path = entry_filename,
+        .has_root_main_file = false,
+        .gpa = gpa,
+    };
+}
+
+const ParsePackageDepsErr = union(enum) {
+    failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
+    failed_to_read_root_file: Filesystem.OpenError,
+};
+
+fn parseDependenciesFromPackageRoot(
+    package_dir: *Filesystem.Dir,
+    root: PackageRoot,
+    package_idx: Package.Idx,
+    desired_dep_queue: *std.ArrayList(DesiredPackageDep),
+    fs: Filesystem,
+    gpa: Allocator,
+) ?ParsePackageDepsErr {
+    const abspath = package_dir.canonicalize(root.root_filepath(), gpa) catch |err|
+        return .{ .failed_to_canonicalize_root_file = err };
+    defer gpa.free(abspath);
+
+    const contents = fs.readFile(abspath, gpa) catch |err|
+        return .{ .failed_to_read_root_file = err };
+    defer gpa.free(contents);
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var parse_ast = parse.parse(&env, gpa, contents);
+    defer parse_ast.deinit();
+
+    const file = parse_ast.store.getFile();
+    const header = parse_ast.store.getHeader(file.header);
+
+    const package_list = switch (header) {
+        .app => |app| app.packages,
+        .module => &.{},
+        .package => |pkg| pkg.packages,
+        // TODO: get packages for hosted/platform modules once their headers are being parsed.
+        .platform => |_| &.{},
+        .hosted => |_| &.{},
+    };
+
+    for (package_list) |package_import| {
+        const import = parse_ast.store.getRecordField(package_import);
+
+        // TODO: get URL when it is stored in `StringLiteral.Store`
+        const url = gpa.dupe(u8, "") catch exitOnOom();
+        const url_region = Region.zero();
+
+        desired_dep_queue.append(DesiredPackageDep{
+            .parent_package = package_idx,
+            .shorthand = gpa.dupe(u8, parse_ast.resolve(import.name)) catch exitOnOom(),
+            .shorthand_region = parse_ast.tokens.resolve(import.name),
+            .url = url,
+            .url_region = url_region,
+        }) catch exitOnOom();
+    }
+
+    return null;
 }

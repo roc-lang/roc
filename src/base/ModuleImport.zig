@@ -58,16 +58,16 @@ pub const Store = struct {
         _ = modules.append(Self{
             .name = &.{},
             .package_shorthand = null,
-            .is_builtin = false,
             .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
+            .resolved = null,
         });
 
         for (builtin_names) |builtin| {
             _ = modules.append(Self{
                 .name = builtin,
                 .package_shorthand = null,
-                .is_builtin = true,
                 .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
+                .resolved = null,
             });
         }
 
@@ -76,6 +76,14 @@ pub const Store = struct {
             .ident_store = ident_store,
             .gpa = gpa,
         };
+    }
+
+    pub fn deinit(store: *Store) void {
+        for (store.imports.items.items) |*import| {
+            import.exposed_idents.deinit();
+        }
+
+        store.imports.deinit();
     }
 
     // TODO: Remove this if we don't need it, it seems unnecessary
@@ -89,9 +97,7 @@ pub const Store = struct {
         name: []const u8,
         package_shorthand: ?[]const u8,
     ) ?Idx {
-        const items = self.imports.items;
-        for (0..self.imports.len()) |index| {
-            const item = items.get(index);
+        for (self.imports.items.items, 0..) |item, index| {
             if (std.mem.eql(u8, name, item.name)) {
                 const neither_has_shorthand = package_shorthand == null and item.package_shorthand == null;
                 const both_have_shorthand = package_shorthand != null and item.package_shorthand != null;
@@ -122,8 +128,8 @@ pub const Store = struct {
             const idx = self.imports.append(Self{
                 .name = name,
                 .package_shorthand = package_shorthand,
-                .is_builtin = false,
                 .exposed_idents = collections.SafeList(Ident.Idx).init(self.gpa),
+                .resolved = null,
             });
 
             return LookupResult{ .import_idx = idx, .was_present = false };
@@ -142,7 +148,7 @@ pub const Store = struct {
         problems: *std.ArrayList(problem.Problem),
     ) void {
         const module_index = @intFromEnum(module_idx);
-        var module = self.imports.items.get(module_index);
+        var module = self.imports.items.items[module_index];
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident_idx)) {

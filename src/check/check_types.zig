@@ -8,16 +8,22 @@ const ModuleEnv = @import("../base/ModuleEnv.zig");
 const Type = @import("../types/type.zig").Type;
 const unify = @import("./check_types/unify.zig");
 
+const ModuleWork = base.ModuleWork;
+
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
-    resolve_ir: resolve.IR,
-    other_modules: []resolve.IR,
-) void {
+    resolve_ir: *const resolve.IR,
+    other_modules: *const ModuleWork(resolve.IR).Store,
+    other_typestores: *const ModuleWork(Type.Store).Store,
+) Type.Store {
     _ = resolve_ir;
     _ = other_modules;
+    _ = other_typestores;
 
     // do something??
+
+    @panic("not implemented");
 }
 
 // test "checkTypes - basic type unification" {

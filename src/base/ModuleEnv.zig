@@ -37,6 +37,15 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
+pub fn deinit(self: *Self) void {
+    self.idents.deinit();
+    self.ident_ids_for_slicing.deinit();
+    self.imports.deinit();
+    self.strings.deinit();
+    self.problems.deinit();
+    self.type_store.deinit();
+}
+
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module_import: ModuleImport.Idx) void {
     self.imports.addExposedIdent(module_import, ident, &self.problems);
     self.idents.setExposingModule(ident, module_import);

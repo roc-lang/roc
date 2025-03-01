@@ -7,7 +7,7 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Region = base.Region;
-const TypeVar = types.TypeVar;
+const Type = types.Type;
 const CanIR = @import("../canonicalize/IR.zig");
 
 const Self = @This();
@@ -20,9 +20,9 @@ exprs: Expr.List,
 destructs: DestructureDef.List,
 function_bodies: FunctionDef.List,
 function_args: FunctionDef.Arg.List,
-type_vars: collections.SafeList(TypeVar),
+type_indices: collections.SafeList(Type.Idx),
 declarations: DeclarationTag.List,
-host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
+host_exposed_annotations: std.AutoHashMap(usize, Type.Idx),
 
 pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
     return Self{
@@ -32,9 +32,9 @@ pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
         .destructs = DestructureDef.List.init(allocator),
         .function_bodies = FunctionDef.List.init(allocator),
         .function_args = FunctionDef.Arg.List.init(allocator),
-        .type_vars = collections.SafeList(TypeVar).init(allocator),
+        .type_indices = collections.SafeList(Type.Idx).init(allocator),
         .declarations = DeclarationTag.List.init(allocator),
-        .host_exposed_annotations = std.AutoHashMap(usize, TypeVar).init(allocator),
+        .host_exposed_annotations = std.AutoHashMap(usize, Type.Idx).init(allocator),
     };
 }
 
@@ -44,7 +44,7 @@ pub fn deinit(self: *Self) void {
     self.destructs.deinit();
     self.function_bodies.deinit();
     self.function_args.deinit();
-    self.type_vars.deinit();
+    self.type_indices.deinit();
     self.declarations.deinit();
     self.host_exposed_annotations.deinit();
 }
@@ -78,17 +78,17 @@ pub const DeclarationTag = union(enum) {
 };
 
 /// Marks whether a recursive let-cycle was determined to be illegal during solving.
-pub const IllegalCycleMark = ?TypeVar;
+pub const IllegalCycleMark = ?Type.Idx;
 
 pub const FunctionDef = struct {
-    closure_type: TypeVar,
-    return_type: TypeVar,
-    fx_type: TypeVar,
+    closure_type: Type.Idx,
+    return_type: Type.Idx,
+    fx_type: Type.Idx,
     // early_returns: std.ArrayList(CanIR.EarlyReturn),
     arguments: Arg.Slice,
 
     pub const Arg = struct {
-        type: TypeVar,
+        type: Type.Idx,
         pattern: Pattern.Idx,
         region: Region,
 
