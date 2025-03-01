@@ -1,0 +1,13 @@
+~~~META
+description=Basic example to develop the snapshot methodology
+~~~SOURCE
+module [foo]
+foo = "one"
+~~~PARSE
+(file
+    (header
+        'foo')
+    (decl
+        (ident
+            'foo')
+        (string_part)))
