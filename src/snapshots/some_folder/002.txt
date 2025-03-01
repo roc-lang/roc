@@ -5,7 +5,8 @@ module [foo, bar]
 
 foo = "one"
 
-bar = "two"~~~PARSE
+bar = "two"
+~~~PARSE
 (file
     (header
         'foo'
