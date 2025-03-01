@@ -20,14 +20,14 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer std.process.argsFree(gpa, args);
 
-    // Check for verbose flag
-    var target_snapshot: ?[]const u8 = null;
+    var snapshot_paths = std.ArrayList([]const u8).init(gpa);
+    defer snapshot_paths.deinit();
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_log = true;
-        } else if (target_snapshot == null) {
-            target_snapshot = arg;
+        } else {
+            try snapshot_paths.append(arg);
         }
     }
 
@@ -35,33 +35,62 @@ pub fn main() !void {
     var file_count: usize = 0;
     var timer = std.time.Timer.start() catch unreachable;
 
-    if (target_snapshot != null) {
-        // Only for the specified snapshot file
-        try processSnapshotFile(target_snapshot.?, gpa);
-        file_count += 1;
-    } else {
-        // For each of the files in the directory
-        var dir = try std.fs.cwd().openDir(snapshots_dir, .{ .iterate = true });
-        defer dir.close();
-
-        var dir_iterator = dir.iterate();
-        while (try dir_iterator.next()) |entry| {
-            if (entry.kind != .file) continue;
-            if (!std.mem.endsWith(u8, entry.name, ".txt")) continue;
-
-            const full_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ snapshots_dir, entry.name });
-            defer gpa.free(full_path);
-
-            try processSnapshotFile(full_path, gpa);
-
-            file_count += 1;
+    if (snapshot_paths.items.len > 0) {
+        for (snapshot_paths.items) |path| {
+            file_count += try processPath(path, gpa);
         }
+    } else {
+        // process all files in snapshots_dir
+        file_count = try processPath(snapshots_dir, gpa);
     }
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
 
-    // Print a summary
     std.log.info("processed {d} snapshots in {d}ms.", .{ file_count, duration_ms });
+}
+
+fn processPath(path: []const u8, allocator: std.mem.Allocator) !usize {
+    var processed_count: usize = 0;
+
+    const canonical_path = try std.fs.cwd().realpathAlloc(allocator, path);
+    defer allocator.free(canonical_path);
+
+    const stat = try std.fs.cwd().statFile(canonical_path);
+
+    if (stat.kind == .directory) {
+        var dir = try std.fs.cwd().openDir(path, .{ .iterate = true });
+        defer dir.close();
+
+        var dir_iterator = dir.iterate();
+        while (try dir_iterator.next()) |entry| {
+            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path, entry.name });
+            defer allocator.free(full_path);
+
+            if (entry.kind == .directory) {
+                processed_count += try processPath(full_path, allocator);
+            } else if (entry.kind == .file) {
+                if (std.mem.endsWith(u8, entry.name, ".txt")) {
+                    processSnapshotFile(full_path, allocator) catch |err| {
+                        if (err == SnapshotError.MissingSnapshotHeader) {
+                            // ignore files non-snapshot files
+                        } else {
+                            return err;
+                        }
+                    };
+                    processed_count += 1;
+                } else {
+                    // ignore files that do not end with ".txt"
+                }
+            }
+        }
+    } else if (stat.kind == .file) {
+        if (std.mem.endsWith(u8, path, ".txt")) {
+            try processSnapshotFile(path, allocator);
+            processed_count += 1;
+        }
+    }
+
+    return processed_count;
 }
 
 /// Represents the different sections of a snapshot file.
@@ -70,6 +99,10 @@ const Section = enum {
     Meta,
     Source,
     Parse,
+
+    const META_HEADER = "~~~META";
+    const SOURCE_HEADER = "~~~SOURCE";
+    const PARSE_HEADER = "~~~PARSE";
 };
 
 /// Stores the contents for a snapshot to be written to file
@@ -93,6 +126,10 @@ const SnapshotContents = struct {
     }
 };
 
+const SnapshotError = error{
+    MissingSnapshotHeader,
+};
+
 fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) !void {
     var contents = SnapshotContents.init(allocator);
     defer contents.deinit();
@@ -103,16 +140,20 @@ fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) 
         const file_content = try std.fs.cwd().readFileAlloc(allocator, snapshot_path, 1024 * 1024);
         defer allocator.free(file_content);
 
+        if (!std.mem.startsWith(u8, file_content, Section.META_HEADER)) {
+            return SnapshotError.MissingSnapshotHeader;
+        }
+
         var current_section = Section.None;
         var lines = std.mem.tokenizeScalar(u8, file_content, '\n');
         while (lines.next()) |line| {
-            if (std.mem.eql(u8, line, "~~~META")) {
+            if (std.mem.eql(u8, line, Section.META_HEADER)) {
                 current_section = Section.Meta;
                 continue;
-            } else if (std.mem.eql(u8, line, "~~~SOURCE")) {
+            } else if (std.mem.eql(u8, line, Section.SOURCE_HEADER)) {
                 current_section = Section.Source;
                 continue;
-            } else if (std.mem.eql(u8, line, "~~~PARSE")) {
+            } else if (std.mem.eql(u8, line, Section.PARSE_HEADER)) {
                 current_section = Section.Parse;
                 continue;
             }
@@ -148,11 +189,14 @@ fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) 
     var file = try std.fs.cwd().createFile(snapshot_path, .{});
     defer file.close();
 
-    try file.writer().writeAll("~~~META\n");
+    try file.writer().writeAll(Section.META_HEADER);
+    try file.writer().writeAll("\n");
     try file.writer().writeAll(contents.meta.items);
-    try file.writer().writeAll("~~~SOURCE\n");
+    try file.writer().writeAll(Section.SOURCE_HEADER);
+    try file.writer().writeAll("\n");
     try file.writer().writeAll(contents.source.items);
-    try file.writer().writeAll("~~~PARSE\n");
+    try file.writer().writeAll(Section.PARSE_HEADER);
+    try file.writer().writeAll("\n");
     try file.writer().writeAll(contents.parse.items);
 
     log("{s}", .{snapshot_path});
