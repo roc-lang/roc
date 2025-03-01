@@ -71,10 +71,12 @@ fn processPath(path: []const u8, gpa: std.mem.Allocator) !usize {
             } else if (entry.kind == .file) {
                 if (std.mem.endsWith(u8, entry.name, ".txt")) {
                     processSnapshotFile(full_path, gpa) catch |err| {
-                        if (err == SnapshotError.MissingSnapshotHeader) {
-                            // ignore files non-snapshot files
-                        } else {
-                            return err;
+                        switch (err) {
+                            Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
+                                // ignore files non-snapshot files
+                                // TODO -- maybe we should print a warning message?
+                            },
+                            else => return err,
                         }
                     };
                     processed_count += 1;
@@ -100,104 +102,109 @@ const Section = enum {
     Source,
     Parse,
 
-    const META_HEADER = "~~~META";
-    const SOURCE_HEADER = "~~~SOURCE";
-    const PARSE_HEADER = "~~~PARSE";
+    const META = "~~~META";
+    const SOURCE = "~~~SOURCE";
+    const PARSE = "~~~PARSE";
 };
 
-/// Stores the contents for a snapshot to be written to file
-const SnapshotContents = struct {
-    meta: std.ArrayList(u8),
-    source: std.ArrayList(u8),
-    parse: std.ArrayList(u8),
+/// Content of a snapshot file, references the Metadata and Source sections
+const Content = struct {
+    meta: []const u8,
+    source: []const u8,
 
-    fn init(allocator: std.mem.Allocator) SnapshotContents {
+    fn init(meta: []const u8, source: []const u8) Content {
         return .{
-            .meta = std.ArrayList(u8).init(allocator),
-            .source = std.ArrayList(u8).init(allocator),
-            .parse = std.ArrayList(u8).init(allocator),
+            .meta = meta,
+            .source = source,
         };
     }
-
-    fn deinit(self: *SnapshotContents) void {
-        self.meta.deinit();
-        self.source.deinit();
-        self.parse.deinit();
-    }
 };
 
-const SnapshotError = error{
+const Error = error{
     MissingSnapshotHeader,
+    MissingSnapshotSource,
 };
 
 fn processSnapshotFile(snapshot_path: []const u8, gpa: std.mem.Allocator) !void {
-    var contents = SnapshotContents.init(gpa);
-    defer contents.deinit();
+    const file_content = try std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024);
+    defer gpa.free(file_content);
 
-    // Parse the file contents
-    {
-        // Read the file
-        const file_content = try std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024);
-        defer gpa.free(file_content);
-
-        if (!std.mem.startsWith(u8, file_content, Section.META_HEADER)) {
-            return SnapshotError.MissingSnapshotHeader;
-        }
-
-        var current_section = Section.None;
-        var lines = std.mem.tokenizeScalar(u8, file_content, '\n');
-        while (lines.next()) |line| {
-            if (std.mem.eql(u8, line, Section.META_HEADER)) {
-                current_section = Section.Meta;
-                continue;
-            } else if (std.mem.eql(u8, line, Section.SOURCE_HEADER)) {
-                current_section = Section.Source;
-                continue;
-            } else if (std.mem.eql(u8, line, Section.PARSE_HEADER)) {
-                current_section = Section.Parse;
-                continue;
-            }
-
-            switch (current_section) {
-                .Meta => try contents.meta.writer().print("{s}\n", .{line}),
-                .Source => try contents.source.writer().print("{s}\n", .{line}),
-                .Parse => {}, // We'll regenerate this section, so we don't need to save it
-                .None => {},
-            }
-        }
+    // Check our file starts with the metadata section
+    // so we can skip parsing and later steps if this isn't a snapshot file
+    if (!std.mem.startsWith(u8, file_content, "~~~META")) {
+        return Error.MissingSnapshotHeader;
     }
 
+    // Parse the file to find section boundaries
+    const content = try extractSections(file_content);
+
     // Generate the PARSE section
+    var parse_buffer = std.ArrayList(u8).init(gpa);
+    defer parse_buffer.deinit();
+
     {
         var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var parse_ast = parse.parse(&env, gpa, contents.source.items);
+        var parse_ast = parse.parse(&env, gpa, content.source);
         defer parse_ast.deinit();
 
         // shouldn't be required in future
         parse_ast.store.emptyScratch();
 
-        // Clear the parse contents to ensure we start fresh
-        contents.parse.clearRetainingCapacity();
-
         // Write the new AST to the parse section
-        try parse_ast.toSExprStr(gpa, &env, contents.parse.writer().any());
+        try parse_ast.toSExprStr(gpa, &env, parse_buffer.writer().any());
     }
 
     // Rewrite the file with updated sections
     var file = try std.fs.cwd().createFile(snapshot_path, .{});
     defer file.close();
 
-    try file.writer().writeAll(Section.META_HEADER);
+    try file.writer().writeAll(Section.META);
     try file.writer().writeAll("\n");
-    try file.writer().writeAll(contents.meta.items);
-    try file.writer().writeAll(Section.SOURCE_HEADER);
+    try file.writer().writeAll(content.meta);
+    try file.writer().writeAll(Section.SOURCE);
     try file.writer().writeAll("\n");
-    try file.writer().writeAll(contents.source.items);
-    try file.writer().writeAll(Section.PARSE_HEADER);
+    try file.writer().writeAll(content.source);
+    try file.writer().writeAll(Section.PARSE);
     try file.writer().writeAll("\n");
-    try file.writer().writeAll(contents.parse.items);
+    try file.writer().writeAll(parse_buffer.items);
 
     log("{s}", .{snapshot_path});
+}
+
+fn extractSections(content: []const u8) !Content {
+    var meta_start: ?usize = null;
+    var meta_end: ?usize = null;
+    var source_start: ?usize = null;
+    var source_end: ?usize = null;
+
+    var lines = std.mem.tokenizeScalar(u8, content, '\n');
+    var current_pos: usize = 0;
+
+    while (lines.next()) |line| {
+        const line_with_newline = line.len + 1;
+
+        if (std.mem.eql(u8, line, Section.META)) {
+            meta_start = current_pos + line_with_newline;
+        } else if (std.mem.eql(u8, line, Section.SOURCE)) {
+            if (meta_start != null) meta_end = current_pos;
+            source_start = current_pos + line_with_newline;
+        } else if (std.mem.eql(u8, line, Section.PARSE)) {
+            if (source_start != null) source_end = current_pos;
+            break;
+        }
+
+        current_pos += line_with_newline;
+    }
+
+    const missing_header = (meta_start == null) or (meta_end == null);
+    const missing_source = (source_start == null) or (source_end == null);
+    if (missing_header) {
+        return Error.MissingSnapshotHeader;
+    } else if (missing_source) {
+        return Error.MissingSnapshotSource;
+    }
+
+    return Content.init(content[meta_start.?..meta_end.?], content[source_start.?..source_end.?]);
 }
