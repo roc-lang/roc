@@ -1,4 +1,7 @@
 const std = @import("std");
+const fmt = @import("fmt.zig");
+const parse = @import("check/parse.zig");
+const base = @import("base.zig");
 const mem = std.mem;
 const Allocator = std.mem.Allocator;
 const RocCmd = @import("cli.zig").RocCmd;
@@ -7,7 +10,7 @@ const RocOpt = @import("cli.zig").RocOpt;
 const coordinate = @import("coordinate.zig");
 
 const usage =
-    \\Usage:    
+    \\Usage:
     \\
     \\  roc [command] [options] [roc_file] [args]
     \\
@@ -65,7 +68,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
             .roc_build => try rocBuild(arena, opt, cmd_args),
             .roc_test => try rocTest(arena, opt, cmd_args),
             .roc_repl => try rocRepl(arena, opt, cmd_args),
-            .roc_format => try rocFormat(arena, opt, cmd_args),
+            .roc_format => try rocFormat(arena, cmd_args),
             .roc_version => try rocVersion(arena, cmd_args),
             .roc_check => try rocCheck(arena, opt, cmd_args),
             .roc_docs => try rocDocs(arena, opt, cmd_args),
@@ -119,12 +122,58 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
-fn rocFormat(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
-    _ = allocator;
+/// Reads, parses, formats, and overwrites a Roc file.
+fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
+    const roc_file_path = if (args.len > 0) args[0] else "main.roc";
 
-    std.debug.print("TODO roc format\n{}\n{s}\n\n", .{ opt, args });
+    const input_file = try std.fs.cwd().openFile(roc_file_path, .{ .mode = .read_only });
+    defer input_file.close();
 
-    fatal("not implemented", .{});
+    const contents = try input_file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(contents);
+
+    var module_env = base.ModuleEnv.init(allocator);
+    defer module_env.deinit();
+
+    var parse_ast = parse.parse(&module_env, allocator, contents);
+    defer parse_ast.deinit();
+
+    var formatter = fmt.init(parse_ast, allocator);
+    defer formatter.deinit();
+
+    const formatted_output = formatter.formatFile();
+    defer allocator.free(formatted_output);
+
+    const output_file = try std.fs.cwd().createFile(roc_file_path, .{});
+    defer output_file.close();
+    try output_file.writeAll(formatted_output);
+}
+
+test "format single file" {
+    const allocator = std.testing.allocator;
+    const filename = "test.roc";
+
+    const roc_file = try std.fs.cwd().createFile(filename, .{});
+    defer roc_file.close();
+    try roc_file.writeAll(
+        \\module []
+        \\
+        \\foo =      "bar"
+    );
+    defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up test.roc", .{});
+
+    try rocFormat(allocator, &.{filename});
+
+    const file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    const formatted_content = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
+    defer allocator.free(formatted_content);
+
+    try std.testing.expectEqualStrings(
+        \\module []
+        \\
+        \\foo = "bar"
+    , formatted_content);
 }
 
 fn rocVersion(allocator: Allocator, args: []const []const u8) !void {
