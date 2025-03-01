@@ -128,9 +128,10 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .apply => |a| {
             fmt.formatExpr(a.@"fn");
             fmt.push('(');
-            const args_len = a.args.len;
+            const args_len = a.args.span.len;
             var i: usize = 0;
-            for (a.args) |arg| {
+            var args_iter = fmt.ast.store.exprIter(a.args);
+            while (args_iter.next()) |arg| {
                 fmt.formatExpr(arg);
                 i += 1;
                 if (i < args_len) {
@@ -145,15 +146,16 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .string => |s| {
             fmt.push('"');
             var i: usize = 0;
-            while (i < s.parts.len) {
-                const e = fmt.ast.store.getExpr(s.parts[i]);
+            var parts_iter = fmt.ast.store.exprIter(s.parts);
+            while (parts_iter.next()) |idx| {
+                const e = fmt.ast.store.getExpr(idx);
                 switch (e) {
                     .string_part => |str| {
                         fmt.pushTokenText(str.token);
                     },
                     else => {
                         fmt.pushAll("${");
-                        fmt.formatExpr(s.parts[i]);
+                        fmt.formatExpr(idx);
                         fmt.push('}');
                     },
                 }
@@ -175,9 +177,10 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .list => |l| {
             fmt.push('[');
             var i: usize = 0;
-            for (l.items) |item| {
+            var items_iter = fmt.ast.store.exprIter(l.items);
+            while (items_iter.next()) |item| {
                 fmt.formatExpr(item);
-                if (i < (l.items.len - 1)) {
+                if (i < (l.items.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
                 i += 1;
@@ -187,9 +190,10 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .tuple => |t| {
             fmt.push('(');
             var i: usize = 0;
-            for (t.items) |item| {
+            var items_iter = fmt.ast.store.exprIter(t.items);
+            while (items_iter.next()) |item| {
                 fmt.formatExpr(item);
-                if (i < (t.items.len - 1)) {
+                if (i < (t.items.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
                 i += 1;

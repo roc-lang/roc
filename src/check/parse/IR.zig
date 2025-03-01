@@ -788,28 +788,19 @@ pub const NodeStore = struct {
             .string => |e| {
                 node.tag = .string;
                 node.main_token = e.token;
-                node.data.lhs = if (e.parts.len > 0) @as(u32, @intCast(store.extra_data.items.len)) else 0;
-                node.data.rhs = @as(u32, @intCast(e.parts.len));
-                for (e.parts) |part| {
-                    store.extra_data.append(part.id) catch exitOnOom();
-                }
+                node.data.lhs = e.parts.span.start;
+                node.data.rhs = e.parts.span.len;
             },
             .list => |l| {
                 node.tag = .list;
                 node.main_token = l.region.start;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(l.items.len));
-                for (l.items) |item| {
-                    store.extra_data.append(item.id) catch exitOnOom();
-                }
+                node.data.lhs = l.items.span.start;
+                node.data.rhs = l.items.span.len;
             },
             .tuple => |t| {
                 node.tag = .tuple;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(t.items.len));
-                for (t.items) |item| {
-                    store.extra_data.append(item.id) catch exitOnOom();
-                }
+                node.data.lhs = t.items.span.start;
+                node.data.rhs = t.items.span.len;
             },
             .record => |r| {
                 node.tag = .record;
@@ -834,12 +825,9 @@ pub const NodeStore = struct {
             },
             .apply => |app| {
                 node.tag = .apply;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(app.args.len + 1));
+                node.data.lhs = app.args.span.start;
+                node.data.rhs = app.args.span.len + 1;
                 store.extra_data.append(app.@"fn".id) catch exitOnOom();
-                for (app.args) |arg| {
-                    store.extra_data.append(arg.id) catch exitOnOom();
-                }
             },
             .record_updater => |_| {},
             .field_access => |fa| {
@@ -1422,47 +1410,30 @@ pub const NodeStore = struct {
                 } };
             },
             .string => {
-                const scratch_top = store.scratch_exprs.items.len;
-                for (store.extra_data.items[node.data.lhs..(node.data.lhs + node.data.rhs)]) |d| {
-                    store.scratch_exprs.append(.{ .id = d }) catch exitOnOom();
-                }
-                const parts = store.scratch_exprs.items[scratch_top..];
-                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
                 return .{ .string = .{
                     .token = node.main_token,
-                    .parts = parts,
+                    .parts = .{ .span = DataSpan{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                     .region = emptyRegion(),
                 } };
             },
             .list => {
-                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
-                const extra_data_end = extra_data_pos + node.data.rhs;
-                const scratch_top = store.scratch_exprs.items.len;
-                while (extra_data_pos < extra_data_end) {
-                    store.scratch_exprs.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
-                    extra_data_pos += 1;
-                }
-                const items = store.scratch_exprs.items[scratch_top..];
-                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-
                 return .{ .list = .{
-                    .items = items,
+                    .items = .{ .span = DataSpan{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                     .region = emptyRegion(),
                 } };
             },
             .tuple => {
-                var extra_data_pos = @as(usize, @intCast(node.data.lhs));
-                const extra_data_end = extra_data_pos + node.data.rhs;
-                const scratch_top = store.scratch_exprs.items.len;
-                while (extra_data_pos < extra_data_end) {
-                    store.scratch_exprs.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
-                    extra_data_pos += 1;
-                }
-                const items = store.scratch_exprs.items[scratch_top..];
-                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-
                 return .{ .tuple = .{
-                    .items = items,
+                    .items = .{ .span = DataSpan{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                     .region = emptyRegion(),
                 } };
             },
@@ -1511,19 +1482,14 @@ pub const NodeStore = struct {
                 } };
             },
             .apply => {
-                const extra_data_start = @as(usize, @intCast(node.data.lhs));
-                const extra_data_len = @as(usize, @intCast(node.data.rhs));
-                const function = store.extra_data.items[extra_data_start];
-                const scratch_top = store.scratch_exprs.items.len;
-                const data = store.extra_data.items[(extra_data_start + 1)..(extra_data_start + extra_data_len)];
-                for (data) |arg| {
-                    store.scratch_exprs.append(.{ .id = arg }) catch exitOnOom();
-                }
-                const args = store.scratch_exprs.items[scratch_top..];
-                store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+                const function_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs)) - 1;
+                const function = store.extra_data.items[function_ed_idx];
                 return .{ .apply = .{
                     .@"fn" = .{ .id = function },
-                    .args = args,
+                    .args = .{ .span = DataSpan{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs - 1,
+                    } },
                     .region = emptyRegion(),
                 } };
             },
@@ -2065,14 +2031,14 @@ pub const NodeStore = struct {
         string: struct {
             token: TokenIdx,
             region: Region,
-            parts: []const ExprIdx,
+            parts: ExprSpan,
         },
         list: struct {
-            items: []const ExprIdx,
+            items: ExprSpan,
             region: Region,
         },
         tuple: struct {
-            items: []const ExprIdx,
+            items: ExprSpan,
             region: Region,
         },
         record: struct {
@@ -2089,7 +2055,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         apply: struct {
-            args: []const ExprIdx,
+            args: ExprSpan,
             @"fn": ExprIdx,
             region: Region,
         },
@@ -2146,7 +2112,8 @@ pub const NodeStore = struct {
                     // const token = ir.tokens.tokens.get(str.token);
                     // std.debug.print("TOKEN: {}\n", .{token});
 
-                    for (str.parts) |part_id| {
+                    var parts_iter = ir.store.exprIter(str.parts);
+                    while (parts_iter.next()) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
                         return part_expr.toSExpr(gpa, env, ir);
                         // std.debug.print("PART: {}\n", .{part_expr});
@@ -2213,47 +2180,13 @@ pub const NodeStore = struct {
         len: u32,
     };
 
-    pub const ExprSpan = struct { span: DataSpan };
-
-    pub fn addExprSpan(store: *NodeStore, exprs: []const ExprIdx) ExprSpan {
-        const start = @as(u32, @intCast(store.extra_data.items.len));
-        const len = @as(u32, @intCast(exprs.len));
-        for (exprs) |item| {
-            store.extra_data.append(item.id) catch exitOnOom();
-        }
-        return .{
-            .span = .{
-                .start = start,
-                .len = len,
-            },
-        };
-    }
-
-    pub fn IdIter(comptime T: anytype) type {
-        return struct {
-            iter: Iterator,
-            pub fn next(self: *@This()) ?T {
-                if (self.iter.next()) |n| {
-                    return .{ .id = n };
-                }
-                return null;
-            }
-        };
-    }
-    pub const ExprIter = IdIter(ExprIdx);
-
-    pub fn getExprIter(store: *NodeStore, span: ExprSpan) ExprIter {
-        const iter = Iterator.new(span.span, &store.extra_data);
-        return .{ .iter = iter };
-    }
-
     const Iterator = struct {
         start: usize,
         end: usize,
         pos: usize,
-        data: *std.ArrayList(u32),
+        data: std.ArrayList(u32),
 
-        pub fn new(span: DataSpan, data: *std.ArrayList(u32)) @This() {
+        pub fn new(span: DataSpan, data: std.ArrayList(u32)) @This() {
             const start = @as(usize, @intCast(span.start));
             const end = start + @as(usize, @intCast(span.len));
             return .{
@@ -2274,6 +2207,74 @@ pub const NodeStore = struct {
         }
     };
 
+    pub fn IdIter(comptime T: type) type {
+        return struct {
+            iter: Iterator,
+            pub fn next(self: *@This()) ?T {
+                if (self.iter.next()) |n| {
+                    const id: T = .{ .id = n };
+                    return id;
+                }
+                return null;
+            }
+        };
+    }
+
+    pub const ExprSpan = struct { span: DataSpan };
+    pub const StatementSpan = struct { span: DataSpan };
+    pub const TokenSpan = struct { span: DataSpan };
+    pub const PatternSpan = struct { span: DataSpan };
+    pub const RecordFieldSpan = struct { span: DataSpan };
+    pub const PatternRecordFieldSpan = struct { span: DataSpan };
+    pub const WhenBranchSpan = struct { span: DataSpan };
+    pub const TypeAnnoSpan = struct { span: DataSpan };
+    pub const AnnoRecordFieldSpan = struct { span: DataSpan };
+
+    pub const ExprIter = IdIter(ExprIdx);
+    pub const StatementIter = IdIter(StatementIdx);
+    pub const PatternIter = IdIter(PatternIdx);
+    pub const RecordFieldIter = IdIter(RecordFieldIdx);
+    pub const PatternRecordFieldIter = IdIter(PatternRecordFieldIdx);
+    pub const WhenBranchIter = IdIter(WhenBranchIdx);
+    pub const TypeAnnoIter = IdIter(TypeAnnoIdx);
+    pub const AnnoRecordFieldIter = IdIter(AnnoRecordFieldIdx);
+
+    /// Returns the start position for a new Span of ExprIdxs in scratch
+    pub fn scratchExprTop(store: *NodeStore) u32 {
+        return @as(u32, @intCast(store.scratch_exprs.items.len));
+    }
+    /// Places a new ExprIdx in the scratch.  Will panic on OOM.
+    pub fn addScratchExpr(store: *NodeStore, idx: ExprIdx) void {
+        store.scratch_exprs.append(idx) catch exitOnOom();
+    }
+    /// Creates a new span starting at start.  Moves the items from scratch
+    /// to extra_data as appropriate.
+    pub fn exprSpanFrom(store: *NodeStore, start: u32) ExprSpan {
+        const end = store.scratch_exprs.items.len;
+        defer store.scratch_exprs.shrinkRetainingCapacity(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        std.debug.assert(end >= i);
+        while (i < end) {
+            store.extra_data.append(store.scratch_exprs.items[i].id) catch exitOnOom();
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+    /// Clears any ExprIds added to scratch from start until the end.
+    /// Should be used wherever the scratch items will not be used,
+    /// as in when parsing fails.
+    pub fn clearScratchExprsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_exprs.shrinkRetainingCapacity(start);
+    }
+
+    /// Returns a new ExprIter so that the caller can iterate through
+    /// all items in the span.
+    pub fn exprIter(store: *NodeStore, span: ExprSpan) ExprIter {
+        const iter = Iterator.new(span.span, store.extra_data);
+        return .{ .iter = iter };
+    }
+
     test "DataSpan and Iterators" {
         var data = try std.ArrayList(u32).initCapacity(std.testing.allocator, 20);
         defer data.deinit();
@@ -2285,7 +2286,7 @@ pub const NodeStore = struct {
 
         {
             const span = ExprSpan{ .span = .{ .start = 0, .len = 3 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
             try std.testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
             try std.testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
             try std.testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
@@ -2295,7 +2296,7 @@ pub const NodeStore = struct {
 
         {
             const span = ExprSpan{ .span = .{ .start = 0, .len = 30 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
             var num: u32 = 0;
             while (iter.next()) |_| {
                 num += 1;
@@ -2305,7 +2306,7 @@ pub const NodeStore = struct {
 
         {
             const span = ExprSpan{ .span = .{ .start = 18, .len = 3 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
             try std.testing.expectEqual(ExprIdx{ .id = 18 }, iter.next());
             try std.testing.expectEqual(ExprIdx{ .id = 19 }, iter.next());
             try std.testing.expectEqual(null, iter.next());
