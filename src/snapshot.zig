@@ -49,11 +49,11 @@ pub fn main() !void {
     std.log.info("processed {d} snapshots in {d}ms.", .{ file_count, duration_ms });
 }
 
-fn processPath(path: []const u8, allocator: std.mem.Allocator) !usize {
+fn processPath(path: []const u8, gpa: std.mem.Allocator) !usize {
     var processed_count: usize = 0;
 
-    const canonical_path = try std.fs.cwd().realpathAlloc(allocator, path);
-    defer allocator.free(canonical_path);
+    const canonical_path = try std.fs.cwd().realpathAlloc(gpa, path);
+    defer gpa.free(canonical_path);
 
     const stat = try std.fs.cwd().statFile(canonical_path);
 
@@ -63,14 +63,14 @@ fn processPath(path: []const u8, allocator: std.mem.Allocator) !usize {
 
         var dir_iterator = dir.iterate();
         while (try dir_iterator.next()) |entry| {
-            const full_path = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ path, entry.name });
-            defer allocator.free(full_path);
+            const full_path = try std.fmt.allocPrint(gpa, "{s}/{s}", .{ path, entry.name });
+            defer gpa.free(full_path);
 
             if (entry.kind == .directory) {
-                processed_count += try processPath(full_path, allocator);
+                processed_count += try processPath(full_path, gpa);
             } else if (entry.kind == .file) {
                 if (std.mem.endsWith(u8, entry.name, ".txt")) {
-                    processSnapshotFile(full_path, allocator) catch |err| {
+                    processSnapshotFile(full_path, gpa) catch |err| {
                         if (err == SnapshotError.MissingSnapshotHeader) {
                             // ignore files non-snapshot files
                         } else {
@@ -85,7 +85,7 @@ fn processPath(path: []const u8, allocator: std.mem.Allocator) !usize {
         }
     } else if (stat.kind == .file) {
         if (std.mem.endsWith(u8, path, ".txt")) {
-            try processSnapshotFile(path, allocator);
+            try processSnapshotFile(path, gpa);
             processed_count += 1;
         }
     }
@@ -130,15 +130,15 @@ const SnapshotError = error{
     MissingSnapshotHeader,
 };
 
-fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) !void {
-    var contents = SnapshotContents.init(allocator);
+fn processSnapshotFile(snapshot_path: []const u8, gpa: std.mem.Allocator) !void {
+    var contents = SnapshotContents.init(gpa);
     defer contents.deinit();
 
     // Parse the file contents
     {
         // Read the file
-        const file_content = try std.fs.cwd().readFileAlloc(allocator, snapshot_path, 1024 * 1024);
-        defer allocator.free(file_content);
+        const file_content = try std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024);
+        defer gpa.free(file_content);
 
         if (!std.mem.startsWith(u8, file_content, Section.META_HEADER)) {
             return SnapshotError.MissingSnapshotHeader;
@@ -169,10 +169,10 @@ fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) 
 
     // Generate the PARSE section
     {
-        var env = base.ModuleEnv.init(allocator);
+        var env = base.ModuleEnv.init(gpa);
         defer env.deinit();
 
-        var parse_ast = parse.parse(&env, allocator, contents.source.items);
+        var parse_ast = parse.parse(&env, gpa, contents.source.items);
         defer parse_ast.deinit();
 
         // shouldn't be required in future
@@ -182,7 +182,7 @@ fn processSnapshotFile(snapshot_path: []const u8, allocator: std.mem.Allocator) 
         contents.parse.clearRetainingCapacity();
 
         // Write the new AST to the parse section
-        try parse_ast.toSExprStr(allocator, &env, contents.parse.writer().any());
+        try parse_ast.toSExprStr(gpa, &env, contents.parse.writer().any());
     }
 
     // Rewrite the file with updated sections
