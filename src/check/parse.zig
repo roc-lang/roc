@@ -130,11 +130,15 @@ test "example s-expr" {
         \\    (decl
         \\        (ident
         \\            'foo')
-        \\        (string_part))
+        \\        (string
+        \\            (string_part
+        \\                'hey')))
         \\    (decl
         \\        (ident
         \\            'bar')
-        \\        (string_part)))
+        \\        (string
+        \\            (string_part
+        \\                'yo'))))
     ;
 
     try testSExprHelper(source, expected);

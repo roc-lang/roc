@@ -2146,19 +2146,22 @@ pub const NodeStore = struct {
                     // const token = ir.tokens.tokens.get(str.token);
                     // std.debug.print("TOKEN: {}\n", .{token});
 
+                    var sexpr_str = sexpr.Expr.init(gpa, "string");
                     for (str.parts) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
-                        return part_expr.toSExpr(gpa, env, ir);
+                        var part_sexpr = part_expr.toSExpr(gpa, env, ir);
+                        sexpr_str.appendNodeChild(gpa, &part_sexpr);
                         // std.debug.print("PART: {}\n", .{part_expr});
                     }
 
-                    @panic("not implemented");
+                    return sexpr_str;
                 },
-                .string_part => |_| {
+                .string_part => |sp| {
                     // TODO -- how to get string parts working... ???
                     // const token = ir.tokens.tokens.get(part.token);
                     // std.debug.print("TOKEN: {}\n", .{token});
-                    const string_part_node = sexpr.Expr.init(gpa, "string_part");
+                    var string_part_node = sexpr.Expr.init(gpa, "string_part");
+                    string_part_node.appendStringChild(gpa, ir.resolve(sp.token));
                     return string_part_node;
                 },
                 .block => |block| {
