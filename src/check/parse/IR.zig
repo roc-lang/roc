@@ -1,4 +1,8 @@
+const base = @import("../../base.zig");
 const IR = @This();
+const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
+const sexpr = @import("../../base/sexpr.zig");
 
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
@@ -181,11 +185,6 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         ty_fn,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
-        /// * lhs - LHS DESCRIPTION
-        /// * rhs - RHS DESCRIPTION
-        ty_star,
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -389,6 +388,11 @@ pub const Node = struct {
         /// * lhs - first statement node
         /// * rhs - number of statements
         block,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ellipsis,
 
         /// A branch is a when expression
         /// Main token is ignored
@@ -496,6 +500,8 @@ pub const NodeStore = struct {
 
     // Node Type Idx types
 
+    /// An index for a Body node.  Should not be constructed externally.
+    pub const BodyIdx = struct { id: u32 };
     /// An index for a File node.  Should not be constructed externally.
     pub const FileIdx = struct { id: u32 };
     /// An index for a Header node.  Should not be constructed externally.
@@ -535,7 +541,7 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
-    pub fn addFile(store: *NodeStore, file: File) FileIdx {
+    pub fn addFile(store: *NodeStore, file: File) void {
         const start = store.extra_data.items.len;
         store.extra_data.append(file.header.id) catch exitOnOom();
         for (file.statements) |statement| {
@@ -550,8 +556,6 @@ pub const NodeStore = struct {
                 .rhs = @as(u32, @intCast(file.statements.len + 1)),
             },
         });
-
-        return FileIdx{ .id = 0 };
     }
 
     pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
@@ -906,6 +910,9 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(start));
                 node.data.rhs = @as(u32, @bitCast(rhs));
             },
+            .ellipsis => |_| {
+                node.tag = .ellipsis;
+            },
         }
         const nid = store.nodes.append(node);
         return .{ .id = @intFromEnum(nid) };
@@ -1023,9 +1030,6 @@ pub const NodeStore = struct {
                 node.tag = .ty_var;
                 node.main_token = v.tok;
             },
-            .star => |_| {
-                node.tag = .ty_star;
-            },
             .underscore => |_| {
                 node.tag = .ty_underscore;
             },
@@ -1093,8 +1097,8 @@ pub const NodeStore = struct {
     // Read API - All nodes should be accessed using these functions
     // ------------------------------------------------------------------------
 
-    pub fn getFile(store: *NodeStore, file: FileIdx) File {
-        const node = store.nodes.get(@enumFromInt(file.id));
+    pub fn getFile(store: *NodeStore) File {
+        const node = store.nodes.get(@enumFromInt(0));
         const header = store.extra_data.items[node.data.lhs];
         const stmt_idxs = store.extra_data.items[(node.data.lhs + 1)..(node.data.lhs + node.data.rhs)];
         std.debug.assert(store.scratch_statements.items.len == 0);
@@ -1591,6 +1595,11 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .ellipsis => {
+                return .{ .ellipsis = .{
+                    .region = emptyRegion(),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1648,11 +1657,6 @@ pub const NodeStore = struct {
             .ty_var => {
                 return .{ .ty_var = .{
                     .tok = node.main_token,
-                    .region = emptyRegion(),
-                } };
-            },
-            .ty_star => {
-                return .{ .star = .{
                     .region = emptyRegion(),
                 } };
             },
@@ -1770,6 +1774,23 @@ pub const NodeStore = struct {
         header: HeaderIdx,
         statements: []const StatementIdx,
         region: Region,
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var file_node = sexpr.Expr.init(gpa, "file");
+
+            const header = ir.store.getHeader(self.header);
+            var header_node = header.toSExpr(gpa, env, ir);
+
+            file_node.appendNodeChild(gpa, &header_node);
+
+            for (self.statements) |stmt_id| {
+                const stmt = ir.store.getStatement(stmt_id);
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
+                file_node.appendNodeChild(gpa, &stmt_node);
+            }
+
+            return file_node;
+        }
     };
 
     /// Represents a Body, or a block of statements.
@@ -1778,7 +1799,22 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         /// The token that represents the newline preceding this block, if any
         whitespace: ?TokenIdx,
+
         region: Region,
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var block_node = sexpr.Expr.init(gpa, "block");
+
+            for (self.statements) |stmt_idx| {
+                const stmt = ir.store.getStatement(stmt_idx);
+
+                var stmt_node = stmt.toSExpr(gpa, env, ir);
+
+                block_node.appendNodeChild(gpa, &stmt_node);
+            }
+
+            return block_node;
+        }
     };
 
     /// Represents a module header.
@@ -1809,6 +1845,23 @@ pub const NodeStore = struct {
         },
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .module => |module| {
+                    var header_node = sexpr.Expr.init(gpa, "header");
+
+                    for (module.exposes) |exposed_idx| {
+                        const token = ir.tokens.tokens.get(exposed_idx);
+                        const text = env.idents.getText(token.extra.interned);
+                        header_node.appendStringChild(gpa, text);
+                    }
+
+                    return header_node;
+                },
+                else => @panic("not implemented"),
+            }
+        }
     };
 
     /// Represents a statement.  Not all statements are valid in all positions.
@@ -1853,6 +1906,34 @@ pub const NodeStore = struct {
             exposes: []const TokenIdx,
             region: Region,
         };
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .decl => |decl| {
+                    var decl_node = sexpr.Expr.init(gpa, "decl");
+
+                    const pattern = ir.store.getPattern(decl.pattern);
+                    const body = ir.store.getExpr(decl.body);
+
+                    var pattern_node = pattern.toSExpr(gpa, env, ir);
+                    var body_node = body.toSExpr(gpa, env, ir);
+
+                    decl_node.appendNodeChild(gpa, &pattern_node);
+                    decl_node.appendNodeChild(gpa, &body_node);
+
+                    return decl_node;
+                },
+                .expr => |expr_stmt| {
+                    const expr = ir.store.getExpr(expr_stmt.expr);
+                    const expr_node = expr.toSExpr(gpa, env, ir);
+                    return expr_node;
+                },
+                else => {
+                    std.log.err("format for statement {}", .{self});
+                    @panic("not implemented");
+                },
+            }
+        }
     };
 
     pub const TypeHeader = struct {
@@ -1864,9 +1945,6 @@ pub const NodeStore = struct {
     pub const TypeAnno = union(enum) {
         ty_var: struct {
             tok: TokenIdx,
-            region: Region,
-        },
-        star: struct {
             region: Region,
         },
         underscore: struct {
@@ -1952,6 +2030,22 @@ pub const NodeStore = struct {
             patterns: []const PatternIdx,
             region: Region,
         },
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                .ident => |ident| {
+                    var node = sexpr.Expr.init(gpa, "ident");
+
+                    const token = ir.tokens.tokens.get(ident.ident_tok);
+                    const text = env.idents.getText(token.extra.interned);
+
+                    node.appendStringChild(gpa, text);
+
+                    return node;
+                },
+                else => @panic("formatting for this pattern not yet implemented"),
+            }
+        }
     };
 
     /// Represents an expression.
@@ -2031,7 +2125,51 @@ pub const NodeStore = struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
         },
+        ellipsis: struct {
+            region: Region,
+        },
         block: Body,
+
+        pub fn as_string_part_region(self: @This()) !Region {
+            switch (self) {
+                .string_part => |part| return part.region,
+                else => return error.ExpectedStringPartRegion,
+            }
+        }
+
+        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            // TODO -- how to get string parts working... ???
+            // std.debug.print("EXPR: {}\n", .{self});
+            switch (self) {
+                .string => |str| {
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(str.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+
+                    for (str.parts) |part_id| {
+                        const part_expr = ir.store.getExpr(part_id);
+                        return part_expr.toSExpr(gpa, env, ir);
+                        // std.debug.print("PART: {}\n", .{part_expr});
+                    }
+
+                    @panic("not implemented");
+                },
+                .string_part => |_| {
+                    // TODO -- how to get string parts working... ???
+                    // const token = ir.tokens.tokens.get(part.token);
+                    // std.debug.print("TOKEN: {}\n", .{token});
+                    const string_part_node = sexpr.Expr.init(gpa, "string_part");
+                    return string_part_node;
+                },
+                .block => |block| {
+                    return block.toSExpr(gpa, env, ir);
+                },
+                else => {
+                    std.log.err("expression {}", .{self});
+                    @panic("not implemented yet");
+                },
+            }
+        }
     };
 
     pub const PatternRecordField = struct {
@@ -2069,6 +2207,111 @@ pub const NodeStore = struct {
         expr: ExprIdx,
         region: Region,
     };
+
+    pub const DataSpan = struct {
+        start: u32,
+        len: u32,
+    };
+
+    pub const ExprSpan = struct { span: DataSpan };
+
+    pub fn addExprSpan(store: *NodeStore, exprs: []const ExprIdx) ExprSpan {
+        const start = @as(u32, @intCast(store.extra_data.items.len));
+        const len = @as(u32, @intCast(exprs.len));
+        for (exprs) |item| {
+            store.extra_data.append(item.id) catch exitOnOom();
+        }
+        return .{
+            .span = .{
+                .start = start,
+                .len = len,
+            },
+        };
+    }
+
+    pub fn IdIter(comptime T: anytype) type {
+        return struct {
+            iter: Iterator,
+            pub fn next(self: *@This()) ?T {
+                if (self.iter.next()) |n| {
+                    return .{ .id = n };
+                }
+                return null;
+            }
+        };
+    }
+    pub const ExprIter = IdIter(ExprIdx);
+
+    pub fn getExprIter(store: *NodeStore, span: ExprSpan) ExprIter {
+        const iter = Iterator.new(span.span, &store.extra_data);
+        return .{ .iter = iter };
+    }
+
+    const Iterator = struct {
+        start: usize,
+        end: usize,
+        pos: usize,
+        data: *std.ArrayList(u32),
+
+        pub fn new(span: DataSpan, data: *std.ArrayList(u32)) @This() {
+            const start = @as(usize, @intCast(span.start));
+            const end = start + @as(usize, @intCast(span.len));
+            return .{
+                .start = start,
+                .end = end,
+                .pos = start,
+                .data = data,
+            };
+        }
+
+        pub fn next(self: *@This()) ?u32 {
+            if (self.pos == self.end or self.data.items.len <= self.pos) {
+                return null;
+            }
+            const curr = self.data.items[self.pos];
+            self.pos += 1;
+            return curr;
+        }
+    };
+
+    test "DataSpan and Iterators" {
+        var data = try std.ArrayList(u32).initCapacity(std.testing.allocator, 20);
+        defer data.deinit();
+        var i: u32 = 0;
+        while (i < 20) {
+            try data.append(i);
+            i += 1;
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 0, .len = 3 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            try std.testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 0, .len = 30 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            var num: u32 = 0;
+            while (iter.next()) |_| {
+                num += 1;
+            }
+            try std.testing.expectEqual(20, num);
+        }
+
+        {
+            const span = ExprSpan{ .span = .{ .start = 18, .len = 3 } };
+            var iter = ExprIter{ .iter = Iterator.new(span.span, &data) };
+            try std.testing.expectEqual(ExprIdx{ .id = 18 }, iter.next());
+            try std.testing.expectEqual(ExprIdx{ .id = 19 }, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+            try std.testing.expectEqual(null, iter.next());
+        }
+    }
 };
 
 pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
@@ -2097,3 +2340,14 @@ const TokenizedBuffer = tokenize.TokenizedBuffer;
 const TokenIdx = tokenize.Token.Idx;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+
+/// Helper function to convert an IR to a string in S-expression format
+/// and write it to the given writer.
+pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+    const file = ir.store.getFile();
+
+    var node = file.toSExpr(gpa, env, ir);
+    defer node.deinit(gpa);
+
+    node.toStringPretty(writer, 4);
+}

@@ -41,7 +41,7 @@ pub fn canonicalize(
     const imported_idents = &.{};
     var scope = Scope.init(&env, builtin_aliases, imported_idents, allocator);
 
-    const file = parse_ir.store.getFile(parse.IR.NodeStore.FileIdx{ .id = 0 });
+    const file = parse_ir.store.getFile();
 
     for (file.statements) |stmt_id| {
         const stmt = parse_ir.store.getStatement(stmt_id);
