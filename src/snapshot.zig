@@ -1,12 +1,13 @@
 const std = @import("std");
 const base = @import("base.zig");
 const parse = @import("check/parse.zig");
+const fmt = @import("fmt.zig");
 
 var verbose_log: bool = false;
 
-fn log(comptime fmt: []const u8, args: anytype) void {
+fn log(comptime fmt_str: []const u8, args: anytype) void {
     if (verbose_log) {
-        std.log.info(fmt, args);
+        std.log.info(fmt_str, args);
     }
 }
 
@@ -69,25 +70,20 @@ fn processPath(path: []const u8, gpa: std.mem.Allocator) !usize {
             if (entry.kind == .directory) {
                 processed_count += try processPath(full_path, gpa);
             } else if (entry.kind == .file) {
-                if (std.mem.endsWith(u8, entry.name, ".txt")) {
-                    processSnapshotFile(full_path, gpa) catch |err| {
-                        switch (err) {
-                            Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
-                                // ignore files non-snapshot files
-                                // TODO -- maybe we should print a warning message?
-                            },
-                            else => return err,
-                        }
-                    };
-                    processed_count += 1;
-                } else {
-                    // ignore files that do not end with ".txt"
-                }
+                processed_count += try processPath(full_path, gpa);
             }
         }
     } else if (stat.kind == .file) {
         if (std.mem.endsWith(u8, path, ".txt")) {
-            try processSnapshotFile(path, gpa);
+            processSnapshotFile(path, gpa) catch |err| {
+                switch (err) {
+                    Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
+                        // Ignore non-snapshot files
+                        log("ignoring non-snapshot file {s}", .{path});
+                    },
+                    else => return err,
+                }
+            };
             processed_count += 1;
         }
     }
@@ -100,23 +96,31 @@ const Section = enum {
     None,
     Meta,
     Source,
+    Formatted,
     Parse,
 
     const META = "~~~META";
     const SOURCE = "~~~SOURCE";
+    const FORMATTED = "~~~FORMATTED";
     const PARSE = "~~~PARSE";
 };
 
-/// Content of a snapshot file, references the Metadata and Source sections
+/// Content of a snapshot file, references the Metadata and Source sections etc
 const Content = struct {
     meta: []const u8,
     source: []const u8,
+    formatted: ?[]const u8,
 
-    fn init(meta: []const u8, source: []const u8) Content {
+    fn init(meta: []const u8, source: []const u8, formatted: ?[]const u8) Content {
         return .{
             .meta = meta,
             .source = source,
+            .formatted = formatted,
         };
+    }
+
+    fn has_formatted_section(self: Content) bool {
+        return self.formatted != null;
     }
 };
 
@@ -131,7 +135,7 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: std.mem.Allocator) !void 
 
     // Check our file starts with the metadata section
     // so we can skip parsing and later steps if this isn't a snapshot file
-    if (!std.mem.startsWith(u8, file_content, "~~~META")) {
+    if (!std.mem.startsWith(u8, file_content, Section.META)) {
         return Error.MissingSnapshotHeader;
     }
 
@@ -142,19 +146,24 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: std.mem.Allocator) !void 
     var parse_buffer = std.ArrayList(u8).init(gpa);
     defer parse_buffer.deinit();
 
-    {
-        var env = base.ModuleEnv.init(gpa);
-        defer env.deinit();
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
 
-        var parse_ast = parse.parse(&env, gpa, content.source);
-        defer parse_ast.deinit();
+    // Parse the source code
+    var parse_ast = parse.parse(&module_env, gpa, content.source);
+    defer parse_ast.deinit();
 
-        // shouldn't be required in future
-        parse_ast.store.emptyScratch();
+    // Format the source code
+    var formatter = fmt.init(parse_ast, gpa);
+    defer formatter.deinit();
+    const formatted_output = formatter.formatFile();
+    defer gpa.free(formatted_output);
 
-        // Write the new AST to the parse section
-        try parse_ast.toSExprStr(gpa, &env, parse_buffer.writer().any());
-    }
+    // shouldn't be required in future
+    parse_ast.store.emptyScratch();
+
+    // Write the new AST to the parse section
+    try parse_ast.toSExprStr(gpa, &module_env, parse_buffer.writer().any());
 
     // Rewrite the file with updated sections
     var file = try std.fs.cwd().createFile(snapshot_path, .{});
@@ -163,9 +172,27 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: std.mem.Allocator) !void 
     try file.writer().writeAll(Section.META);
     try file.writer().writeAll("\n");
     try file.writer().writeAll(content.meta);
-    try file.writer().writeAll(Section.SOURCE);
     try file.writer().writeAll("\n");
-    try file.writer().writeAll(content.source);
+
+    // If there's an explicit FORMATTED section, keep the source as-is
+    // and update the FORMATTED section
+    if (content.has_formatted_section()) {
+        try file.writer().writeAll(Section.SOURCE);
+        try file.writer().writeAll("\n");
+        try file.writer().writeAll(content.source);
+        try file.writer().writeAll("\n");
+        try file.writer().writeAll(Section.FORMATTED);
+        try file.writer().writeAll("\n");
+        try file.writer().writeAll(formatted_output);
+        try file.writer().writeAll("\n");
+    } else {
+        // Otherwise, update SOURCE directly with the formatted output
+        try file.writer().writeAll(Section.SOURCE);
+        try file.writer().writeAll("\n");
+        try file.writer().writeAll(formatted_output);
+        try file.writer().writeAll("\n");
+    }
+
     try file.writer().writeAll(Section.PARSE);
     try file.writer().writeAll("\n");
     try file.writer().writeAll(parse_buffer.items);
@@ -178,6 +205,8 @@ fn extractSections(content: []const u8) !Content {
     var meta_end: ?usize = null;
     var source_start: ?usize = null;
     var source_end: ?usize = null;
+    var formatted_start: ?usize = null;
+    var formatted_end: ?usize = null;
 
     var lines = std.mem.tokenizeScalar(u8, content, '\n');
     var current_pos: usize = 0;
@@ -190,8 +219,15 @@ fn extractSections(content: []const u8) !Content {
         } else if (std.mem.eql(u8, line, Section.SOURCE)) {
             if (meta_start != null) meta_end = current_pos;
             source_start = current_pos + line_with_newline;
-        } else if (std.mem.eql(u8, line, Section.PARSE)) {
+        } else if (std.mem.eql(u8, line, Section.FORMATTED)) {
             if (source_start != null) source_end = current_pos;
+            formatted_start = current_pos + line_with_newline;
+        } else if (std.mem.eql(u8, line, Section.PARSE)) {
+            if (formatted_start != null) {
+                formatted_end = current_pos;
+            } else if (source_start != null) {
+                source_end = current_pos;
+            }
             break;
         }
 
@@ -206,5 +242,10 @@ fn extractSections(content: []const u8) !Content {
         return Error.MissingSnapshotSource;
     }
 
-    return Content.init(content[meta_start.?..meta_end.?], content[source_start.?..source_end.?]);
+    var formatted: ?[]const u8 = null;
+    if (formatted_start != null and formatted_end != null) {
+        formatted = content[formatted_start.?..formatted_end.?];
+    }
+
+    return Content.init(content[meta_start.?..meta_end.?], content[source_start.?..source_end.?], formatted);
 }

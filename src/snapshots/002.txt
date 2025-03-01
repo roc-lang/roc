@@ -2,9 +2,10 @@
 description=Basic example to develop the snapshot methodology
 ~~~SOURCE
 module [foo, bar]
+
 foo = "one"
-bar = "two"
-~~~PARSE
+
+bar = "two"~~~PARSE
 (file
     (header
         'foo'
