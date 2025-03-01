@@ -151,43 +151,21 @@ fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
 test "format single file" {
     const allocator = std.testing.allocator;
     const filename = "test.roc";
-    {
-        const roc_file = try std.fs.cwd().createFile(filename, .{});
-        defer roc_file.close();
-        try roc_file.writeAll(
-            \\module []
-            \\
-            \\foo =      "bar"
-        );
-    }
-    defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up temp file", .{});
 
-    // TODO: Share build step between tests
-    {
-        const build_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ "zig", "build" },
-        });
-        defer allocator.free(build_result.stdout);
-        defer allocator.free(build_result.stderr);
-        try std.testing.expectEqual(build_result.term.Exited, 0);
-    }
+    const roc_file = try std.fs.cwd().createFile(filename, .{});
+    defer roc_file.close();
+    try roc_file.writeAll(
+        \\module []
+        \\
+        \\foo =      "bar"
+    );
+    defer std.fs.cwd().deleteFile(filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
-    {
-        const format_result = try std.process.Child.run(.{
-            .allocator = allocator,
-            .argv = &[_][]const u8{ "./zig-out/bin/roc", "format", filename },
-        });
-        defer allocator.free(format_result.stdout);
-        defer allocator.free(format_result.stderr);
-        try std.testing.expectEqual(format_result.term.Exited, 0);
-    }
+    try rocFormat(allocator, &.{filename});
 
-    const formatted_content = blk: {
-        const file = try std.fs.cwd().openFile(filename, .{});
-        defer file.close();
-        break :blk try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
-    };
+    const file = try std.fs.cwd().openFile(filename, .{});
+    defer file.close();
+    const formatted_content = try file.reader().readAllAlloc(allocator, std.math.maxInt(usize));
     defer allocator.free(formatted_content);
 
     try std.testing.expectEqualStrings(
