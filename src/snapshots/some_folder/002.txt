@@ -14,8 +14,10 @@ bar = "two"
     (decl
         (ident
             'foo')
-        (string_part))
+        (string
+            'one'))
     (decl
         (ident
             'bar')
-        (string_part)))
+        (string
+            'two')))

@@ -145,23 +145,19 @@ const Section = union(enum) {
 
     /// Captures the start and end positions of a section within the file content
     const Range = struct {
-        start: ?usize,
-        end: ?usize,
+        start: usize,
+        end: usize,
 
         fn empty() Range {
             return .{
-                .start = null,
-                .end = null,
+                .start = 0,
+                .end = 0,
             };
         }
 
-        fn isComplete(self: Range) bool {
-            return self.start != null and self.end != null;
-        }
-
-        fn extract(self: Range, content: []const u8) ?[]const u8 {
-            if (!self.isComplete()) return null;
-            return std.mem.trimRight(u8, content[self.start.?..self.end.?], "\n");
+        fn extract(self: Range, content: []const u8) []const u8 {
+            if (self.end < self.start) @panic("invalid range");
+            return std.mem.trimRight(u8, content[self.start..self.end], "\n");
         }
     };
 };
@@ -190,21 +186,13 @@ const Content = struct {
         var formatted: ?[]const u8 = undefined;
 
         if (ranges.get(.meta)) |value| {
-            if (value.extract(content)) |src| {
-                meta = src;
-            } else {
-                return Error.MissingSnapshotHeader;
-            }
+            meta = value.extract(content);
         } else {
             return Error.MissingSnapshotHeader;
         }
 
         if (ranges.get(.source)) |value| {
-            if (value.extract(content)) |src| {
-                source = src;
-            } else {
-                return Error.MissingSnapshotSource;
-            }
+            source = value.extract(content);
         } else {
             return Error.MissingSnapshotSource;
         }
