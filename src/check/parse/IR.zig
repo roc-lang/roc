@@ -2104,29 +2104,21 @@ pub const NodeStore = struct {
         }
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
-            // TODO -- how to get string parts working... ???
-            // std.debug.print("EXPR: {}\n", .{self});
             switch (self) {
                 .string => |str| {
-                    // TODO -- how to get string parts working... ???
-                    // const token = ir.tokens.tokens.get(str.token);
-                    // std.debug.print("TOKEN: {}\n", .{token});
-
+                    var sexpr_str = sexpr.Expr.init(gpa, "string");
                     var parts_iter = ir.store.exprIter(str.parts);
                     while (parts_iter.next()) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
-                        return part_expr.toSExpr(gpa, env, ir);
-                        // std.debug.print("PART: {}\n", .{part_expr});
+                        var part_sexpr = part_expr.toSExpr(gpa, env, ir);
+                        sexpr_str.appendNodeChild(gpa, &part_sexpr);
                     }
-
-                    @panic("not implemented");
+                    return sexpr_str;
                 },
-                .string_part => |_| {
-                    // TODO -- how to get string parts working... ???
-                    // const token = ir.tokens.tokens.get(part.token);
-                    // std.debug.print("TOKEN: {}\n", .{token});
-                    const string_part_node = sexpr.Expr.init(gpa, "string_part");
-                    return string_part_node;
+                .string_part => |sp| {
+                    const text = ir.resolve(sp.token);
+                    const owned_str: []u8 = gpa.dupe(u8, text) catch exitOnOom();
+                    return sexpr.Expr{ .string = owned_str };
                 },
                 .block => |block| {
                     return block.toSExpr(gpa, env, ir);
