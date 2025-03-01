@@ -122,6 +122,7 @@ fn rocRepl(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
+/// Reads, parses, formats, and overwrites a Roc file.
 fn rocFormat(allocator: Allocator, args: []const []const u8) !void {
     const roc_file_path = if (args.len > 0) args[0] else "main.roc";
 
