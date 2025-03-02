@@ -164,6 +164,19 @@ fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratc
     return scratch_top;
 }
 
+/// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
+fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*IR.NodeStore, T) void, parser: fn (*Parser) T) ExpectError!void {
+    while (self.peek() != end_token) {
+        scratch_fn(&self.store, parser(self));
+        self.expect(.Comma) catch {
+            break;
+        };
+    }
+    self.expect(end_token) catch {
+        return ExpectError.expected_not_found;
+    };
+}
+
 /// Parses a module header using the following grammar:
 ///
 /// provides_entry :: [LowerIdent|UpperIdent] Comma Newline*
@@ -769,24 +782,16 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             expr = self.parseStringExpr();
         },
         .OpenSquare => {
-            const scratch_top = self.store.scratch_exprs.items.len;
-            defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
             self.advance();
-            while (self.peek() != .CloseSquare) {
-                self.store.scratch_exprs.append(self.parseExpr()) catch exitOnOom();
-                if (self.peek() != .Comma) {
-                    break;
+            const scratch_top = self.store.scratchExprTop();
+            self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseSquare, IR.NodeStore.addScratchExpr, parseExpr) catch {
+                while (self.peek() != .CloseSquare) {
+                    self.advance();
                 }
-                self.advance();
-            }
-            if (self.peek() != .CloseSquare) {
-                // No close problem
-                self.addProblem(
-                    .{ .region = .{ .start = start, .end = self.pos }, .tag = .list_not_closed },
-                );
-            }
-            self.advance();
-            const items = self.store.scratch_exprs.items[scratch_top..];
+                self.store.clearScratchExprsFrom(scratch_top);
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
+            };
+            const items = self.store.exprSpanFrom(scratch_top);
             expr = self.store.addExpr(.{ .list = .{
                 .items = items,
                 .region = .{ .start = start, .end = self.pos },
@@ -795,14 +800,15 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         .OpenRound => {
             self.advance();
             // TODO: Parenthesized expressions
-            const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
+            const scratch_top = self.store.scratchExprTop();
+            self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
                 while (self.peek() != .CloseRound) {
                     self.advance();
                 }
+                self.store.clearScratchExprsFrom(scratch_top);
                 return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
             };
-            defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-            const items = self.store.scratch_exprs.items[scratch_top..];
+            const items = self.store.exprSpanFrom(scratch_top);
             expr = self.store.addExpr(.{ .tuple = .{
                 .items = items,
                 .region = .{ .start = start, .end = self.pos },
@@ -969,11 +975,12 @@ fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeSt
     // Check for an apply...
     if (self.peek() == .NoSpaceOpenRound) {
         self.advance();
-        const scratch_top = self.parseCollection(IR.NodeStore.ExprIdx, .CloseRound, &self.store.scratch_exprs, parseExpr) catch {
+        const scratch_top = self.store.scratchExprTop();
+        self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
+            self.store.clearScratchExprsFrom(scratch_top);
             return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
         };
-        defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
-        const args = self.store.scratch_exprs.items[scratch_top..];
+        const args = self.store.exprSpanFrom(scratch_top);
 
         expression = self.store.addExpr(.{ .apply = .{
             .args = args,
@@ -1033,8 +1040,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
     // e.g.:
     // StringStart, StringPart, OpenStringInterpolation, <expr>, CloseStringInterpolation, StringPart, StringEnd
     self.advanceOne();
-    const scratch_top = self.store.scratch_exprs.items.len;
-    defer self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
+    const scratch_top = self.store.scratchExprTop();
     while (true) {
         switch (self.peek()) {
             .StringEnd => {
@@ -1047,12 +1053,12 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
                     .region = .{ .start = self.pos, .end = self.pos },
                 } });
                 self.advanceOne();
-                self.store.scratch_exprs.append(index) catch exitOnOom();
+                self.store.addScratchExpr(index);
             },
             .OpenStringInterpolation => {
                 self.advanceOne();
                 const ex = self.parseExpr();
-                self.store.scratch_exprs.append(ex) catch exitOnOom();
+                self.store.addScratchExpr(ex);
                 // This assert isn't really correct, but we'll have to turn this into a malformed expression
                 // TODO...
                 std.debug.assert(self.peek() == .CloseStringInterpolation);
@@ -1065,13 +1071,12 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
             },
         }
     }
-    const parts = self.store.scratch_exprs.items[scratch_top..];
+    const parts = self.store.exprSpanFrom(scratch_top);
     const expr = self.store.addExpr(.{ .string = .{
         .token = start,
         .parts = parts,
         .region = .{ .start = start, .end = self.pos },
     } });
-    self.store.scratch_exprs.shrinkRetainingCapacity(scratch_top);
     return expr;
 }
 

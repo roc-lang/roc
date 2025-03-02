@@ -20,4 +20,5 @@ foo = "one"
     (decl
         (ident
             'foo')
-        (string_part)))
+        (string
+            'one')))
