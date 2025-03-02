@@ -690,12 +690,8 @@ pub const NodeStore = struct {
             .tag => |t| {
                 node.tag = .tag_patt;
                 node.main_token = t.tag_tok;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(t.args.len));
-
-                for (t.args) |a| {
-                    store.extra_data.append(a.id) catch exitOnOom();
-                }
+                node.data.lhs = t.args.span.start;
+                node.data.rhs = t.args.span.len;
             },
             .number => |n| {
                 node.tag = .number_patt;
@@ -717,12 +713,8 @@ pub const NodeStore = struct {
             },
             .list => |l| {
                 node.tag = .list_patt;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(l.patterns.len));
-
-                for (l.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
-                }
+                node.data.lhs = l.patterns.span.start;
+                node.data.rhs = l.patterns.span.len;
             },
             .list_rest => |r| {
                 node.tag = .list_rest_patt;
@@ -731,27 +723,18 @@ pub const NodeStore = struct {
                 }
             },
             .tuple => |t| {
-                std.debug.assert(t.patterns.len > 1);
                 node.tag = .tuple_patt;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(t.patterns.len));
-
-                for (t.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
-                }
+                node.data.lhs = t.patterns.span.start;
+                node.data.rhs = t.patterns.span.len;
             },
             .underscore => |_| {
                 node.tag = .underscore_patt;
             },
             .alternatives => |a| {
-                std.debug.assert(a.patterns.len > 1);
+                std.debug.assert(a.patterns.span.len > 1);
                 node.tag = .alternatives_patt;
-                node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
-                node.data.rhs = @as(u32, @intCast(a.patterns.len));
-
-                for (a.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
-                }
+                node.data.lhs = a.patterns.span.start;
+                node.data.rhs = a.patterns.span.len;
             },
         }
         const nid = store.nodes.append(node);
@@ -1227,21 +1210,12 @@ pub const NodeStore = struct {
                 } };
             },
             .tag_patt => {
-                const scratch_top = store.scratch_patterns.items.len;
-                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                const f_start = @as(usize, @intCast(node.data.lhs));
-                const f_end = f_start + @as(usize, @intCast(node.data.rhs));
-
-                const ed = store.extra_data.items[f_start..f_end];
-
-                for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
-                }
-
-                const args = store.scratch_patterns.items[scratch_top..];
                 return .{ .tag = .{
                     .tag_tok = node.main_token,
-                    .args = args,
+                    .args = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                     .region = emptyRegion(),
                 } };
             },
@@ -1278,22 +1252,12 @@ pub const NodeStore = struct {
                 } };
             },
             .list_patt => {
-                const scratch_top = store.scratch_patterns.items.len;
-                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                const p_start = @as(usize, @intCast(node.data.lhs));
-                const p_end = p_start + @as(usize, @intCast(node.data.rhs));
-
-                const ed = store.extra_data.items[p_start..p_end];
-
-                for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
-                }
-
-                const patterns = store.scratch_patterns.items[scratch_top..];
-
                 return .{ .list = .{
                     .region = emptyRegion(),
-                    .patterns = patterns,
+                    .patterns = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                 } };
             },
             .list_rest_patt => {
@@ -1303,41 +1267,21 @@ pub const NodeStore = struct {
                 } };
             },
             .tuple_patt => {
-                const scratch_top = store.scratch_patterns.items.len;
-                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                const p_start = @as(usize, @intCast(node.data.lhs));
-                const p_end = p_start + @as(usize, @intCast(node.data.rhs));
-
-                const ed = store.extra_data.items[p_start..p_end];
-
-                for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
-                }
-
-                const patterns = store.scratch_patterns.items[scratch_top..];
-
                 return .{ .tuple = .{
                     .region = emptyRegion(),
-                    .patterns = patterns,
+                    .patterns = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                 } };
             },
             .alternatives_patt => {
-                const scratch_top = store.scratch_patterns.items.len;
-                defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                const p_start = @as(usize, @intCast(node.data.lhs));
-                const p_end = p_start + @as(usize, @intCast(node.data.rhs));
-
-                const ed = store.extra_data.items[p_start..p_end];
-
-                for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
-                }
-
-                const patterns = store.scratch_patterns.items[scratch_top..];
-
                 return .{ .alternatives = .{
                     .region = emptyRegion(),
-                    .patterns = patterns,
+                    .patterns = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
                 } };
             },
             .underscore_patt => {
@@ -1927,7 +1871,7 @@ pub const NodeStore = struct {
         },
         tag: struct {
             tag_tok: TokenIdx,
-            args: []const PatternIdx,
+            args: PatternSpan,
             region: Region,
         },
         number: struct {
@@ -1944,7 +1888,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         list: struct {
-            patterns: []const PatternIdx,
+            patterns: PatternSpan,
             region: Region,
         },
         list_rest: struct {
@@ -1952,14 +1896,14 @@ pub const NodeStore = struct {
             region: Region,
         },
         tuple: struct {
-            patterns: []const PatternIdx,
+            patterns: PatternSpan,
             region: Region,
         },
         underscore: struct {
             region: Region,
         },
         alternatives: struct {
-            patterns: []const PatternIdx,
+            patterns: PatternSpan,
             region: Region,
         },
 
@@ -2271,6 +2215,45 @@ pub const NodeStore = struct {
     /// Returns a new StatementIter so that the caller can iterate through
     /// all items in the span.
     pub fn statementIter(store: *NodeStore, span: StatementSpan) StatementIter {
+        const iter = Iterator.new(span.span, store.extra_data);
+        return .{ .iter = iter };
+    }
+
+    /// Returns the start position for a new Span of patternIdxs in scratch
+    pub fn scratchPatternTop(store: *NodeStore) u32 {
+        return @as(u32, @intCast(store.scratch_patterns.items.len));
+    }
+
+    /// Places a new PatternIdx in the scratch.  Will panic on OOM.
+    pub fn addScratchPattern(store: *NodeStore, idx: PatternIdx) void {
+        store.scratch_patterns.append(idx) catch exitOnOom();
+    }
+
+    /// Creates a new span starting at start.  Moves the items from scratch
+    /// to extra_data as appropriate.
+    pub fn patternSpanFrom(store: *NodeStore, start: u32) PatternSpan {
+        const end = store.scratch_patterns.items.len;
+        defer store.scratch_patterns.shrinkRetainingCapacity(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        std.debug.assert(end >= i);
+        while (i < end) {
+            store.extra_data.append(store.scratch_patterns.items[i].id) catch exitOnOom();
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+
+    /// Clears any PatternIds added to scratch from start until the end.
+    /// Should be used wherever the scratch items will not be used,
+    /// as in when parsing fails.
+    pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_patterns.shrinkRetainingCapacity(start);
+    }
+
+    /// Returns a new PatternIter so that the caller can iterate through
+    /// all items in the span.
+    pub fn patternIter(store: *NodeStore, span: PatternSpan) PatternIter {
         const iter = Iterator.new(span.span, store.extra_data);
         return .{ .iter = iter };
     }

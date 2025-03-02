@@ -497,8 +497,8 @@ const Alternatives = enum {
 
 pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternIdx {
     const outer_start = self.pos;
-    const patterns_scratch_top = self.store.scratch_patterns.items.len;
-    defer self.store.scratch_patterns.shrinkRetainingCapacity(patterns_scratch_top);
+    const patterns_scratch_top = self.store.scratchPatternTop();
+    errdefer self.store.clearScratchPatternsFrom(patterns_scratch_top);
     while (self.peek() != .EndOfFile) {
         const start = self.pos;
         var pattern: ?IR.NodeStore.PatternIdx = null;
@@ -514,7 +514,10 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 if (self.peekNext() != .NoSpaceOpenRound) {
                     pattern = self.store.addPattern(.{ .tag = .{
                         .region = .{ .start = start, .end = self.pos },
-                        .args = &.{},
+                        .args = .{ .span = .{
+                            .start = 0,
+                            .len = 0,
+                        } },
                         .tag_tok = start,
                     } });
                     self.advance();
@@ -522,20 +525,15 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                     self.advance(); // Advance past Upperident
                     self.advance(); // Advance past NoSpaceOpenRound
                     // Parse args
-                    const scratch_top = self.store.scratch_patterns.items.len;
-                    defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                    while (self.peek() != .CloseRound) {
-                        self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
-                        if (self.peek() != .Comma) {
-                            break;
+                    const scratch_top = self.store.scratchPatternTop();
+                    self.parseCollectionSpan(IR.NodeStore.PatternIdx, .CloseRound, IR.NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                        while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                            self.advance();
                         }
-                        self.advance();
-                    }
-                    if (self.peek() != .CloseRound) {
+                        self.store.clearScratchPatternsFrom(scratch_top);
                         return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
-                    }
-                    self.advance();
-                    const args = self.store.scratch_patterns.items[scratch_top..];
+                    };
+                    const args = self.store.patternSpanFrom(scratch_top);
                     pattern = self.store.addPattern(.{ .tag = .{
                         .region = .{ .start = start, .end = self.pos },
                         .args = args,
@@ -565,20 +563,15 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
             .OpenSquare => {
                 // List
                 self.advance();
-                const scratch_top = self.store.scratch_patterns.items.len;
-                defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                while (self.peek() != .CloseSquare) {
-                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
-                    if (self.peek() != .Comma) {
-                        break;
+                const scratch_top = self.store.scratchPatternTop();
+                self.parseCollectionSpan(IR.NodeStore.PatternIdx, .CloseSquare, IR.NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                    while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                        self.advance();
                     }
-                    self.advance();
-                }
-                if (self.peek() != .CloseSquare) {
-                    return self.pushMalformed(IR.NodeStore.PatternIdx, .list_not_closed);
-                }
-                self.advance();
-                const patterns = self.store.scratch_patterns.items[scratch_top..];
+                    self.store.clearScratchPatternsFrom(scratch_top);
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                };
+                const patterns = self.store.patternSpanFrom(scratch_top);
 
                 pattern = self.store.addPattern(.{ .list = .{
                     .region = .{ .start = start, .end = self.pos },
@@ -632,20 +625,15 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
             },
             .OpenRound, .NoSpaceOpenRound => {
                 self.advance();
-                const scratch_top = self.store.scratch_patterns.items.len;
-                defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
-                while (self.peek() != .CloseRound) {
-                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
-                    if (self.peek() != .Comma) {
-                        break;
+                const scratch_top = self.store.scratchPatternTop();
+                self.parseCollectionSpan(IR.NodeStore.PatternIdx, .CloseRound, IR.NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                    while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
+                        self.advance();
                     }
-                    self.advance();
-                }
-                if (self.peek() != .CloseRound) {
-                    return self.pushMalformed(IR.NodeStore.PatternIdx, .list_not_closed);
-                }
-                self.advance();
-                const patterns = self.store.scratch_patterns.items[scratch_top..];
+                    self.store.clearScratchPatternsFrom(scratch_top);
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                };
+                const patterns = self.store.patternSpanFrom(scratch_top);
 
                 pattern = self.store.addPattern(.{ .tuple = .{
                     .patterns = patterns,
@@ -660,20 +648,20 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 return p;
             }
             if (self.peek() != .OpBar) {
-                if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
+                if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
                     return p;
                 }
-                self.store.scratch_patterns.append(p) catch exitOnOom();
+                self.store.addScratchPattern(p);
                 break;
             }
-            self.store.scratch_patterns.append(p) catch exitOnOom();
+            self.store.addScratchPattern(p);
             self.advance();
         }
     }
-    if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
+    if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
         std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}", .{ self.pos, @tagName(self.peek()) });
     }
-    const patterns = self.store.scratch_patterns.items[patterns_scratch_top..];
+    const patterns = self.store.patternSpanFrom(patterns_scratch_top);
     return self.store.addPattern(.{ .alternatives = .{
         .region = .{ .start = outer_start, .end = self.pos },
         .patterns = patterns,
@@ -682,6 +670,9 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
 
 fn parsePatternNoAlts(self: *Parser) IR.NodeStore.PatternIdx {
     return self.parsePattern(.alternatives_forbidden);
+}
+fn parsePatternWithAlts(self: *Parser) IR.NodeStore.PatternIdx {
+    return self.parsePattern(.alternatives_allowed);
 }
 
 pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternRecordFieldIdx {

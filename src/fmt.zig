@@ -303,12 +303,13 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         },
         .tag => |t| {
             fmt.formatIdent(t.tag_tok, null);
-            if (t.args.len > 0) {
+            if (t.args.span.len > 0) {
                 fmt.push('(');
                 var i: usize = 0;
-                for (t.args) |arg| {
+                var args_iter = fmt.ast.store.patternIter(t.args);
+                while (args_iter.next()) |arg| {
                     fmt.formatPattern(arg);
-                    if (i < (t.args.len - 1)) {
+                    if (i < (t.args.span.len - 1)) {
                         fmt.pushAll(", ");
                     }
                     i += 1;
@@ -349,9 +350,10 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .list => |l| {
             fmt.push('[');
             var i: usize = 0;
-            for (l.patterns) |p| {
+            var pattern_iter = fmt.ast.store.patternIter(l.patterns);
+            while (pattern_iter.next()) |p| {
                 fmt.formatPattern(p);
-                if (i < (l.patterns.len - 1)) {
+                if (i < (l.patterns.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
                 i += 1;
@@ -361,9 +363,10 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .tuple => |t| {
             fmt.push('(');
             var i: usize = 0;
-            for (t.patterns) |p| {
+            var pattern_iter = fmt.ast.store.patternIter(t.patterns);
+            while (pattern_iter.next()) |p| {
                 fmt.formatPattern(p);
-                if (i < (t.patterns.len - 1)) {
+                if (i < (t.patterns.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
                 i += 1;
@@ -382,9 +385,10 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         },
         .alternatives => |a| {
             var i: usize = 0;
-            for (a.patterns) |p| {
+            var pattern_iter = fmt.ast.store.patternIter(a.patterns);
+            while (pattern_iter.next()) |p| {
                 fmt.formatPattern(p);
-                if (i < (a.patterns.len - 1)) {
+                if (i < (a.patterns.span.len - 1)) {
                     fmt.pushAll(" | ");
                 }
                 i += 1;
