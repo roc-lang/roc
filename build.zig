@@ -93,6 +93,9 @@ pub fn build(b: *std.Build) void {
             std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
         } else if (is_windows) {
             std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
+        } else if (use_system_afl) {
+            // If we have system afl, no need for llvm-config.
+            build_afl = true;
         } else {
             // AFL++ does not work with our prebuilt static llvm.
             // Check for llvm-config program in user_llvm_path or on the system.
@@ -168,7 +171,7 @@ fn add_fuzz_target(
     check_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
     check_step.dependOn(&check_repro.step);
 
-    if (build_afl or use_system_afl) {
+    if (build_afl) {
         const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
