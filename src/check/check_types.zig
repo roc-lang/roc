@@ -13,17 +13,17 @@ const ModuleWork = base.ModuleWork;
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
+    type_store: *Type.Store,
     resolve_ir: *const resolve.IR,
     other_modules: *const ModuleWork(resolve.IR).Store,
     other_typestores: *const ModuleWork(Type.Store).Store,
-) Type.Store {
+) void {
+    _ = type_store;
     _ = resolve_ir;
     _ = other_modules;
     _ = other_typestores;
 
-    // do something??
-
-    @panic("not implemented");
+    // TODO: implement
 }
 
 // test "checkTypes - basic type unification" {

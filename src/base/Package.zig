@@ -35,6 +35,9 @@ pub const Idx = List.Idx;
 
 pub const Module = struct {
     /// The full name of a module, e.g. `Foo.Bar`.
+    ///
+    /// This is empty if the filepath is not a standard module,
+    /// e.g. `main.roc` or `script.roc`.
     name: []const u8,
     /// The absolute path to this module minus the folder path
     /// for the package's source code root.
@@ -47,10 +50,12 @@ pub const Module = struct {
     pub const Idx = Module.List.Idx;
 
     pub const NameError = error{
+        BadPathName,
         non_ascii_path,
         empty_name,
         empty_name_segment,
         dot_in_path,
+        invalid_extension,
     };
 
     pub fn fromRelativePath(
@@ -67,16 +72,29 @@ pub const Module = struct {
         // the last four characters for the extension.
         std.debug.assert(relative_path.len > ROC_EXTENSION.len);
         var name = string_arena.allocator().alloc(u8, relative_path.len - ROC_EXTENSION.len) catch exitOnOom();
+        var chars_added: usize = 0;
 
         while (component_iter.next()) |component| {
+            if (component.name.len == 0) {
+                return error.empty_name_segment;
+            } else if (std.ascii.isLower(component.name[0])) {
+                return Module{
+                    .name = "",
+                    .filepath_relative_to_package_root = relative_path,
+                };
+            }
+
             const not_last = component_iter.peekNext() != null;
 
             const segment = if (not_last) component.name else blk: {
                 const extension = path.extension(component.name);
-                break :blk if (std.mem.eql(u8, extension, ROC_EXTENSION))
-                    path.stem(component.name)
-                else
-                    component.name;
+                if (extension.len == 0) {
+                    break :blk component.name;
+                } else if (std.mem.eql(u8, extension, ROC_EXTENSION)) {
+                    break :blk path.stem(component.name);
+                } else {
+                    return error.invalid_extension;
+                }
             };
 
             for (segment) |char| {
@@ -88,9 +106,11 @@ pub const Module = struct {
                 }
             }
 
-            std.mem.copyForwards(u8, name[name.len..], segment);
+            std.mem.copyForwards(u8, name[chars_added..], segment);
+            chars_added += segment.len;
             if (not_last) {
-                std.mem.copyForwards(u8, name[name.len..], ".");
+                std.mem.copyForwards(u8, name[chars_added..], ".");
+                chars_added += 1;
             }
         }
 
@@ -269,6 +289,16 @@ pub const Store = struct {
                 err: Module.NameError,
                 filename: []const u8,
             },
+
+            pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
+                switch (err.*) {
+                    .could_not_find_builtins_root_module => {},
+                    .could_not_find_primary_root_module => {},
+                    .invalid_builtin_module_name => |data| {
+                        gpa.free(data.filename);
+                    },
+                }
+            }
         };
     };
 
@@ -285,7 +315,7 @@ pub const Store = struct {
         var packages = List.init(gpa);
         errdefer packages.deinit();
 
-        var builtins_package = Self{
+        _ = packages.append(Self{
             .download_url = &.{},
             .content_hash = &.{},
             .version_string = &.{},
@@ -296,31 +326,31 @@ pub const Store = struct {
             .root_module_idx = @enumFromInt(0),
             .relative_filepaths = builtin_filenames,
             .dependencies = Dependency.List.init(gpa),
-        };
-        _ = packages.append(builtins_package);
+        });
 
-        var builtin_root_idx: ?Idx = null;
-        for (builtin_filenames.items) |builtin_filename| {
-            const module = Module.fromRelativePath(builtin_filename, &string_arena) catch |err| {
-                return .{ .err = .{ .invalid_builtin_module_name = .{
-                    .err = err,
-                    .filename = gpa.dupe(u8, builtin_filename) catch exitOnOom(),
-                } } };
-            };
-            const module_idx = builtins_package.modules.append(module);
+        // TODO: implement compilation of builtins
+        // var builtin_root_idx: ?Idx = null;
+        // for (builtin_filenames.items) |builtin_filename| {
+        //     const module = Module.fromRelativePath(builtin_filename, &string_arena) catch |err| {
+        //         return .{ .err = .{ .invalid_builtin_module_name = .{
+        //             .err = err,
+        //             .filename = gpa.dupe(u8, builtin_filename) catch exitOnOom(),
+        //         } } };
+        //     };
+        //     const module_idx = packages.items.items[0].modules.append(module);
 
-            if (std.mem.eql(u8, builtin_filename, DEFAULT_MAIN_FILENAME)) {
-                builtin_root_idx = module_idx;
-            }
-        }
+        //     if (std.mem.eql(u8, builtin_filename, DEFAULT_MAIN_FILENAME)) {
+        //         builtin_root_idx = module_idx;
+        //     }
+        // }
 
-        if (builtin_root_idx) |root_idx| {
-            packages.items.items[0].root_module_idx = root_idx;
-        } else {
-            return .{ .err = .could_not_find_builtins_root_module };
-        }
+        // if (builtin_root_idx) |root_idx| {
+        //     packages.items.items[0].root_module_idx = root_idx;
+        // } else {
+        //     return .{ .err = .could_not_find_builtins_root_module };
+        // }
 
-        const primary_package = Self{
+        _ = packages.append(Self{
             .download_url = &.{},
             .content_hash = &.{},
             .version_string = &.{},
@@ -330,15 +360,14 @@ pub const Store = struct {
             .root_module_idx = @enumFromInt(0),
             .relative_filepaths = primary_relative_filepaths,
             .dependencies = Dependency.List.init(gpa),
-        };
-        _ = packages.append(primary_package);
+        });
 
         var primary_root_idx: ?Idx = null;
         for (primary_relative_filepaths.items) |relative_path| {
             // For now, assume that modules with invalid names can't be imported,
             // so we don't even load them.
             const module = Module.fromRelativePath(relative_path, &string_arena) catch continue;
-            const module_idx = builtins_package.modules.append(module);
+            const module_idx = packages.items.items[1].modules.append(module);
 
             if (std.mem.eql(u8, relative_path, primary_root_module_path)) {
                 primary_root_idx = module_idx;

@@ -50,7 +50,7 @@ pub fn SafeList(comptime T: type) type {
             self.items.deinit();
         }
 
-        pub fn len(self: *SafeList(T)) usize {
+        pub fn len(self: *const SafeList(T)) usize {
             return self.items.items.len;
         }
 
@@ -77,11 +77,11 @@ pub fn SafeList(comptime T: type) type {
             return self.items.items[start_length..];
         }
 
-        pub fn get(self: *SafeList(T), id: Idx) T {
-            return self.items.items[@as(usize, @intFromEnum(id))];
+        pub fn get(self: *const SafeList(T), id: Idx) *T {
+            return &self.items.items[@as(usize, @intFromEnum(id))];
         }
 
-        pub fn set(self: *SafeList(T), id: Idx, value: T) void {
+        pub fn set(self: *const SafeList(T), id: Idx, value: T) void {
             self.items.items[@as(usize, @intFromEnum(id))] = value;
         }
 
@@ -218,5 +218,5 @@ test "safe list_u32 inserting and getting" {
 
     const item = list_u32.get(id);
 
-    try testing.expectEqual(item, 1);
+    try testing.expectEqual(item.*, 1);
 }

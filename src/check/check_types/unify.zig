@@ -15,12 +15,12 @@ const TypeMismatch = enum { type_mismatch };
 
 pub fn unify(
     allocator: Allocator,
-    env: *ModuleEnv,
+    type_store: *Type.Store,
     first: Type.Idx,
     second: Type.Idx,
 ) !UnificationResult {
-    const first_type = env.type_store.get(first);
-    const second_type = env.type_store.get(second);
+    const first_type = type_store.get(first);
+    const second_type = type_store.get(second);
 
     var result = UnificationResult{
         .mismatches = std.ArrayList(TypeMismatch).init(allocator),
@@ -31,23 +31,23 @@ pub fn unify(
         return result;
     }
 
-    try unifyType(allocator, env, &result, first, first_type, second, second_type);
+    try unifyType(allocator, type_store, &result, first, first_type, second, second_type);
 
     return result;
 }
 
 fn unifyType(
     allocator: Allocator,
-    env: *ModuleEnv,
+    type_store: *Type.Store,
     result: *UnificationResult,
     first: Type.Idx,
-    first_type: Type,
+    first_type: *Type,
     second: Type.Idx,
-    second_type: Type,
+    second_type: *Type,
 ) !void {
     _ = allocator;
 
-    switch (first_type) {
+    switch (first_type.*) {
         .bool => {
             @panic("todo");
         },
@@ -74,7 +74,7 @@ fn unifyType(
         .frac => {
             @panic("todo");
         },
-        .flex_var => |opt_name| unifyFlex(env, result, first, opt_name, second, second_type),
+        .flex_var => |opt_name| unifyFlex(type_store, result, first, opt_name, second, second_type),
         .rigid_var => {
             @panic("todo");
         },
@@ -88,18 +88,18 @@ fn unifyType(
 }
 
 fn unifyFlex(
-    env: *ModuleEnv,
+    type_store: *Type.Store,
     result: *UnificationResult,
     first: Type.Idx,
     opt_name: ?Ident.Idx,
     second: Type.Idx,
-    second_type: Type,
+    second_type: *Type,
 ) void {
-    switch (second_type) {
+    switch (second_type.*) {
         .flex_var => |other_name| {
             // Prefer right's name
             const name = other_name orelse opt_name;
-            merge(env, result, first, second, .{ .flex_var = name });
+            merge(type_store, result, first, second, .{ .flex_var = name });
         },
         .bool => {
             @panic("todo");
@@ -140,13 +140,13 @@ fn unifyFlex(
 }
 
 fn merge(
-    env: *ModuleEnv,
+    type_store: *Type.Store,
     result: *UnificationResult,
     left: Type.Idx,
     right: Type.Idx,
     type_value: Type,
 ) void {
-    env.type_store.set(left, type_value);
-    env.type_store.set(right, type_value);
+    type_store.set(left, type_value);
+    type_store.set(right, type_value);
     result.has_changed = true;
 }

@@ -53,7 +53,7 @@ pub fn canonicalize(
         }
     }
 
-    @panic("not implemented");
+    // TODO: implement
 }
 
 fn bringImportIntoScope(

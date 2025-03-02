@@ -19,10 +19,10 @@ const Self = @This();
 
 idents: Ident.Store,
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
+// TODO: move to can IR
 imports: ModuleImport.Store,
 strings: StringLiteral.Store,
 problems: std.ArrayList(Problem),
-type_store: Type.Store,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     var ident_store = Ident.Store.init(gpa);
@@ -33,7 +33,6 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .imports = ModuleImport.Store.init(&.{}, &ident_store, gpa),
         .strings = StringLiteral.Store.init(gpa),
         .problems = std.ArrayList(Problem).init(gpa),
-        .type_store = Type.Store.init(gpa),
     };
 }
 
@@ -43,7 +42,6 @@ pub fn deinit(self: *Self) void {
     self.imports.deinit();
     self.strings.deinit();
     self.problems.deinit();
-    self.type_store.deinit();
 }
 
 pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module_import: ModuleImport.Idx) void {

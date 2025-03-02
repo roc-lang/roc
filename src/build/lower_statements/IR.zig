@@ -18,17 +18,15 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
-    return Self{
-        .env = env,
-        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(allocator),
-        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(allocator),
-        .exprs = Expr.List.init(allocator),
-        .layouts = Layout.List.init(allocator),
-        .stmts = Stmt.List.init(allocator),
-        .idents_with_layouts = IdentWithLayout.List.init(allocator),
-        .list_literal_elems = ListLiteralElem.List.init(allocator),
-    };
+pub fn init(self: *Self, env: *base.ModuleEnv, gpa: std.mem.Allocator) void {
+    self.env = env;
+    self.procedures = std.AutoHashMap(Ident.Idx, Procedure).init(gpa);
+    self.constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(gpa);
+    self.exprs = Expr.List.init(gpa);
+    self.layouts = Layout.List.init(gpa);
+    self.stmts = Stmt.List.init(gpa);
+    self.idents_with_layouts = IdentWithLayout.List.init(gpa);
+    self.list_literal_elems = ListLiteralElem.List.init(gpa);
 }
 
 pub fn deinit(self: *Self) void {

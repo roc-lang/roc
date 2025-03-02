@@ -30,11 +30,14 @@ pub fn deinit(self: *Self) void {
 
 pub const ConstructResult = union(enum) {
     success: Self,
-    failed_to_open_module: Filesystem.OpenError,
+    failed_to_open_module: struct {
+        filename: []const u8,
+        err: Filesystem.ReadError,
+    },
 };
 
 /// Create a graph from a list of packages.
-pub fn fromPackages(package_store: *Package.Store, fs: Filesystem, gpa: std.mem.Allocator) ConstructResult {
+pub fn fromPackages(package_store: *const Package.Store, fs: Filesystem, gpa: std.mem.Allocator) ConstructResult {
     var graph = Self{
         .modules = std.ArrayList(ModuleWork(can.IR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
@@ -51,7 +54,14 @@ pub fn fromPackages(package_store: *Package.Store, fs: Filesystem, gpa: std.mem.
                 fs,
                 gpa,
             ) catch |err| {
-                return .{ .failed_to_open_module = err };
+                const filepath = std.fs.path.join(gpa, &.{
+                    package.absolute_dirpath,
+                    module.filepath_relative_to_package_root,
+                }) catch exitOnOom();
+                return .{ .failed_to_open_module = .{
+                    .err = err,
+                    .filename = filepath,
+                } };
             };
 
             graph.modules.append(ModuleWork(can.IR){
@@ -73,7 +83,7 @@ fn loadOrCompileCanIr(
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) Filesystem.OpenError!can.IR {
+) Filesystem.ReadError!can.IR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
     const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch exitOnOom();
@@ -85,15 +95,17 @@ fn loadOrCompileCanIr(
     const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version);
 
     return if (cache_lookup) |ir| ir else blk: {
-        var can_ir = can.IR.init(gpa);
+        var can_ir: can.IR = undefined;
+        can.IR.init(&can_ir, gpa);
         var parse_ir = parse.parse(&can_ir.env, gpa, contents);
+        parse_ir.store.emptyScratch();
         can.canonicalize(&can_ir, &parse_ir, gpa);
 
         break :blk can_ir;
     };
 }
 
-fn collectAdjacencies(graph: *Self, package_store: *Package.Store) void {
+fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
     for (graph.modules.items, 0..) |metadata, metadata_index| {
         const import_store = metadata.work.env.imports;
         const package = package_store.packages.get(metadata.package_idx);
@@ -148,16 +160,16 @@ pub const Sccs = struct {
 };
 
 pub const OrderingResult = union(enum) {
-    ordered: std.ArrayList(ModuleWork(can.IR)),
-    found_cycle: std.ArrayList(ModuleWork(can.IR)),
+    ordered: ModuleWork(can.IR).Store,
+    found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
 pub fn putModulesInCompilationOrder(
     self: *const Self,
     sccs: *const Sccs,
-    allocator: std.mem.Allocator,
+    gpa: std.mem.Allocator,
 ) OrderingResult {
-    var modules = std.ArrayList(ModuleWork(can.IR)).init(allocator);
+    var modules = std.ArrayList(ModuleWork(can.IR)).init(gpa);
     errdefer modules.deinit();
 
     var group_index = sccs.groups.items.len;
@@ -171,16 +183,21 @@ pub fn putModulesInCompilationOrder(
             const module_index = group.items[0];
             modules.append(self.modules.items[module_index]) catch exitOnOom();
         } else {
-            var cycle = std.ArrayList(ModuleWork(can.IR)).init(allocator);
+            var cycle = std.ArrayList(ModuleWork(void)).init(gpa);
             for (group.items) |group_item_index| {
-                cycle.append(self.modules.items[group_item_index]) catch exitOnOom();
+                const can_ir = &self.modules.items[group_item_index];
+                cycle.append(ModuleWork(void){
+                    .package_idx = can_ir.package_idx,
+                    .module_idx = can_ir.module_idx,
+                    .work = undefined,
+                }) catch exitOnOom();
             }
 
             return .{ .found_cycle = cycle };
         }
     }
 
-    return .{ .ordered = modules };
+    return .{ .ordered = ModuleWork(can.IR).Store.fromCanIrs(gpa, modules.items) };
 }
 
 // Uses Tarjan's algorithm as described in https://www.thealgorists.com/Algo/GraphTheory/Tarjan/SCC

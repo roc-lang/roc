@@ -10,8 +10,8 @@ const resolve = @import("check/resolve_imports.zig");
 const check_types = @import("check/check_types.zig");
 const type_spec = @import("build/specialize_types.zig");
 const func_lift = @import("build/lift_functions.zig");
-const func_spec = @import("build/specialize_types.zig");
 const func_solve = @import("build/solve_functions.zig");
+const func_spec = @import("build/specialize_functions.zig");
 const lower = @import("build/lower_statements.zig");
 const refcount = @import("build/reference_count.zig");
 const utils = @import("coordinate/utils.zig");
@@ -84,20 +84,6 @@ const BUILTIN_FILENAMES: []const []const u8 = &.{};
 //
 // Lastly, pass all modules together to LLVM codegen
 
-// pub const CoordinateProblem = union(enum) {
-//     empty_shorthand: struct {
-//         in_package: Package.Idx,
-//         module: Package.Module.Idx,
-//         shorthand_region: Region,
-//     },
-//     duplicate_shorthand: struct {
-//         in_package: Package.Idx,
-//         module: Package.Module.Idx,
-//         first_shorthand_region: Region,
-//         shadowing_shorthand_region: Region,
-//     },
-// };
-
 pub const TypecheckResult = union(enum) {
     success: Success,
     err: Err,
@@ -105,19 +91,36 @@ pub const TypecheckResult = union(enum) {
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
-        resolved: ModuleWork(resolve.IR).Store,
-        typechecked: ModuleWork(Type.Store).Store,
+        can_irs: ModuleWork(can.IR).Store,
+        resolve_irs: ModuleWork(resolve.IR).Store,
+        type_stores: ModuleWork(Type.Store).Store,
     };
 
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
         discovery_err: ModuleDiscoveryResult.Err,
-        failed_to_build_module_graph: Filesystem.OpenError,
+        failed_to_build_module_graph: struct {
+            err: Filesystem.ReadError,
+            filename: []const u8,
+        },
+        could_not_find_root_module,
         found_cycle: struct {
             packages: Package.Store,
-            cycle: std.ArrayList(ModuleWork(can.IR)),
+            cycle: std.ArrayList(ModuleWork(void)),
         },
-        // other errors...
+
+        pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
+            switch (err.*) {
+                .package_root_search_err => {},
+                .discovery_err => |*data| data.deinit(gpa),
+                .failed_to_build_module_graph => |data| gpa.free(data.filename),
+                .could_not_find_root_module => {},
+                .found_cycle => |*data| {
+                    data.packages.deinit();
+                    data.cycle.deinit();
+                },
+            }
+        }
     };
 };
 
@@ -126,21 +129,31 @@ pub fn typecheckModule(
     fs: Filesystem,
     gpa: std.mem.Allocator,
 ) TypecheckResult {
-    var packages = switch (discoverModulesStartingFromEntry(entry_relative_path, fs, gpa)) {
-        .success => |store| store,
+    const discover_data = switch (discoverModulesStartingFromEntry(entry_relative_path, fs, gpa)) {
+        .success => |data| data,
         .err => |err| return .{ .err = .{ .discovery_err = err } },
     };
+    const packages = discover_data.packages;
+    var root = discover_data.root;
+    defer root.deinit();
 
     var module_graph = switch (ModuleGraph.fromPackages(&packages, fs, gpa)) {
         .success => |graph| graph,
-        .failed_to_open_module => |err| return .{ .err = .{ .failed_to_build_module_graph = err } },
+        .failed_to_open_module => |data| return .{
+            .err = .{
+                .failed_to_build_module_graph = .{
+                    .err = data.err,
+                    .filename = data.filename,
+                },
+            },
+        },
     };
     defer module_graph.deinit();
 
     const sccs = module_graph.findStronglyConnectedComponents(gpa);
     defer sccs.groups.deinit();
 
-    const modules = switch (module_graph.putModulesInCompilationOrder(&sccs, gpa)) {
+    const can_irs = switch (module_graph.putModulesInCompilationOrder(&sccs, gpa)) {
         .ordered => |modules| modules,
         .found_cycle => |cycle| {
             return .{ .err = .{ .found_cycle = .{
@@ -150,44 +163,133 @@ pub fn typecheckModule(
         },
     };
 
-    var resolve_irs = ModuleWork(resolve.IR).Store.init(gpa);
-    for (modules.items) |module| {
-        const resolved = resolve.resolveImports(&module.work, &resolve_irs);
-        _ = resolve_irs.insert(can.IR, &module, resolved);
+    var main_module_idx: ?ModuleWorkIdx = null;
+    var index_iter = can_irs.iterIndices();
+    while (index_iter.next()) |idx| {
+        const module = can_irs.getModule(idx, &packages);
+
+        if (std.mem.eql(u8, module.filepath_relative_to_package_root, root.entry_relative_path)) {
+            main_module_idx = idx;
+        }
     }
 
-    var typecheck_irs = ModuleWork(Type.Store).Store.init(gpa);
-    for (resolve_irs.items.items) |module| {
-        const type_store = check_types.checkTypes(&module.work, &resolve_irs, &typecheck_irs);
-        _ = typecheck_irs.insert(resolve.IR, &module, type_store);
+    if (main_module_idx == null) {
+        return .{ .err = .could_not_find_root_module };
+    }
+
+    const resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs, resolve.IR.init);
+    index_iter = resolve_irs.iterIndices();
+    while (index_iter.next()) |idx| {
+        resolve.resolveImports(resolve_irs.getWork(idx), can_irs.getWork(idx), &resolve_irs);
+    }
+
+    const type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs, Type.Store.init);
+    index_iter = type_stores.iterIndices();
+    while (index_iter.next()) |idx| {
+        check_types.checkTypes(type_stores.getWork(idx), resolve_irs.getWork(idx), &resolve_irs, &type_stores);
     }
 
     return .{
         .success = .{
             .packages = packages,
-            // TODO: set this based on the actual main module idx
-            .main_module_idx = @enumFromInt(0),
-            .resolved = resolve_irs,
-            .typechecked = typecheck_irs,
+            .main_module_idx = main_module_idx.?,
+            .can_irs = can_irs,
+            .resolve_irs = resolve_irs,
+            .type_stores = type_stores,
         },
     };
 }
 
-// pub const BuildResult = union(enum) {};
+pub const BuildResult = union(enum) {
+    success: Success,
+    typecheck_err: TypecheckResult.Err,
 
-// pub fn prepareModuleForCodegen(
-//     filepath: []u8,
-//     gpa: std.mem.Allocator,
-// ) BuildResult {
-//     const typecheck_result = switch (typecheckModule(filepath, gpa)) {
-//         .Success => |data| data,
-//         else => {},
-//     };
-// }
+    pub const Success = struct {
+        packages: Package.Store,
+        main_module_idx: ModuleWorkIdx,
+        can_irs: ModuleWork(can.IR).Store,
+        refcount_irs: ModuleWork(refcount.IR).Store,
+    };
+};
+
+pub fn prepareModuleForCodegen(
+    entry_filepath: []u8,
+    fs: Filesystem,
+    gpa: std.mem.Allocator,
+) BuildResult {
+    const typecheck_result = switch (typecheckModule(entry_filepath, fs, gpa)) {
+        .success => |data| data,
+        .err => |err| return .{ .typecheck_err = err },
+    };
+
+    const packages = typecheck_result.packages;
+    const main_module_idx = typecheck_result.main_module_idx;
+    const can_irs = typecheck_result.can_irs;
+    const resolve_irs = typecheck_result.resolve_irs;
+    const type_stores = typecheck_result.type_stores;
+
+    const all_type_speced = ModuleWork(type_spec.IR).Store.initFromCanIrs(gpa, &can_irs, type_spec.IR.init);
+    var index_iter = all_type_speced.iterIndices();
+    while (index_iter.next()) |idx| {
+        type_spec.specializeTypes(
+            all_type_speced.getWork(idx),
+            resolve_irs.getWork(idx),
+            type_stores.getWork(idx),
+            &all_type_speced,
+        );
+    }
+
+    const all_func_lifted = ModuleWork(func_lift.IR).Store.initFromCanIrs(gpa, &can_irs, func_lift.IR.init);
+    index_iter = all_func_lifted.iterIndices();
+    while (index_iter.next()) |idx| {
+        func_lift.liftFunctions(all_func_lifted.getWork(idx), all_type_speced.getWork(idx), &all_func_lifted);
+    }
+
+    const all_func_solved = ModuleWork(func_solve.IR).Store.initFromCanIrs(gpa, &can_irs, func_solve.IR.init);
+    index_iter = all_func_solved.iterIndices();
+    while (index_iter.next()) |idx| {
+        func_solve.solveFunctions(all_func_solved.getWork(idx), all_func_lifted.getWork(idx), &all_func_solved);
+    }
+
+    const all_func_speced = ModuleWork(func_spec.IR).Store.initFromCanIrs(gpa, &can_irs, func_spec.IR.init);
+    index_iter = all_func_speced.iterIndices();
+    while (index_iter.next()) |idx| {
+        func_spec.specializeFunctions(
+            all_func_speced.getWork(idx),
+            all_func_lifted.getWork(idx),
+            all_func_solved.getWork(idx),
+            &all_func_speced,
+        );
+    }
+
+    const all_lowered = ModuleWork(lower.IR).Store.initFromCanIrs(gpa, &can_irs, lower.IR.init);
+    index_iter = all_lowered.iterIndices();
+    while (index_iter.next()) |idx| {
+        lower.lowerStatements(all_lowered.getWork(idx), all_func_speced.getWork(idx), &all_lowered);
+    }
+
+    const all_refcounted = ModuleWork(refcount.IR).Store.initFromCanIrs(gpa, &can_irs, refcount.IR.init);
+    index_iter = all_refcounted.iterIndices();
+    while (index_iter.next()) |idx| {
+        refcount.referenceCount(all_refcounted.getWork(idx), all_lowered.getWork(idx), &all_refcounted);
+    }
+
+    return .{ .success = .{
+        .packages = packages,
+        .main_module_idx = main_module_idx,
+        .can_irs = can_irs,
+        .refcount_irs = all_refcounted,
+    } };
+}
 
 pub const ModuleDiscoveryResult = union(enum) {
-    success: Package.Store,
+    success: Success,
     err: Err,
+
+    pub const Success = struct {
+        packages: Package.Store,
+        root: PackageRoot,
+    };
 
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
@@ -198,6 +300,18 @@ pub const ModuleDiscoveryResult = union(enum) {
         failed_to_walk_files: anyerror,
         failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
         failed_to_read_root_file: Filesystem.OpenError,
+
+        pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
+            switch (err.*) {
+                .package_root_search_err => {},
+                .failed_to_open_root_dir => {},
+                .init_packages => |*data| data.deinit(gpa),
+                .parse_deps => {},
+                .failed_to_walk_files => {},
+                .failed_to_canonicalize_root_file => {},
+                .failed_to_read_root_file => {},
+            }
+        }
     };
 };
 
@@ -217,7 +331,6 @@ fn discoverModulesStartingFromEntry(
     var root = findRootOfPackage(entry_relative_path, fs, gpa) catch |err| {
         return .{ .err = .{ .package_root_search_err = err } };
     };
-    defer root.deinit();
 
     var root_dir = fs.openDir(root.absolute_dir) catch |err| {
         return .{ .err = .{ .failed_to_open_root_dir = err } };
@@ -303,7 +416,10 @@ fn discoverModulesStartingFromEntry(
         );
     }
 
-    return .{ .success = package_store };
+    return .{ .success = .{
+        .packages = package_store,
+        .root = root,
+    } };
 }
 
 const PackageRoot = struct {
@@ -347,8 +463,8 @@ fn findRootOfPackage(
         dir.close();
 
         if (has_main) {
-            const entry_relative_to_dir = gpa.alloc(u8, entry_abs_path.len - current_dirpath.len) catch exitOnOom();
-            std.mem.copyForwards(u8, entry_relative_to_dir, entry_abs_path[current_dirpath.len..]);
+            const entry_relative_to_dir = gpa.alloc(u8, entry_abs_path.len - current_dirpath.len - 1) catch exitOnOom();
+            std.mem.copyForwards(u8, entry_relative_to_dir, entry_abs_path[(current_dirpath.len + 1)..]);
 
             return PackageRoot{
                 .absolute_dir = current_dirpath,
@@ -358,6 +474,9 @@ fn findRootOfPackage(
             };
         } else {
             const parent_dirpath = std.fs.path.resolve(gpa, &.{ current_dirpath, ".." }) catch break;
+            // If these are the same, we have reached the root of the filesystem
+            if (std.mem.eql(u8, current_dirpath, parent_dirpath)) break;
+
             gpa.free(current_dirpath);
             current_dirpath = parent_dirpath;
         }
@@ -367,7 +486,7 @@ fn findRootOfPackage(
     gpa.free(current_dirpath);
 
     const alloced_entry_dirpath = gpa.dupe(u8, entry_dirpath) catch exitOnOom();
-    const entry_filename = gpa.dupe(u8, entry_abs_path[entry_dirpath.len..]) catch exitOnOom();
+    const entry_filename = gpa.dupe(u8, entry_abs_path[(entry_dirpath.len + 1)..]) catch exitOnOom();
 
     return PackageRoot{
         .absolute_dir = alloced_entry_dirpath,
@@ -379,7 +498,7 @@ fn findRootOfPackage(
 
 const ParsePackageDepsErr = union(enum) {
     failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
-    failed_to_read_root_file: Filesystem.OpenError,
+    failed_to_read_root_file: Filesystem.ReadError,
 };
 
 fn parseDependenciesFromPackageRoot(
@@ -404,6 +523,7 @@ fn parseDependenciesFromPackageRoot(
     var parse_ast = parse.parse(&env, gpa, contents);
     defer parse_ast.deinit();
 
+    parse_ast.store.emptyScratch();
     const file = parse_ast.store.getFile();
     const header = parse_ast.store.getHeader(file.header);
 

@@ -122,6 +122,7 @@ pub const Type = union(enum) {
     }
 
     pub const Store = struct {
+        env: *base.ModuleEnv,
         types: List,
 
         pub const BOOL: Idx = @enumFromInt(0);
@@ -137,37 +138,34 @@ pub const Type = union(enum) {
         pub const U128: Idx = @enumFromInt(10);
         pub const I128: Idx = @enumFromInt(11);
 
-        pub fn init(allocator: std.mem.Allocator) Store {
-            var store = Store{
-                .types = List.init(allocator),
-            };
+        pub fn init(self: *Store, env: *base.ModuleEnv, gpa: std.mem.Allocator) void {
+            self.env = env;
+            self.types = List.init(gpa);
 
             // APPEND THE BUILTINS ORDER MATTERS FOR THE CONSTANTS
             // DEFINED ABOVE
 
-            _ = store.types.append(.bool);
-            _ = store.types.append(.str);
-            _ = store.types.append(.{ .int = .u8 });
-            _ = store.types.append(.{ .int = .i8 });
-            _ = store.types.append(.{ .int = .u16 });
-            _ = store.types.append(.{ .int = .i16 });
-            _ = store.types.append(.{ .int = .u32 });
-            _ = store.types.append(.{ .int = .i32 });
-            _ = store.types.append(.{ .int = .u64 });
-            _ = store.types.append(.{ .int = .i64 });
-            _ = store.types.append(.{ .int = .u128 });
-            _ = store.types.append(.{ .int = .i128 });
+            _ = self.types.append(.bool);
+            _ = self.types.append(.str);
+            _ = self.types.append(.{ .int = .u8 });
+            _ = self.types.append(.{ .int = .i8 });
+            _ = self.types.append(.{ .int = .u16 });
+            _ = self.types.append(.{ .int = .i16 });
+            _ = self.types.append(.{ .int = .u32 });
+            _ = self.types.append(.{ .int = .i32 });
+            _ = self.types.append(.{ .int = .u64 });
+            _ = self.types.append(.{ .int = .i64 });
+            _ = self.types.append(.{ .int = .u128 });
+            _ = self.types.append(.{ .int = .i128 });
 
             // TODO other builtins... can we find a nicer solution for managing this?
-
-            return store;
         }
 
         pub fn deinit(self: *Store) void {
             self.types.deinit();
         }
 
-        pub fn get(self: *Store, id: Idx) Type {
+        pub fn get(self: *Store, id: Idx) *Type {
             return self.types.get(id);
         }
 
@@ -187,16 +185,22 @@ pub const Type = union(enum) {
 };
 
 test "formatting" {
-    var store = Type.Store.init(std.testing.allocator);
+    const gpa = testing.allocator;
+
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
+
+    var store: Type.Store = undefined;
+    Type.Store.init(&store, &env, gpa);
     defer store.deinit();
 
-    const bool_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.BOOL)});
-    defer testing.allocator.free(bool_str);
+    const bool_str = try std.fmt.allocPrint(gpa, "{}", .{store.get(Type.Store.BOOL)});
+    defer gpa.free(bool_str);
 
     try testing.expectEqualStrings(bool_str, "Bool");
 
-    const i128_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.I128)});
-    defer testing.allocator.free(i128_str);
+    const i128_str = try std.fmt.allocPrint(gpa, "{}", .{store.get(Type.Store.I128)});
+    defer gpa.free(i128_str);
 
     try testing.expectEqualStrings(i128_str, "I128");
 }

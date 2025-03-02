@@ -9,10 +9,10 @@ const exitOnOom = collections.utils.exitOnOom;
 const Self = @This();
 
 fileExists: *const fn (absolute_path: []const u8) OpenError!bool,
-readFile: *const fn (relative_path: []const u8, allocator: Allocator) OpenError![]const u8,
+readFile: *const fn (relative_path: []const u8, allocator: Allocator) ReadError![]const u8,
 openDir: *const fn (absolute_path: []const u8) OpenError!Dir,
 dirName: *const fn (absolute_path: []const u8) ?[]const u8,
-baseName: *const fn (absolute_path: []const u8) []const u8,
+baseName: *const fn (absolute_path: []const u8) ?[]const u8,
 canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8,
 
 pub fn default() Self {
@@ -26,9 +26,11 @@ pub fn default() Self {
     };
 }
 
-pub const OpenError = std.fs.File.OpenError;
+pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.Error || error{StreamTooLong};
 
-pub const CanonicalizeError = std.posix.RealPathError || error{OutOfMemory};
+pub const OpenError = std.fs.File.OpenError || std.fs.Dir.AccessError;
+
+pub const CanonicalizeError = error{ FileNotFound, Unknown, OutOfMemory } || std.posix.RealPathError;
 
 pub const Dir = struct {
     dir: std.fs.Dir,
@@ -115,8 +117,8 @@ fn fileExists(absolute_path: []const u8) OpenError!bool {
 }
 
 /// Reads the contents of a file at the given relative path.
-fn readFile(relative_path: []const u8, allocator: std.mem.Allocator) OpenError![]const u8 {
-    const file = try std.fs.cwd().openFile(relative_path, .{ .read = true });
+fn readFile(relative_path: []const u8, allocator: std.mem.Allocator) ReadError![]const u8 {
+    const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
     const max_allowed_file_length = std.math.maxInt(usize);
@@ -126,11 +128,11 @@ fn readFile(relative_path: []const u8, allocator: std.mem.Allocator) OpenError![
 }
 
 fn openDir(absolute_path: []const u8) OpenError!Dir {
-    const dir = try std.fs.openDirAbsolute(absolute_path, Dir.openOptions) catch |err| {
-        switch (err) {
-            error.FileNotFound => OpenError.FileNotFound,
-            else => OpenError.Unknown,
-        }
+    const dir = std.fs.openDirAbsolute(absolute_path, Dir.openOptions) catch |err| {
+        return switch (err) {
+            error.FileNotFound => error.FileNotFound,
+            else => return err,
+        };
     };
 
     return Dir{ .dir = dir };
@@ -144,11 +146,11 @@ fn baseName(absolute_path: []const u8) ?[]const u8 {
     return std.fs.path.basename(absolute_path);
 }
 
-fn canonicalize(allocator: Allocator, root_relative_path: []const u8) CanonicalizeError![]const u8 {
-    try std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
-        switch (err) {
-            error.FileNotFound => CanonicalizeError.FileNotFound,
-            else => CanonicalizeError.Unknown,
-        }
+fn canonicalize(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+    return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
+        return switch (err) {
+            error.FileNotFound => error.FileNotFound,
+            else => error.Unknown,
+        };
     };
 }
