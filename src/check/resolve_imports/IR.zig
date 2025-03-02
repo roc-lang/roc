@@ -22,16 +22,18 @@ type_indices: collections.SafeList(Type.Idx),
 declarations: DeclarationTag.List,
 host_exposed_annotations: std.AutoHashMap(usize, Type.Idx),
 
-pub fn init(self: *Self, env: *base.ModuleEnv, gpa: std.mem.Allocator) void {
-    self.env = env;
-    self.regions = Region.List.init(gpa);
-    self.exprs = Expr.List.init(gpa);
-    self.destructs = DestructureDef.List.init(gpa);
-    self.function_bodies = FunctionDef.List.init(gpa);
-    self.function_args = FunctionDef.Arg.List.init(gpa);
-    self.type_indices = collections.SafeList(Type.Idx).init(gpa);
-    self.declarations = DeclarationTag.List.init(gpa);
-    self.host_exposed_annotations = std.AutoHashMap(usize, Type.Idx).init(gpa);
+pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Self {
+    return Self{
+        .env = env,
+        .regions = Region.List.init(gpa),
+        .exprs = Expr.List.init(gpa),
+        .destructs = DestructureDef.List.init(gpa),
+        .function_bodies = FunctionDef.List.init(gpa),
+        .function_args = FunctionDef.Arg.List.init(gpa),
+        .type_indices = collections.SafeList(Type.Idx).init(gpa),
+        .declarations = DeclarationTag.List.init(gpa),
+        .host_exposed_annotations = std.AutoHashMap(usize, Type.Idx).init(gpa),
+    };
 }
 
 pub fn deinit(self: *Self) void {

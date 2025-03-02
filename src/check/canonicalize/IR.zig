@@ -39,20 +39,22 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(self: *Self, gpa: std.mem.Allocator) void {
-    self.env = base.ModuleEnv.init(gpa);
-    self.aliases = Alias.List.init(gpa);
-    self.defs = Def.List.init(gpa);
-    self.exprs = Expr.List.init(gpa);
-    self.exprs_at_regions = ExprAtRegion.List.init(gpa);
-    self.typed_exprs_at_regions = TypedExprAtRegion.List.init(gpa);
-    self.when_branches = WhenBranch.List.init(gpa);
-    self.patterns = Pattern.List.init(gpa);
-    self.patterns_at_regions = PatternAtRegion.List.init(gpa);
-    self.typed_patterns_at_regions = TypedPatternAtRegion.List.init(gpa);
-    self.type_indices = collections.SafeList(TypeIdx).init(gpa);
-    // self.type_var_names = Ident.Store.init(gpa);
-    self.ingested_files = IngestedFile.List.init(gpa);
+pub fn init(gpa: std.mem.Allocator) Self {
+    return Self{
+        .env = base.ModuleEnv.init(gpa),
+        .aliases = Alias.List.init(gpa),
+        .defs = Def.List.init(gpa),
+        .exprs = Expr.List.init(gpa),
+        .exprs_at_regions = ExprAtRegion.List.init(gpa),
+        .typed_exprs_at_regions = TypedExprAtRegion.List.init(gpa),
+        .when_branches = WhenBranch.List.init(gpa),
+        .patterns = Pattern.List.init(gpa),
+        .patterns_at_regions = PatternAtRegion.List.init(gpa),
+        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(gpa),
+        .type_indices = collections.SafeList(TypeIdx).init(gpa),
+        // .type_var_names = Ident.Store.init(gpa),
+        .ingested_files = IngestedFile.List.init(gpa),
+    };
 }
 
 pub fn deinit(self: *Self) void {

@@ -21,17 +21,19 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-pub fn init(self: *Self, env: *base.ModuleEnv, gpa: std.mem.Allocator) void {
-    self.env = env;
-    self.exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(gpa);
-    self.exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(gpa);
-    self.types = Type.List.init(gpa);
-    self.exprs = Expr.List.init(gpa);
-    self.typed_exprs = Expr.Typed.List.init(gpa);
-    self.patterns = Pattern.List.init(gpa);
-    self.typed_patterns = Pattern.Typed.List.init(gpa);
-    self.typed_idents = TypedIdent.List.init(gpa);
-    self.when_branches = WhenBranch.List.init(gpa);
+pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Self {
+    return Self{
+        .env = env,
+        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(gpa),
+        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(gpa),
+        .types = Type.List.init(gpa),
+        .exprs = Expr.List.init(gpa),
+        .typed_exprs = Expr.Typed.List.init(gpa),
+        .patterns = Pattern.List.init(gpa),
+        .typed_patterns = Pattern.Typed.List.init(gpa),
+        .typed_idents = TypedIdent.List.init(gpa),
+        .when_branches = WhenBranch.List.init(gpa),
+    };
 }
 
 pub fn deinit(self: *Self) void {

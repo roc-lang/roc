@@ -56,7 +56,7 @@ pub fn ModuleWork(comptime Work: type) type {
             pub fn initFromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: *const ModuleWork(can.IR).Store,
-                init_work_with_env: *const fn (work: *Work, env: *base.ModuleEnv, gpa: std.mem.Allocator) void,
+                init_work_with_env: *const fn (env: *base.ModuleEnv, gpa: std.mem.Allocator) Work,
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
                 items.ensureTotalCapacity(gpa, can_irs.items.len) catch exitOnOom();
@@ -67,10 +67,8 @@ pub fn ModuleWork(comptime Work: type) type {
                     items.appendAssumeCapacity(.{
                         .package_idx = can_irs.getPackageIdx(work_idx),
                         .module_idx = can_irs.getModuleIdx(work_idx),
-                        .work = undefined,
+                        .work = init_work_with_env(&can_irs.getWork(work_idx).env, gpa),
                     });
-
-                    init_work_with_env(&items.items(.work)[index], &can_irs.getWork(work_idx).env, gpa);
                 }
 
                 return Store{ .items = items };
