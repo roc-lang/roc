@@ -52,9 +52,8 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     const file = fmt.ast.store.getFile();
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
-    const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch exitOnOom();
-    defer fmt.gpa.free(statements);
-    for (statements) |s| {
+    var statement_iter = fmt.ast.store.statementIter(file.statements);
+    while (statement_iter.next()) |s| {
         fmt.ensureNewline();
         if (newline_behavior == .extra_newline_needed) {
             fmt.newline();
@@ -435,10 +434,11 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
 }
 
 fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
-    if (body.whitespace != null and body.statements.len > 1) {
+    if (body.statements.span.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append('{') catch exitOnOom();
-        for (body.statements) |s| {
+        var statement_iter = fmt.ast.store.statementIter(body.statements);
+        while (statement_iter.next()) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
             _ = fmt.formatStatement(s);
@@ -447,8 +447,11 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
         fmt.curr_indent -= 1;
         fmt.pushIndent();
         fmt.buffer.append('}') catch exitOnOom();
-    } else if (body.statements.len == 1) {
-        _ = fmt.formatStatement(body.statements[0]);
+    } else if (body.statements.span.len == 1) {
+        var statement_iter = fmt.ast.store.statementIter(body.statements);
+        while (statement_iter.next()) |s| {
+            _ = fmt.formatStatement(s);
+        }
     } else {
         fmt.pushAll("{}");
     }

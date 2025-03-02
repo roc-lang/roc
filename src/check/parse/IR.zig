@@ -542,18 +542,13 @@ pub const NodeStore = struct {
     }
 
     pub fn addFile(store: *NodeStore, file: File) void {
-        const start = store.extra_data.items.len;
         store.extra_data.append(file.header.id) catch exitOnOom();
-        for (file.statements) |statement| {
-            store.extra_data.append(statement.id) catch exitOnOom();
-        }
-
         store.nodes.set(@enumFromInt(0), .{
             .tag = .root,
             .main_token = 0,
             .data = .{
-                .lhs = @as(u32, @intCast(start)),
-                .rhs = @as(u32, @intCast(file.statements.len + 1)),
+                .lhs = file.statements.span.start,
+                .rhs = file.statements.span.len,
             },
         });
     }
@@ -880,23 +875,10 @@ pub const NodeStore = struct {
             },
             .record_builder => |_| {},
             .block => |body| {
-                const start = store.extra_data.items.len;
-                const len = @as(u31, @intCast(body.statements.len));
-                if (body.whitespace) |ws| {
-                    store.extra_data.append(ws) catch exitOnOom();
-                }
-                for (body.statements) |statement| {
-                    store.extra_data.append(statement.id) catch exitOnOom();
-                }
-
-                const rhs = BodyRhs{
-                    .has_whitespace = if (body.whitespace != null) 1 else 0,
-                    .num_statements = len,
-                };
                 node.tag = .block;
                 node.main_token = 0;
-                node.data.lhs = @as(u32, @intCast(start));
-                node.data.rhs = @as(u32, @bitCast(rhs));
+                node.data.lhs = body.statements.span.start;
+                node.data.rhs = body.statements.span.len;
             },
             .ellipsis => |_| {
                 node.tag = .ellipsis;
@@ -1087,19 +1069,11 @@ pub const NodeStore = struct {
 
     pub fn getFile(store: *NodeStore) File {
         const node = store.nodes.get(@enumFromInt(0));
-        const header = store.extra_data.items[node.data.lhs];
-        const stmt_idxs = store.extra_data.items[(node.data.lhs + 1)..(node.data.lhs + node.data.rhs)];
-        std.debug.assert(store.scratch_statements.items.len == 0);
-        const scratch_top = store.scratch_statements.items.len;
-        for (stmt_idxs) |idx| {
-            store.scratch_statements.append(StatementIdx{ .id = idx }) catch exitOnOom();
-        }
-        const statements = store.scratch_statements.items[scratch_top..];
-        store.scratch_statements.shrinkRetainingCapacity(scratch_top);
-
+        const header_ed_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
+        const header = store.extra_data.items[header_ed_idx];
         return .{
             .header = .{ .id = header },
-            .statements = statements,
+            .statements = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
             .region = .{ .start = 0, .end = 0 },
         };
     }
@@ -1545,19 +1519,12 @@ pub const NodeStore = struct {
                 } };
             },
             .block => {
-                const rhs = @as(BodyRhs, @bitCast(node.data.rhs));
-                const start = if (rhs.has_whitespace == 1) node.data.lhs + 1 else node.data.lhs;
-                const whitespace: ?TokenIdx = if (rhs.has_whitespace == 1) store.extra_data.items[node.data.lhs] else null;
-                const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
-                const scratch_top = store.scratch_statements.items.len;
-                for (statement_data) |i| {
-                    store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
-                }
-                const statements = store.scratch_statements.items[scratch_top..];
-                store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+                const statements = StatementSpan{ .span = .{
+                    .start = node.data.lhs,
+                    .len = node.data.rhs,
+                } };
                 return .{ .block = .{
                     .statements = statements,
-                    .whitespace = whitespace,
                     .region = emptyRegion(),
                 } };
             },
@@ -1738,7 +1705,7 @@ pub const NodeStore = struct {
     /// Represents a Roc file.
     pub const File = struct {
         header: HeaderIdx,
-        statements: []const StatementIdx,
+        statements: StatementSpan,
         region: Region,
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
@@ -1749,7 +1716,8 @@ pub const NodeStore = struct {
 
             file_node.appendNodeChild(gpa, &header_node);
 
-            for (self.statements) |stmt_id| {
+            var statement_iter = ir.store.statementIter(self.statements);
+            while (statement_iter.next()) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
                 var stmt_node = stmt.toSExpr(gpa, env, ir);
                 file_node.appendNodeChild(gpa, &stmt_node);
@@ -1762,16 +1730,14 @@ pub const NodeStore = struct {
     /// Represents a Body, or a block of statements.
     pub const Body = struct {
         /// The statements that constitute the block
-        statements: []const StatementIdx,
-        /// The token that represents the newline preceding this block, if any
-        whitespace: ?TokenIdx,
-
+        statements: StatementSpan,
         region: Region,
 
         pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var block_node = sexpr.Expr.init(gpa, "block");
 
-            for (self.statements) |stmt_idx| {
+            var statement_iter = ir.store.statementIter(self.statements);
+            while (statement_iter.next()) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
                 var stmt_node = stmt.toSExpr(gpa, env, ir);
@@ -2235,10 +2201,12 @@ pub const NodeStore = struct {
     pub fn scratchExprTop(store: *NodeStore) u32 {
         return @as(u32, @intCast(store.scratch_exprs.items.len));
     }
+
     /// Places a new ExprIdx in the scratch.  Will panic on OOM.
     pub fn addScratchExpr(store: *NodeStore, idx: ExprIdx) void {
         store.scratch_exprs.append(idx) catch exitOnOom();
     }
+
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn exprSpanFrom(store: *NodeStore, start: u32) ExprSpan {
@@ -2253,6 +2221,7 @@ pub const NodeStore = struct {
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
     }
+
     /// Clears any ExprIds added to scratch from start until the end.
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
@@ -2263,6 +2232,45 @@ pub const NodeStore = struct {
     /// Returns a new ExprIter so that the caller can iterate through
     /// all items in the span.
     pub fn exprIter(store: *NodeStore, span: ExprSpan) ExprIter {
+        const iter = Iterator.new(span.span, store.extra_data);
+        return .{ .iter = iter };
+    }
+
+    /// Returns the start position for a new Span of StatementIdxs in scratch
+    pub fn scratchStatementTop(store: *NodeStore) u32 {
+        return @as(u32, @intCast(store.scratch_statements.items.len));
+    }
+
+    /// Places a new StatementIdx in the scratch.  Will panic on OOM.
+    pub fn addScratchStatement(store: *NodeStore, idx: StatementIdx) void {
+        store.scratch_statements.append(idx) catch exitOnOom();
+    }
+
+    /// Creates a new span starting at start.  Moves the items from scratch
+    /// to extra_data as appropriate.
+    pub fn statementSpanFrom(store: *NodeStore, start: u32) StatementSpan {
+        const end = store.scratch_statements.items.len;
+        defer store.scratch_statements.shrinkRetainingCapacity(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        std.debug.assert(end >= i);
+        while (i < end) {
+            store.extra_data.append(store.scratch_statements.items[i].id) catch exitOnOom();
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+
+    /// Clears any StatementIds added to scratch from start until the end.
+    /// Should be used wherever the scratch items will not be used,
+    /// as in when parsing fails.
+    pub fn clearScratchStatementsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_statements.shrinkRetainingCapacity(start);
+    }
+
+    /// Returns a new StatementIter so that the caller can iterate through
+    /// all items in the span.
+    pub fn statementIter(store: *NodeStore, span: StatementSpan) StatementIter {
         const iter = Iterator.new(span.span, store.extra_data);
         return .{ .iter = iter };
     }
@@ -2313,12 +2321,10 @@ pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
 }
 
 pub const ImportLhs = packed struct { aliased: u1, qualified: u1, num_exposes: u30 };
-pub const BodyRhs = packed struct { has_whitespace: u1, num_statements: u31 };
 
 // Check that all packed structs are 4 bytes size as they as cast to
 // and from a u32
 comptime {
-    std.debug.assert(@sizeOf(BodyRhs) == 4);
     std.debug.assert(@sizeOf(NodeStore.Header.AppHeaderRhs) == 4);
     std.debug.assert(@sizeOf(ImportLhs) == 4);
 }

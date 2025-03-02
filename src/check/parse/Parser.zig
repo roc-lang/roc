@@ -117,26 +117,26 @@ pub fn parseFile(self: *Parser) void {
     self.store.emptyScratch();
     _ = self.store.addFile(.{
         .header = IR.NodeStore.HeaderIdx{ .id = 0 },
-        .statements = &[0]IR.NodeStore.StatementIdx{},
+        .statements = .{ .span = .{
+            .start = 0,
+            .len = 0,
+        } },
         .region = .{ .start = 0, .end = 0 },
     });
 
     const header = self.parseHeader();
+    const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
         if (self.peek() == .EndOfFile) {
             break;
         }
-        const scratch_top = self.store.scratch_statements.items.len;
+        const current_scratch_top = self.store.scratchStatementTop();
         if (self.parseStmt()) |idx| {
-            if (self.store.scratch_statements.items.len > scratch_top) {
-                self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
-            }
-            self.store.scratch_statements.append(idx) catch exitOnOom();
+            std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
+            self.store.addScratchStatement(idx);
         } else {
-            if (self.store.scratch_statements.items.len > scratch_top) {
-                self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
-            }
+            std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
             break;
         }
     }
@@ -145,7 +145,7 @@ pub fn parseFile(self: *Parser) void {
 
     _ = self.store.addFile(.{
         .header = header,
-        .statements = self.store.scratch_statements.items[0..],
+        .statements = self.store.statementSpanFrom(scratch_top),
         .region = .{ .start = 0, .end = @intCast(self.tok_buf.tokens.len - 1) },
     });
 }
@@ -830,23 +830,21 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
                     .region = .{ .start = start, .end = self.pos },
                 } });
             } else {
-                const scratch_top = self.store.scratch_statements.items.len;
-                defer self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
+                const scratch_top = self.store.scratchStatementTop();
 
                 while (true) {
                     const statement = self.parseStmt() orelse break;
-                    self.store.scratch_statements.append(statement) catch exitOnOom();
+                    self.store.addScratchStatement(statement);
                     if (self.peek() == .CloseCurly) {
                         self.advance();
                         break;
                     }
                 }
 
-                const statements = self.store.scratch_statements.items[scratch_top..];
+                const statements = self.store.statementSpanFrom(scratch_top);
 
                 const body = .{
                     .statements = statements,
-                    .whitespace = self.pos - 1,
                     .region = .{ .start = start, .end = self.pos },
                 };
                 expr = self.store.addExpr(.{ .block = body });
