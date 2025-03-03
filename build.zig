@@ -26,6 +26,7 @@ pub fn build(b: *std.Build) void {
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
+    const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse false;
 
     if (user_llvm_path) |path| {
         // Even if the llvm backend is not enabled, still add the llvm path.
@@ -92,6 +93,9 @@ pub fn build(b: *std.Build) void {
             std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
         } else if (is_windows) {
             std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
+        } else if (use_system_afl) {
+            // If we have system afl, no need for llvm-config.
+            build_afl = true;
         } else {
             // AFL++ does not work with our prebuilt static llvm.
             // Check for llvm-config program in user_llvm_path or on the system.
@@ -111,6 +115,7 @@ pub fn build(b: *std.Build) void {
             add_fuzz_target(
                 b,
                 build_afl,
+                use_system_afl,
                 check_step,
                 target,
                 name,
@@ -122,6 +127,7 @@ pub fn build(b: *std.Build) void {
 fn add_fuzz_target(
     b: *std.Build,
     build_afl: bool,
+    use_system_afl: bool,
     check_step: *Step,
     target: ResolvedTarget,
     name: []const u8,
@@ -167,7 +173,7 @@ fn add_fuzz_target(
 
     if (build_afl) {
         const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
-        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, fuzz_obj);
+        const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
     }
 }
