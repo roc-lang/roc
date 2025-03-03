@@ -4,6 +4,7 @@
 //!
 //! This reduces the size of this module's IRs as they can store references to this
 //! interned (and deduplicated) data instead of storing the values themselves.
+
 const std = @import("std");
 const type_mod = @import("../types.zig");
 const problem = @import("../problem.zig");
@@ -36,8 +37,3 @@ pub fn deinit(self: *Self) void {
     self.strings.deinit();
     self.problems.deinit();
 }
-
-// pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module_import: ModuleImport.Idx) void {
-//     self.imports.addExposedIdent(module_import, ident, &self.problems);
-//     self.idents.setExposingModule(ident, module_import);
-// }

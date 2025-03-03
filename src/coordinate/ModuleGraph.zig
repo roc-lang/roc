@@ -1,3 +1,6 @@
+//! Track the import relationship between all modules in all packages needed to
+//! compile a Roc program.
+
 const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
@@ -36,7 +39,8 @@ pub const ConstructResult = union(enum) {
     },
 };
 
-/// Create a graph from a list of packages.
+/// Discover the graph-like relationship between all modules in the given packages based
+/// on the import statements in each module.
 pub fn fromPackages(package_store: *const Package.Store, fs: Filesystem, gpa: std.mem.Allocator) ConstructResult {
     var graph = Self{
         .modules = std.ArrayList(ModuleWork(can.IR)).init(gpa),
@@ -163,6 +167,11 @@ pub const OrderingResult = union(enum) {
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
+/// Take all known modules and sort them in order of dependencies before parents to allow
+/// compilation worry-free from dependency modules not being already compiled during a module's
+/// compilation.
+///
+/// If a cycle is found, the above guarantee cannot be made, so we fail early.
 pub fn putModulesInCompilationOrder(
     self: *const Self,
     sccs: *const Sccs,
@@ -199,7 +208,10 @@ pub fn putModulesInCompilationOrder(
     return .{ .ordered = ModuleWork(can.IR).Store.fromCanIrs(gpa, modules.items) };
 }
 
-// Uses Tarjan's algorithm as described in https://www.thealgorists.com/Algo/GraphTheory/Tarjan/SCC
+/// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first
+/// compilation order.
+///
+/// Uses Tarjan's algorithm as described in https://www.thealgorists.com/Algo/GraphTheory/Tarjan/SCC
 pub fn findStronglyConnectedComponents(self: *const Self, gpa: std.mem.Allocator) Sccs {
     var next_unused_index: usize = 0;
     var stack = std.ArrayList(usize).init(self.gpa);

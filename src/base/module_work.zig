@@ -1,7 +1,11 @@
-//! A
+//! The work done by a compiler stage for a module in a package, usually an IR.
 //!
 //! The [ModuleGraph] will determine the correct compilation order of packages
-//! and put them in a row
+//! at time of import resolution by putting them in a row dependency-first.
+//! Once that is done, all compiler stages will use the exact same order for
+//! module compilation, meaning we can use the same indices for accessing data
+//! in other modules based on the order of work in a [ModuleWork.Store].
+
 const std = @import("std");
 const base = @import("../base.zig");
 const can = @import("../check/canonicalize.zig");
@@ -42,7 +46,7 @@ pub fn ModuleWork(comptime Work: type) type {
 
             pub fn fromCanIrs(
                 gpa: std.mem.Allocator,
-                can_irs: []ModuleWork(can.IR),
+                can_irs: []const ModuleWork(can.IR),
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
                 items.ensureTotalCapacity(gpa, can_irs.len) catch exitOnOom();
@@ -61,7 +65,6 @@ pub fn ModuleWork(comptime Work: type) type {
             pub fn initFromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: *const ModuleWork(can.IR).Store,
-                init_work_with_env: *const fn (env: *base.ModuleEnv, gpa: std.mem.Allocator) Work,
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
                 items.ensureTotalCapacity(gpa, can_irs.items.len) catch exitOnOom();
@@ -72,7 +75,7 @@ pub fn ModuleWork(comptime Work: type) type {
                     items.appendAssumeCapacity(.{
                         .package_idx = can_irs.getPackageIdx(work_idx),
                         .module_idx = can_irs.getModuleIdx(work_idx),
-                        .work = init_work_with_env(&can_irs.getWork(work_idx).env, gpa),
+                        .work = Work.init(&can_irs.getWork(work_idx).env, gpa),
                     });
                 }
 
@@ -80,6 +83,10 @@ pub fn ModuleWork(comptime Work: type) type {
             }
 
             pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+                for (0..self.items.len) |index| {
+                    self.items.items(.work)[index].deinit();
+                }
+
                 self.items.deinit(gpa);
             }
 

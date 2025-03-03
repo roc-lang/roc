@@ -1,3 +1,5 @@
+//! Coordination of all compilation stages in our compiler: the brains of the operation.
+
 const std = @import("std");
 const base = @import("base.zig");
 const cache = @import("cache.zig");
@@ -29,60 +31,6 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const DEFAULT_MAIN_FILENAME: []const u8 = "main.roc";
 const BUILTIN_FILENAMES: []const []const u8 = &.{};
-
-// to compile:
-//
-// load file, returning early on failure to load (e.g. missing file)
-// parse just header, taking out:
-// - exported idents
-// - packages as pairs of shorthands and URLs
-// - position to finish parsing rest of file from
-// - if we are trying to build on top of typechecking, fail if module is not an app/platform/package
-// for package in discovered packages, do the same as above recursively
-// assemble a directed graph of packages and modules with the loaded module as the root
-
-// we have a map where the key is the package "key" (pending what key we use)
-// a package has these attributes
-// - download URL
-// - content hash
-// - version string
-// - a root file path
-// - a collection of files with paths relative to the root file of the package (AKA `main.roc`)
-//
-// we have many external packages with the above qualities, and we also have a single "current" package
-// it only has these attributes
-// - a root file path
-// - a collection of files with paths relative to the root file of the package (AKA `main.roc`)
-//
-// traverse graph of dependencies looking for a DAG relationship between the packages
-// - If this isn't the case, show an error with the cyclic dependency
-// reverse the dependency graph and traverse it for compilation order
-//
-// In full parallel (no inter-module dependencies considered):
-// - get the base64-encoded BLAKE3 hash of each file
-// - if we have a cached artifact of that module's hash for that Roc version:
-//   - load it into an arena that contains the CanIR for that module with no more or less data in that arena
-// - otherwise, parse and then (solo) canonicalize that module, and cache when finished
-//
-// For future compilation of stages, compile the modules in order of dependencies first, appending freshly-compiled modules to a full list of modules such that they are consistently ordered between stages and densely stored
-//
-// Then, in reverse order of the dependencies of each module (AKA dependencies first):
-// - resolve imports
-// - typecheck
-//
-// - if just typechecking, return here
-// - if using the interpreter as a backend, use the typechecked ResolveIR to run the code as-is
-// - if using LLVM as a backend, use the typechecked ResolveIR to compile constants to their values or to errors, keeping a mapping of generic constants to their possible types
-//
-// Afterwards, in reverse order of the dependencies of each module (AKA dependencies first):
-// - specialize types
-// - lift functions
-// - solve functions
-// - specialize functions
-// - lower statements
-// - reference count
-//
-// Lastly, pass all modules together to LLVM codegen
 
 pub const TypecheckResult = union(enum) {
     success: Success,
@@ -124,6 +72,7 @@ pub const TypecheckResult = union(enum) {
     };
 };
 
+/// Check the types of a module and its dependencies.
 pub fn typecheckModule(
     entry_relative_path: []const u8,
     fs: Filesystem,
@@ -177,13 +126,13 @@ pub fn typecheckModule(
         return .{ .err = .could_not_find_root_module };
     }
 
-    const resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs, resolve.IR.init);
+    const resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = resolve_irs.iterIndices();
     while (index_iter.next()) |idx| {
         resolve.resolveImports(resolve_irs.getWork(idx), can_irs.getWork(idx), &resolve_irs);
     }
 
-    const type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs, Type.Store.init);
+    const type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = type_stores.iterIndices();
     while (index_iter.next()) |idx| {
         check_types.checkTypes(type_stores.getWork(idx), resolve_irs.getWork(idx), &resolve_irs, &type_stores);
@@ -212,6 +161,8 @@ pub const BuildResult = union(enum) {
     };
 };
 
+/// Check the types of a module and its dependencies and then prepare the typechecked modules for compilation
+/// into a binary built by LLVM.
 pub fn prepareModuleForCodegen(
     entry_filepath: []u8,
     fs: Filesystem,
@@ -228,7 +179,7 @@ pub fn prepareModuleForCodegen(
     const resolve_irs = typecheck_result.resolve_irs;
     const type_stores = typecheck_result.type_stores;
 
-    const all_type_speced = ModuleWork(type_spec.IR).Store.initFromCanIrs(gpa, &can_irs, type_spec.IR.init);
+    const all_type_speced = ModuleWork(type_spec.IR).Store.initFromCanIrs(gpa, &can_irs);
     var index_iter = all_type_speced.iterIndices();
     while (index_iter.next()) |idx| {
         type_spec.specializeTypes(
@@ -239,19 +190,19 @@ pub fn prepareModuleForCodegen(
         );
     }
 
-    const all_func_lifted = ModuleWork(func_lift.IR).Store.initFromCanIrs(gpa, &can_irs, func_lift.IR.init);
+    const all_func_lifted = ModuleWork(func_lift.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = all_func_lifted.iterIndices();
     while (index_iter.next()) |idx| {
         func_lift.liftFunctions(all_func_lifted.getWork(idx), all_type_speced.getWork(idx), &all_func_lifted);
     }
 
-    const all_func_solved = ModuleWork(func_solve.IR).Store.initFromCanIrs(gpa, &can_irs, func_solve.IR.init);
+    const all_func_solved = ModuleWork(func_solve.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = all_func_solved.iterIndices();
     while (index_iter.next()) |idx| {
         func_solve.solveFunctions(all_func_solved.getWork(idx), all_func_lifted.getWork(idx), &all_func_solved);
     }
 
-    const all_func_speced = ModuleWork(func_spec.IR).Store.initFromCanIrs(gpa, &can_irs, func_spec.IR.init);
+    const all_func_speced = ModuleWork(func_spec.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = all_func_speced.iterIndices();
     while (index_iter.next()) |idx| {
         func_spec.specializeFunctions(
@@ -262,13 +213,13 @@ pub fn prepareModuleForCodegen(
         );
     }
 
-    const all_lowered = ModuleWork(lower.IR).Store.initFromCanIrs(gpa, &can_irs, lower.IR.init);
+    const all_lowered = ModuleWork(lower.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = all_lowered.iterIndices();
     while (index_iter.next()) |idx| {
         lower.lowerStatements(all_lowered.getWork(idx), all_func_speced.getWork(idx), &all_lowered);
     }
 
-    const all_refcounted = ModuleWork(refcount.IR).Store.initFromCanIrs(gpa, &can_irs, refcount.IR.init);
+    const all_refcounted = ModuleWork(refcount.IR).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = all_refcounted.iterIndices();
     while (index_iter.next()) |idx| {
         refcount.referenceCount(all_refcounted.getWork(idx), all_lowered.getWork(idx), &all_refcounted);

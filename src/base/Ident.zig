@@ -1,5 +1,10 @@
-//! Stores attributes for an identifier like the raw_text, is it effectful, ignored, or reassignable.
-//! An example of an identifier is the name of a top-level function like `main!` or a variable like `x_`.
+//! Any text in a Roc source file that has significant content.
+//!
+//! During tokenization, all variable names, record field names, type names, etc. are interned
+//! into a deduplicated collection, the [Ident.Store]. On interning, each Ident gets a unique ID
+//! that represents that string, which can be used to look up the string value in the [Ident.Store]
+//! in constant time. Storing IDs in each IR instead of strings also uses less memory in the IRs.
+
 const std = @import("std");
 const collections = @import("../collections.zig");
 const problem = @import("../problem.zig");
@@ -38,7 +43,7 @@ pub const Idx = packed struct(u32) {
     idx: u29,
 };
 
-/// Identifier attributes such as if it is effectful, ignored, or reassignable packed into 3-bits.
+/// Identifier attributes such as if it is effectful, ignored, or reassignable.
 pub const Attributes = packed struct(u3) {
     effectful: bool,
     ignored: bool,
@@ -54,12 +59,14 @@ pub const Store = struct {
     /// This needs to be set when the ident is first seen during canonicalization
     /// before doing anything else.
     exposing_modules: std.ArrayList(ModuleImport.Idx),
+    attributes: std.ArrayList(Attributes),
     next_unique_name: u32,
 
     pub fn init(gpa: std.mem.Allocator) Store {
         return Store{
             .interner = SmallStringInterner.init(gpa),
             .exposing_modules = std.ArrayList(ModuleImport.Idx).init(gpa),
+            .attributes = std.ArrayList(Attributes).init(gpa),
             .next_unique_name = 0,
         };
     }
@@ -67,11 +74,13 @@ pub const Store = struct {
     pub fn deinit(self: *Store) void {
         self.interner.deinit();
         self.exposing_modules.deinit();
+        self.attributes.deinit();
     }
 
     pub fn insert(self: *Store, ident: Ident, region: Region) Idx {
         const idx = self.interner.insert(ident.raw_text, region);
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
+        self.attributes.append(ident.attributes) catch exitOnOom();
 
         return Idx{
             .attributes = ident.attributes,
@@ -103,12 +112,15 @@ pub const Store = struct {
         const idx = self.interner.insert(name, Region.zero());
         self.exposing_modules.append(@enumFromInt(0)) catch exitOnOom();
 
+        const attributes = Attributes{
+            .effectful = false,
+            .ignored = false,
+            .reassignable = false,
+        };
+        self.attributes.append(attributes) catch exitOnOom();
+
         return Idx{
-            .attributes = Attributes{
-                .effectful = false,
-                .ignored = false,
-                .reassignable = false,
-            },
+            .attributes = attributes,
             .idx = @truncate(@intFromEnum(idx)),
         };
     }

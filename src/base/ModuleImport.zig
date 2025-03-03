@@ -3,6 +3,7 @@
 //! During early compiler stages, we only know about the contents of
 //! a single module at a time, and this type represents a module import
 //! that hasn't been resolved to a separate source file yet.
+
 const std = @import("std");
 const base = @import("../base.zig");
 const problem = @import("../problem.zig");

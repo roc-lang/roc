@@ -117,10 +117,6 @@ pub const Type = union(enum) {
         }
     }
 
-    pub fn equal(self: *Type, other: *Type) bool {
-        return self == other;
-    }
-
     pub const Store = struct {
         env: *base.ModuleEnv,
         types: List,

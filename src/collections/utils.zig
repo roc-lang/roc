@@ -1,5 +1,4 @@
 const std = @import("std");
-const testing = std.testing;
 
 /// Exit the current process when we hit an out-of-memory error.
 ///

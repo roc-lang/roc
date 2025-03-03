@@ -1,4 +1,8 @@
-//! A package representing multiple modules belonging to the same
+//! A package representing multiple modules.
+//!
+//! This is slightly more broad than just a Roc "package", as this can
+//! represent a package, platform, or even an app with modules.
+
 const std = @import("std");
 const collections = @import("../collections.zig");
 const path = std.fs.path;
