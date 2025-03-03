@@ -18,16 +18,16 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Self {
     return Self{
         .env = env,
-        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(allocator),
-        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(allocator),
-        .exprs = Expr.List.init(allocator),
-        .layouts = Layout.List.init(allocator),
-        .stmts = Stmt.List.init(allocator),
-        .idents_with_layouts = IdentWithLayout.List.init(allocator),
-        .list_literal_elems = ListLiteralElem.List.init(allocator),
+        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(gpa),
+        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(gpa),
+        .exprs = Expr.List.init(gpa),
+        .layouts = Layout.List.init(gpa),
+        .stmts = Stmt.List.init(gpa),
+        .idents_with_layouts = IdentWithLayout.List.init(gpa),
+        .list_literal_elems = ListLiteralElem.List.init(gpa),
     };
 }
 

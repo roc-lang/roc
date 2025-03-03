@@ -3,6 +3,8 @@ const base = @import("../base.zig");
 const func_lift = @import("./lift_functions.zig");
 const func_solve = @import("./solve_functions.zig");
 
+const ModuleWork = base.ModuleWork;
+
 const Self = @This();
 pub const IR = @import("./specialize_functions/IR.zig");
 
@@ -12,13 +14,15 @@ pub const IR = @import("./specialize_functions/IR.zig");
 ///
 /// Notes from Ayaz' doc: https://github.com/roc-lang/rfcs/blob/b4731508b60bf0e69d41083f09a5738123dfcefe/0102-compiling-lambda-sets.md#function_specialize
 pub fn specializeFunctions(
-    ir: func_lift.IR,
-    function_sets: func_solve.FunctionSet.List,
-    other_modules: []Self.IR,
-) Self.IR {
+    ir: *IR,
+    func_lift_ir: *const func_lift.IR,
+    function_sets: *const func_solve.IR,
+    other_modules: *const ModuleWork(IR).Store,
+) void {
     _ = ir;
+    _ = func_lift_ir;
     _ = function_sets;
     _ = other_modules;
 
-    @panic("not implemented");
+    // TODO: implement
 }

@@ -500,31 +500,29 @@ pub const NodeStore = struct {
 
     // Node Type Idx types
 
-    /// An index for a Body node.  Should not be constructed externally.
+    /// An index for a Body node. Should not be constructed externally.
     pub const BodyIdx = struct { id: u32 };
-    /// An index for a File node.  Should not be constructed externally.
-    pub const FileIdx = struct { id: u32 };
-    /// An index for a Header node.  Should not be constructed externally.
+    /// An index for a Header node. Should not be constructed externally.
     pub const HeaderIdx = struct { id: u32 };
-    /// An index for a Statement node.  Should not be constructed externally.
+    /// An index for a Statement node. Should not be constructed externally.
     pub const StatementIdx = struct { id: u32 };
-    /// An index for a Pattern node.  Should not be constructed externally.
+    /// An index for a Pattern node. Should not be constructed externally.
     pub const PatternIdx = struct { id: u32 };
-    /// An index for a Expr node.  Should not be constructed externally.
+    /// An index for a Expr node. Should not be constructed externally.
     pub const ExprIdx = struct { id: u32 };
-    /// An index for a IfElse node.  Should not be constructed externally.
+    /// An index for a IfElse node. Should not be constructed externally.
     pub const IfElseIdx = struct { id: u32 };
-    /// An index for a WhenBranch node.  Should not be constructed externally.
+    /// An index for a WhenBranch node. Should not be constructed externally.
     pub const WhenBranchIdx = struct { id: u32 };
-    /// An index for a RecordField node.  Should not be constructed externally.
+    /// An index for a RecordField node. Should not be constructed externally.
     pub const RecordFieldIdx = struct { id: u32 };
-    /// An index for a PatternRecordField node.  Should not be constructed externally.
+    /// An index for a PatternRecordField node. Should not be constructed externally.
     pub const PatternRecordFieldIdx = struct { id: u32 };
-    /// An index for a TypeHeader node.  Should not be constructed externally.
+    /// An index for a TypeHeader node. Should not be constructed externally.
     pub const TypeHeaderIdx = struct { id: u32 };
-    /// An index for a TypeAnno node.  Should not be constructed externally.
+    /// An index for a TypeAnno node. Should not be constructed externally.
     pub const TypeAnnoIdx = struct { id: u32 };
-    /// An index for a AnnoRecordField node.  Should not be constructed externally.
+    /// An index for a AnnoRecordField node. Should not be constructed externally.
     pub const AnnoRecordFieldIdx = struct { id: u32 };
 
     // ------------------------------------------------------------------------

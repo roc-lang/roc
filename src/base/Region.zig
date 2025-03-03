@@ -1,3 +1,5 @@
+//! A slice of a module's source code, used for highlighting code in diagnostics.
+
 const std = @import("std");
 const collections = @import("../collections.zig");
 
@@ -33,6 +35,7 @@ pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOp
     }
 }
 
+/// One side of a [Region].
 pub const Position = struct {
     offset: u32,
 
