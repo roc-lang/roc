@@ -706,6 +706,7 @@ pub const Cursor = struct {
                     self.pos += 1;
                 } else if (c == '\n') {
                     self.pushMessage(.UnclosedSingleQuote, @intCast(start), @intCast(self.pos));
+                    @panic("sad");
                 } else if (c == '\'') {
                     self.pos += 1;
                 } else {
