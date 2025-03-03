@@ -73,7 +73,7 @@ fn bringImportIntoScope(
         .end = Region.Position.zero(),
     };
 
-    const res = ir.env.imports.getOrInsert(import_name, shorthand);
+    const res = ir.imports.getOrInsert(import_name, shorthand);
 
     if (res.was_present) {
         ir.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{

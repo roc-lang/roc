@@ -106,7 +106,7 @@ fn loadOrCompileCanIr(
 
 fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
     for (graph.modules.items, 0..) |metadata, metadata_index| {
-        const import_store = metadata.work.env.imports;
+        const import_store = metadata.work.imports;
         const package = package_store.packages.get(metadata.package_idx);
 
         import_loop: for (import_store.imports.items.items) |*import| {

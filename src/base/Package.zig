@@ -1,4 +1,4 @@
-//! A package representing multiple
+//! A package representing multiple modules belonging to the same
 const std = @import("std");
 const collections = @import("../collections.zig");
 const path = std.fs.path;
@@ -33,11 +33,12 @@ dependencies: Dependency.List,
 const List = collections.SafeList(@This());
 pub const Idx = List.Idx;
 
+/// A .roc file within a package.
 pub const Module = struct {
     /// The full name of a module, e.g. `Foo.Bar`.
     ///
     /// This is empty if the filepath is not a standard module,
-    /// e.g. `main.roc` or `script.roc`.
+    /// e.g. `main.roc` or `script.roc`, AKA modules that aren't importable.
     name: []const u8,
     /// The absolute path to this module minus the folder path
     /// for the package's source code root.
@@ -58,6 +59,7 @@ pub const Module = struct {
         invalid_extension,
     };
 
+    /// Parse a package module given its relative path from the package's root dir.
     pub fn fromRelativePath(
         relative_path: []const u8,
         string_arena: *std.heap.ArenaAllocator,
@@ -164,6 +166,7 @@ pub const Url = struct {
         missing_version,
     };
 
+    /// Parse a package download URL into useful metadata.
     pub fn parse(url: []const u8) ParseErr!Url {
         const HTTPS_PREFIX = "https://";
         const starts_with_https = std.mem.eql(u8, url[0..HTTPS_PREFIX.len], HTTPS_PREFIX);

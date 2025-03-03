@@ -1,3 +1,7 @@
+//! A
+//!
+//! The [ModuleGraph] will determine the correct compilation order of packages
+//! and put them in a row
 const std = @import("std");
 const base = @import("../base.zig");
 const can = @import("../check/canonicalize.zig");
@@ -26,6 +30,7 @@ pub const ModuleWorkIndexIter = struct {
     }
 };
 
+/// The work done by a compiler stage for a module in a package, usually an IR.
 pub fn ModuleWork(comptime Work: type) type {
     return struct {
         package_idx: Package.Idx,

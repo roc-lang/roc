@@ -17,7 +17,7 @@ pub const Recursive = enum {
     TailRecursive,
 };
 
-// pub const CalledVia = enum {};
+pub const CalledVia = enum {};
 
 /// Represents a value written as-is in a Roc source file.
 pub const Literal = union(enum) {

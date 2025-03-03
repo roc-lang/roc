@@ -17,6 +17,7 @@ const Self = @This();
 
 env: base.ModuleEnv,
 aliases: Alias.List,
+imports: ModuleImport.Store,
 defs: Def.List,
 exprs: Expr.List,
 exprs_at_regions: ExprAtRegion.List,
@@ -40,9 +41,12 @@ ingested_files: IngestedFile.List,
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 pub fn init(gpa: std.mem.Allocator) Self {
+    var env = base.ModuleEnv.init(gpa);
+
     return Self{
-        .env = base.ModuleEnv.init(gpa),
+        .env = env,
         .aliases = Alias.List.init(gpa),
+        .imports = ModuleImport.Store.init(&.{}, &env.idents, gpa),
         .defs = Def.List.init(gpa),
         .exprs = Expr.List.init(gpa),
         .exprs_at_regions = ExprAtRegion.List.init(gpa),
@@ -60,6 +64,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
 pub fn deinit(self: *Self) void {
     self.env.deinit();
     self.aliases.deinit();
+    self.imports.deinit();
     self.defs.deinit();
     self.exprs.deinit();
     self.exprs_at_regions.deinit();
