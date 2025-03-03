@@ -29,8 +29,66 @@ jobs:
       - name: zig version
         run: zig version
 
-      - name: install rust nightly 1.77.0
-        run: rustup install nightly-2024-02-03
+      on:
+  workflow_call:
+
+name: windows - release build
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows-release-build:
+    name: windows-release-build
+    runs-on: windows-2022
+    env:
+      LLVM_SYS_180_PREFIX: C:\LLVM-18.1.8-win64
+
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: Add-Content -Path "$env:GITHUB_ENV" -Value "GITHUB_RUNNER_CPU=$((Get-CimInstance Win32_Processor).Name)"
+
+      - name: download and install zig
+        run: |
+          curl.exe -f --output "C:\zig-windows-x86_64-0.13.0.zip" --url https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
+          cd C:\
+          7z x zig-windows-x86_64-0.13.0.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.13.0\"
+
+      - name: zig version
+        run: zig version
+
+      - name: extract Rust versions for stable and nightly from rust-toolchain.toml
+        run: |
+          $toolchainContent = Get-Content -Path rust-toolchain.toml -Raw
+          $stableMatch = [regex]::Match($toolchainContent, 'channel\s*=\s*"([\d\.]+)"')
+          $nightlyMatch = [regex]::Match($toolchainContent, 'channel\s*=\s*"(nightly-[\d-]+)"')
+          
+          if (-not $stableMatch.Success) {
+            Write-Error "Failed to extract stable Rust version from rust-toolchain.toml"
+            exit 1
+          }
+          
+          if (-not $nightlyMatch.Success) {
+            Write-Error "Failed to extract nightly Rust version from rust-toolchain.toml"
+            exit 1
+          }
+          
+          $stableVersion = $stableMatch.Groups[1].Value
+          $nightlyVersion = $nightlyMatch.Groups[1].Value
+          
+          echo "RUST_STABLE_VERSION=$stableVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          echo "RUST_NIGHTLY_VERSION=$nightlyVersion" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          Write-Host "Found Rust stable version: $stableVersion"
+          Write-Host "Found Rust nightly version: $nightlyVersion"
+
+      - name: install rust
+        run: |
+          rustup install ${{ env.RUST_NIGHTLY_VERSION }}
+          rustup install ${{ env.RUST_STABLE_VERSION }}
 
       - name: set up llvm 18
         run: |
