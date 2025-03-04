@@ -2351,5 +2351,5 @@ pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) 
     var node = file.toSExpr(env, ir);
     defer node.deinit(env.gpa);
 
-    node.toStringPretty(writer, 4);
+    node.toStringPretty(writer);
 }

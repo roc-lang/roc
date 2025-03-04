@@ -8,16 +8,10 @@ foo = "one"
 bar = "two"
 ~~~PARSE
 (file
-    (header
-        'foo'
-        'bar')
+    (header 'foo' 'bar')
     (decl
-        (ident
-            'foo')
-        (string
-            'one'))
+        (ident 'foo')
+        (string 'one'))
     (decl
-        (ident
-            'bar')
-        (string
-            'two')))
+        (ident 'bar')
+        (string 'two')))
