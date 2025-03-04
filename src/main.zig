@@ -15,7 +15,7 @@ const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 
 const usage =
-    \\Usage:
+    \\Usage
     \\
     \\  roc [command] [options] [roc_file] [args]
     \\
