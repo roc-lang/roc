@@ -31,29 +31,23 @@ pub const Store = struct {
     /// sizes, encoded in reverse where for example,
     /// the first 7 bit would signal the length, the last bit would signal that the length
     /// continues to the previous byte
-    buffer: std.ArrayList(u8),
+    buffer: std.ArrayListUnmanaged(u8) = .{},
 
-    pub fn init(gpa: std.mem.Allocator) Store {
-        return Store{
-            .buffer = std.ArrayList(u8).init(gpa),
-        };
+    pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
+        self.buffer.deinit(gpa);
     }
 
-    pub fn deinit(self: *Store) void {
-        self.buffer.deinit();
-    }
-
-    pub fn insert(self: *Store, string: []u8) Idx {
+    pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) Idx {
         const str_len: u32 = @truncate(string.len);
         const str_len_bytes = std.mem.asBytes(&str_len);
-        self.buffer.appendSlice(str_len_bytes) catch exitOnOom();
+        self.buffer.appendSlice(gpa, str_len_bytes) catch |err| exitOnOom(err);
         const str_start_idx = self.buffer.items.len;
-        self.buffer.appendSlice(string) catch exitOnOom();
+        self.buffer.appendSlice(gpa, string) catch |err| exitOnOom(err);
 
         return @enumFromInt(@as(u32, @intCast(str_start_idx)));
     }
 
-    pub fn get(self: *Store, idx: Idx) []u8 {
+    pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
         const str_len = std.mem.bytesAsValue(u32, self.buffer.items[idx_u32 - 4 .. idx_u32]).*;
         return self.buffer.items[idx_u32 .. idx_u32 + str_len];
@@ -61,13 +55,15 @@ pub const Store = struct {
 };
 
 test "insert" {
-    var interner = Store.init(testing.allocator);
-    defer interner.deinit();
+    const gpa = testing.allocator;
 
-    var str_1 = "abc".*;
-    var str_2 = "defg".*;
-    const idx_1 = interner.insert(&str_1);
-    const idx_2 = interner.insert(&str_2);
+    var interner = Store{};
+    defer interner.deinit(gpa);
+
+    const str_1 = "abc".*;
+    const str_2 = "defg".*;
+    const idx_1 = interner.insert(gpa, &str_1);
+    const idx_2 = interner.insert(gpa, &str_2);
 
     try testing.expectEqualStrings("abc", interner.get(idx_1));
     try testing.expectEqualStrings("defg", interner.get(idx_2));

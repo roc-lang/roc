@@ -18,27 +18,27 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
-pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Self {
+pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
-        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(gpa),
-        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(gpa),
-        .exprs = Expr.List.init(gpa),
-        .layouts = Layout.List.init(gpa),
-        .stmts = Stmt.List.init(gpa),
-        .idents_with_layouts = IdentWithLayout.List.init(gpa),
-        .list_literal_elems = ListLiteralElem.List.init(gpa),
+        .procedures = std.AutoHashMap(Ident.Idx, Procedure).init(env.gpa),
+        .constants = std.AutoHashMap(Ident.Idx, StmtWithLayout).init(env.gpa),
+        .exprs = .{},
+        .layouts = .{},
+        .stmts = .{},
+        .idents_with_layouts = .{},
+        .list_literal_elems = .{},
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.procedures.deinit();
-    self.constants.deinit();
-    self.exprs.deinit();
-    self.layouts.deinit();
-    self.stmts.deinit();
-    self.idents_with_layouts.deinit();
-    self.list_literal_elems.deinit();
+    self.procedures.deinit(self.env.gpa);
+    self.constants.deinit(self.env.gpa);
+    self.exprs.deinit(self.env.gpa);
+    self.layouts.deinit(self.env.gpa);
+    self.stmts.deinit(self.env.gpa);
+    self.idents_with_layouts.deinit(self.env.gpa);
+    self.list_literal_elems.deinit(self.env.gpa);
 }
 
 pub const Procedure = struct {

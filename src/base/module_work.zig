@@ -49,7 +49,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 can_irs: []const ModuleWork(can.IR),
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
-                items.ensureTotalCapacity(gpa, can_irs.len) catch exitOnOom();
+                items.ensureTotalCapacity(gpa, can_irs.len) catch |err| exitOnOom(err);
 
                 for (can_irs) |work| {
                     items.appendAssumeCapacity(.{
@@ -67,7 +67,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 can_irs: *const ModuleWork(can.IR).Store,
             ) Store {
                 var items = std.MultiArrayList(ModuleWork(Work)){};
-                items.ensureTotalCapacity(gpa, can_irs.items.len) catch exitOnOom();
+                items.ensureTotalCapacity(gpa, can_irs.items.len) catch |err| exitOnOom(err);
 
                 for (0..can_irs.items.len) |index| {
                     const work_idx: ModuleWorkIdx = @enumFromInt(index);
@@ -75,7 +75,7 @@ pub fn ModuleWork(comptime Work: type) type {
                     items.appendAssumeCapacity(.{
                         .package_idx = can_irs.getPackageIdx(work_idx),
                         .module_idx = can_irs.getModuleIdx(work_idx),
-                        .work = Work.init(&can_irs.getWork(work_idx).env, gpa),
+                        .work = Work.init(&can_irs.getWork(work_idx).env),
                     });
                 }
 

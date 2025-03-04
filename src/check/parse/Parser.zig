@@ -12,30 +12,30 @@ const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
 pub const Parser = @This();
 
-allocator: std.mem.Allocator,
+gpa: std.mem.Allocator,
 pos: TokenIdx,
 tok_buf: TokenizedBuffer,
 store: IR.NodeStore,
-scratch_nodes: std.ArrayList(IR.Node.Idx),
-diagnostics: std.ArrayList(IR.Diagnostic),
+scratch_nodes: std.ArrayListUnmanaged(IR.Node.Idx),
+diagnostics: std.ArrayListUnmanaged(IR.Diagnostic),
 
-pub fn init(gpa: std.mem.Allocator, tokens: TokenizedBuffer) Parser {
+pub fn init(tokens: TokenizedBuffer) Parser {
     const estimated_node_count = (tokens.tokens.len + 2) / 2;
-    const store = IR.NodeStore.initWithCapacity(gpa, estimated_node_count);
+    const store = IR.NodeStore.initWithCapacity(tokens.env.gpa, estimated_node_count);
 
     return Parser{
-        .allocator = gpa,
+        .gpa = tokens.env.gpa,
         .pos = 0,
         .tok_buf = tokens,
         .store = store,
-        .scratch_nodes = std.ArrayList(IR.Node.Idx).init(gpa),
-        .diagnostics = std.ArrayList(IR.Diagnostic).init(gpa),
+        .scratch_nodes = .{},
+        .diagnostics = .{},
     };
 }
 
 pub fn deinit(parser: *Parser) void {
-    parser.scratch_nodes.deinit();
-    parser.diagnostics.deinit();
+    parser.scratch_nodes.deinit(parser.gpa);
+    parser.diagnostics.deinit(parser.gpa);
 }
 
 const TestError = error{TestError};
@@ -97,19 +97,19 @@ pub fn peekNext(self: Parser) Token.Tag {
     return self.tok_buf.tokens.items(.tag)[next];
 }
 pub fn pushDiagnostic(self: *Parser, tag: IR.Diagnostic.Tag, region: IR.Region) void {
-    self.diagnostics.append(.{
+    self.diagnostics.append(self.gpa, .{
         .tag = tag,
         .region = region,
-    }) catch exitOnOom();
+    }) catch |err| exitOnOom(err);
 }
 
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t {
     const pos = self.pos;
     self.advanceOne(); // TODO: find a better point to advance to
-    self.diagnostics.append(.{
+    self.diagnostics.append(self.gpa, .{
         .tag = tag,
         .region = .{ .start = pos, .end = pos },
-    }) catch exitOnOom();
+    }) catch |err| exitOnOom(err);
     return self.store.addMalformed(t, tag, pos);
 }
 
@@ -132,7 +132,7 @@ pub fn parseFile(self: *Parser) void {
             if (self.store.scratch_statements.items.len > scratch_top) {
                 self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
             }
-            self.store.scratch_statements.append(idx) catch exitOnOom();
+            self.store.scratch_statements.append(self.gpa, idx) catch |err| exitOnOom(err);
         } else {
             if (self.store.scratch_statements.items.len > scratch_top) {
                 self.store.scratch_statements.shrinkRetainingCapacity(scratch_top);
@@ -150,10 +150,10 @@ pub fn parseFile(self: *Parser) void {
     });
 }
 
-fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratch: *std.ArrayList(T), parser: fn (*Parser) T) ExpectError!usize {
+fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratch: *std.ArrayListUnmanaged(T), parser: fn (*Parser) T) ExpectError!usize {
     const scratch_top = scratch.items.len;
     while (self.peek() != end_token) {
-        scratch.append(parser(self)) catch exitOnOom();
+        scratch.append(self.gpa, parser(self)) catch |err| exitOnOom(err);
         self.expect(.Comma) catch {
             break;
         };
@@ -218,7 +218,7 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             std.debug.panic("TODO: Handler header bad exposes contents: {s}", .{@tagName(self.peek())});
         }
 
-        self.store.scratch_tokens.append(self.pos) catch exitOnOom();
+        self.store.scratch_tokens.append(self.gpa, self.pos) catch |err| exitOnOom(err);
         self.advance();
 
         if (self.peek() != .Comma) {
@@ -259,7 +259,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides);
         }
 
-        self.store.scratch_tokens.append(self.pos) catch exitOnOom();
+        self.store.scratch_tokens.append(self.gpa, self.pos) catch |err| exitOnOom(err);
         self.advance();
 
         if (self.peek() != .Comma) {
@@ -305,12 +305,12 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
                 return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_or_platform_string);
             }
             const value = self.parseStringExpr();
-            self.store.scratch_record_fields.append(self.store.addRecordField(.{
+            self.store.scratch_record_fields.append(self.gpa, self.store.addRecordField(.{
                 .name = name_tok,
                 .value = value,
                 .optional = false,
                 .region = .{ .start = entry_start, .end = self.pos },
-            })) catch exitOnOom();
+            })) catch |err| exitOnOom(err);
         }
         if (self.peek() != .Comma) {
             packages = self.store.scratch_record_fields.items[statement_scratch_top..];
@@ -525,7 +525,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                     const scratch_top = self.store.scratch_patterns.items.len;
                     defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
                     while (self.peek() != .CloseRound) {
-                        self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                        self.store.scratch_patterns.append(self.gpa, self.parsePattern(alternatives)) catch |err| exitOnOom(err);
                         if (self.peek() != .Comma) {
                             break;
                         }
@@ -568,7 +568,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 const scratch_top = self.store.scratch_patterns.items.len;
                 defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
                 while (self.peek() != .CloseSquare) {
-                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                    self.store.scratch_patterns.append(self.gpa, self.parsePattern(alternatives)) catch |err| exitOnOom(err);
                     if (self.peek() != .Comma) {
                         break;
                     }
@@ -590,7 +590,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 const scratch_top = self.store.scratch_pattern_record_fields.items.len;
                 defer self.store.scratch_pattern_record_fields.shrinkRetainingCapacity(scratch_top);
                 while (self.peek() != .CloseCurly) {
-                    self.store.scratch_pattern_record_fields.append(self.parsePatternRecordField(alternatives)) catch exitOnOom();
+                    self.store.scratch_pattern_record_fields.append(self.gpa, self.parsePatternRecordField(alternatives)) catch |err| exitOnOom(err);
                     if (self.peek() != .Comma) {
                         break;
                     }
@@ -635,7 +635,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 const scratch_top = self.store.scratch_patterns.items.len;
                 defer self.store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
                 while (self.peek() != .CloseRound) {
-                    self.store.scratch_patterns.append(self.parsePattern(alternatives)) catch exitOnOom();
+                    self.store.scratch_patterns.append(self.gpa, self.parsePattern(alternatives)) catch |err| exitOnOom(err);
                     if (self.peek() != .Comma) {
                         break;
                     }
@@ -663,10 +663,10 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 if ((self.store.scratch_patterns.items.len - patterns_scratch_top) == 0) {
                     return p;
                 }
-                self.store.scratch_patterns.append(p) catch exitOnOom();
+                self.store.scratch_patterns.append(self.gpa, p) catch |err| exitOnOom(err);
                 break;
             }
-            self.store.scratch_patterns.append(p) catch exitOnOom();
+            self.store.scratch_patterns.append(self.gpa, p) catch |err| exitOnOom(err);
             self.advance();
         }
     }
@@ -835,7 +835,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
 
                 while (true) {
                     const statement = self.parseStmt() orelse break;
-                    self.store.scratch_statements.append(statement) catch exitOnOom();
+                    self.store.scratch_statements.append(self.gpa, statement) catch |err| exitOnOom(err);
                     if (self.peek() == .CloseCurly) {
                         self.advance();
                         break;
@@ -893,7 +893,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const scratch_top = self.store.scratch_when_branches.items.len;
             defer self.store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
             while (self.peek() != .CloseCurly) {
-                self.store.scratch_when_branches.append(self.parseBranch()) catch exitOnOom();
+                self.store.scratch_when_branches.append(self.gpa, self.parseBranch()) catch |err| exitOnOom(err);
                 if (self.peek() == .Comma) {
                     self.advance();
                 }
@@ -1105,7 +1105,7 @@ pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {
     const scratch_top = self.store.scratch_tokens.items.len;
     defer self.store.scratch_tokens.shrinkRetainingCapacity(scratch_top);
     while (self.peek() == .LowerIdent) {
-        self.store.scratch_tokens.append(self.pos) catch exitOnOom();
+        self.store.scratch_tokens.append(self.gpa, self.pos) catch |err| exitOnOom(err);
         self.advance(); // Advance past LowerIdent
     }
     const args = self.store.scratch_tokens.items[scratch_top..];
@@ -1164,7 +1164,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
             defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
             while (self.peek() != .CloseRound and self.peek() != .OpArrow and self.peek() != .OpFatArrow) {
                 // Looking for args here so that we don't capture an un-parenthesized fn's args
-                self.store.scratch_type_annos.append(self.parseTypeAnno(.looking_for_args)) catch exitOnOom();
+                self.store.scratch_type_annos.append(self.gpa, self.parseTypeAnno(.looking_for_args)) catch |err| exitOnOom(err);
                 if (self.peek() != .Comma) {
                     break;
                 }
@@ -1240,10 +1240,10 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
         if ((looking_for_args == .not_looking_for_args) and (self.peek() == .Comma or self.peek() == .OpArrow or self.peek() == .OpFatArrow)) {
             const scratch_top = self.store.scratch_type_annos.items.len;
             defer self.store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
-            self.store.scratch_type_annos.append(an) catch exitOnOom();
+            self.store.scratch_type_annos.append(self.gpa, an) catch |err| exitOnOom(err);
             while (self.peek() == .Comma) {
                 self.advance(); // Advance past Comma
-                self.store.scratch_type_annos.append(self.parseTypeAnno(.looking_for_args)) catch exitOnOom();
+                self.store.scratch_type_annos.append(self.gpa, self.parseTypeAnno(.looking_for_args)) catch |err| exitOnOom(err);
             }
             const args = self.store.scratch_type_annos.items[scratch_top..];
             if (self.peek() != .OpArrow and self.peek() != .OpFatArrow) {
@@ -1295,7 +1295,7 @@ pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
 }
 
 pub fn addProblem(self: *Parser, diagnostic: IR.Diagnostic) void {
-    self.diagnostics.append(diagnostic) catch exitOnOom();
+    self.diagnostics.append(diagnostic) catch |err| exitOnOom(err);
 }
 
 /// Binding power of the lhs and rhs of a particular operator.

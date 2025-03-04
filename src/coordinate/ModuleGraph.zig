@@ -41,7 +41,11 @@ pub const ConstructResult = union(enum) {
 
 /// Discover the graph-like relationship between all modules in the given packages based
 /// on the import statements in each module.
-pub fn fromPackages(package_store: *const Package.Store, fs: Filesystem, gpa: std.mem.Allocator) ConstructResult {
+pub fn fromPackages(
+    gpa: std.mem.Allocator,
+    fs: Filesystem,
+    package_store: *const Package.Store,
+) ConstructResult {
     var graph = Self{
         .modules = std.ArrayList(ModuleWork(can.IR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
@@ -57,13 +61,13 @@ pub fn fromPackages(package_store: *const Package.Store, fs: Filesystem, gpa: st
                 module.filepath_relative_to_package_root,
                 fs,
                 gpa,
-            ) catch |err| {
+            ) catch |load_err| {
                 const filepath = std.fs.path.join(gpa, &.{
                     package.absolute_dirpath,
                     module.filepath_relative_to_package_root,
-                }) catch exitOnOom();
+                }) catch |err| exitOnOom(err);
                 return .{ .failed_to_open_module = .{
-                    .err = err,
+                    .err = load_err,
                     .filename = filepath,
                 } };
             };
@@ -72,8 +76,8 @@ pub fn fromPackages(package_store: *const Package.Store, fs: Filesystem, gpa: st
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
                 .work = can_ir,
-            }) catch exitOnOom();
-            graph.adjacencies.append(std.ArrayList(usize).init(gpa)) catch exitOnOom();
+            }) catch |err| exitOnOom(err);
+            graph.adjacencies.append(std.ArrayList(usize).init(gpa)) catch |err| exitOnOom(err);
         }
     }
 
@@ -90,7 +94,7 @@ fn loadOrCompileCanIr(
 ) Filesystem.ReadError!can.IR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
-    const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch exitOnOom();
+    const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch |err| exitOnOom(err);
     // TODO: this should be an internal error if the file is missing,
     // since we should only be trying to read files that were found during
     // traversing the file system earlier.
@@ -100,9 +104,9 @@ fn loadOrCompileCanIr(
 
     return if (cache_lookup) |ir| ir else blk: {
         var can_ir = can.IR.init(gpa);
-        var parse_ir = parse.parse(&can_ir.env, gpa, contents);
+        var parse_ir = parse.parse(&can_ir.env, contents);
         parse_ir.store.emptyScratch();
-        can.canonicalize(&can_ir, &parse_ir, gpa);
+        can.canonicalize(&can_ir, &parse_ir);
 
         break :blk can_ir;
     };
@@ -144,7 +148,7 @@ fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
                     if (search_metadata.package_idx != from_package_idx) continue;
                     if (search_metadata.module_idx != from_module_idx) continue;
 
-                    graph.adjacencies.items[metadata_index].append(search_index) catch exitOnOom();
+                    graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
                 }
             }
         }
@@ -189,7 +193,7 @@ pub fn putModulesInCompilationOrder(
 
         if (group.items.len == 1) {
             const module_index = group.items[0];
-            modules.append(self.modules.items[module_index]) catch exitOnOom();
+            modules.append(self.modules.items[module_index]) catch |err| exitOnOom(err);
         } else {
             var cycle = std.ArrayList(ModuleWork(void)).init(gpa);
             for (group.items) |group_item_index| {
@@ -198,7 +202,7 @@ pub fn putModulesInCompilationOrder(
                     .package_idx = can_ir.package_idx,
                     .module_idx = can_ir.module_idx,
                     .work = undefined,
-                }) catch exitOnOom();
+                }) catch |err| exitOnOom(err);
             }
 
             return .{ .found_cycle = cycle };
@@ -216,7 +220,7 @@ pub fn findStronglyConnectedComponents(self: *const Self, gpa: std.mem.Allocator
     var next_unused_index: usize = 0;
     var stack = std.ArrayList(usize).init(self.gpa);
 
-    var all_attributes = gpa.alloc(Attributes, self.modules.items.len) catch exitOnOom();
+    var all_attributes = gpa.alloc(Attributes, self.modules.items.len) catch |err| exitOnOom(err);
     defer gpa.free(all_attributes);
 
     var sccs = Sccs{ .groups = std.ArrayList(std.ArrayList(usize)).init(self.gpa) };
@@ -248,7 +252,7 @@ fn sccRecurseIntoGraph(
     all_attributes[current].index = next_unused_index.*;
     all_attributes[current].low_link = next_unused_index.*;
     next_unused_index.* += 1;
-    stack.append(current) catch exitOnOom();
+    stack.append(current) catch |err| exitOnOom(err);
     all_attributes[current].on_stack = true;
 
     // TODO: should this be adjacencies for "current" or all nodes?
@@ -278,14 +282,14 @@ fn sccRecurseIntoGraph(
         while (true) {
             const scc_item = stack.pop();
             all_attributes[scc_item].on_stack = false;
-            scc.append(scc_item) catch exitOnOom();
+            scc.append(scc_item) catch |err| exitOnOom(err);
 
             if (scc_item == current) {
                 break;
             }
         }
 
-        sccs.groups.append(scc) catch exitOnOom();
+        sccs.groups.append(scc) catch |err| exitOnOom(err);
     }
 }
 

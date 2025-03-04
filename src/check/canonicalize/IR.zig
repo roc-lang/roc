@@ -45,37 +45,37 @@ pub fn init(gpa: std.mem.Allocator) Self {
 
     return Self{
         .env = env,
-        .aliases = Alias.List.init(gpa),
+        .aliases = .{},
         .imports = ModuleImport.Store.init(&.{}, &env.idents, gpa),
-        .defs = Def.List.init(gpa),
-        .exprs = Expr.List.init(gpa),
-        .exprs_at_regions = ExprAtRegion.List.init(gpa),
-        .typed_exprs_at_regions = TypedExprAtRegion.List.init(gpa),
-        .when_branches = WhenBranch.List.init(gpa),
-        .patterns = Pattern.List.init(gpa),
-        .patterns_at_regions = PatternAtRegion.List.init(gpa),
-        .typed_patterns_at_regions = TypedPatternAtRegion.List.init(gpa),
-        .type_indices = collections.SafeList(TypeIdx).init(gpa),
+        .defs = .{},
+        .exprs = .{},
+        .exprs_at_regions = .{},
+        .typed_exprs_at_regions = .{},
+        .when_branches = .{},
+        .patterns = .{},
+        .patterns_at_regions = .{},
+        .typed_patterns_at_regions = .{},
+        .type_indices = .{},
         // .type_var_names = Ident.Store.init(gpa),
-        .ingested_files = IngestedFile.List.init(gpa),
+        .ingested_files = .{},
     };
 }
 
 pub fn deinit(self: *Self) void {
     self.env.deinit();
-    self.aliases.deinit();
-    self.imports.deinit();
-    self.defs.deinit();
-    self.exprs.deinit();
-    self.exprs_at_regions.deinit();
-    self.typed_exprs_at_regions.deinit();
-    self.when_branches.deinit();
-    self.patterns.deinit();
-    self.patterns_at_regions.deinit();
-    self.typed_patterns_at_regions.deinit();
-    self.type_indices.deinit();
-    // self.type_var_names.deinit();
-    self.ingested_files.deinit();
+    self.aliases.deinit(self.env.gpa);
+    self.imports.deinit(self.env.gpa);
+    self.defs.deinit(self.env.gpa);
+    self.exprs.deinit(self.env.gpa);
+    self.exprs_at_regions.deinit(self.env.gpa);
+    self.typed_exprs_at_regions.deinit(self.env.gpa);
+    self.when_branches.deinit(self.env.gpa);
+    self.patterns.deinit(self.env.gpa);
+    self.patterns_at_regions.deinit(self.env.gpa);
+    self.typed_patterns_at_regions.deinit(self.env.gpa);
+    self.type_indices.deinit(self.env.gpa);
+    // self.type_var_names.deinit(self.env.gpa);
+    self.ingested_files.deinit(self.env.gpa);
 }
 
 pub const RigidVariables = struct {

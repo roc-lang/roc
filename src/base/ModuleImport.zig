@@ -41,7 +41,6 @@ pub const Resolved = struct {
 pub const Store = struct {
     imports: List,
     ident_store: *Ident.Store,
-    gpa: std.mem.Allocator,
 
     pub const primary_idx: Idx = @enumFromInt(0);
 
@@ -55,19 +54,19 @@ pub const Store = struct {
         ident_store: *Ident.Store,
         gpa: std.mem.Allocator,
     ) Store {
-        var modules = List.init(gpa);
-        _ = modules.append(Self{
+        var modules = List{};
+        _ = modules.append(gpa, Self{
             .name = &.{},
             .package_shorthand = null,
-            .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
+            .exposed_idents = .{},
             .resolved = null,
         });
 
         for (builtin_names) |builtin| {
-            _ = modules.append(Self{
+            _ = modules.append(gpa, Self{
                 .name = builtin,
                 .package_shorthand = null,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(gpa),
+                .exposed_idents = .{},
                 .resolved = null,
             });
         }
@@ -75,16 +74,15 @@ pub const Store = struct {
         return Store{
             .imports = modules,
             .ident_store = ident_store,
-            .gpa = gpa,
         };
     }
 
-    pub fn deinit(store: *Store) void {
+    pub fn deinit(store: *Store, gpa: std.mem.Allocator) void {
         for (store.imports.items.items) |*import| {
-            import.exposed_idents.deinit();
+            import.exposed_idents.deinit(gpa);
         }
 
-        store.imports.deinit();
+        store.imports.deinit(gpa);
     }
 
     // TODO: Remove this if we don't need it, it seems unnecessary
@@ -120,16 +118,17 @@ pub const Store = struct {
     /// reusing an existing [Idx] if the module was already imported.
     pub fn getOrInsert(
         self: *Store,
+        gpa: std.mem.Allocator,
         name: []const u8,
         package_shorthand: ?[]const u8,
     ) LookupResult {
         if (self.lookup(name, package_shorthand)) |idx| {
             return LookupResult{ .import_idx = idx, .was_present = true };
         } else {
-            const idx = self.imports.append(Self{
+            const idx = self.imports.append(gpa, Self{
                 .name = name,
                 .package_shorthand = package_shorthand,
-                .exposed_idents = collections.SafeList(Ident.Idx).init(self.gpa),
+                .exposed_idents = .{},
                 .resolved = null,
             });
 

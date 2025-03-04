@@ -134,27 +134,24 @@ pub const Type = union(enum) {
         pub const U128: Idx = @enumFromInt(10);
         pub const I128: Idx = @enumFromInt(11);
 
-        pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Store {
-            var store = Store{
-                .env = env,
-                .types = List.init(gpa),
-            };
+        pub fn init(env: *base.ModuleEnv) Store {
+            var store = Store{ .env = env, .types = .{} };
 
             // APPEND THE BUILTINS ORDER MATTERS FOR THE CONSTANTS
             // DEFINED ABOVE
 
-            _ = store.types.append(.bool);
-            _ = store.types.append(.str);
-            _ = store.types.append(.{ .int = .u8 });
-            _ = store.types.append(.{ .int = .i8 });
-            _ = store.types.append(.{ .int = .u16 });
-            _ = store.types.append(.{ .int = .i16 });
-            _ = store.types.append(.{ .int = .u32 });
-            _ = store.types.append(.{ .int = .i32 });
-            _ = store.types.append(.{ .int = .u64 });
-            _ = store.types.append(.{ .int = .i64 });
-            _ = store.types.append(.{ .int = .u128 });
-            _ = store.types.append(.{ .int = .i128 });
+            _ = store.types.append(env.gpa, .bool);
+            _ = store.types.append(env.gpa, .str);
+            _ = store.types.append(env.gpa, .{ .int = .u8 });
+            _ = store.types.append(env.gpa, .{ .int = .i8 });
+            _ = store.types.append(env.gpa, .{ .int = .u16 });
+            _ = store.types.append(env.gpa, .{ .int = .i16 });
+            _ = store.types.append(env.gpa, .{ .int = .u32 });
+            _ = store.types.append(env.gpa, .{ .int = .i32 });
+            _ = store.types.append(env.gpa, .{ .int = .u64 });
+            _ = store.types.append(env.gpa, .{ .int = .i64 });
+            _ = store.types.append(env.gpa, .{ .int = .u128 });
+            _ = store.types.append(env.gpa, .{ .int = .i128 });
 
             // TODO other builtins... can we find a nicer solution for managing this?
 
@@ -162,21 +159,21 @@ pub const Type = union(enum) {
         }
 
         pub fn deinit(self: *Store) void {
-            self.types.deinit();
+            self.types.deinit(self.env.gpa);
         }
 
-        pub fn get(self: *Store, id: Idx) *Type {
+        pub fn get(self: *const Store, id: Idx) *Type {
             return self.types.get(id);
         }
 
-        pub fn set(self: *Store, id: Idx, value: Type) void {
+        pub fn set(self: *const Store, id: Idx, value: Type) void {
             self.types.set(id, value);
         }
 
         /// Create a fresh type variable
         /// Used in canonicalization when creating type slots
         pub fn fresh(self: *Store) Idx {
-            return self.types.append(.{ .flex_var = null });
+            return self.types.append(self.env.gpa, .{ .flex_var = null });
         }
     };
 
@@ -190,7 +187,7 @@ test "formatting" {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var store = Type.Store.init(&env, gpa);
+    var store = Type.Store.init(&env);
     defer store.deinit();
 
     const bool_str = try std.fmt.allocPrint(gpa, "{}", .{store.get(Type.Store.BOOL)});

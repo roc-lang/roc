@@ -262,11 +262,11 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: Allocator) !bool {
     defer module_env.deinit();
 
     // Parse the source code
-    var parse_ast = parse.parse(&module_env, gpa, content.source);
+    var parse_ast = parse.parse(&module_env, content.source);
     defer parse_ast.deinit();
 
     // Format the source code
-    var formatter = fmt.init(parse_ast, gpa);
+    var formatter = fmt.init(parse_ast);
     defer formatter.deinit();
     const formatted_output = formatter.formatFile();
     defer gpa.free(formatted_output);
@@ -275,7 +275,7 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: Allocator) !bool {
     parse_ast.store.emptyScratch();
 
     // Write the new AST to the parse section
-    try parse_ast.toSExprStr(gpa, &module_env, parse_buffer.writer().any());
+    try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
 
     // Rewrite the file with updated sections
     var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {

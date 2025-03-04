@@ -17,25 +17,20 @@ const FormatFlags = enum { debug_binop, no_debug };
 
 ast: IR,
 gpa: std.mem.Allocator,
-buffer: std.ArrayList(u8),
-curr_indent: u32,
+buffer: std.ArrayListUnmanaged(u8) = .{},
+curr_indent: u32 = 0,
 flags: FormatFlags = .no_debug,
 
 const Formatter = @This();
 
 /// Creates a new Formatter for the given parse IR.
-pub fn init(ast: IR, gpa: std.mem.Allocator) Formatter {
-    return .{
-        .ast = ast,
-        .gpa = gpa,
-        .buffer = std.ArrayList(u8).init(gpa),
-        .curr_indent = 0,
-    };
+pub fn init(ast: IR) Formatter {
+    return .{ .ast = ast, .gpa = ast.store.gpa };
 }
 
 /// Deinits all data owned by the formatter object.
 pub fn deinit(fmt: *Formatter) void {
-    fmt.buffer.deinit();
+    fmt.buffer.deinit(fmt.gpa);
 }
 
 /// Sets the Formatter up fresh to work on a new parse IR.
@@ -52,7 +47,7 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     const file = fmt.ast.store.getFile();
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
-    const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch exitOnOom();
+    const statements = fmt.gpa.dupe(IR.NodeStore.StatementIdx, file.statements) catch |err| exitOnOom(err);
     defer fmt.gpa.free(statements);
     for (statements) |s| {
         fmt.ensureNewline();
@@ -61,7 +56,7 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
         }
         newline_behavior = fmt.formatStatement(s);
     }
-    return fmt.buffer.toOwnedSlice() catch exitOnOom();
+    return fmt.buffer.toOwnedSlice(fmt.gpa) catch |err| exitOnOom(err);
 }
 
 const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
@@ -71,7 +66,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
     switch (statement) {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
-            fmt.buffer.appendSlice(" = ") catch exitOnOom();
+            fmt.buffer.appendSlice(fmt.gpa, " = ") catch |err| exitOnOom(err);
             fmt.formatExpr(d.body);
             return .extra_newline_needed;
         },
@@ -80,7 +75,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             return .extra_newline_needed;
         },
         .import => |i| {
-            fmt.buffer.appendSlice("import ") catch exitOnOom();
+            fmt.buffer.appendSlice(fmt.gpa, "import ") catch |err| exitOnOom(err);
             fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
             return .extra_newline_needed;
         },
@@ -117,7 +112,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
 fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) void {
     if (qualifier) |q| {
         fmt.pushTokenText(q);
-        fmt.buffer.append('.') catch exitOnOom();
+        fmt.buffer.append(fmt.gpa, '.') catch |err| exitOnOom(err);
     }
     fmt.pushTokenText(ident);
 }
@@ -437,7 +432,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
 fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (body.whitespace != null and body.statements.len > 1) {
         fmt.curr_indent += 1;
-        fmt.buffer.append('{') catch exitOnOom();
+        fmt.buffer.append(fmt.gpa, '{') catch |err| exitOnOom(err);
         for (body.statements) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
@@ -446,7 +441,7 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
         fmt.ensureNewline();
         fmt.curr_indent -= 1;
         fmt.pushIndent();
-        fmt.buffer.append('}') catch exitOnOom();
+        fmt.buffer.append(fmt.gpa, '}') catch |err| exitOnOom(err);
     } else if (body.statements.len == 1) {
         _ = fmt.formatStatement(body.statements[0]);
     } else {
@@ -566,7 +561,7 @@ fn ensureNewline(fmt: *Formatter) void {
 }
 
 fn newline(fmt: *Formatter) void {
-    fmt.buffer.append('\n') catch exitOnOom();
+    fmt.buffer.append(fmt.gpa, '\n') catch |err| exitOnOom(err);
 }
 
 fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
@@ -584,11 +579,11 @@ fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
 const indent = "    ";
 
 fn push(fmt: *Formatter, c: u8) void {
-    fmt.buffer.append(c) catch exitOnOom();
+    fmt.buffer.append(fmt.gpa, c) catch |err| exitOnOom(err);
 }
 
 fn pushAll(fmt: *Formatter, str: []const u8) void {
-    fmt.buffer.appendSlice(str) catch exitOnOom();
+    fmt.buffer.appendSlice(fmt.gpa, str) catch |err| exitOnOom(err);
 }
 
 fn pushIndent(fmt: *Formatter) void {
@@ -596,7 +591,7 @@ fn pushIndent(fmt: *Formatter) void {
         return;
     }
     for (0..fmt.curr_indent) |_| {
-        fmt.buffer.appendSlice(indent) catch exitOnOom();
+        fmt.buffer.appendSlice(fmt.gpa, indent) catch |err| exitOnOom(err);
     }
 }
 
@@ -612,7 +607,7 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
     }
 
     const text = fmt.ast.source[start..region.end.offset];
-    fmt.buffer.appendSlice(text) catch exitOnOom();
+    fmt.buffer.appendSlice(fmt.gpa, text) catch |err| exitOnOom(err);
 }
 
 fn moduleFmtsSame(source: []const u8) !void {
@@ -623,20 +618,23 @@ fn moduleFmtsSame(source: []const u8) !void {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var parse_ast = parse(&env, std.testing.allocator, source);
+    var parse_ast = parse(&env, source);
     defer parse_ast.deinit();
 
     // @Anthony / @Josh shouldn't these be added to the ModuleEnv (env) so they are in the arena
     // and then they are cleaned up when the arena is deinitialized at the end of program compilation
     // or included in the cached build
-    defer std.testing.allocator.free(parse_ast.errors);
+    defer gpa.free(parse_ast.errors);
 
     try std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors);
-    var formatter = Formatter.init(parse_ast, std.testing.allocator);
+
+    var formatter = Formatter.init(parse_ast);
     defer formatter.deinit();
+
     const result = formatter.formatFile();
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualSlices(u8, source, result);
+    defer gpa.free(result);
+
+    try std.testing.expectEqualStrings(source, result);
 }
 
 const tokenize = @import("check/parse/tokenize.zig");
@@ -651,18 +649,20 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
+
     var messages: [1]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice, gpa);
-    tokenizer_.tokenize();
-    const result = tokenizer_.finish_and_deinit();
 
-    var parser = Parser.init(gpa, result.tokens);
+    var tokenizer_ = tokenize.Tokenizer.init(&env, source, msg_slice);
+    tokenizer_.tokenize();
+    const result = tokenizer_.finishAndDeinit();
+
+    var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     const expr = parser.parseExpr();
 
-    const errors = parser.diagnostics.toOwnedSlice() catch exitOnOom();
+    const errors = parser.diagnostics.toOwnedSlice(gpa) catch |err| exitOnOom(err);
 
     var parse_ast = IR{
         .source = source,
@@ -677,29 +677,40 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
         std.debug.print("Tokens:\n{any}", .{result.tokens.tokens.items(.tag)});
         std.debug.panic("Test failed with parse errors", .{});
     };
-    var formatter = Formatter.init(parse_ast, std.testing.allocator);
+
+    var formatter = Formatter.init(parse_ast);
     formatter.flags = flags;
     defer formatter.deinit();
+
     formatter.formatExpr(expr);
-    const fmt_result = formatter.buffer.toOwnedSlice() catch exitOnOom();
-    defer std.testing.allocator.free(fmt_result);
-    try std.testing.expectEqualSlices(u8, expected, fmt_result);
+
+    const fmt_result = formatter.buffer.toOwnedSlice(gpa) catch |err| exitOnOom(err);
+    defer gpa.free(fmt_result);
+
+    try std.testing.expectEqualStrings(expected, fmt_result);
 }
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     const parse = @import("check/parse.zig").parse;
     const gpa = std.testing.allocator;
+
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
-    var parse_ast = parse(&env, std.testing.allocator, source);
+
+    var parse_ast = parse(&env, source);
     defer parse_ast.deinit();
-    defer std.testing.allocator.free(parse_ast.errors);
+
+    defer gpa.free(parse_ast.errors);
+
     try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
-    var formatter = Formatter.init(parse_ast, std.testing.allocator);
+
+    var formatter = Formatter.init(parse_ast);
     defer formatter.deinit();
+
     const result = formatter.formatFile();
-    defer std.testing.allocator.free(result);
-    try std.testing.expectEqualSlices(u8, to, result);
+    defer gpa.free(result);
+
+    try std.testing.expectEqualStrings(to, result);
 }
 
 test "Hello world" {

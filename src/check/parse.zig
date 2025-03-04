@@ -13,23 +13,23 @@ const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *base.ModuleEnv, allocator: std.mem.Allocator, source: []const u8) IR {
+pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice, allocator);
+    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice);
     tokenizer.tokenize();
-    const result = tokenizer.finish_and_deinit();
+    const result = tokenizer.finishAndDeinit();
 
     if (result.messages.len > 0) {
-        tokenizeReport(allocator, source, result.messages);
+        tokenizeReport(env.gpa, source, result.messages);
     }
 
-    var parser = Parser.init(allocator, result.tokens);
+    var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     parser.parseFile();
 
-    const errors = parser.diagnostics.toOwnedSlice() catch exitOnOom();
+    const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
 
     return .{
         .source = source,
@@ -55,11 +55,11 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
     std.debug.print("Found the {d} following issues while parsing:\n", .{msgs.len});
     var newlines = std.ArrayList(usize).init(allocator);
     defer newlines.deinit();
-    newlines.append(0) catch exitOnOom();
+    newlines.append(0) catch |err| exitOnOom(err);
     var pos: usize = 0;
     for (source) |c| {
         if (c == '\n') {
-            newlines.append(pos) catch exitOnOom();
+            newlines.append(pos) catch |err| exitOnOom(err);
         }
         pos += 1;
     }
@@ -75,12 +75,12 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 var spaces = std.ArrayList(u8).init(allocator);
                 defer spaces.deinit();
                 for (0..start_col) |_| {
-                    spaces.append(' ') catch exitOnOom();
+                    spaces.append(' ') catch |err| exitOnOom(err);
                 }
 
                 std.debug.print(
                     "({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
-                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.toOwnedSlice() catch exitOnOom() },
+                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.toOwnedSlice() catch |err| exitOnOom(err) },
                 );
             },
             else => {
@@ -96,7 +96,7 @@ fn testSExprHelper(source: []const u8, expected: []const u8) !void {
     defer env.deinit();
 
     // parse our source
-    var parse_ast = parse(&env, testing.allocator, source);
+    var parse_ast = parse(&env, source);
     defer parse_ast.deinit();
 
     // shouldn't be required in future
@@ -107,7 +107,7 @@ fn testSExprHelper(source: []const u8, expected: []const u8) !void {
     defer buf.deinit();
 
     // convert the AST to our SExpr
-    try parse_ast.toSExprStr(testing.allocator, &env, buf.writer().any());
+    try parse_ast.toSExprStr(&env, buf.writer().any());
 
     // TODO in future we should just write the SExpr to a file and snapshot it
     // for now we are comparing strings to keep it simple

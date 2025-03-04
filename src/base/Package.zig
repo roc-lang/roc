@@ -30,7 +30,7 @@ modules: Module.List,
 /// Usually `main.roc`, or sometimes the application, e.g. `my-script.roc`.
 root_module_idx: Module.Idx,
 /// All files in this package (including the Roc ones) relative to the package's root.
-relative_filepaths: std.ArrayList([]const u8),
+relative_filepaths: std.ArrayListUnmanaged([]const u8),
 /// All packages depended on by this package.
 dependencies: Dependency.List,
 
@@ -77,7 +77,7 @@ pub const Module = struct {
         // replace the separators (the / in this example) with dots and remove
         // the last four characters for the extension.
         std.debug.assert(relative_path.len > ROC_EXTENSION.len);
-        var name = string_arena.allocator().alloc(u8, relative_path.len - ROC_EXTENSION.len) catch exitOnOom();
+        var name = string_arena.allocator().alloc(u8, relative_path.len - ROC_EXTENSION.len) catch |err| exitOnOom(err);
         var chars_added: usize = 0;
 
         while (component_iter.next()) |component| {
@@ -279,7 +279,7 @@ pub const Dependency = struct {
 
 pub const Store = struct {
     packages: List,
-    indices_by_url: std.StringHashMap(Idx),
+    indices_by_url: std.StringHashMapUnmanaged(Idx),
     string_arena: std.heap.ArenaAllocator,
 
     pub const builtins_idx: Idx = @enumFromInt(0);
@@ -310,29 +310,29 @@ pub const Store = struct {
     };
 
     pub fn init(
+        gpa: std.mem.Allocator,
         primary_root_module_absdir: []const u8,
         primary_root_module_path: []const u8,
-        primary_relative_filepaths: std.ArrayList([]const u8),
-        builtin_filenames: std.ArrayList([]const u8),
-        gpa: std.mem.Allocator,
+        primary_relative_filepaths: std.ArrayListUnmanaged([]const u8),
+        builtin_filenames: std.ArrayListUnmanaged([]const u8),
     ) InitResult {
         var string_arena = std.heap.ArenaAllocator.init(gpa);
         errdefer string_arena.deinit();
 
-        var packages = List.init(gpa);
-        errdefer packages.deinit();
+        var packages = List{};
+        errdefer packages.deinit(gpa);
 
-        _ = packages.append(Self{
+        _ = packages.append(gpa, Self{
             .download_url = &.{},
             .content_hash = &.{},
             .version_string = &.{},
             // TODO: set this to the cache path for builtins once they are saved there.
             .absolute_dirpath = &.{},
-            .modules = Module.List.init(gpa),
+            .modules = .{},
             // zero value during init
             .root_module_idx = @enumFromInt(0),
             .relative_filepaths = builtin_filenames,
-            .dependencies = Dependency.List.init(gpa),
+            .dependencies = .{},
         });
 
         // TODO: implement compilation of builtins
@@ -341,7 +341,7 @@ pub const Store = struct {
         //     const module = Module.fromRelativePath(builtin_filename, &string_arena) catch |err| {
         //         return .{ .err = .{ .invalid_builtin_module_name = .{
         //             .err = err,
-        //             .filename = gpa.dupe(u8, builtin_filename) catch exitOnOom(),
+        //             .filename = gpa.dupe(u8, builtin_filename) catch |err| exitOnOom(err),
         //         } } };
         //     };
         //     const module_idx = packages.items.items[0].modules.append(module);
@@ -357,16 +357,16 @@ pub const Store = struct {
         //     return .{ .err = .could_not_find_builtins_root_module };
         // }
 
-        _ = packages.append(Self{
+        _ = packages.append(gpa, Self{
             .download_url = &.{},
             .content_hash = &.{},
             .version_string = &.{},
             .absolute_dirpath = primary_root_module_absdir,
-            .modules = Module.List.init(gpa),
+            .modules = .{},
             // zero value during init
             .root_module_idx = @enumFromInt(0),
             .relative_filepaths = primary_relative_filepaths,
-            .dependencies = Dependency.List.init(gpa),
+            .dependencies = .{},
         });
 
         var primary_root_idx: ?Idx = null;
@@ -374,7 +374,7 @@ pub const Store = struct {
             // For now, assume that modules with invalid names can't be imported,
             // so we don't even load them.
             const module = Module.fromRelativePath(relative_path, &string_arena) catch continue;
-            const module_idx = packages.items.items[1].modules.append(module);
+            const module_idx = packages.items.items[1].modules.append(gpa, module);
 
             if (std.mem.eql(u8, relative_path, primary_root_module_path)) {
                 primary_root_idx = module_idx;
@@ -389,15 +389,15 @@ pub const Store = struct {
 
         return .{ .success = Store{
             .packages = packages,
-            .indices_by_url = std.StringHashMap(Idx).init(gpa),
+            .indices_by_url = .{},
             .string_arena = string_arena,
         } };
     }
 
-    pub fn deinit(self: *Store) void {
+    pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         for (self.packages.items.items) |*package| {
-            package.modules.deinit();
-            package.dependencies.deinit();
+            package.modules.deinit(gpa);
+            package.dependencies.deinit(gpa);
             package.relative_filepaths.deinit();
         }
 
@@ -411,11 +411,11 @@ pub const Store = struct {
         url_data: Url,
         absolute_dirpath: []const u8,
         root_module_filename: []const u8,
-        relative_filepaths: std.ArrayList([]const u8),
+        relative_filepaths: std.ArrayListUnmanaged([]const u8),
         gpa: std.mem.Allocator,
     ) error{root_module_not_found}!Idx {
-        var modules = Module.List.init(gpa);
-        const dependencies = Dependency.List.init(gpa);
+        var modules = Module.List{};
+        const dependencies = Dependency.List{};
 
         var root_module_idx: ?Module.Idx = null;
         for (relative_filepaths.items) |filepath| {
@@ -425,14 +425,14 @@ pub const Store = struct {
                 filepath,
                 &self.string_arena,
             ) catch continue;
-            const module_idx = modules.append(module);
+            const module_idx = modules.append(gpa, module);
 
             if (std.mem.eql(u8, filepath, root_module_filename)) {
                 root_module_idx = module_idx;
             }
         }
 
-        const idx = self.packages.append(Self{
+        const idx = self.packages.append(gpa, Self{
             .download_url = url_data.url,
             .content_hash = url_data.content_hash,
             .version_string = url_data.version,
@@ -444,7 +444,7 @@ pub const Store = struct {
             .dependencies = dependencies,
         });
 
-        self.indices_by_url.put(url_data.url, idx) catch exitOnOom();
+        self.indices_by_url.put(gpa, url_data.url, idx) catch |err| exitOnOom(err);
 
         return idx;
     }
@@ -455,6 +455,7 @@ pub const Store = struct {
 
     pub fn addDependencyToPackage(
         self: *Store,
+        gpa: std.mem.Allocator,
         parent_idx: Idx,
         child_idx: Idx,
         shorthand: []const u8,
@@ -478,7 +479,7 @@ pub const Store = struct {
             break :blk .{ .idx = child_idx };
         };
 
-        _ = pkg.dependencies.append(Dependency{
+        _ = pkg.dependencies.append(gpa, Dependency{
             .shorthand = shorthand,
             .shorthand_region = shorthand_region,
             .package = dep_pkg,

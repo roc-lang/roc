@@ -69,7 +69,7 @@ pub const Dir = struct {
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
         return dir.dir.realpathAlloc(allocator, filename) catch |err| {
             switch (err) {
-                error.OutOfMemory => exitOnOom(),
+                error.OutOfMemory => exitOnOom(error.OutOfMemory),
                 else => return err,
             }
         };
@@ -83,18 +83,18 @@ pub const Dir = struct {
         dir: *Dir,
         gpa: std.mem.Allocator,
         string_arena: *std.heap.ArenaAllocator,
-    ) !std.ArrayList([]const u8) {
-        var files = std.ArrayList([]const u8).init(gpa);
-        errdefer files.deinit();
+    ) !std.ArrayListUnmanaged([]const u8) {
+        var files = std.ArrayListUnmanaged([]const u8){};
+        errdefer files.deinit(gpa);
 
-        var walker = dir.dir.walk(gpa) catch exitOnOom();
+        var walker = dir.dir.walk(gpa) catch |err| exitOnOom(err);
         while (try walker.next()) |entry| {
             switch (entry.kind) {
                 .file => {
                     const path = std.mem.sliceTo(entry.path, 0);
-                    const relative_path = string_arena.allocator().dupe(u8, path) catch exitOnOom();
+                    const relative_path = string_arena.allocator().dupe(u8, path) catch |err| exitOnOom(err);
 
-                    files.append(relative_path) catch exitOnOom();
+                    files.append(gpa, relative_path) catch |err| exitOnOom(err);
                 },
                 else => {
                     // do nothing

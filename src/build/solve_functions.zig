@@ -24,15 +24,15 @@ pub const IR = struct {
     env: *base.ModuleEnv,
     function_sets: FunctionSet.List,
 
-    pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) IR {
+    pub fn init(env: *base.ModuleEnv) IR {
         return IR{
             .env = env,
-            .function_sets = FunctionSet.List.init(gpa),
+            .function_sets = .{},
         };
     }
 
     pub fn deinit(self: *IR) void {
-        self.function_sets.deinit();
+        self.function_sets.deinit(self.env.gpa);
     }
 };
 
