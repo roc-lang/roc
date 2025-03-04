@@ -15,10 +15,7 @@ module [foo]
 foo = "one"
 ~~~PARSE
 (file
-    (header
-        'foo')
+    (header 'foo')
     (decl
-        (ident
-            'foo')
-        (string
-            'one')))
+        (ident 'foo')
+        (string 'one')))

@@ -76,17 +76,28 @@ pub const Expr = union(enum) {
     pub fn format(self: Expr, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        try toStringCompact(self, writer);
+        try toStringPretty(self, writer);
+    }
+
+    fn countItems(node: *const Expr) usize {
+        switch (node.*) {
+            .node => |n| {
+                var count: usize = 1;
+                for (n.children.items) |child| {
+                    count += countItems(&child);
+                }
+                return count;
+            },
+            else => return 1,
+        }
+    }
+
+    fn isSimple(node: *const Expr) bool {
+        return countItems(node) <= 3;
     }
 
     /// Write the node as an S-expression formatted string to the given writer.
-    fn toString(node: Expr, writer: std.io.AnyWriter, options: struct {
-        indent: ?usize = null,
-        current_level: usize = 0,
-    }) !void {
-        const indent_level = options.indent orelse 0;
-        const has_indent = indent_level > 0;
-
+    fn toString(node: Expr, writer: std.io.AnyWriter, indent: usize) !void {
         switch (node) {
             .node => |n| {
                 try writer.print("(", .{});
@@ -94,29 +105,24 @@ pub const Expr = union(enum) {
 
                 if (n.children.items.len > 0) {
                     // If we have indentation and children, format with newlines
-                    if (has_indent) {
-                        const next_level = options.current_level + 1;
-
-                        for (n.children.items) |child| {
-                            try writer.print("\n", .{});
-
-                            // Print indentation
-                            try writeIndent(writer, next_level * indent_level);
-
-                            try child.toString(writer, .{
-                                .indent = indent_level,
-                                .current_level = next_level,
-                            });
-                        }
-                    } else {
+                    if (node.isSimple()) {
                         // No indentation, use the original compact format
                         try writer.print(" ", .{});
 
                         for (n.children.items, 0..) |child, i| {
-                            try child.toString(writer, .{});
+                            try child.toString(writer, indent + 1);
                             if (i + 1 < n.children.items.len) {
                                 try writer.print(" ", .{});
                             }
+                        }
+                    } else {
+                        for (n.children.items) |child| {
+                            try writer.print("\n", .{});
+
+                            // Print indentation
+                            try writeIndent(writer, 4 * (indent + 1));
+
+                            try child.toString(writer, indent + 1);
                         }
                     }
                 }
@@ -130,14 +136,8 @@ pub const Expr = union(enum) {
         }
     }
 
-    pub fn toStringCompact(node: Expr, writer: std.io.AnyWriter) void {
-        return toString(node, writer, .{}) catch {
-            @panic("Ran out of memory writing S-expression to writer");
-        };
-    }
-
-    pub fn toStringPretty(node: Expr, writer: std.io.AnyWriter, indent_size: usize) void {
-        return toString(node, writer, .{ .indent = indent_size }) catch {
+    pub fn toStringPretty(node: Expr, writer: std.io.AnyWriter) void {
+        return toString(node, writer, 0) catch {
             @panic("Ran out of memory writing S-expression to writer");
         };
     }
@@ -183,30 +183,16 @@ test "s-expression" {
     foo.appendSignedIntChild(gpa, -123);
     foo.appendNodeChild(gpa, &baz);
 
-    // Test compact formatting
-    {
-        var buf = std.ArrayList(u8).init(gpa);
-        defer buf.deinit();
-        foo.toStringCompact(buf.writer().any());
-        const expected =
-            \\(foo 'bar' -123 (baz 456 7.89e2))
-        ;
-        try testing.expectEqualStrings(expected, buf.items);
-    }
-
     // Test pretty formatting
     {
         var buf = std.ArrayList(u8).init(gpa);
         defer buf.deinit();
-        const spaces = 4;
-        foo.toStringPretty(buf.writer().any(), spaces);
+        foo.toStringPretty(buf.writer().any());
         const expected =
             \\(foo
             \\    'bar'
             \\    -123
-            \\    (baz
-            \\        456
-            \\        7.89e2))
+            \\    (baz 456 7.89e2))
         ;
         try testing.expectEqualStrings(expected, buf.items);
     }

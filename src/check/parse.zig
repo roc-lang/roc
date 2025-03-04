@@ -124,19 +124,13 @@ test "example s-expr" {
 
     const expected =
         \\(file
-        \\    (header
-        \\        'foo'
-        \\        'bar')
+        \\    (header 'foo' 'bar')
         \\    (decl
-        \\        (ident
-        \\            'foo')
-        \\        (string
-        \\            'hey'))
+        \\        (ident 'foo')
+        \\        (string 'hey'))
         \\    (decl
-        \\        (ident
-        \\            'bar')
-        \\        (string
-        \\            'yo')))
+        \\        (ident 'bar')
+        \\        (string 'yo')))
     ;
 
     try testSExprHelper(source, expected);
