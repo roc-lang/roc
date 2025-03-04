@@ -10,7 +10,7 @@ foo =
 
     "one"
 ~~~FORMATTED
-module [foo]
+module[foo]
 
 foo = "one"
 ~~~PARSE
