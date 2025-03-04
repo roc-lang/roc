@@ -1,6 +1,6 @@
-//! The common state or environment for a module for things that live for the duration of the compilation.
+//! The common state for a module: any data useful over the full lifetime of its compilation.
 //!
-//! Stores all interned data like symbols, strings, tag names, field names, and problems.
+//! Stores all interned data like idents, strings, and problems.
 //!
 //! This reduces the size of this module's IRs as they can store references to this
 //! interned (and deduplicated) data instead of storing the values themselves.
@@ -17,23 +17,25 @@ const Problem = problem.Problem;
 
 const Self = @This();
 
-idents: Ident.Store,
+gpa: std.mem.Allocator,
+idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
-problems: std.ArrayList(Problem),
+problems: Problem.List,
 
 pub fn init(gpa: std.mem.Allocator) Self {
     return Self{
-        .idents = Ident.Store.init(gpa),
-        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(gpa),
-        .strings = StringLiteral.Store.init(gpa),
-        .problems = std.ArrayList(Problem).init(gpa),
+        .gpa = gpa,
+        .idents = .{},
+        .ident_ids_for_slicing = .{},
+        .strings = .{},
+        .problems = .{},
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.idents.deinit();
-    self.ident_ids_for_slicing.deinit();
-    self.strings.deinit();
-    self.problems.deinit();
+    self.idents.deinit(self.gpa);
+    self.ident_ids_for_slicing.deinit(self.gpa);
+    self.strings.deinit(self.gpa);
+    self.problems.deinit(self.gpa);
 }

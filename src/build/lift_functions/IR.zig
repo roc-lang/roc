@@ -21,31 +21,31 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-pub fn init(env: *base.ModuleEnv, gpa: std.mem.Allocator) Self {
+pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
-        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(gpa),
-        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(gpa),
-        .types = Type.List.init(gpa),
-        .exprs = Expr.List.init(gpa),
-        .typed_exprs = Expr.Typed.List.init(gpa),
-        .patterns = Pattern.List.init(gpa),
-        .typed_patterns = Pattern.Typed.List.init(gpa),
-        .typed_idents = TypedIdent.List.init(gpa),
-        .when_branches = WhenBranch.List.init(gpa),
+        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(env.gpa),
+        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(env.gpa),
+        .types = .{},
+        .exprs = .{},
+        .typed_exprs = .{},
+        .patterns = .{},
+        .typed_patterns = .{},
+        .typed_idents = .{},
+        .when_branches = .{},
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.exposed_values.deinit();
-    self.exposed_functions.deinit();
-    self.types.deinit();
-    self.exprs.deinit();
-    self.typed_exprs.deinit();
-    self.patterns.deinit();
-    self.typed_patterns.deinit();
-    self.typed_idents.deinit();
-    self.when_branches.deinit();
+    self.exposed_values.deinit(self.env.gpa);
+    self.exposed_functions.deinit(self.env.gpa);
+    self.types.deinit(self.env.gpa);
+    self.exprs.deinit(self.env.gpa);
+    self.typed_exprs.deinit(self.env.gpa);
+    self.patterns.deinit(self.env.gpa);
+    self.typed_patterns.deinit(self.env.gpa);
+    self.typed_idents.deinit(self.env.gpa);
+    self.when_branches.deinit(self.env.gpa);
 }
 
 pub const Type = union(enum) {

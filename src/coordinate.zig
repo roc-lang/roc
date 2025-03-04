@@ -74,11 +74,11 @@ pub const TypecheckResult = union(enum) {
 
 /// Check the types of a module and its dependencies.
 pub fn typecheckModule(
-    entry_relative_path: []const u8,
-    fs: Filesystem,
     gpa: std.mem.Allocator,
+    fs: Filesystem,
+    entry_relative_path: []const u8,
 ) TypecheckResult {
-    const discover_data = switch (discoverModulesStartingFromEntry(entry_relative_path, fs, gpa)) {
+    const discover_data = switch (discoverModulesStartingFromEntry(gpa, fs, entry_relative_path)) {
         .success => |data| data,
         .err => |err| return .{ .err = .{ .discovery_err = err } },
     };
@@ -86,7 +86,7 @@ pub fn typecheckModule(
     var root = discover_data.root;
     defer root.deinit();
 
-    var module_graph = switch (ModuleGraph.fromPackages(&packages, fs, gpa)) {
+    var module_graph = switch (ModuleGraph.fromPackages(gpa, fs, &packages)) {
         .success => |graph| graph,
         .failed_to_open_module => |data| return .{
             .err = .{
@@ -275,9 +275,9 @@ const DesiredPackageDep = struct {
 };
 
 fn discoverModulesStartingFromEntry(
-    entry_relative_path: []const u8,
-    fs: Filesystem,
     gpa: std.mem.Allocator,
+    fs: Filesystem,
+    entry_relative_path: []const u8,
 ) ModuleDiscoveryResult {
     var root = findRootOfPackage(entry_relative_path, fs, gpa) catch |err| {
         return .{ .err = .{ .package_root_search_err = err } };
@@ -292,15 +292,15 @@ fn discoverModulesStartingFromEntry(
     const relative_paths = root_dir.findAllFilesRecursively(gpa, &string_arena) catch |err|
         return .{ .err = .{ .failed_to_walk_files = err } };
 
-    var builtins = std.ArrayList([]const u8).initCapacity(gpa, BUILTIN_FILENAMES.len) catch exitOnOom();
-    builtins.appendSlice(BUILTIN_FILENAMES) catch exitOnOom();
+    var builtins = std.ArrayListUnmanaged([]const u8).initCapacity(gpa, BUILTIN_FILENAMES.len) catch |err| exitOnOom(err);
+    builtins.appendSlice(gpa, BUILTIN_FILENAMES) catch |err| exitOnOom(err);
 
     var package_store = switch (Package.Store.init(
+        gpa,
         root.absolute_dir,
         root.root_filepath(),
         relative_paths,
         builtins,
-        gpa,
     )) {
         .success => |store| store,
         .err => |err| return .{ .err = .{ .init_packages = err } },
@@ -360,6 +360,7 @@ fn discoverModulesStartingFromEntry(
         };
 
         package_store.addDependencyToPackage(
+            gpa,
             next_dep.parent_package,
             dep_package_idx,
             next_dep.shorthand,
@@ -407,14 +408,14 @@ fn findRootOfPackage(
     const entry_dirpath = fs.dirName(entry_abs_path) orelse
         return error.entry_not_in_a_directory;
 
-    var current_dirpath = gpa.dupe(u8, entry_dirpath) catch exitOnOom();
+    var current_dirpath = gpa.dupe(u8, entry_dirpath) catch |err| exitOnOom(err);
     while (true) {
         var dir = fs.openDir(current_dirpath) catch break;
         const has_main = dir.hasFile(DEFAULT_MAIN_FILENAME) catch break;
         dir.close();
 
         if (has_main) {
-            const entry_relative_to_dir = gpa.alloc(u8, entry_abs_path.len - current_dirpath.len - 1) catch exitOnOom();
+            const entry_relative_to_dir = gpa.alloc(u8, entry_abs_path.len - current_dirpath.len - 1) catch |err| exitOnOom(err);
             std.mem.copyForwards(u8, entry_relative_to_dir, entry_abs_path[(current_dirpath.len + 1)..]);
 
             return PackageRoot{
@@ -436,8 +437,8 @@ fn findRootOfPackage(
     // cannot naively reuse this since it may have been set to a parent dir
     gpa.free(current_dirpath);
 
-    const alloced_entry_dirpath = gpa.dupe(u8, entry_dirpath) catch exitOnOom();
-    const entry_filename = gpa.dupe(u8, entry_abs_path[(entry_dirpath.len + 1)..]) catch exitOnOom();
+    const alloced_entry_dirpath = gpa.dupe(u8, entry_dirpath) catch |err| exitOnOom(err);
+    const entry_filename = gpa.dupe(u8, entry_abs_path[(entry_dirpath.len + 1)..]) catch |err| exitOnOom(err);
 
     return PackageRoot{
         .absolute_dir = alloced_entry_dirpath,
@@ -471,7 +472,7 @@ fn parseDependenciesFromPackageRoot(
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();
 
-    var parse_ast = parse.parse(&env, gpa, contents);
+    var parse_ast = parse.parse(&env, contents);
     defer parse_ast.deinit();
 
     parse_ast.store.emptyScratch();
@@ -491,16 +492,16 @@ fn parseDependenciesFromPackageRoot(
         const import = parse_ast.store.getRecordField(package_import);
 
         // TODO: get URL when it is stored in `StringLiteral.Store`
-        const url = gpa.dupe(u8, "") catch exitOnOom();
+        const url = gpa.dupe(u8, "") catch |err| exitOnOom(err);
         const url_region = Region.zero();
 
         desired_dep_queue.append(DesiredPackageDep{
             .parent_package = package_idx,
-            .shorthand = gpa.dupe(u8, parse_ast.resolve(import.name)) catch exitOnOom(),
+            .shorthand = gpa.dupe(u8, parse_ast.resolve(import.name)) catch |err| exitOnOom(err),
             .shorthand_region = parse_ast.tokens.resolve(import.name),
             .url = url,
             .url_region = url_region,
-        }) catch exitOnOom();
+        }) catch |err| exitOnOom(err);
     }
 
     return null;

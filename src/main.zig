@@ -135,10 +135,10 @@ fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    var parse_ast = parse.parse(&module_env, gpa, contents);
+    var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit();
 
-    var formatter = fmt.init(parse_ast, gpa);
+    var formatter = fmt.init(parse_ast);
     defer formatter.deinit();
 
     const formatted_output = formatter.formatFile();
@@ -191,13 +191,13 @@ fn rocCheck(gpa: Allocator, opt: RocOpt, args: []const []const u8) void {
         fatal("The check command expects a single filename as an argument.\n", .{});
     };
 
-    switch (coordinate.typecheckModule(filename, Filesystem.default(), gpa)) {
+    switch (coordinate.typecheckModule(gpa, Filesystem.default(), filename)) {
         .success => |data| {
             var problems = std.ArrayList(Problem).init(gpa);
             var index_iter = data.can_irs.iterIndices();
             while (index_iter.next()) |idx| {
                 const env = &data.can_irs.getWork(idx).env;
-                problems.appendSlice(env.problems.items) catch exitOnOom();
+                problems.appendSlice(env.problems.items.items) catch |err| exitOnOom(err);
             }
 
             for (problems.items) |problem| {

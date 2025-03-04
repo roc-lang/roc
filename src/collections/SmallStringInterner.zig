@@ -17,69 +17,58 @@ const Self = @This();
 /// The raw underlying bytes for all strings.
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
-bytes: std.ArrayListUnmanaged(u8),
+bytes: std.ArrayListUnmanaged(u8) = .{},
 /// A deduplicated set of strings indicies referencing into bytes.
 /// The key is the offset into bytes.
-strings: StringIdx.Table,
+strings: StringIdx.Table = .{},
 /// A unique ID for every string. This is fundamentally an index into bytes.
 /// It also maps 1:1 with a region at the same index.
-outer_indices: std.ArrayListUnmanaged(StringIdx),
-regions: std.ArrayListUnmanaged(Region),
-gpa: std.mem.Allocator,
+outer_indices: std.ArrayListUnmanaged(StringIdx) = .{},
+regions: std.ArrayListUnmanaged(Region) = .{},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
 
-pub fn init(gpa: std.mem.Allocator) Self {
-    return Self{
-        .bytes = .{},
-        .strings = .{},
-        .outer_indices = .{},
-        .regions = .{},
-        .gpa = gpa,
-    };
-}
-
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
-pub fn deinit(self: *Self) void {
-    self.bytes.deinit(self.gpa);
-    self.strings.deinit(self.gpa);
-    self.outer_indices.deinit(self.gpa);
-    self.regions.deinit(self.gpa);
+pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    self.bytes.deinit(gpa);
+    self.strings.deinit(gpa);
+    self.outer_indices.deinit(gpa);
+    self.regions.deinit(gpa);
 }
 
 /// Add a string to this interner, returning a unique, serial index.
-pub fn insert(self: *Self, string: []const u8, region: Region) Idx {
+pub fn insert(self: *Self, gpa: std.mem.Allocator, string: []const u8, region: Region) Idx {
     const entry = self.strings.getOrPutContextAdapted(
-        self.gpa,
+        gpa,
         string,
         StringIdx.TableAdapter{ .bytes = &self.bytes },
         StringIdx.TableContext{ .bytes = &self.bytes },
-    ) catch exitOnOom();
-    if (entry.found_existing) return self.addOuterIdForStringIndex(entry.key_ptr.*, region);
+    ) catch |err| exitOnOom(err);
+    if (entry.found_existing) return self.addOuterIdForStringIndex(gpa, entry.key_ptr.*, region);
 
-    self.bytes.ensureUnusedCapacity(self.gpa, string.len + 1) catch exitOnOom();
+    self.bytes.ensureUnusedCapacity(gpa, string.len + 1) catch |err| exitOnOom(err);
     const string_offset: StringIdx = @enumFromInt(self.bytes.items.len);
 
     self.bytes.appendSliceAssumeCapacity(string);
     self.bytes.appendAssumeCapacity(0);
 
     entry.key_ptr.* = string_offset;
-    return self.addOuterIdForStringIndex(string_offset, region);
+    return self.addOuterIdForStringIndex(gpa, string_offset, region);
 }
 
-fn addOuterIdForStringIndex(self: *Self, string_offset: StringIdx, region: Region) Idx {
+fn addOuterIdForStringIndex(self: *Self, gpa: std.mem.Allocator, string_offset: StringIdx, region: Region) Idx {
     const len: Idx = @enumFromInt(@as(u32, @truncate(self.outer_indices.items.len)));
-    self.outer_indices.append(self.gpa, string_offset) catch exitOnOom();
-    self.regions.append(self.gpa, region) catch exitOnOom();
+    self.outer_indices.append(gpa, string_offset) catch |err| exitOnOom(err);
+    self.regions.append(gpa, region) catch |err| exitOnOom(err);
 
     return len;
 }
 
 /// Check if two indices have the same text in constant time.
 pub fn indicesHaveSameText(
-    self: *Self,
+    self: *const Self,
     first_idx: Idx,
     second_idx: Idx,
 ) bool {
@@ -90,14 +79,14 @@ pub fn indicesHaveSameText(
 }
 
 /// Get a reference to the text for an interned string.
-pub fn getText(self: *Self, idx: Idx) []u8 {
+pub fn getText(self: *const Self, idx: Idx) []u8 {
     const string_offset = self.outer_indices.items[@as(usize, @intFromEnum(idx))];
 
     return std.mem.sliceTo(self.bytes.items[@intFromEnum(string_offset)..], 0);
 }
 
 /// Get the region for an interned string.
-pub fn getRegion(self: *Self, idx: Idx) Region {
+pub fn getRegion(self: *const Self, idx: Idx) Region {
     return self.regions.items[@as(usize, @intFromEnum(idx))];
 }
 

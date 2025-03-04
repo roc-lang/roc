@@ -1,18 +1,28 @@
+const std = @import("std");
 const base = @import("../../base.zig");
-const IR = @This();
-const Allocator = std.mem.Allocator;
-const Ident = base.Ident;
 const sexpr = @import("../../base/sexpr.zig");
+const tokenize = @import("tokenize.zig");
+const collections = @import("../../collections.zig");
 
-pub fn deinit(self: *IR) void {
-    defer self.tokens.deinit();
-    defer self.store.deinit();
-}
+const TokenIdx = tokenize.Token.Idx;
+const TokenizedBuffer = tokenize.TokenizedBuffer;
+const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+
+const testing = std.testing;
+const Ident = base.Ident;
+const Allocator = std.mem.Allocator;
+
+const IR = @This();
 
 source: []const u8,
 tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
+
+pub fn deinit(self: *IR) void {
+    defer self.tokens.deinit();
+    defer self.store.deinit();
+}
 
 /// Diagnostics related to parsing
 pub const Diagnostic = struct {
@@ -407,54 +417,54 @@ pub const Node = struct {
 /// be the only way that other modules interact with
 /// the IR (AST).
 pub const NodeStore = struct {
-    nodes: Node.List,
-    extra_data: std.ArrayList(u32),
     gpa: std.mem.Allocator,
-    scratch_statements: std.ArrayList(StatementIdx),
-    scratch_tokens: std.ArrayList(TokenIdx),
-    scratch_exprs: std.ArrayList(ExprIdx),
-    scratch_patterns: std.ArrayList(PatternIdx),
-    scratch_record_fields: std.ArrayList(RecordFieldIdx),
-    scratch_pattern_record_fields: std.ArrayList(PatternRecordFieldIdx),
-    scratch_when_branches: std.ArrayList(WhenBranchIdx),
-    scratch_type_annos: std.ArrayList(TypeAnnoIdx),
-    scratch_anno_record_fields: std.ArrayList(AnnoRecordFieldIdx),
+    nodes: Node.List,
+    extra_data: std.ArrayListUnmanaged(u32),
+    scratch_statements: std.ArrayListUnmanaged(StatementIdx),
+    scratch_tokens: std.ArrayListUnmanaged(TokenIdx),
+    scratch_exprs: std.ArrayListUnmanaged(ExprIdx),
+    scratch_patterns: std.ArrayListUnmanaged(PatternIdx),
+    scratch_record_fields: std.ArrayListUnmanaged(RecordFieldIdx),
+    scratch_pattern_record_fields: std.ArrayListUnmanaged(PatternRecordFieldIdx),
+    scratch_when_branches: std.ArrayListUnmanaged(WhenBranchIdx),
+    scratch_type_annos: std.ArrayListUnmanaged(TypeAnnoIdx),
+    scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
     pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         var store: NodeStore = .{
-            .nodes = collections.SafeMultiList(Node).init(gpa),
-            .extra_data = std.ArrayList(u32).init(gpa),
             .gpa = gpa,
-            .scratch_statements = std.ArrayList(StatementIdx).init(gpa),
-            .scratch_tokens = std.ArrayList(TokenIdx).init(gpa),
-            .scratch_exprs = std.ArrayList(ExprIdx).init(gpa),
-            .scratch_patterns = std.ArrayList(PatternIdx).init(gpa),
-            .scratch_record_fields = std.ArrayList(RecordFieldIdx).init(gpa),
-            .scratch_pattern_record_fields = std.ArrayList(PatternRecordFieldIdx).init(gpa),
-            .scratch_when_branches = std.ArrayList(WhenBranchIdx).init(gpa),
-            .scratch_type_annos = std.ArrayList(TypeAnnoIdx).init(gpa),
-            .scratch_anno_record_fields = std.ArrayList(AnnoRecordFieldIdx).init(gpa),
+            .nodes = .{},
+            .extra_data = .{},
+            .scratch_statements = .{},
+            .scratch_tokens = .{},
+            .scratch_exprs = .{},
+            .scratch_patterns = .{},
+            .scratch_record_fields = .{},
+            .scratch_pattern_record_fields = .{},
+            .scratch_when_branches = .{},
+            .scratch_type_annos = .{},
+            .scratch_anno_record_fields = .{},
         };
 
-        store.nodes.ensureTotalCapacity(capacity);
-        _ = store.nodes.append(.{
+        store.nodes.ensureTotalCapacity(gpa, capacity);
+        _ = store.nodes.append(gpa, .{
             .tag = .root,
             .main_token = 0,
             .data = .{ .lhs = 0, .rhs = 0 },
         });
-        store.extra_data.ensureTotalCapacity(capacity / 2) catch exitOnOom();
-        store.scratch_statements.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_tokens.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_exprs.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_patterns.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_pattern_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_when_branches.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_type_annos.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
-        store.scratch_anno_record_fields.ensureTotalCapacity(scratch_90th_percentile_capacity) catch exitOnOom();
+        store.extra_data.ensureTotalCapacity(gpa, capacity / 2) catch |err| exitOnOom(err);
+        store.scratch_statements.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_tokens.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_exprs.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_patterns.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_pattern_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_when_branches.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_type_annos.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_anno_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
 
         return store;
     }
@@ -471,17 +481,17 @@ pub const NodeStore = struct {
     /// ownership of all Node data before calling this
     /// method.
     pub fn deinit(store: *NodeStore) void {
-        store.nodes.deinit();
-        store.extra_data.deinit();
-        store.scratch_statements.deinit();
-        store.scratch_tokens.deinit();
-        store.scratch_exprs.deinit();
-        store.scratch_patterns.deinit();
-        store.scratch_record_fields.deinit();
-        store.scratch_pattern_record_fields.deinit();
-        store.scratch_when_branches.deinit();
-        store.scratch_type_annos.deinit();
-        store.scratch_anno_record_fields.deinit();
+        store.nodes.deinit(store.gpa);
+        store.extra_data.deinit(store.gpa);
+        store.scratch_statements.deinit(store.gpa);
+        store.scratch_tokens.deinit(store.gpa);
+        store.scratch_exprs.deinit(store.gpa);
+        store.scratch_patterns.deinit(store.gpa);
+        store.scratch_record_fields.deinit(store.gpa);
+        store.scratch_pattern_record_fields.deinit(store.gpa);
+        store.scratch_when_branches.deinit(store.gpa);
+        store.scratch_type_annos.deinit(store.gpa);
+        store.scratch_anno_record_fields.deinit(store.gpa);
     }
 
     /// Ensures that all scratch buffers in the store
@@ -531,7 +541,7 @@ pub const NodeStore = struct {
 
     /// Any node type can be malformed, but must come with a diagnostic reason
     pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag, token: TokenIdx) t {
-        const nid = store.nodes.append(.{
+        const nid = store.nodes.append(store.gpa, .{
             .tag = .malformed,
             .main_token = token,
             .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
@@ -541,9 +551,9 @@ pub const NodeStore = struct {
 
     pub fn addFile(store: *NodeStore, file: File) void {
         const start = store.extra_data.items.len;
-        store.extra_data.append(file.header.id) catch exitOnOom();
+        store.extra_data.append(store.gpa, file.header.id) catch |err| exitOnOom(err);
         for (file.statements) |statement| {
-            store.extra_data.append(statement.id) catch exitOnOom();
+            store.extra_data.append(store.gpa, statement.id) catch |err| exitOnOom(err);
         }
 
         store.nodes.set(@enumFromInt(0), .{
@@ -582,13 +592,13 @@ pub const NodeStore = struct {
                     .num_provides = @as(u22, @intCast(app.provides.len)),
                 }));
 
-                store.extra_data.append(app.platform.id) catch exitOnOom();
+                store.extra_data.append(store.gpa, app.platform.id) catch |err| exitOnOom(err);
 
                 for (app.packages) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p.id) catch |err| exitOnOom(err);
                 }
                 for (app.provides) |p| {
-                    store.extra_data.append(p) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p) catch |err| exitOnOom(err);
                 }
             },
             .module => |mod| {
@@ -596,12 +606,12 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(mod.exposes.len));
                 for (mod.exposes) |p| {
-                    store.extra_data.append(p) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p) catch |err| exitOnOom(err);
                 }
             },
             else => {},
         }
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -647,18 +657,18 @@ pub const NodeStore = struct {
                 const extra_data_start = store.extra_data.items.len;
                 if (i.qualifier_tok) |tok| {
                     lhs.qualified = 1;
-                    store.extra_data.append(tok) catch exitOnOom();
+                    store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 if (i.alias_tok) |tok| {
                     lhs.aliased = 1;
-                    store.extra_data.append(tok) catch exitOnOom();
+                    store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 node.data.lhs = @as(u32, @bitCast(lhs));
                 if (node.data.lhs > 0) {
                     node.data.rhs = @as(u32, @intCast(extra_data_start));
                 }
                 for (i.exposes) |e| {
-                    store.extra_data.append(@as(u32, @intCast(e))) catch exitOnOom();
+                    store.extra_data.append(store.gpa, @as(u32, @intCast(e))) catch |err| exitOnOom(err);
                 }
             },
             .type_decl => |d| {
@@ -672,7 +682,7 @@ pub const NodeStore = struct {
                 node.data.rhs = a.anno.id;
             },
         }
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -697,7 +707,7 @@ pub const NodeStore = struct {
                 node.data.rhs = @as(u32, @intCast(t.args.len));
 
                 for (t.args) |a| {
-                    store.extra_data.append(a.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, a.id) catch |err| exitOnOom(err);
                 }
             },
             .number => |n| {
@@ -715,7 +725,7 @@ pub const NodeStore = struct {
                 node.data.rhs = @as(u32, @intCast(r.fields.len));
 
                 for (r.fields) |f| {
-                    store.extra_data.append(f.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, f.id) catch |err| exitOnOom(err);
                 }
             },
             .list => |l| {
@@ -724,7 +734,7 @@ pub const NodeStore = struct {
                 node.data.rhs = @as(u32, @intCast(l.patterns.len));
 
                 for (l.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p.id) catch |err| exitOnOom(err);
                 }
             },
             .list_rest => |r| {
@@ -740,7 +750,7 @@ pub const NodeStore = struct {
                 node.data.rhs = @as(u32, @intCast(t.patterns.len));
 
                 for (t.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p.id) catch |err| exitOnOom(err);
                 }
             },
             .underscore => |_| {
@@ -753,11 +763,11 @@ pub const NodeStore = struct {
                 node.data.rhs = @as(u32, @intCast(a.patterns.len));
 
                 for (a.patterns) |p| {
-                    store.extra_data.append(p.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, p.id) catch |err| exitOnOom(err);
                 }
             },
         }
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -805,7 +815,7 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(r.fields.len));
                 for (r.fields) |field| {
-                    store.extra_data.append(field.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, field.id) catch |err| exitOnOom(err);
                 }
             },
             .tag => |e| {
@@ -816,16 +826,16 @@ pub const NodeStore = struct {
                 node.tag = .lambda;
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(l.args.len));
-                store.extra_data.append(l.body.id) catch exitOnOom();
+                store.extra_data.append(store.gpa, l.body.id) catch |err| exitOnOom(err);
                 for (l.args) |arg| {
-                    store.extra_data.append(arg.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, arg.id) catch |err| exitOnOom(err);
                 }
             },
             .apply => |app| {
                 node.tag = .apply;
                 node.data.lhs = app.args.span.start;
                 node.data.rhs = app.args.span.len + 1;
-                store.extra_data.append(app.@"fn".id) catch exitOnOom();
+                store.extra_data.append(store.gpa, app.@"fn".id) catch |err| exitOnOom(err);
             },
             .record_updater => |_| {},
             .field_access => |fa| {
@@ -852,16 +862,16 @@ pub const NodeStore = struct {
                 node.tag = .if_then_else;
                 node.data.lhs = i.condition.id;
                 node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
-                store.extra_data.append(i.then.id) catch exitOnOom();
-                store.extra_data.append(i.@"else".id) catch exitOnOom();
+                store.extra_data.append(store.gpa, i.then.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, i.@"else".id) catch |err| exitOnOom(err);
             },
             .match => |m| {
                 node.tag = .match;
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = node.data.lhs + 1 + @as(u32, @intCast(m.branches.len));
-                store.extra_data.append(m.expr.id) catch exitOnOom();
+                store.extra_data.append(store.gpa, m.expr.id) catch |err| exitOnOom(err);
                 for (m.branches) |b| {
-                    store.extra_data.append(b.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, b.id) catch |err| exitOnOom(err);
                 }
             },
             .ident => |id| {
@@ -881,10 +891,10 @@ pub const NodeStore = struct {
                 const start = store.extra_data.items.len;
                 const len = @as(u31, @intCast(body.statements.len));
                 if (body.whitespace) |ws| {
-                    store.extra_data.append(ws) catch exitOnOom();
+                    store.extra_data.append(store.gpa, ws) catch |err| exitOnOom(err);
                 }
                 for (body.statements) |statement| {
-                    store.extra_data.append(statement.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, statement.id) catch |err| exitOnOom(err);
                 }
 
                 const rhs = BodyRhs{
@@ -900,7 +910,7 @@ pub const NodeStore = struct {
                 node.tag = .ellipsis;
             },
         }
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -916,7 +926,7 @@ pub const NodeStore = struct {
         if (field.value) |value| {
             node.data.rhs = value.id;
         }
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -948,7 +958,7 @@ pub const NodeStore = struct {
             node.data.rhs = 1;
         }
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -962,7 +972,7 @@ pub const NodeStore = struct {
             },
         };
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -980,10 +990,10 @@ pub const NodeStore = struct {
         node.data.rhs = @as(u32, @intCast(header.args.len));
 
         for (header.args) |arg| {
-            store.extra_data.append(arg) catch exitOnOom();
+            store.extra_data.append(store.gpa, arg) catch |err| exitOnOom(err);
         }
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -997,7 +1007,7 @@ pub const NodeStore = struct {
             },
         };
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -1025,7 +1035,7 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(t.args.len));
                 for (t.args) |arg| {
-                    store.extra_data.append(arg.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, arg.id) catch |err| exitOnOom(err);
                 }
             },
             .tag_union => |tu| {
@@ -1036,11 +1046,11 @@ pub const NodeStore = struct {
                     .tags_len = @as(u31, @intCast(tu.tags.len)),
                 };
                 for (tu.tags) |tag| {
-                    store.extra_data.append(tag.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, tag.id) catch |err| exitOnOom(err);
                 }
                 if (tu.open_anno) |a| {
                     rhs.open = 1;
-                    store.extra_data.append(a.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, a.id) catch |err| exitOnOom(err);
                 }
                 node.data.rhs = @as(u32, @bitCast(rhs));
             },
@@ -1049,7 +1059,7 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(t.annos.len));
                 for (t.annos) |ta| {
-                    store.extra_data.append(ta.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, ta.id) catch |err| exitOnOom(err);
                 }
             },
             .record => |r| {
@@ -1057,7 +1067,7 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(r.fields.len));
                 for (r.fields) |field| {
-                    store.extra_data.append(field.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, field.id) catch |err| exitOnOom(err);
                 }
             },
             .@"fn" => |f| {
@@ -1065,9 +1075,9 @@ pub const NodeStore = struct {
                 node.data.lhs = @as(u32, @intCast(store.extra_data.items.len));
                 node.data.rhs = @as(u32, @intCast(f.args.len));
                 for (f.args) |arg| {
-                    store.extra_data.append(arg.id) catch exitOnOom();
+                    store.extra_data.append(store.gpa, arg.id) catch |err| exitOnOom(err);
                 }
-                store.extra_data.append(f.ret.id) catch exitOnOom();
+                store.extra_data.append(store.gpa, f.ret.id) catch |err| exitOnOom(err);
             },
             .parens => |p| {
                 node.tag = .ty_parens;
@@ -1075,7 +1085,7 @@ pub const NodeStore = struct {
             },
         }
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -1090,7 +1100,7 @@ pub const NodeStore = struct {
         std.debug.assert(store.scratch_statements.items.len == 0);
         const scratch_top = store.scratch_statements.items.len;
         for (stmt_idxs) |idx| {
-            store.scratch_statements.append(StatementIdx{ .id = idx }) catch exitOnOom();
+            store.scratch_statements.append(store.gpa, StatementIdx{ .id = idx }) catch |err| exitOnOom(err);
         }
         const statements = store.scratch_statements.items[scratch_top..];
         store.scratch_statements.shrinkRetainingCapacity(scratch_top);
@@ -1115,14 +1125,14 @@ pub const NodeStore = struct {
                 const scratch_rf_top = store.scratch_record_fields.items.len;
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (position < (rhs.num_packages + 1)) {
-                    store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(data[position])) }) catch exitOnOom();
-                    store.scratch_tokens.append(data[position]) catch exitOnOom();
+                    store.scratch_record_fields.append(store.gpa, .{ .id = @as(u32, @intCast(data[position])) }) catch |err| exitOnOom(err);
+                    store.scratch_tokens.append(store.gpa, data[position]) catch |err| exitOnOom(err);
                     position += 1;
                 }
                 const packages = store.scratch_record_fields.items[scratch_rf_top..];
                 store.scratch_record_fields.shrinkRetainingCapacity(scratch_rf_top);
                 while (position < (rhs.num_provides + rhs.num_packages + 1)) {
-                    store.scratch_tokens.append(data[position]) catch exitOnOom();
+                    store.scratch_tokens.append(store.gpa, data[position]) catch |err| exitOnOom(err);
                     position += 1;
                 }
                 const provides = store.scratch_tokens.items[scratch_tok_top..];
@@ -1191,7 +1201,7 @@ pub const NodeStore = struct {
                 }
                 const scratch_tok_top = store.scratch_tokens.items.len;
                 while (extra_data_pos < extra_data_end) {
-                    store.scratch_tokens.append(store.extra_data.items[extra_data_pos]) catch exitOnOom();
+                    store.scratch_tokens.append(store.gpa, store.extra_data.items[extra_data_pos]) catch |err| exitOnOom(err);
                 }
                 const exposes = store.scratch_tokens.items[scratch_tok_top..];
                 store.scratch_tokens.shrinkRetainingCapacity(scratch_tok_top);
@@ -1259,7 +1269,7 @@ pub const NodeStore = struct {
                 const ed = store.extra_data.items[f_start..f_end];
 
                 for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_patterns.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
 
                 const args = store.scratch_patterns.items[scratch_top..];
@@ -1291,7 +1301,7 @@ pub const NodeStore = struct {
                 const ed = store.extra_data.items[f_start..f_end];
 
                 for (ed) |d| {
-                    store.scratch_pattern_record_fields.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_pattern_record_fields.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
 
                 const fields = store.scratch_pattern_record_fields.items[scratch_top..];
@@ -1310,7 +1320,7 @@ pub const NodeStore = struct {
                 const ed = store.extra_data.items[p_start..p_end];
 
                 for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_patterns.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
 
                 const patterns = store.scratch_patterns.items[scratch_top..];
@@ -1335,7 +1345,7 @@ pub const NodeStore = struct {
                 const ed = store.extra_data.items[p_start..p_end];
 
                 for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_patterns.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
 
                 const patterns = store.scratch_patterns.items[scratch_top..];
@@ -1354,7 +1364,7 @@ pub const NodeStore = struct {
                 const ed = store.extra_data.items[p_start..p_end];
 
                 for (ed) |d| {
-                    store.scratch_patterns.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_patterns.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
 
                 const patterns = store.scratch_patterns.items[scratch_top..];
@@ -1440,7 +1450,10 @@ pub const NodeStore = struct {
                 const extra_data_end = extra_data_pos + node.data.rhs;
                 const scratch_top = store.scratch_record_fields.items.len;
                 while (extra_data_pos < extra_data_end) {
-                    store.scratch_record_fields.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    store.scratch_record_fields.append(
+                        store.gpa,
+                        .{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) },
+                    ) catch |err| exitOnOom(err);
                     extra_data_pos += 1;
                 }
                 const fields = store.scratch_record_fields.items[scratch_top..];
@@ -1470,7 +1483,10 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_patterns.items.len;
                 defer store.scratch_patterns.shrinkRetainingCapacity(scratch_top);
                 while (extra_data_pos < extra_data_end) {
-                    store.scratch_patterns.append(.{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) }) catch exitOnOom();
+                    store.scratch_patterns.append(
+                        store.gpa,
+                        .{ .id = @as(u32, @intCast(store.extra_data.items[extra_data_pos])) },
+                    ) catch |err| exitOnOom(err);
                     extra_data_pos += 1;
                 }
                 return .{ .lambda = .{
@@ -1519,7 +1535,7 @@ pub const NodeStore = struct {
                 defer store.scratch_when_branches.shrinkRetainingCapacity(scratch_top);
                 const branch_ed = store.extra_data.items[branch_start..branch_end];
                 for (branch_ed) |branch| {
-                    store.scratch_when_branches.append(.{ .id = branch }) catch exitOnOom();
+                    store.scratch_when_branches.append(store.gpa, .{ .id = branch }) catch |err| exitOnOom(err);
                 }
                 const branches = store.scratch_when_branches.items[scratch_top..];
                 return .{ .match = .{
@@ -1549,7 +1565,7 @@ pub const NodeStore = struct {
                 const statement_data = store.extra_data.items[start..(start + rhs.num_statements)];
                 const scratch_top = store.scratch_statements.items.len;
                 for (statement_data) |i| {
-                    store.scratch_statements.append(.{ .id = i }) catch exitOnOom();
+                    store.scratch_statements.append(store.gpa, .{ .id = i }) catch |err| exitOnOom(err);
                 }
                 const statements = store.scratch_statements.items[scratch_top..];
                 store.scratch_statements.shrinkRetainingCapacity(scratch_top);
@@ -1635,7 +1651,7 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_type_annos.items.len;
                 defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
                 for (store.extra_data.items[ed_start..ed_end]) |d| {
-                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_type_annos.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
                 const args = store.scratch_type_annos.items[scratch_top..];
                 return .{ .tag = .{
@@ -1655,7 +1671,7 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_type_annos.items.len;
                 defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
                 for (tags_ed) |d| {
-                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_type_annos.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
                 var open_anno: ?TypeAnnoIdx = null;
                 if (rhs.open == 1) {
@@ -1674,7 +1690,7 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_type_annos.items.len;
                 defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
                 for (store.extra_data.items[ed_start..ed_end]) |d| {
-                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_type_annos.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
                 const items = store.scratch_type_annos.items[scratch_top..];
                 return .{ .tuple = .{
@@ -1688,7 +1704,7 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_type_annos.items.len;
                 defer store.scratch_anno_record_fields.shrinkRetainingCapacity(scratch_top);
                 for (store.extra_data.items[ed_start..ed_end]) |d| {
-                    store.scratch_anno_record_fields.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_anno_record_fields.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
                 const fields = store.scratch_anno_record_fields.items[scratch_top..];
                 return .{ .record = .{
@@ -1704,7 +1720,7 @@ pub const NodeStore = struct {
                 const scratch_top = store.scratch_type_annos.items.len;
                 defer store.scratch_type_annos.shrinkRetainingCapacity(scratch_top);
                 for (args_ed) |d| {
-                    store.scratch_type_annos.append(.{ .id = d }) catch exitOnOom();
+                    store.scratch_type_annos.append(store.gpa, .{ .id = d }) catch |err| exitOnOom(err);
                 }
                 const ret = .{ .id = store.extra_data.items[args_ed_end] };
                 const args = store.scratch_type_annos.items[scratch_top..];
@@ -1725,7 +1741,7 @@ pub const NodeStore = struct {
             },
         }
 
-        const nid = store.nodes.append(node);
+        const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
 
@@ -1739,18 +1755,18 @@ pub const NodeStore = struct {
         statements: []const StatementIdx,
         region: Region,
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
-            var file_node = sexpr.Expr.init(gpa, "file");
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var file_node = sexpr.Expr.init(env.gpa, "file");
 
             const header = ir.store.getHeader(self.header);
-            var header_node = header.toSExpr(gpa, env, ir);
+            var header_node = header.toSExpr(env, ir);
 
-            file_node.appendNodeChild(gpa, &header_node);
+            file_node.appendNodeChild(env.gpa, &header_node);
 
             for (self.statements) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
-                var stmt_node = stmt.toSExpr(gpa, env, ir);
-                file_node.appendNodeChild(gpa, &stmt_node);
+                var stmt_node = stmt.toSExpr(env, ir);
+                file_node.appendNodeChild(env.gpa, &stmt_node);
             }
 
             return file_node;
@@ -1766,15 +1782,15 @@ pub const NodeStore = struct {
 
         region: Region,
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
-            var block_node = sexpr.Expr.init(gpa, "block");
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var block_node = sexpr.Expr.init(env.gpa, "block");
 
             for (self.statements) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
-                var stmt_node = stmt.toSExpr(gpa, env, ir);
+                var stmt_node = stmt.toSExpr(env, ir);
 
-                block_node.appendNodeChild(gpa, &stmt_node);
+                block_node.appendNodeChild(env.gpa, &stmt_node);
             }
 
             return block_node;
@@ -1810,15 +1826,15 @@ pub const NodeStore = struct {
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .module => |module| {
-                    var header_node = sexpr.Expr.init(gpa, "header");
+                    var header_node = sexpr.Expr.init(env.gpa, "header");
 
                     for (module.exposes) |exposed_idx| {
                         const token = ir.tokens.tokens.get(exposed_idx);
                         const text = env.idents.getText(token.extra.interned);
-                        header_node.appendStringChild(gpa, text);
+                        header_node.appendStringChild(env.gpa, text);
                     }
 
                     return header_node;
@@ -1871,25 +1887,25 @@ pub const NodeStore = struct {
             region: Region,
         };
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .decl => |decl| {
-                    var decl_node = sexpr.Expr.init(gpa, "decl");
+                    var decl_node = sexpr.Expr.init(env.gpa, "decl");
 
                     const pattern = ir.store.getPattern(decl.pattern);
                     const body = ir.store.getExpr(decl.body);
 
-                    var pattern_node = pattern.toSExpr(gpa, env, ir);
-                    var body_node = body.toSExpr(gpa, env, ir);
+                    var pattern_node = pattern.toSExpr(env, ir);
+                    var body_node = body.toSExpr(env, ir);
 
-                    decl_node.appendNodeChild(gpa, &pattern_node);
-                    decl_node.appendNodeChild(gpa, &body_node);
+                    decl_node.appendNodeChild(env.gpa, &pattern_node);
+                    decl_node.appendNodeChild(env.gpa, &body_node);
 
                     return decl_node;
                 },
                 .expr => |expr_stmt| {
                     const expr = ir.store.getExpr(expr_stmt.expr);
-                    const expr_node = expr.toSExpr(gpa, env, ir);
+                    const expr_node = expr.toSExpr(env, ir);
                     return expr_node;
                 },
                 else => {
@@ -1995,15 +2011,15 @@ pub const NodeStore = struct {
             region: Region,
         },
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .ident => |ident| {
-                    var node = sexpr.Expr.init(gpa, "ident");
+                    var node = sexpr.Expr.init(env.gpa, "ident");
 
                     const token = ir.tokens.tokens.get(ident.ident_tok);
                     const text = env.idents.getText(token.extra.interned);
 
-                    node.appendStringChild(gpa, text);
+                    node.appendStringChild(env.gpa, text);
 
                     return node;
                 },
@@ -2101,25 +2117,25 @@ pub const NodeStore = struct {
             }
         }
 
-        pub fn toSExpr(self: @This(), gpa: Allocator, env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .string => |str| {
-                    var sexpr_str = sexpr.Expr.init(gpa, "string");
+                    var sexpr_str = sexpr.Expr.init(env.gpa, "string");
                     var parts_iter = ir.store.exprIter(str.parts);
                     while (parts_iter.next()) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
-                        var part_sexpr = part_expr.toSExpr(gpa, env, ir);
-                        sexpr_str.appendNodeChild(gpa, &part_sexpr);
+                        var part_sexpr = part_expr.toSExpr(env, ir);
+                        sexpr_str.appendNodeChild(env.gpa, &part_sexpr);
                     }
                     return sexpr_str;
                 },
                 .string_part => |sp| {
                     const text = ir.resolve(sp.token);
-                    const owned_str: []u8 = gpa.dupe(u8, text) catch exitOnOom();
+                    const owned_str: []u8 = env.gpa.dupe(u8, text) catch |err| exitOnOom(err);
                     return sexpr.Expr{ .string = owned_str };
                 },
                 .block => |block| {
-                    return block.toSExpr(gpa, env, ir);
+                    return block.toSExpr(env, ir);
                 },
                 else => {
                     std.log.err("expression {}", .{self});
@@ -2174,9 +2190,9 @@ pub const NodeStore = struct {
         start: usize,
         end: usize,
         pos: usize,
-        data: std.ArrayList(u32),
+        data: std.ArrayListUnmanaged(u32),
 
-        pub fn new(span: DataSpan, data: std.ArrayList(u32)) @This() {
+        pub fn new(span: DataSpan, data: std.ArrayListUnmanaged(u32)) @This() {
             const start = @as(usize, @intCast(span.start));
             const end = start + @as(usize, @intCast(span.len));
             return .{
@@ -2235,7 +2251,7 @@ pub const NodeStore = struct {
     }
     /// Places a new ExprIdx in the scratch.  Will panic on OOM.
     pub fn addScratchExpr(store: *NodeStore, idx: ExprIdx) void {
-        store.scratch_exprs.append(idx) catch exitOnOom();
+        store.scratch_exprs.append(store.gpa, idx) catch |err| exitOnOom(err);
     }
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
@@ -2246,7 +2262,7 @@ pub const NodeStore = struct {
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         std.debug.assert(end >= i);
         while (i < end) {
-            store.extra_data.append(store.scratch_exprs.items[i].id) catch exitOnOom();
+            store.extra_data.append(store.gpa, store.scratch_exprs.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -2266,22 +2282,24 @@ pub const NodeStore = struct {
     }
 
     test "DataSpan and Iterators" {
-        var data = try std.ArrayList(u32).initCapacity(std.testing.allocator, 20);
-        defer data.deinit();
+        const gpa = testing.allocator;
+
+        var data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, 20);
+        defer data.deinit(gpa);
         var i: u32 = 0;
         while (i < 20) {
-            try data.append(i);
+            try data.append(gpa, i);
             i += 1;
         }
 
         {
             const span = ExprSpan{ .span = .{ .start = 0, .len = 3 } };
             var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
-            try std.testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
-            try std.testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
-            try std.testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
-            try std.testing.expectEqual(null, iter.next());
-            try std.testing.expectEqual(null, iter.next());
+            try testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
+            try testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
+            try testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
+            try testing.expectEqual(null, iter.next());
+            try testing.expectEqual(null, iter.next());
         }
 
         {
@@ -2325,20 +2343,13 @@ test {
     _ = std.testing.refAllDeclsRecursive(@This());
 }
 
-const std = @import("std");
-const tokenize = @import("tokenize.zig");
-const TokenizedBuffer = tokenize.TokenizedBuffer;
-const TokenIdx = tokenize.Token.Idx;
-const collections = @import("../../collections.zig");
-const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
-
 /// Helper function to convert an IR to a string in S-expression format
 /// and write it to the given writer.
-pub fn toSExprStr(ir: *@This(), gpa: Allocator, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
 
-    var node = file.toSExpr(gpa, env, ir);
-    defer node.deinit(gpa);
+    var node = file.toSExpr(env, ir);
+    defer node.deinit(env.gpa);
 
     node.toStringPretty(writer, 4);
 }

@@ -34,12 +34,11 @@ pub const IR = @import("canonicalize/IR.zig");
 pub fn canonicalize(
     can_ir: *IR,
     parse_ir: *parse.IR,
-    allocator: std.mem.Allocator,
 ) void {
     var env = can_ir.env;
     const builtin_aliases = &.{};
     const imported_idents = &.{};
-    var scope = Scope.init(&env, builtin_aliases, imported_idents, allocator);
+    var scope = Scope.init(&env, builtin_aliases, imported_idents);
 
     const file = parse_ir.store.getFile();
 
@@ -73,12 +72,12 @@ fn bringImportIntoScope(
         .end = Region.Position.zero(),
     };
 
-    const res = ir.imports.getOrInsert(import_name, shorthand);
+    const res = ir.imports.getOrInsert(ir.env.gpa, import_name, shorthand);
 
     if (res.was_present) {
-        ir.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
+        _ = ir.env.problems.append(ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
             .duplicate_import_region = region,
-        } })) catch exitOnOom();
+        } }));
     }
 
     // for (import.exposing.items.items) |exposed| {

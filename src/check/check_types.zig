@@ -60,7 +60,8 @@ test "checkTypes - basic type unification" {
 
     // Test that we can perform basic type unification
     const a_type = Type{ .flex_var = null };
-    const int_type = Type{ .rigid_var = env.idents.insert(Ident.for_text("Int"), Region.zero()) };
+    const int_name = env.idents.insert(env.gpa, Ident.for_text("Int"), Region.zero());
+    const int_type = Type{ .rigid_var = int_name };
 
     type_store.set(type_id_1, a_type);
     type_store.set(type_id_2, int_type);

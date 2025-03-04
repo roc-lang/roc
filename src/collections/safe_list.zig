@@ -1,8 +1,11 @@
 //! Lists that make it easier to avoid incorrect indexing.
 
 const std = @import("std");
+const utils = @import("utils.zig");
+
 const testing = std.testing;
-const exitOnOom = @import("utils.zig").exitOnOom;
+const Allocator = std.mem.Allocator;
+const exitOnOom = utils.exitOnOom;
 
 /// Wraps a `std.ArrayList` to provide a list that's safer to access
 /// with arbitrary indices.
@@ -22,7 +25,7 @@ const exitOnOom = @import("utils.zig").exitOnOom;
 /// less likely since indices are only created for valid list entries.
 pub fn SafeList(comptime T: type) type {
     return struct {
-        items: std.ArrayList(T),
+        items: std.ArrayListUnmanaged(T) = .{},
 
         /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
@@ -43,36 +46,32 @@ pub fn SafeList(comptime T: type) type {
             }
         };
 
-        pub fn init(allocator: std.mem.Allocator) SafeList(T) {
-            return SafeList(T){ .items = std.ArrayList(T).init(allocator) };
-        }
-
-        pub fn deinit(self: *SafeList(T)) void {
-            self.items.deinit();
+        pub fn deinit(self: *SafeList(T), gpa: Allocator) void {
+            self.items.deinit(gpa);
         }
 
         pub fn len(self: *const SafeList(T)) usize {
             return self.items.items.len;
         }
 
-        pub fn append(self: *SafeList(T), item: T) Idx {
+        pub fn append(self: *SafeList(T), gpa: Allocator, item: T) Idx {
             const length = self.len();
-            self.items.append(item) catch exitOnOom();
+            self.items.append(gpa, item) catch |err| exitOnOom(err);
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
 
-        pub fn appendSlice(self: *SafeList(T), items: []const T) Slice {
+        pub fn appendSlice(self: *SafeList(T), gpa: Allocator, items: []const T) Slice {
             const start_length = self.len();
-            self.items.appendSlice(items) catch exitOnOom();
+            self.items.appendSlice(gpa, items) catch |err| exitOnOom(err);
 
             return self.items.items[start_length..];
         }
 
-        pub fn extendFromIter(self: *SafeList(T), iter: anytype) Slice {
+        pub fn extendFromIter(self: *SafeList(T), gpa: Allocator, iter: anytype) Slice {
             const start_length = self.len();
             while (iter.next()) |item| {
-                self.items.append(item) catch exitOnOom();
+                self.items.append(gpa, item) catch |err| exitOnOom(err);
             }
 
             return self.items.items[start_length..];
@@ -103,7 +102,7 @@ pub fn SafeList(comptime T: type) type {
             }
         };
 
-        pub fn iterIndices(self: *SafeList(T)) IndexIterator {
+        pub fn iterIndices(self: *const SafeList(T)) IndexIterator {
             return IndexIterator{
                 .len = self.len(),
                 .current = 0,
@@ -131,8 +130,7 @@ pub fn SafeList(comptime T: type) type {
 /// less likely since indices are only created for valid list entries.
 pub fn SafeMultiList(comptime T: type) type {
     return struct {
-        items: std.MultiArrayList(T),
-        allocator: std.mem.Allocator,
+        items: std.MultiArrayList(T) = .{},
 
         /// Index of an item in the list.
         pub const Idx = enum(u32) { _ };
@@ -142,28 +140,21 @@ pub fn SafeMultiList(comptime T: type) type {
 
         pub const Field = std.MultiArrayList(T).Field;
 
-        pub fn init(allocator: std.mem.Allocator) SafeMultiList(T) {
-            return SafeMultiList(T){
-                .items = std.MultiArrayList(T){},
-                .allocator = allocator,
-            };
-        }
-
-        pub fn field(self: *SafeMultiList(T), comptime field_name: Field) []type {
+        pub fn field(self: *const SafeMultiList(T), comptime field_name: Field) []type {
             return self.items.items(field_name);
         }
 
-        pub fn deinit(self: *SafeMultiList(T)) void {
-            self.items.deinit(self.allocator);
+        pub fn deinit(self: *SafeMultiList(T), gpa: Allocator) void {
+            self.items.deinit(gpa);
         }
 
-        pub fn len(self: *SafeMultiList(T)) usize {
+        pub fn len(self: *const SafeMultiList(T)) usize {
             return self.items.len;
         }
 
-        pub fn append(self: *SafeMultiList(T), item: T) Idx {
+        pub fn append(self: *SafeMultiList(T), gpa: Allocator, item: T) Idx {
             const length = self.len();
-            self.items.append(self.allocator, item) catch exitOnOom();
+            self.items.append(gpa, item) catch |err| exitOnOom(err);
 
             return @enumFromInt(@as(u32, @intCast(length)));
         }
@@ -177,8 +168,8 @@ pub fn SafeMultiList(comptime T: type) type {
             return self.items.get(@intFromEnum(idx));
         }
 
-        pub fn ensureTotalCapacity(self: *SafeMultiList(T), capacity: usize) void {
-            self.items.ensureTotalCapacity(self.allocator, capacity) catch exitOnOom();
+        pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) void {
+            self.items.ensureTotalCapacity(gpa, capacity) catch |err| exitOnOom(err);
         }
 
         pub const IndexIterator = struct {
@@ -198,7 +189,7 @@ pub fn SafeMultiList(comptime T: type) type {
             }
         };
 
-        pub fn iterIndices(self: *SafeMultiList(T)) IndexIterator {
+        pub fn iterIndices(self: *const SafeMultiList(T)) IndexIterator {
             return IndexIterator{
                 .len = self.len(),
                 .current = 0,
@@ -208,12 +199,14 @@ pub fn SafeMultiList(comptime T: type) type {
 }
 
 test "safe list_u32 inserting and getting" {
-    var list_u32 = SafeList(u32).init(testing.allocator);
-    defer list_u32.deinit();
+    const gpa = testing.allocator;
+
+    var list_u32 = SafeList(u32){};
+    defer list_u32.deinit(gpa);
 
     try testing.expectEqual(list_u32.len(), 0);
 
-    const id = list_u32.append(1);
+    const id = list_u32.append(gpa, 1);
 
     try testing.expectEqual(list_u32.len(), 1);
 
