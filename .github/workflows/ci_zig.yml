@@ -51,6 +51,19 @@ jobs:
               run: |
                 zig build test -Dllvm -Dfuzz
 
+            - name: zig snapshot tests
+              run: zig build snapshot
+
+            - name: Check for snapshot changes
+              run: |
+                git diff --exit-code src/snapshots || {
+                  echo "Oops! It looks like the snapshots in 'src/snapshots' have changed.";
+                  echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+                  echo "Here’s what changed:";
+                  git diff src/snapshots;
+                  exit 1;
+                }
+
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
               run: |
