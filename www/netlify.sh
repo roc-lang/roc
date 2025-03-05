@@ -7,7 +7,7 @@ set -euxo pipefail
 
 rustup update
 # Get Rust version from rust-toolchain.toml
-RUST_VERSION=$(grep "channel =" ../rust-toolchain.toml | head -1 | cut -d '"' -f 2)
+RUST_VERSION=$(grep "channel =" /opt/buildhome/repo/rust-toolchain.toml | head -1 | cut -d '"' -f 2)
 rustup default "$RUST_VERSION"
 
 bash build.sh
