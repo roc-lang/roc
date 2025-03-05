@@ -358,7 +358,7 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
     // Handle the last section if there is one
     if (current_section) |section| {
         var range = ranges.get(section) orelse Section.Range.empty();
-        range.end = line_start;
+        range.end = @min(line_start, content.len);
         try ranges.put(section, range);
     }
 

@@ -1683,6 +1683,34 @@ pub const NodeStore = struct {
                     const expr_node = expr.toSExpr(env, ir);
                     return expr_node;
                 },
+                .import => |import| {
+                    var import_node = sexpr.Expr.init(env.gpa, "import");
+
+                    // Module Qualifier e.g. `pf` in `import pf.Stdout`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        if (import.qualifier_tok) |tok| ir.resolve(tok) else "",
+                    );
+
+                    // Module Name e.g. `Stdout` in `import pf.Stdout`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        ir.resolve(import.module_name_tok),
+                    );
+
+                    // Module Alias e.g. `OUT` in `import pf.Stdout as OUT`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        if (import.alias_tok) |tok| ir.resolve(tok) else "",
+                    );
+
+                    // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
+                    for (import.exposes) |tok| {
+                        import_node.appendStringChild(env.gpa, ir.resolve(tok));
+                    }
+
+                    return import_node;
+                },
                 else => {
                     std.log.err("format for statement {}", .{self});
                     @panic("not implemented");
@@ -1911,8 +1939,14 @@ pub const NodeStore = struct {
                 .block => |block| {
                     return block.toSExpr(env, ir);
                 },
+                .ident => |ident| {
+                    var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
+                    ident_sexpr.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
+                    ident_sexpr.appendStringChild(env.gpa, ir.resolve(ident.token));
+                    return ident_sexpr;
+                },
                 else => {
-                    std.log.err("expression {}", .{self});
+                    std.log.err("Format for Expr {}", .{self});
                     @panic("not implemented yet");
                 },
             }
