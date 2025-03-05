@@ -6,12 +6,8 @@
 set -euxo pipefail
 
 rustup update
-rustup default stable
+# Get Rust version from rust-toolchain.toml
+RUST_VERSION=$(grep "channel =" ../rust-toolchain.toml | head -1 | cut -d '"' -f 2)
+rustup default "$RUST_VERSION"
 
-ZIG_DIRNAME="zig-linux-x86_64-0.11.0"
-wget https://ziglang.org/download/0.11.0/${ZIG_DIRNAME}.tar.xz
-tar --extract --xz --file=${ZIG_DIRNAME}.tar.xz
-PATH="$(pwd)/${ZIG_DIRNAME}:${PATH}"
-
-export PATH
 bash build.sh
