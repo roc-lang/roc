@@ -42,7 +42,8 @@ pub fn canonicalize(
 
     const file = parse_ir.store.getFile();
 
-    for (file.statements) |stmt_id| {
+    var statement_iter = parse_ir.store.statementIter(file.statements);
+    while (statement_iter.next()) |stmt_id| {
         const stmt = parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import| {
