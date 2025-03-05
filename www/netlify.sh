@@ -5,11 +5,9 @@
 # https://vaneyckt.io/posts/safer_bash_scripts_with_set_euxo_pipefail/
 set -euxo pipefail
 
-# for debugging
-cat ./netlify.sh
-
 rustup update
-# get Rust version from rust-toolchain.toml
-rustup default $(grep "channel =" ../rust-toolchain.toml | head -1 | cut -d '"' -f 2)
+# Get Rust version from rust-toolchain.toml
+RUST_VERSION=$(grep "^[^#].*channel =" ../rust-toolchain.toml | head -1 | cut -d '"' -f 2)
+rustup default "$RUST_VERSION"
 
 bash build.sh
