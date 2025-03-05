@@ -30,7 +30,7 @@ fantastical, and it has incredible potential for puns. Here are some different w
 
 Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
 
-## [Why does Roc not handle strings like most languages?]
+## [Why does Roc not handle strings like most languages?](#strings-in-roc) {#strings-in-roc}
 
 We want to help you make reliable software, so we aim to make sure that you're aware of all the pitfalls when handing strings.
 For (professional) software that needs to be reliable, check out the explainer [here](https://www.roc-lang.org/builtins/Str) and the [unicode package](https://github.com/roc-lang/unicode).
