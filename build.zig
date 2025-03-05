@@ -84,54 +84,56 @@ pub fn build(b: *std.Build) void {
     check_fmt_step.dependOn(&check_fmt.step);
 
     const fuzz = b.option(bool, "fuzz", "Build fuzz targets including AFL++ and tooling") orelse false;
-    if (fuzz) {
-        const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
-        const is_windows = target.result.os.tag == .windows;
+    const is_native = target.query.isNativeCpu() and target.query.isNativeOs() and (target.query.isNativeAbi() or target.result.abi.isMusl());
+    const is_windows = target.result.os.tag == .windows;
 
-        var build_afl = false;
-        if (!is_native) {
-            std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
-        } else if (is_windows) {
-            std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
-        } else if (use_system_afl) {
-            // If we have system afl, no need for llvm-config.
+    var build_afl = false;
+    if (!is_native) {
+        std.log.warn("Cross compilation does not support fuzzing (Only building repro executables)", .{});
+    } else if (is_windows) {
+        std.log.warn("Windows does not support fuzzing (Only building repro executables)", .{});
+    } else if (use_system_afl) {
+        // If we have system afl, no need for llvm-config.
+        build_afl = true;
+    } else {
+        // AFL++ does not work with our prebuilt static llvm.
+        // Check for llvm-config program in user_llvm_path or on the system.
+        // If found, let AFL++ use that.
+        if (b.findProgram(&.{"llvm-config"}, &.{})) |_| {
             build_afl = true;
-        } else {
-            // AFL++ does not work with our prebuilt static llvm.
-            // Check for llvm-config program in user_llvm_path or on the system.
-            // If found, let AFL++ use that.
-            if (b.findProgram(&.{"llvm-config"}, &.{})) |_| {
-                build_afl = true;
-            } else |_| {
-                std.log.warn("AFL++ requires a full version of llvm from the system or passed in via -Dllvm-path, but `llvm-config` was not found (Only building repro executables)", .{});
-            }
+        } else |_| {
+            std.log.warn("AFL++ requires a full version of llvm from the system or passed in via -Dllvm-path, but `llvm-config` was not found (Only building repro executables)", .{});
         }
+    }
 
-        const names: []const []const u8 = &.{
-            "cli",
-            "tokenize",
-        };
-        for (names) |name| {
-            add_fuzz_target(
-                b,
-                build_afl,
-                use_system_afl,
-                check_step,
-                target,
-                name,
-            );
-        }
+    const names: []const []const u8 = &.{
+        "cli",
+        "tokenize",
+    };
+    for (names) |name| {
+        add_fuzz_target(
+            b,
+            fuzz,
+            build_afl,
+            use_system_afl,
+            check_step,
+            target,
+            name,
+        );
     }
 }
 
 fn add_fuzz_target(
     b: *std.Build,
+    fuzz: bool,
     build_afl: bool,
     use_system_afl: bool,
     check_step: *Step,
     target: ResolvedTarget,
     name: []const u8,
 ) void {
+    // We always include the repro scripts (no dependencies).
+    // We only include the fuzzing scripts if `-Dfuzz` is set.
     const root_source_file = b.path(b.fmt("src/fuzz-{s}.zig", .{name}));
     const fuzz_obj = b.addObject(.{
         .name = b.fmt("{s}_obj", .{name}),
@@ -146,10 +148,8 @@ fn add_fuzz_target(
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
-    const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
-    b.default_step.dependOn(fuzz_step);
-
     const name_repro = b.fmt("repro-{s}", .{name});
+    const run_repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const install_repro = b.addExecutable(.{
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
@@ -159,7 +159,13 @@ fn add_fuzz_target(
     });
     install_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
     b.installArtifact(install_repro);
-    fuzz_step.dependOn(&install_repro.step);
+
+    const run_cmd = b.addRunArtifact(install_repro);
+    run_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_cmd.addArgs(args);
+    }
+    run_repro_step.dependOn(&run_cmd.step);
 
     const check_repro = b.addExecutable(.{
         .name = name_repro,
@@ -171,7 +177,10 @@ fn add_fuzz_target(
     check_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
     check_step.dependOn(&check_repro.step);
 
-    if (build_afl) {
+    if (fuzz and build_afl) {
+        const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
+        b.default_step.dependOn(fuzz_step);
+
         const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
