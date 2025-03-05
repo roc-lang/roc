@@ -30,6 +30,13 @@ fantastical, and it has incredible potential for puns. Here are some different w
 
 Fun fact: "roc" translates to 鹏 in Chinese, [which means](https://www.mdbg.net/chinese/dictionary?page=worddict&wdrst=0&wdqb=%E9%B9%8F) "a large fabulous bird."
 
+## [Why does Roc not handle strings like most languages?]
+
+We want to help you make reliable software, so we aim to make sure that you're aware of all the pitfalls when handing strings.
+For (professional) software that needs to be reliable, check out the explainer [here](https://www.roc-lang.org/builtins/Str) and the [unicode package](https://github.com/roc-lang/unicode).
+For personal scripts or things like advent of code, the [roc-ascii package](https://github.com/Hasnep/roc-ascii) can cover your needs.
+
+
 ## [Why is there no way to specify "import everything this module exposes" in `imports`?](#import-everything) {#import-everything}
 
 In [Elm](https://elm-lang.org), it's possible to import a module in a way that brings everything that module
