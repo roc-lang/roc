@@ -1541,8 +1541,7 @@ pub const NodeStore = struct {
 
             file_node.appendNodeChild(env.gpa, &header_node);
 
-            var statement_iter = ir.store.statementIter(self.statements);
-            while (statement_iter.next()) |stmt_id| {
+            for (ir.store.statementSlice(self.statements)) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
                 var stmt_node = stmt.toSExpr(env, ir);
                 file_node.appendNodeChild(env.gpa, &stmt_node);
@@ -1561,8 +1560,7 @@ pub const NodeStore = struct {
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var block_node = sexpr.Expr.init(env.gpa, "block");
 
-            var statement_iter = ir.store.statementIter(self.statements);
-            while (statement_iter.next()) |stmt_idx| {
+            for (ir.store.statementSlice(self.statements)) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
                 var stmt_node = stmt.toSExpr(env, ir);
@@ -1608,8 +1606,7 @@ pub const NodeStore = struct {
                 .module => |module| {
                     var header_node = sexpr.Expr.init(env.gpa, "header");
 
-                    var exposes_iter = ir.store.tokenIter(module.exposes);
-                    while (exposes_iter.next()) |exposed_idx| {
+                    for (ir.store.tokenSlice(module.exposes)) |exposed_idx| {
                         const token = ir.tokens.tokens.get(exposed_idx);
                         const text = env.idents.getText(token.extra.interned);
                         header_node.appendStringChild(env.gpa, text);
@@ -1899,8 +1896,7 @@ pub const NodeStore = struct {
             switch (self) {
                 .string => |str| {
                     var sexpr_str = sexpr.Expr.init(env.gpa, "string");
-                    var parts_iter = ir.store.exprIter(str.parts);
-                    while (parts_iter.next()) |part_id| {
+                    for (ir.store.exprSlice(str.parts)) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
                         var part_sexpr = part_expr.toSExpr(env, ir);
                         sexpr_str.appendNodeChild(env.gpa, &part_sexpr);
@@ -1964,46 +1960,6 @@ pub const NodeStore = struct {
         len: u32,
     };
 
-    const Iterator = struct {
-        start: usize,
-        end: usize,
-        pos: usize,
-        data: std.ArrayListUnmanaged(u32),
-
-        pub fn new(span: DataSpan, data: std.ArrayListUnmanaged(u32)) @This() {
-            const start = @as(usize, @intCast(span.start));
-            const end = start + @as(usize, @intCast(span.len));
-            return .{
-                .start = start,
-                .end = end,
-                .pos = start,
-                .data = data,
-            };
-        }
-
-        pub fn next(self: *@This()) ?u32 {
-            if (self.pos == self.end or self.data.items.len <= self.pos) {
-                return null;
-            }
-            const curr = self.data.items[self.pos];
-            self.pos += 1;
-            return curr;
-        }
-    };
-
-    pub fn IdIter(comptime T: type) type {
-        return struct {
-            iter: Iterator,
-            pub fn next(self: *@This()) ?T {
-                if (self.iter.next()) |n| {
-                    const id: T = .{ .id = n };
-                    return id;
-                }
-                return null;
-            }
-        };
-    }
-
     pub const ExprSpan = struct { span: DataSpan };
     pub const StatementSpan = struct { span: DataSpan };
     pub const TokenSpan = struct { span: DataSpan };
@@ -2013,16 +1969,6 @@ pub const NodeStore = struct {
     pub const WhenBranchSpan = struct { span: DataSpan };
     pub const TypeAnnoSpan = struct { span: DataSpan };
     pub const AnnoRecordFieldSpan = struct { span: DataSpan };
-
-    pub const ExprIter = IdIter(ExprIdx);
-    pub const StatementIter = IdIter(StatementIdx);
-    pub const PatternIter = IdIter(PatternIdx);
-    pub const PatternRecordFieldIter = IdIter(PatternRecordFieldIdx);
-    pub const RecordFieldIter = IdIter(RecordFieldIdx);
-    pub const WhenBranchIter = IdIter(WhenBranchIdx);
-    pub const TypeAnnoIter = IdIter(TypeAnnoIdx);
-    pub const AnnoRecordFieldIter = IdIter(AnnoRecordFieldIdx);
-    pub const TokenIter = Iterator;
 
     /// Returns the start position for a new Span of ExprIdxs in scratch
     pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -2058,9 +2004,8 @@ pub const NodeStore = struct {
 
     /// Returns a new ExprIter so that the caller can iterate through
     /// all items in the span.
-    pub fn exprIter(store: *NodeStore, span: ExprSpan) ExprIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn exprSlice(store: *NodeStore, span: ExprSpan) []ExprIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns the start position for a new Span of StatementIdxs in scratch
@@ -2095,11 +2040,10 @@ pub const NodeStore = struct {
         store.scratch_statements.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new StatementIter so that the caller can iterate through
+    /// Returns a new Statement slice so that the caller can iterate through
     /// all items in the span.
-    pub fn statementIter(store: *NodeStore, span: StatementSpan) StatementIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn statementSlice(store: *NodeStore, span: StatementSpan) []StatementIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns the start position for a new Span of patternIdxs in scratch
@@ -2134,18 +2078,16 @@ pub const NodeStore = struct {
         store.scratch_patterns.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new PatternIter so that the caller can iterate through
+    /// Returns a new Pattern slice so that the caller can iterate through
     /// all items in the span.
-    pub fn patternIter(store: *NodeStore, span: PatternSpan) PatternIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn patternSlice(store: *NodeStore, span: PatternSpan) []PatternIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns a new PatternRecordFieldIter so that the caller can iterate through
     /// all items in the span.
-    pub fn patternRecordFieldIter(store: *NodeStore, span: PatternRecordFieldSpan) PatternRecordFieldIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn patternRecordFieldSlice(store: *NodeStore, span: PatternRecordFieldSpan) []PatternRecordFieldIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
     /// Returns the start position for a new Span of patternRecordFieldIdxs in scratch
     pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
@@ -2178,11 +2120,10 @@ pub const NodeStore = struct {
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new RecordFieldIter so that the caller can iterate through
+    /// Returns a new RecordField slice so that the caller can iterate through
     /// all items in the span.
-    pub fn recordFieldIter(store: *NodeStore, span: RecordFieldSpan) RecordFieldIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn recordFieldSlice(store: *NodeStore, span: RecordFieldSpan) []RecordFieldIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
     /// Returns the start position for a new Span of recordFieldIdxs in scratch
     pub fn scratchRecordFieldTop(store: *NodeStore) u32 {
@@ -2246,11 +2187,10 @@ pub const NodeStore = struct {
         store.scratch_when_branches.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new WhenBranchIter so that the caller can iterate through
+    /// Returns a new WhenBranch slice so that the caller can iterate through
     /// all items in the span.
-    pub fn whenBranchIter(store: *NodeStore, span: WhenBranchSpan) WhenBranchIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn whenBranchSlice(store: *NodeStore, span: WhenBranchSpan) []WhenBranchIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns the start position for a new Span of typeAnnoIdxs in scratch
@@ -2284,11 +2224,10 @@ pub const NodeStore = struct {
         store.scratch_type_annos.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new TypeAnnoIter so that the caller can iterate through
+    /// Returns a new TypeAnno slice so that the caller can iterate through
     /// all items in the span.
-    pub fn typeAnnoIter(store: *NodeStore, span: TypeAnnoSpan) TypeAnnoIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn typeAnnoSlice(store: *NodeStore, span: TypeAnnoSpan) []TypeAnnoIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
@@ -2322,11 +2261,10 @@ pub const NodeStore = struct {
         store.scratch_anno_record_fields.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new AnnoRecordFieldIter so that the caller can iterate through
+    /// Returns a new AnnoRecordField slice so that the caller can iterate through
     /// all items in the span.
-    pub fn annoRecordFieldIter(store: *NodeStore, span: AnnoRecordFieldSpan) AnnoRecordFieldIter {
-        const iter = Iterator.new(span.span, store.extra_data);
-        return .{ .iter = iter };
+    pub fn annoRecordFieldSlice(store: *NodeStore, span: AnnoRecordFieldSpan) []AnnoRecordFieldIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 
     /// Returns the start position for a new Span of token_Idxs in scratch
@@ -2360,51 +2298,10 @@ pub const NodeStore = struct {
         store.scratch_tokens.shrinkRetainingCapacity(start);
     }
 
-    /// Returns a new TokenIter so that the caller can iterate through
+    /// Returns a new Token slice so that the caller can iterate through
     /// all items in the span.
-    pub fn tokenIter(store: *NodeStore, span: TokenSpan) TokenIter {
-        return Iterator.new(span.span, store.extra_data);
-    }
-
-    test "DataSpan and Iterators" {
-        const gpa = testing.allocator;
-
-        var data = try std.ArrayListUnmanaged(u32).initCapacity(gpa, 20);
-        defer data.deinit(gpa);
-        var i: u32 = 0;
-        while (i < 20) {
-            try data.append(gpa, i);
-            i += 1;
-        }
-
-        {
-            const span = ExprSpan{ .span = .{ .start = 0, .len = 3 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
-            try testing.expectEqual(ExprIdx{ .id = 0 }, iter.next());
-            try testing.expectEqual(ExprIdx{ .id = 1 }, iter.next());
-            try testing.expectEqual(ExprIdx{ .id = 2 }, iter.next());
-            try testing.expectEqual(null, iter.next());
-            try testing.expectEqual(null, iter.next());
-        }
-
-        {
-            const span = ExprSpan{ .span = .{ .start = 0, .len = 30 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
-            var num: u32 = 0;
-            while (iter.next()) |_| {
-                num += 1;
-            }
-            try std.testing.expectEqual(20, num);
-        }
-
-        {
-            const span = ExprSpan{ .span = .{ .start = 18, .len = 3 } };
-            var iter = ExprIter{ .iter = Iterator.new(span.span, data) };
-            try std.testing.expectEqual(ExprIdx{ .id = 18 }, iter.next());
-            try std.testing.expectEqual(ExprIdx{ .id = 19 }, iter.next());
-            try std.testing.expectEqual(null, iter.next());
-            try std.testing.expectEqual(null, iter.next());
-        }
+    pub fn tokenSlice(store: *NodeStore, span: TokenSpan) []TokenIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 };
 

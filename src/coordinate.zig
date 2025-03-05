@@ -497,8 +497,7 @@ fn parseDependenciesFromPackageRoot(
         } },
     };
 
-    var package_iter = parse_ast.store.recordFieldIter(package_list);
-    while (package_iter.next()) |package_import| {
+    for (parse_ast.store.recordFieldSlice(package_list)) |package_import| {
         const import = parse_ast.store.getRecordField(package_import);
 
         // TODO: get URL when it is stored in `StringLiteral.Store`

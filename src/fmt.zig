@@ -47,8 +47,7 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
     const file = fmt.ast.store.getFile();
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
-    var statement_iter = fmt.ast.store.statementIter(file.statements);
-    while (statement_iter.next()) |s| {
+    for (fmt.ast.store.statementSlice(file.statements)) |s| {
         fmt.ensureNewline();
         if (newline_behavior == .extra_newline_needed) {
             fmt.newline();
@@ -124,8 +123,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.push('(');
             const args_len = a.args.span.len;
             var i: usize = 0;
-            var args_iter = fmt.ast.store.exprIter(a.args);
-            while (args_iter.next()) |arg| {
+            for (fmt.ast.store.exprSlice(a.args)) |arg| {
                 fmt.formatExpr(arg);
                 i += 1;
                 if (i < args_len) {
@@ -140,8 +138,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .string => |s| {
             fmt.push('"');
             var i: usize = 0;
-            var parts_iter = fmt.ast.store.exprIter(s.parts);
-            while (parts_iter.next()) |idx| {
+            for (fmt.ast.store.exprSlice(s.parts)) |idx| {
                 const e = fmt.ast.store.getExpr(idx);
                 switch (e) {
                     .string_part => |str| {
@@ -171,8 +168,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .list => |l| {
             fmt.push('[');
             var i: usize = 0;
-            var items_iter = fmt.ast.store.exprIter(l.items);
-            while (items_iter.next()) |item| {
+            for (fmt.ast.store.exprSlice(l.items)) |item| {
                 fmt.formatExpr(item);
                 if (i < (l.items.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -184,8 +180,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .tuple => |t| {
             fmt.push('(');
             var i: usize = 0;
-            var items_iter = fmt.ast.store.exprIter(t.items);
-            while (items_iter.next()) |item| {
+            for (fmt.ast.store.exprSlice(t.items)) |item| {
                 fmt.formatExpr(item);
                 if (i < (t.items.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -197,8 +192,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .record => |r| {
             fmt.pushAll("{ ");
             var i: usize = 0;
-            var fields_iter = fmt.ast.store.recordFieldIter(r.fields);
-            while (fields_iter.next()) |fieldIdx| {
+            for (fmt.ast.store.recordFieldSlice(r.fields)) |fieldIdx| {
                 const field = fmt.ast.store.getRecordField(fieldIdx);
                 fmt.pushTokenText(field.name);
                 if (field.value) |v| {
@@ -215,8 +209,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .lambda => |l| {
             fmt.push('|');
             var i: usize = 0;
-            var args_iter = fmt.ast.store.patternIter(l.args);
-            while (args_iter.next()) |arg| {
+            for (fmt.ast.store.patternSlice(l.args)) |arg| {
                 fmt.formatPattern(arg);
                 if (i < (l.args.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -263,8 +256,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.formatExpr(m.expr);
             fmt.pushAll(" {");
             fmt.curr_indent += 1;
-            var branches_iter = fmt.ast.store.whenBranchIter(m.branches);
-            while (branches_iter.next()) |b| {
+            for (fmt.ast.store.whenBranchSlice(m.branches)) |b| {
                 const branch = fmt.ast.store.getBranch(b);
                 fmt.newline();
                 fmt.pushIndent();
@@ -304,8 +296,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
             if (t.args.span.len > 0) {
                 fmt.push('(');
                 var i: usize = 0;
-                var args_iter = fmt.ast.store.patternIter(t.args);
-                while (args_iter.next()) |arg| {
+                for (fmt.ast.store.patternSlice(t.args)) |arg| {
                     fmt.formatPattern(arg);
                     if (i < (t.args.span.len - 1)) {
                         fmt.pushAll(", ");
@@ -324,8 +315,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .record => |r| {
             fmt.pushAll("{ ");
             var i: usize = 0;
-            var fields_iter = fmt.ast.store.patternRecordFieldIter(r.fields);
-            while (fields_iter.next()) |field_idx| {
+            for (fmt.ast.store.patternRecordFieldSlice(r.fields)) |field_idx| {
                 const field = fmt.ast.store.getPatternRecordField(field_idx);
                 if (field.rest) {
                     fmt.pushAll("..");
@@ -349,8 +339,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .list => |l| {
             fmt.push('[');
             var i: usize = 0;
-            var pattern_iter = fmt.ast.store.patternIter(l.patterns);
-            while (pattern_iter.next()) |p| {
+            for (fmt.ast.store.patternSlice(l.patterns)) |p| {
                 fmt.formatPattern(p);
                 if (i < (l.patterns.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -362,8 +351,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         .tuple => |t| {
             fmt.push('(');
             var i: usize = 0;
-            var pattern_iter = fmt.ast.store.patternIter(t.patterns);
-            while (pattern_iter.next()) |p| {
+            for (fmt.ast.store.patternSlice(t.patterns)) |p| {
                 fmt.formatPattern(p);
                 if (i < (t.patterns.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -384,8 +372,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
         },
         .alternatives => |a| {
             var i: usize = 0;
-            var pattern_iter = fmt.ast.store.patternIter(a.patterns);
-            while (pattern_iter.next()) |p| {
+            for (fmt.ast.store.patternSlice(a.patterns)) |p| {
                 fmt.formatPattern(p);
                 if (i < (a.patterns.span.len - 1)) {
                     fmt.pushAll(" | ");
@@ -403,8 +390,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.pushAll("app [");
             // Format provides
             var i: usize = 0;
-            var provides_iter = fmt.ast.store.tokenIter(a.provides);
-            while (provides_iter.next()) |p| {
+            for (fmt.ast.store.tokenSlice(a.provides)) |p| {
                 fmt.pushTokenText(p);
                 i += 1;
                 if (i < a.provides.span.len) {
@@ -418,9 +404,8 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             if (a.packages.span.len > 0) {
                 fmt.push(',');
             }
-            var packages_iter = fmt.ast.store.recordFieldIter(a.packages);
             i = 0;
-            while (packages_iter.next()) |package| {
+            for (fmt.ast.store.recordFieldSlice(a.packages)) |package| {
                 const field = fmt.ast.store.getRecordField(package);
                 fmt.pushTokenText(field.name);
                 if (field.value) |v| {
@@ -438,8 +423,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
         .module => |m| {
             fmt.pushAll("module [");
             var i: usize = 0;
-            var exposes_iter = fmt.ast.store.tokenIter(m.exposes);
-            while (exposes_iter.next()) |p| {
+            for (fmt.ast.store.tokenSlice(m.exposes)) |p| {
                 fmt.pushTokenText(p);
                 i += 1;
                 if (i < m.exposes.span.len) {
@@ -459,8 +443,7 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (body.statements.span.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append(fmt.gpa, '{') catch |err| exitOnOom(err);
-        var statement_iter = fmt.ast.store.statementIter(body.statements);
-        while (statement_iter.next()) |s| {
+        for (fmt.ast.store.statementSlice(body.statements)) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
             _ = fmt.formatStatement(s);
@@ -470,8 +453,7 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
         fmt.pushIndent();
         fmt.buffer.append(fmt.gpa, '}') catch |err| exitOnOom(err);
     } else if (body.statements.span.len == 1) {
-        var statement_iter = fmt.ast.store.statementIter(body.statements);
-        while (statement_iter.next()) |s| {
+        for (fmt.ast.store.statementSlice(body.statements)) |s| {
             _ = fmt.formatStatement(s);
         }
     } else {
@@ -485,8 +467,7 @@ fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) void {
     if (h.args.span.len > 0) {
         fmt.push(' ');
         var i: usize = 0;
-        var args_iter = fmt.ast.store.tokenIter(h.args);
-        while (args_iter.next()) |arg| {
+        for (fmt.ast.store.tokenSlice(h.args)) |arg| {
             fmt.pushTokenText(arg);
             if (i < (h.args.span.len - 1)) {
                 fmt.push(' ');
@@ -507,8 +488,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
             if (t.args.span.len > 0) {
                 fmt.push('(');
                 var i: usize = 0;
-                var args_iter = fmt.ast.store.typeAnnoIter(t.args);
-                while (args_iter.next()) |arg| {
+                for (fmt.ast.store.typeAnnoSlice(t.args)) |arg| {
                     fmt.formatTypeAnno(arg);
                     if (i < (t.args.span.len - 1)) {
                         fmt.pushAll(", ");
@@ -521,8 +501,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
         .tuple => |t| {
             fmt.push('(');
             var i: usize = 0;
-            var anno_iter = fmt.ast.store.typeAnnoIter(t.annos);
-            while (anno_iter.next()) |an| {
+            for (fmt.ast.store.typeAnnoSlice(t.annos)) |an| {
                 fmt.formatTypeAnno(an);
                 if (i < (t.annos.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -538,8 +517,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
             }
             fmt.pushAll("{ ");
             var i: usize = 0;
-            var fields_iter = fmt.ast.store.annoRecordFieldIter(r.fields);
-            while (fields_iter.next()) |idx| {
+            for (fmt.ast.store.annoRecordFieldSlice(r.fields)) |idx| {
                 const field = fmt.ast.store.getAnnoRecordField(idx);
                 fmt.pushTokenText(field.name);
                 fmt.pushAll(" : ");
@@ -554,8 +532,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
         .tag_union => |t| {
             fmt.push('[');
             var i: usize = 0;
-            var tags_iter = fmt.ast.store.typeAnnoIter(t.tags);
-            while (tags_iter.next()) |tag| {
+            for (fmt.ast.store.typeAnnoSlice(t.tags)) |tag| {
                 fmt.formatTypeAnno(tag);
                 if (i < (t.tags.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -566,8 +543,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
         },
         .@"fn" => |f| {
             var i: usize = 0;
-            var args_iter = fmt.ast.store.typeAnnoIter(f.args);
-            while (args_iter.next()) |idx| {
+            for (fmt.ast.store.typeAnnoSlice(f.args)) |idx| {
                 fmt.formatTypeAnno(idx);
                 if (i < (f.args.span.len - 1)) {
                     fmt.pushAll(", ");
