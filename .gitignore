@@ -129,3 +129,5 @@ crates/glue/tests/fixtures/*/test_glue/
 **/*platform/glue/*
 crates/cli/tests/test-projects/test-platform-effects-zig/glue
 crates/cli/tests/test-projects/test-platform-simple-zig/glue
+
+src/fuzz-corpus/
