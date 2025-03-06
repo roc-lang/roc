@@ -43,7 +43,7 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     std.debug.assert(formatted_twice != null);
     defer gpa.free(formatted_twice.?);
 
-    std.testing.expectEqualStrings(formatted.?, formatted_twice.?);
+    std.testing.expectEqualStrings(formatted.?, formatted_twice.?) catch @panic("Input does not format same on second try");
 }
 
 fn parse_and_format(gpa: std.mem.Allocator, input: []const u8, debug: bool) ?[]const u8 {
@@ -61,6 +61,9 @@ fn parse_and_format(gpa: std.mem.Allocator, input: []const u8, debug: bool) ?[]c
 
     if (parse_ast.errors.len > 0) {
         // Failed to parse, nothing else to do.
+        if (debug) {
+            std.debug.print("Errors: {any}", .{parse_ast.errors});
+        }
         return null;
     }
 
