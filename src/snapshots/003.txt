@@ -6,12 +6,6 @@ module [decoder]
 import json.Json
 
 decoder = Utf8.decode
-~~~FORMATTED
-module [decoder]
-
-import json.Json
-
-decoder = Utf8.decode
 ~~~PARSE
 (file
     (header 'decoder')
