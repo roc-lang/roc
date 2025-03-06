@@ -23,6 +23,7 @@ ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 problems: Problem.List,
 
+/// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator) Self {
     return Self{
         .gpa = gpa,
@@ -33,6 +34,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
+/// Deinitialize the module environment.
 pub fn deinit(self: *Self) void {
     self.idents.deinit(self.gpa);
     self.ident_ids_for_slicing.deinit(self.gpa);

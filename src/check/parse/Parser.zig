@@ -10,6 +10,7 @@ const TokenIdx = Token.Idx;
 
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
+/// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
 
 gpa: std.mem.Allocator,
@@ -19,6 +20,7 @@ store: IR.NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(IR.Node.Idx),
 diagnostics: std.ArrayListUnmanaged(IR.Diagnostic),
 
+/// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
     const estimated_node_count = (tokens.tokens.len + 2) / 2;
     const store = IR.NodeStore.initWithCapacity(tokens.env.gpa, estimated_node_count);
@@ -33,12 +35,14 @@ pub fn init(tokens: TokenizedBuffer) Parser {
     };
 }
 
+/// deninit the parser memory
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
 }
 
 const TestError = error{TestError};
+
 fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
     const messages = [128]tokenize.Diagnostic;
     const tokenizer = tokenize.Tokenizer.init(source, messages[0..], std.testing.allocator);
@@ -52,6 +56,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     try run(parser);
 }
 
+/// helper to advance the parser until a non-newline token is encountered
 pub fn advance(self: *Parser) void {
     while (true) {
         self.pos += 1;
@@ -63,6 +68,7 @@ pub fn advance(self: *Parser) void {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
 }
 
+///
 pub fn advanceOne(self: *Parser) void {
     self.pos += 1;
     // We have an EndOfFile token that we never expect to advance past

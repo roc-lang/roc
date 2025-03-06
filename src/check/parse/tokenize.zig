@@ -3,6 +3,10 @@ const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 const base = @import("../../base.zig");
 
+/// representation of a token in the source code, like '+', 'foo', '=', '{'
+/// these are represented by an offset into the bytes of the source code
+/// and an extra field that stores either the length of the token or
+/// an index into the string interner
 pub const Token = struct {
     tag: Tag,
     offset: u32,
@@ -281,11 +285,13 @@ pub const TokenizedBuffer = struct {
     }
 };
 
+/// Represents a comment in roc source e.g. `## some comment`
 pub const Comment = struct {
     begin: u32,
     end: u32,
 };
 
+/// Represents a unicode character parse from the source.
 const Unicode = struct {
     tag: Tag,
     length: u32,
@@ -299,11 +305,13 @@ const Unicode = struct {
     };
 };
 
+/// Represents a diagnostic message including its position in the source.
 pub const Diagnostic = struct {
     tag: Tag,
     begin: u32,
     end: u32,
 
+    /// Represents the type of diagnostic message.
     pub const Tag = enum {
         MisplacedCarriageReturn,
         AsciiControl,
@@ -1281,6 +1289,7 @@ fn testTokenization(gpa: std.mem.Allocator, input: []const u8, expected: []const
     checkTokenizerInvariants(gpa, input, false);
 }
 
+/// Assert the invariants of the tokenizer are held.
 pub fn checkTokenizerInvariants(gpa: std.mem.Allocator, input: []const u8, debug: bool) void {
     var env = base.ModuleEnv.init(gpa);
     defer env.deinit();

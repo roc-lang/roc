@@ -28,9 +28,13 @@ exposed_idents: collections.SafeList(Ident.Idx),
 /// This should be populated during global import resolution.
 resolved: ?Resolved,
 
+/// A type-safe ArrayList of ModuleImports
 pub const List = collections.SafeList(@This());
+
+/// Index of the ModuleImport
 pub const Idx = List.Idx;
 
+/// Represents a resolved module import.
 pub const Resolved = struct {
     package_idx: Package.Idx,
     module_idx: Package.Module.Idx,
@@ -42,13 +46,16 @@ pub const Store = struct {
     imports: List,
     ident_store: *Ident.Store,
 
+    /// the primary or "self" module index is always '0'
     pub const primary_idx: Idx = @enumFromInt(0);
 
+    /// represent a lookup for the store
     pub const LookupResult = struct {
         import_idx: Idx,
         was_present: bool,
     };
 
+    /// initialize a new empty store
     pub fn init(
         builtin_names: []const []const u8,
         ident_store: *Ident.Store,
@@ -77,6 +84,7 @@ pub const Store = struct {
         };
     }
 
+    /// deinitialize a store's memory
     pub fn deinit(store: *Store, gpa: std.mem.Allocator) void {
         for (store.imports.items.items) |*import| {
             import.exposed_idents.deinit(gpa);

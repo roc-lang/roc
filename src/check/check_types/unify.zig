@@ -13,6 +13,7 @@ const UnificationResult = struct {
 
 const TypeMismatch = enum { type_mismatch };
 
+/// Unifies two types in a type store.
 pub fn unify(
     allocator: Allocator,
     type_store: *Type.Store,

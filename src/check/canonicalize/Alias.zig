@@ -17,10 +17,13 @@ is_builtin: bool,
 // pub typ: Type,
 kind: Kind,
 
+/// todo
 pub const List = collections.SafeMultiList(@This());
+/// todo
 pub const Idx = List.Idx;
+/// todo
 pub const Slice = List.Slice;
-
+/// todo
 pub const Kind = union(enum) {
     ImportedUnknown,
     ImportedCustomUnion,
@@ -28,25 +31,26 @@ pub const Kind = union(enum) {
     Structural: Structural,
     Malformed: Malformed,
 };
-
+/// todo
 pub const Custom = struct {
     type_variables: Var.Slice,
     recursion_variables: std.AutoHashMap(TypeIdx, Ident.Idx),
 };
-
+/// todo
 pub const Structural = struct {
     type_variables: Var.Slice,
 };
-
+/// todo
 pub const Malformed = struct {
     problem: Problem,
 };
-
+/// todo
 pub const Var = struct {
     name: Ident.Idx,
     region: Region,
     type_var: TypeIdx,
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = Var.List.Slice;
 };

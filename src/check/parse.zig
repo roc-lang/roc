@@ -5,11 +5,13 @@ const base = @import("../base.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-pub const IR = @import("parse/IR.zig");
 const NodeList = IR.NodeList;
 const Diagnostic = IR.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
+
+/// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
+pub const IR = @import("parse/IR.zig");
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.

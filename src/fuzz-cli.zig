@@ -14,8 +14,10 @@ const cli = @import("cli.zig");
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
 
+/// Initialize the fuzz test.
 pub export fn zig_fuzz_init() void {}
 
+/// Run the fuzz test
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     zig_fuzz_test_inner(buf, len, false);
 }

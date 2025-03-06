@@ -20,6 +20,7 @@ const exitOnOom = collections.utils.exitOnOom;
 /// irrespective of which compiler stage is being referenced.
 pub const ModuleWorkIdx = enum(u32) { _ };
 
+/// An iterator over all module work indices.
 pub const ModuleWorkIndexIter = struct {
     current: u32,
     len: u32,
@@ -41,9 +42,11 @@ pub fn ModuleWork(comptime Work: type) type {
         module_idx: Package.Module.Idx,
         work: Work,
 
+        /// A store of module work.
         pub const Store = struct {
             items: std.MultiArrayList(ModuleWork(Work)),
 
+            /// create a Store from a slice of ModuleWork(can.IR)
             pub fn fromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: []const ModuleWork(can.IR),
@@ -62,6 +65,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 return Store{ .items = items };
             }
 
+            /// create a Store from a ModuleWork.Store
             pub fn initFromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: *const ModuleWork(can.IR).Store,
@@ -82,6 +86,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 return Store{ .items = items };
             }
 
+            /// deinit a Store's memory
             pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
                 for (0..self.items.len) |index| {
                     self.items.items(.work)[index].deinit();
@@ -90,6 +95,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 self.items.deinit(gpa);
             }
 
+            /// an iterator for the store
             pub fn iterIndices(self: *const Store) ModuleWorkIndexIter {
                 return ModuleWorkIndexIter{
                     .current = 0,
@@ -97,18 +103,22 @@ pub fn ModuleWork(comptime Work: type) type {
                 };
             }
 
+            /// a package index for the module work index
             pub fn getPackageIdx(self: *const Store, idx: ModuleWorkIdx) Package.Idx {
                 return self.items.items(.package_idx)[@as(usize, @intFromEnum(idx))];
             }
 
+            /// a module index for the module work index
             pub fn getModuleIdx(self: *const Store, idx: ModuleWorkIdx) Package.Module.Idx {
                 return self.items.items(.module_idx)[@as(usize, @intFromEnum(idx))];
             }
 
+            /// work for the module work index
             pub fn getWork(self: *const Store, idx: ModuleWorkIdx) *Work {
                 return &self.items.items(.work)[@as(usize, @intFromEnum(idx))];
             }
 
+            /// a module for the module work index
             pub fn getModule(self: *const Store, idx: ModuleWorkIdx, packages: *const Package.Store) *Package.Module {
                 const package_idx = self.getPackageIdx(idx);
                 const package = packages.packages.get(package_idx);
