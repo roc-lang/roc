@@ -14,7 +14,7 @@ jobs:
                 version: 0.13.0
 
             - run: |
-                ./ci/zig-lints.sh
+                ./ci/zig_lints.sh
               
                 zig build check-fmt
                 
