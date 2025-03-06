@@ -481,14 +481,23 @@ fn parseDependenciesFromPackageRoot(
 
     const package_list = switch (header) {
         .app => |app| app.packages,
-        .module => &.{},
+        .module => parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+            .start = 0,
+            .len = 0,
+        } },
         .package => |pkg| pkg.packages,
         // TODO: get packages for hosted/platform modules once their headers are being parsed.
-        .platform => |_| &.{},
-        .hosted => |_| &.{},
+        .platform => |_| parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+            .start = 0,
+            .len = 0,
+        } },
+        .hosted => |_| parse.IR.NodeStore.RecordFieldSpan{ .span = .{
+            .start = 0,
+            .len = 0,
+        } },
     };
 
-    for (package_list) |package_import| {
+    for (parse_ast.store.recordFieldSlice(package_list)) |package_import| {
         const import = parse_ast.store.getRecordField(package_import);
 
         // TODO: get URL when it is stored in `StringLiteral.Store`
