@@ -1,6 +1,3 @@
-/// This is just a silly fuzz test to start getting the infra setup.
-/// It shows the basic that other fuzz tests likely should build off of.
-///
 /// Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
 ///
 /// To run:
@@ -10,7 +7,7 @@
 /// Other afl commands also available in `./zig-out/AFLplusplus/bin`
 ///
 const std = @import("std");
-const base = @import("./base.zig");
+const base = @import("base.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
 pub export fn zig_fuzz_init() void {}

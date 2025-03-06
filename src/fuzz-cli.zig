@@ -21,7 +21,6 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
 }
 
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
-    _ = debug;
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
@@ -32,12 +31,15 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     // Convert the input buffer into what is expected by the test.
     const buf_slice = buf[0..@intCast(len)];
+    if (debug) {
+        std.debug.print("Args:\n==========\n{s}\n==========\n\n", .{buf_slice});
+    }
 
     var args_list = std.ArrayList([]const u8).init(allocator);
     defer args_list.deinit();
     var it = std.mem.splitScalar(u8, buf_slice, ' ');
     while (it.next()) |param| {
-        args_list.append(param) catch unreachable;
+        args_list.append(param) catch @panic("OOM");
     }
 
     const args = args_list.items;
