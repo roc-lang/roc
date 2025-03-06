@@ -691,26 +691,65 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
 }
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
-    const parse = @import("check/parse.zig").parse;
     const gpa = std.testing.allocator;
+    const result = try moduleFmtsStable(gpa, source, false);
+    defer gpa.free(result);
+    try std.testing.expectEqualStrings(to, result);
+}
 
-    var env = base.ModuleEnv.init(gpa);
-    defer env.deinit();
+// Asserts a module when formatted twice in a row results in the same final output.
+// Returns that final output.
+pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+    if (debug) {
+        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
+    }
 
-    var parse_ast = parse(&env, source);
+    const formatted = try parseAndFmt(gpa, input, debug);
+    defer gpa.free(formatted);
+
+    const formatted_twice = parseAndFmt(gpa, formatted, debug) catch {
+        return error.SecondParseFailed;
+    };
+    errdefer gpa.free(formatted_twice);
+
+    std.testing.expectEqualStrings(formatted, formatted_twice) catch {
+        return error.FormattingNotStable;
+    };
+    return formatted_twice;
+}
+
+fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
+    const parse = @import("check/parse.zig").parse;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var parse_ast = parse(&module_env, input);
     defer parse_ast.deinit();
 
-    defer gpa.free(parse_ast.errors);
+    // Currently disabled cause SExpr are missing a lot of IR coverage resulting in panics.
+    if (debug and false) {
+        // shouldn't be required in future
+        parse_ast.store.emptyScratch();
 
-    try std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{});
+        std.debug.print("Parsed SExpr:\n==========\n", .{});
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        std.debug.print("\n==========\n\n", .{});
+    }
 
-    var formatter = Formatter.init(parse_ast);
+    std.testing.expectEqualSlices(IR.Diagnostic, parse_ast.errors, &[_]IR.Diagnostic{}) catch {
+        return error.ParseFailed;
+    };
+
+    var formatter = init(parse_ast);
     defer formatter.deinit();
 
-    const result = formatter.formatFile();
-    defer gpa.free(result);
+    const formatted = formatter.formatFile();
 
-    try std.testing.expectEqualStrings(to, result);
+    if (debug) {
+        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{formatted});
+    }
+    return formatted;
 }
 
 test "Hello world" {

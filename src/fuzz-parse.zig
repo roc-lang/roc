@@ -28,52 +28,18 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const input = buf[0..@intCast(len)];
 
-    if (debug) {
-        std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});
-    }
-
-    const formatted = parse_and_format(gpa, input, debug);
-    if (formatted == null) {
-        // Failed to parse, nothing else to do.
-        return;
-    }
-    defer gpa.free(formatted.?);
-
-    const formatted_twice = parse_and_format(gpa, formatted.?, debug);
-    std.debug.assert(formatted_twice != null);
-    defer gpa.free(formatted_twice.?);
-
-    std.testing.expectEqualStrings(formatted.?, formatted_twice.?) catch @panic("Input does not format same on second try");
-}
-
-fn parse_and_format(gpa: std.mem.Allocator, input: []const u8, debug: bool) ?[]const u8 {
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var parse_ast = parse.parse(&module_env, input);
-    defer parse_ast.deinit();
-
-    if (debug) {
-        std.debug.print("Parsed SExpr:\n==========\n", .{});
-        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
-        std.debug.print("\n==========\n\n", .{});
-    }
-
-    if (parse_ast.errors.len > 0) {
-        // Failed to parse, nothing else to do.
-        if (debug) {
-            std.debug.print("Errors: {any}", .{parse_ast.errors});
-        }
-        return null;
-    }
-
-    var formatter = fmt.init(parse_ast);
-    defer formatter.deinit();
-
-    const formatted = formatter.formatFile();
-
-    if (debug) {
-        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{formatted});
-    }
-    return formatted;
+    const result = fmt.moduleFmtsStable(gpa, input, debug) catch |err|
+        switch (err) {
+        error.ParseFailed => {
+            // No issue. Just bad input we couldn't parse.
+            return;
+        },
+        error.SecondParseFailed => {
+            @panic("Parsing of formatter output failed");
+        },
+        error.FormattingNotStable => {
+            @panic("Formatting not stable");
+        },
+    };
+    gpa.free(result);
 }
