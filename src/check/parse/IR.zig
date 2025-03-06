@@ -1607,9 +1607,7 @@ pub const NodeStore = struct {
                     var header_node = sexpr.Expr.init(env.gpa, "header");
 
                     for (ir.store.tokenSlice(module.exposes)) |exposed_idx| {
-                        const token = ir.tokens.tokens.get(exposed_idx);
-                        const text = env.idents.getText(token.extra.interned);
-                        header_node.appendStringChild(env.gpa, text);
+                        header_node.appendStringChild(env.gpa, ir.resolve(exposed_idx));
                     }
 
                     return header_node;
@@ -1705,7 +1703,7 @@ pub const NodeStore = struct {
                     );
 
                     // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                    for (import.exposes) |tok| {
+                    for (ir.store.tokenSlice(import.exposes)) |tok| {
                         import_node.appendStringChild(env.gpa, ir.resolve(tok));
                     }
 
@@ -1819,10 +1817,7 @@ pub const NodeStore = struct {
                 .ident => |ident| {
                     var node = sexpr.Expr.init(env.gpa, "ident");
 
-                    const token = ir.tokens.tokens.get(ident.ident_tok);
-                    const text = env.idents.getText(token.extra.interned);
-
-                    node.appendStringChild(env.gpa, text);
+                    node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
 
                     return node;
                 },
