@@ -1937,6 +1937,12 @@ pub const NodeStore = struct {
                     const owned_str: []u8 = env.gpa.dupe(u8, text) catch |err| exitOnOom(err);
                     return sexpr.Expr{ .string = owned_str };
                 },
+                // (tag <tag>)
+                .tag => |tag| {
+                    var node = sexpr.Expr.init(env.gpa, "tag");
+                    node.appendStringChild(env.gpa, ir.resolve(tag.token));
+                    return node;
+                },
                 .block => |block| {
                     return block.toSExpr(env, ir);
                 },
@@ -1952,6 +1958,20 @@ pub const NodeStore = struct {
                     binop_sexpr.appendNodeChild(env.gpa, &rhs);
 
                     return binop_sexpr;
+                },
+                // (if_then_else <condition> <then> <else>)
+                .if_then_else => |stmt| {
+                    var node = sexpr.Expr.init(env.gpa, "if_then_else");
+
+                    var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir);
+                    var then = ir.store.getExpr(stmt.then).toSExpr(env, ir);
+                    var else_ = ir.store.getExpr(stmt.@"else").toSExpr(env, ir);
+
+                    node.appendNodeChild(env.gpa, &condition);
+                    node.appendNodeChild(env.gpa, &then);
+                    node.appendNodeChild(env.gpa, &else_);
+
+                    return node;
                 },
                 .ident => |ident| {
                     var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
