@@ -3,6 +3,10 @@ description=Add a variable with spaces
 ~~~SOURCE
 module [add2]
 
+add2 = x +      2
+~~~FORMATTED
+module [add2]
+
 add2 = x + 2
 ~~~PARSE
 (file
