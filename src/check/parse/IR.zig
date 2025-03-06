@@ -1918,6 +1918,11 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
+                .int => |int| {
+                    var expr = sexpr.Expr.init(env.gpa, "int");
+                    expr.appendStringChild(env.gpa, ir.resolve(int.token));
+                    return expr;
+                },
                 .string => |str| {
                     var sexpr_str = sexpr.Expr.init(env.gpa, "string");
                     for (ir.store.exprSlice(str.parts)) |part_id| {
@@ -1934,6 +1939,19 @@ pub const NodeStore = struct {
                 },
                 .block => |block| {
                     return block.toSExpr(env, ir);
+                },
+                // (binop <op> <lhs> <rhs>)
+                .bin_op => |binop| {
+                    var binop_sexpr = sexpr.Expr.init(env.gpa, "binop");
+
+                    binop_sexpr.appendStringChild(env.gpa, ir.resolve(binop.operator));
+
+                    var lhs = ir.store.getExpr(binop.left).toSExpr(env, ir);
+                    var rhs = ir.store.getExpr(binop.right).toSExpr(env, ir);
+                    binop_sexpr.appendNodeChild(env.gpa, &lhs);
+                    binop_sexpr.appendNodeChild(env.gpa, &rhs);
+
+                    return binop_sexpr;
                 },
                 .ident => |ident| {
                     var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
@@ -1955,6 +1973,7 @@ pub const NodeStore = struct {
         rest: bool,
         region: Region,
     };
+
     pub const RecordField = struct {
         name: TokenIdx,
         value: ?ExprIdx,
@@ -1967,6 +1986,7 @@ pub const NodeStore = struct {
         body: ExprIdx,
         region: Region,
     };
+
     pub const WhenBranch = struct {
         pattern: PatternIdx,
         body: ExprIdx,
@@ -1979,6 +1999,7 @@ pub const NodeStore = struct {
         operator: TokenIdx,
         region: Region,
     };
+
     pub const Unary = struct {
         operator: TokenIdx,
         expr: ExprIdx,
