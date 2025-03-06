@@ -1607,9 +1607,7 @@ pub const NodeStore = struct {
                     var header_node = sexpr.Expr.init(env.gpa, "header");
 
                     for (ir.store.tokenSlice(module.exposes)) |exposed_idx| {
-                        const token = ir.tokens.tokens.get(exposed_idx);
-                        const text = env.idents.getText(token.extra.interned);
-                        header_node.appendStringChild(env.gpa, text);
+                        header_node.appendStringChild(env.gpa, ir.resolve(exposed_idx));
                     }
 
                     return header_node;
@@ -1682,6 +1680,34 @@ pub const NodeStore = struct {
                     const expr = ir.store.getExpr(expr_stmt.expr);
                     const expr_node = expr.toSExpr(env, ir);
                     return expr_node;
+                },
+                .import => |import| {
+                    var import_node = sexpr.Expr.init(env.gpa, "import");
+
+                    // Module Qualifier e.g. `pf` in `import pf.Stdout`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        if (import.qualifier_tok) |tok| ir.resolve(tok) else "",
+                    );
+
+                    // Module Name e.g. `Stdout` in `import pf.Stdout`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        ir.resolve(import.module_name_tok),
+                    );
+
+                    // Module Alias e.g. `OUT` in `import pf.Stdout as OUT`
+                    import_node.appendStringChild(
+                        env.gpa,
+                        if (import.alias_tok) |tok| ir.resolve(tok) else "",
+                    );
+
+                    // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
+                    for (ir.store.tokenSlice(import.exposes)) |tok| {
+                        import_node.appendStringChild(env.gpa, ir.resolve(tok));
+                    }
+
+                    return import_node;
                 },
                 else => {
                     std.log.err("format for statement {}", .{self});
@@ -1791,10 +1817,7 @@ pub const NodeStore = struct {
                 .ident => |ident| {
                     var node = sexpr.Expr.init(env.gpa, "ident");
 
-                    const token = ir.tokens.tokens.get(ident.ident_tok);
-                    const text = env.idents.getText(token.extra.interned);
-
-                    node.appendStringChild(env.gpa, text);
+                    node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
 
                     return node;
                 },
@@ -1911,8 +1934,14 @@ pub const NodeStore = struct {
                 .block => |block| {
                     return block.toSExpr(env, ir);
                 },
+                .ident => |ident| {
+                    var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
+                    ident_sexpr.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
+                    ident_sexpr.appendStringChild(env.gpa, ir.resolve(ident.token));
+                    return ident_sexpr;
+                },
                 else => {
-                    std.log.err("expression {}", .{self});
+                    std.log.err("Format for Expr {}", .{self});
                     @panic("not implemented yet");
                 },
             }

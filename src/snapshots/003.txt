@@ -1,0 +1,18 @@
+~~~META
+description=Import statment
+~~~SOURCE
+module [decoder]
+
+import json.Json
+
+decoder = Utf8.decode
+~~~PARSE
+(file
+    (header 'decoder')
+    (import
+        'json'
+        '.Json'
+        '')
+    (decl
+        (ident 'decoder')
+        (ident 'Utf8' '.decode')))
