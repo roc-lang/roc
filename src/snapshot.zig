@@ -6,6 +6,9 @@ const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 
 var verbose_log: bool = false;
+var prng = std.rand.DefaultPrng.init(1234567890);
+
+const rand = prng.random();
 
 /// Logs a message if verbose logging is enabled.
 fn log(comptime fmt_str: []const u8, args: anytype) void {
@@ -32,12 +35,37 @@ pub fn main() !void {
     var snapshot_paths = std.ArrayList([]const u8).init(gpa);
     defer snapshot_paths.deinit();
 
+    var maybe_fuzz_corpus_path: ?[]const u8 = null;
+    var expect_fuzz_corpus_path: bool = false;
+
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_log = true;
+        } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
+            expect_fuzz_corpus_path = true;
+        } else if (expect_fuzz_corpus_path) {
+            maybe_fuzz_corpus_path = arg;
+            expect_fuzz_corpus_path = false;
+        } else if (std.mem.eql(u8, arg, "--help")) {
+            const usage =
+                \\Usage: roc snapshot [options] [snapshot_paths...]
+                \\
+                \\Options:
+                \\  --verbose       Enable verbose logging
+                \\  --fuzz-corpus <path>  Specify the path to the fuzz corpus
+                \\
+                \\Arguments:
+                \\  snapshot_paths  Paths to snapshot files or directories
+            ;
+            std.log.info("{s}", .{usage});
+            std.process.exit(0);
         } else {
             try snapshot_paths.append(arg);
         }
+    }
+
+    if (maybe_fuzz_corpus_path != null) {
+        log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
     }
 
     const snapshots_dir = "src/snapshots";
@@ -46,11 +74,11 @@ pub fn main() !void {
 
     if (snapshot_paths.items.len > 0) {
         for (snapshot_paths.items) |path| {
-            file_count += try processPath(path, gpa);
+            file_count += try processPath(gpa, path, maybe_fuzz_corpus_path);
         }
     } else {
         // process all files in snapshots_dir
-        file_count = try processPath(snapshots_dir, gpa);
+        file_count = try processPath(gpa, snapshots_dir, maybe_fuzz_corpus_path);
     }
 
     const duration_ms = timer.read() / std.time.ns_per_ms;
@@ -58,7 +86,7 @@ pub fn main() !void {
     std.log.info("processed {d} snapshots in {d} ms.", .{ file_count, duration_ms });
 }
 
-fn processPath(path: []const u8, gpa: Allocator) !usize {
+fn processPath(gpa: Allocator, path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !usize {
     var processed_count: usize = 0;
 
     const canonical_path = std.fs.cwd().realpathAlloc(gpa, path) catch |err| {
@@ -86,16 +114,16 @@ fn processPath(path: []const u8, gpa: Allocator) !usize {
             defer gpa.free(full_path);
 
             if (entry.kind == .directory) {
-                processed_count += try processPath(full_path, gpa);
+                processed_count += try processPath(gpa, full_path, maybe_fuzz_corpus_path);
             } else if (entry.kind == .file and std.mem.endsWith(u8, entry.name, ".txt")) {
-                if (try processSnapshotFile(full_path, gpa)) {
+                if (try processSnapshotFile(gpa, full_path, maybe_fuzz_corpus_path)) {
                     processed_count += 1;
                 }
             }
         }
     } else if (stat.kind == .file) {
         if (std.mem.endsWith(u8, canonical_path, ".txt")) {
-            if (try processSnapshotFile(canonical_path, gpa)) {
+            if (try processSnapshotFile(gpa, canonical_path, maybe_fuzz_corpus_path)) {
                 processed_count += 1;
             }
         }
@@ -227,7 +255,7 @@ const Error = error{
     MissingSnapshotSource,
 };
 
-fn processSnapshotFile(snapshot_path: []const u8, gpa: Allocator) !bool {
+fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
         log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
@@ -311,6 +339,35 @@ fn processSnapshotFile(snapshot_path: []const u8, gpa: Allocator) !bool {
     try file.writer().writeAll(Section.PARSE);
     try file.writer().writeAll("\n");
     try file.writer().writeAll(parse_buffer.items);
+
+    // If flag --fuzz-corpus is passed, so write the SOURCE to our corpus
+    if (maybe_fuzz_corpus_path != null) {
+
+        // create a pseudo-random name for our file
+        const rand_file_name = [_][]const u8{
+            maybe_fuzz_corpus_path.?, &[_]u8{
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+            },
+        };
+
+        const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
+        defer gpa.free(corpus_file_path);
+
+        var corpus_file = std.fs.cwd().createFile(corpus_file_path, .{}) catch |err| {
+            log("failed to create file in '{s}': {s}", .{ maybe_fuzz_corpus_path.?, @errorName(err) });
+            return false;
+        };
+        defer corpus_file.close();
+
+        try corpus_file.writer().writeAll(content.source);
+    }
 
     log("{s}", .{snapshot_path});
 
