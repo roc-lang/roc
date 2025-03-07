@@ -42,11 +42,16 @@ pub fn ModuleWork(comptime Work: type) type {
         module_idx: Package.Module.Idx,
         work: Work,
 
-        /// A store of module work.
+        /// A collection of the work for all modules in all packages.
+        ///
+        /// This does not allow addition of individual modules which ensures
+        /// that `ModuleWorkIdx`s are valid and correct (AKA point to the same module)
+        /// across all types of work during compilation.
         pub const Store = struct {
             items: std.MultiArrayList(ModuleWork(Work)),
 
-            /// create a Store from a slice of ModuleWork(can.IR)
+            /// Create a `ModuleWork.Store` from
+            ///  create a Store from a slice of ModuleWork(can.IR)
             pub fn fromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: []const ModuleWork(can.IR),
@@ -65,7 +70,12 @@ pub fn ModuleWork(comptime Work: type) type {
                 return Store{ .items = items };
             }
 
-            /// create a Store from a ModuleWork.Store
+            /// Create a `ModuleWork.Store` using the `ModuleEnv`s and same module order
+            /// of a different `ModuleWork.Store`.
+            ///
+            /// All `ModuleWork.Store`s should be made with the method except for the initial
+            /// `can.IR` store. The `Work` type must define an `init` method that takes a pointer
+            /// to a `ModuleEnv` struct.
             pub fn initFromCanIrs(
                 gpa: std.mem.Allocator,
                 can_irs: *const ModuleWork(can.IR).Store,
@@ -86,7 +96,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 return Store{ .items = items };
             }
 
-            /// deinit a Store's memory
+            /// Deinitialize a `ModuleWork.Store`'s memory.
             pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
                 for (0..self.items.len) |index| {
                     self.items.items(.work)[index].deinit();
@@ -95,7 +105,7 @@ pub fn ModuleWork(comptime Work: type) type {
                 self.items.deinit(gpa);
             }
 
-            /// an iterator for the store
+            /// Iterate over all indices of the work in this store.
             pub fn iterIndices(self: *const Store) ModuleWorkIndexIter {
                 return ModuleWorkIndexIter{
                     .current = 0,
@@ -103,22 +113,22 @@ pub fn ModuleWork(comptime Work: type) type {
                 };
             }
 
-            /// a package index for the module work index
+            /// Get the `Package.Idx` for this work.
             pub fn getPackageIdx(self: *const Store, idx: ModuleWorkIdx) Package.Idx {
                 return self.items.items(.package_idx)[@as(usize, @intFromEnum(idx))];
             }
 
-            /// a module index for the module work index
+            /// Get the `Package.Module.Idx` for this work.
             pub fn getModuleIdx(self: *const Store, idx: ModuleWorkIdx) Package.Module.Idx {
                 return self.items.items(.module_idx)[@as(usize, @intFromEnum(idx))];
             }
 
-            /// work for the module work index
+            /// Get the work from this container.
             pub fn getWork(self: *const Store, idx: ModuleWorkIdx) *Work {
                 return &self.items.items(.work)[@as(usize, @intFromEnum(idx))];
             }
 
-            /// a module for the module work index
+            /// Get the name of the package module for this container.
             pub fn getModule(self: *const Store, idx: ModuleWorkIdx, packages: *const Package.Store) *Package.Module {
                 const package_idx = self.getPackageIdx(idx);
                 const package = packages.packages.get(package_idx);

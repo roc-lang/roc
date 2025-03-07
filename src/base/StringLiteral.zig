@@ -1,4 +1,4 @@
-//! Strings written in-line in Roc code, e.g. `x = "abc"`.
+//! Strings written inline in Roc code, e.g. `x = "abc"`.
 
 const std = @import("std");
 const collections = @import("../collections.zig");
@@ -6,7 +6,7 @@ const collections = @import("../collections.zig");
 const exitOnOom = collections.utils.exitOnOom;
 const testing = std.testing;
 
-/// The index of this string in a StringLiteral.Interner.
+/// The index of this string in a `StringLiteral.Store`.
 pub const Idx = enum(u32) { _ };
 
 /// An interner for string literals.
@@ -33,10 +33,14 @@ pub const Store = struct {
     /// continues to the previous byte
     buffer: std.ArrayListUnmanaged(u8) = .{},
 
+    /// Deinitialize a `StringLiteral.Store`'s memory.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.buffer.deinit(gpa);
     }
 
+    /// Insert a new string into a `StringLiteral.Store`.
+    ///
+    /// Does not deduplicate, as string literals are expected to be large and mostly unique.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, string: []const u8) Idx {
         const str_len: u32 = @truncate(string.len);
         const str_len_bytes = std.mem.asBytes(&str_len);
@@ -47,6 +51,7 @@ pub const Store = struct {
         return @enumFromInt(@as(u32, @intCast(str_start_idx)));
     }
 
+    /// Get a string literal's text from this `Store`.
     pub fn get(self: *const Store, idx: Idx) []u8 {
         const idx_u32: u32 = @intCast(@intFromEnum(idx));
         const str_len = std.mem.bytesAsValue(u32, self.buffer.items[idx_u32 - 4 .. idx_u32]).*;

@@ -1,3 +1,5 @@
+//! Useful types for representing numbers in the Roc type system.
+
 const base = @import("../base.zig");
 
 /// A bound placed on a number because of its literal value.
@@ -9,7 +11,7 @@ pub const NumericRange = union(enum) {
     NumAtLeastEitherSign: Bound.Int.Width,
 };
 
-/// todo
+/// Whether a number literal constrains its type to be signed.
 pub const SignDemand = enum {
     /// Can be signed or unsigned.
     NoDemand,
@@ -17,7 +19,7 @@ pub const SignDemand = enum {
     Signed,
 };
 
-/// todo
+/// A bound
 pub const Bound = struct {
     /// Describes a bound on the width of an integer.
     pub const Int = union(enum) {

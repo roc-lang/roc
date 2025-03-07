@@ -26,7 +26,7 @@ const HELP =
     \\
 ;
 
-/// cli entrypoint
+/// CLI entrypoint for fuzzing failure reproducer.
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {

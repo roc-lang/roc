@@ -136,6 +136,7 @@ pub const Expr = union(enum) {
         }
     }
 
+    /// Render this S-Expr to a writer with pleasing indentation.
     pub fn toStringPretty(node: Expr, writer: std.io.AnyWriter) void {
         return toString(node, writer, 0) catch {
             @panic("Ran out of memory writing S-expression to writer");

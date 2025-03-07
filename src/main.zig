@@ -36,13 +36,13 @@ const usage =
     \\ -h, --help       Print usage
 ;
 
-/// log a fatal error and exit the process with a non-zero code
+/// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.log.err(format, args);
     std.process.exit(1);
 }
 
-/// cli entrypoint
+/// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
     const gpa = std.heap.c_allocator;
 
@@ -85,7 +85,7 @@ fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
     }
 }
 
-fn print_help() !void {
+fn printHelp() !void {
     try std.io.getStdOut().writeAll(usage);
     std.process.exit(0);
 }

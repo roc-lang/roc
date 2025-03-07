@@ -1,5 +1,5 @@
 ~~~META
-description=Import statment
+description=Import statement
 ~~~SOURCE
 module [decoder]
 
