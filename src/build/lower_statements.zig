@@ -5,6 +5,8 @@ const func_spec = @import("./specialize_functions.zig");
 const ModuleWork = base.ModuleWork;
 
 const Self = @This();
+
+/// Represents the intermediate representation of the program after converting expressions into statements for consumption by codegen.
 pub const IR = @import("./lower_statements/IR.zig");
 
 /// Convert expressions into statements for consumption by codegen.

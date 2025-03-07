@@ -10,12 +10,15 @@ const std = @import("std");
 const base = @import("base.zig");
 const tokenize = @import("check/parse/tokenize.zig");
 
+/// Hook for AFL++ to initialize the fuzz test environment.
 pub export fn zig_fuzz_init() void {}
 
+/// Hook for AFL++ to run the fuzz test.
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     zig_fuzz_test_inner(buf, len, false);
 }
 
+/// helper for zig_fuzz_test
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.

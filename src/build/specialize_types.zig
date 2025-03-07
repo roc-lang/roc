@@ -7,6 +7,8 @@ const Type = types.Type;
 const ModuleWork = base.ModuleWork;
 
 const Self = @This();
+
+/// Represents the intermediate representation of the program after type specialization.
 pub const IR = @import("specialize_types/IR.zig");
 
 /// Create a copy of every function in the program, by walking from the entrypoint down the tree, replacing type variables with concrete types.

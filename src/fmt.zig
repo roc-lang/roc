@@ -709,8 +709,8 @@ fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
     try std.testing.expectEqualStrings(to, result);
 }
 
-// Asserts a module when formatted twice in a row results in the same final output.
-// Returns that final output.
+/// Asserts a module when formatted twice in a row results in the same final output.
+/// Returns that final output.
 pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
     if (debug) {
         std.debug.print("Original:\n==========\n{s}\n==========\n\n", .{input});

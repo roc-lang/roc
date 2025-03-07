@@ -5,6 +5,7 @@ const collections = @import("collections.zig");
 const Ident = base.Ident;
 const Region = base.Region;
 
+/// Represents a problem encountered during the compilation process.
 pub const Problem = union(enum) {
     canonicalize: Canonicalize,
     compiler: Compiler,

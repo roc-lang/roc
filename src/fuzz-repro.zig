@@ -1,7 +1,8 @@
-/// Runner to enable reproducing fuzzing failures.
-///
-/// The default persistent mode fuzzer is really efficient, but can't be run from the command line.
-/// This runners makes a simple script to reproduce failures from the command line (stdin or file).
+//! Runner to enable reproducing fuzzing failures.
+//!
+//! The default persistent mode fuzzer is really efficient, but can't be run from the command line.
+//! This runners makes a simple script to reproduce failures from the command line (stdin or file).
+
 const std = @import("std");
 const fuzz_test = @import("fuzz_test");
 
@@ -25,6 +26,7 @@ const HELP =
     \\
 ;
 
+/// cli entrypoint
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {

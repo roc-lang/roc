@@ -5,6 +5,9 @@ const type_spec = @import("./specialize_types.zig");
 const ModuleWork = base.ModuleWork;
 
 const Self = @This();
+
+/// Represents the intermediate representation of the program IR after lifting functions.
+/// All anonymous function bodies are lifted to the top level of the program.
 pub const IR = @import("./lift_functions/IR.zig");
 
 /// Lift all closures to the top-level and leave behind closure captures

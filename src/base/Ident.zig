@@ -62,7 +62,7 @@ pub const Store = struct {
     attributes: std.ArrayListUnmanaged(Attributes) = .{},
     next_unique_name: u32 = 0,
 
-    /// deinit the store memory
+    /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);
         self.exposing_modules.deinit(gpa);

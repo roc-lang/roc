@@ -23,6 +23,7 @@ modules: std.ArrayList(ModuleWork(can.IR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
+/// todo
 pub fn deinit(self: *Self) void {
     self.modules.deinit();
     for (self.adjacencies.items) |adjacency_list| {
@@ -31,6 +32,7 @@ pub fn deinit(self: *Self) void {
     self.adjacencies.deinit();
 }
 
+/// todo
 pub const ConstructResult = union(enum) {
     success: Self,
     failed_to_open_module: struct {
@@ -166,6 +168,7 @@ pub const Sccs = struct {
     groups: std.ArrayList(std.ArrayList(usize)),
 };
 
+/// todo
 pub const OrderingResult = union(enum) {
     ordered: ModuleWork(can.IR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),

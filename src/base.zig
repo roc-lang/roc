@@ -1,23 +1,34 @@
 const std = @import("std");
 const parse = @import("check/parse.zig");
 const module_work = @import("base/module_work.zig");
-pub const sexpr = @import("base/sexpr.zig");
 
+/// re-export the S-expression helpers
+pub const sexpr = @import("base/sexpr.zig");
+/// re-export Ident
 pub const Ident = @import("base/Ident.zig");
+/// re-export Region
 pub const Region = @import("base/Region.zig");
+/// re-export Package
 pub const Package = @import("base/Package.zig");
+/// re-export ModuleEnv
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
+/// re-export ModuleImport
 pub const ModuleImport = @import("base/ModuleImport.zig");
+/// re-export StringLiteral
 pub const StringLiteral = @import("base/StringLiteral.zig");
+/// re-export ModuleWork
 pub const ModuleWork = module_work.ModuleWork;
+/// re-export ModuleWorkIdx
 pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
 
+/// todo
 pub const Recursive = enum {
     NotRecursive,
     Recursive,
     TailRecursive,
 };
 
+/// todo
 pub const CalledVia = enum {};
 
 /// Represents a value written as-is in a Roc source file.

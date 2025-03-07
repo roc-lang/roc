@@ -9,6 +9,7 @@ pub const NumericRange = union(enum) {
     NumAtLeastEitherSign: Bound.Int.Width,
 };
 
+/// todo
 pub const SignDemand = enum {
     /// Can be signed or unsigned.
     NoDemand,
@@ -16,6 +17,7 @@ pub const SignDemand = enum {
     Signed,
 };
 
+/// todo
 pub const Bound = struct {
     /// Describes a bound on the width of an integer.
     pub const Int = union(enum) {

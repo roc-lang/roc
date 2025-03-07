@@ -18,6 +18,7 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
+/// todo
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
@@ -31,6 +32,7 @@ pub fn init(env: *base.ModuleEnv) Self {
     };
 }
 
+/// todo
 pub fn deinit(self: *Self) void {
     self.procedures.deinit(self.env.gpa);
     self.constants.deinit(self.env.gpa);
@@ -41,6 +43,7 @@ pub fn deinit(self: *Self) void {
     self.list_literal_elems.deinit(self.env.gpa);
 }
 
+/// todo
 pub const Procedure = struct {
     arguments: IdentWithLayout.Slice,
     body: Stmt.Idx,
@@ -48,8 +51,10 @@ pub const Procedure = struct {
 };
 
 // TODO: is this necessary?
+/// todo
 pub const TagIdIntType = u16;
 
+/// todo
 pub const Layout = union(enum) {
     primitive: types.Primitive,
     box: Layout.Idx,
@@ -59,21 +64,30 @@ pub const Layout = union(enum) {
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
     unit,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const IdentWithLayout = struct {
     ident: Ident.Idx,
     layout: Layout.Idx,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const StmtWithLayout = struct {
     stmt: Stmt.Idx,
     layout: Layout.Idx,
@@ -83,6 +97,7 @@ pub const StmtWithLayout = struct {
 //
 // Copied (and adapted) from:
 // https://github.com/roc-lang/roc/blob/689c58f35e0a39ca59feba549f7fcf375562a7a6/crates/compiler/mono/src/layout.rs#L733
+/// todo
 pub const UnionLayout = union(enum) {
     // TODO: 3 types:
     // - Unwrapped (1 variant converted to the inner type)
@@ -90,6 +105,7 @@ pub const UnionLayout = union(enum) {
     // - Recursive ("box" the recursion point)
 };
 
+/// todo
 pub const Expr = union(enum) {
     literal: base.Literal,
 
@@ -155,25 +171,34 @@ pub const Expr = union(enum) {
         module_ident: Ident.Idx,
     },
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const ListLiteralElem = union(enum) {
     string_literal_id: []const u8,
     number: base.Literal.Num,
     ident: Ident.Idx,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const Call = struct {
     kind: Kind,
     arguments: IdentWithLayout.Slice,
 
+    /// todo
     pub const Kind = union(enum) {
         by_name: struct {
             ident: Ident.Idx,
@@ -197,6 +222,7 @@ pub const Call = struct {
     };
 };
 
+/// todo
 pub const Stmt = union(enum) {
     let: struct {
         ident: Ident.Idx,
@@ -239,12 +265,17 @@ pub const Stmt = union(enum) {
         message: Ident.Idx,
     },
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const Branch = struct {
     discriminant: u64,
     kind: Kind,
@@ -269,6 +300,8 @@ pub const Branch = struct {
     };
 };
 
+/// todo
 pub const JoinPoint = struct {
+    /// todo
     pub const Idx = Ident.Idx;
 };

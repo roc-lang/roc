@@ -7,30 +7,32 @@ const testing = std.testing;
 const Ident = base.Ident;
 const ModuleWork = base.ModuleWork;
 
+/// todo
 pub const FunctionSet = struct {
     higher_order_function: Ident.Idx,
     pattern: func_lift.IR.Pattern.Idx,
     data: collections.SafeMultiList(Data),
-
+    /// todo
     pub const Data = struct {
         function_name: Ident.Idx,
         captures: ?func_lift.IR.Type.Slice,
     };
-
+    /// todo
     pub const List = collections.SafeList(@This());
 };
 
+/// todo
 pub const IR = struct {
     env: *base.ModuleEnv,
     function_sets: FunctionSet.List,
-
+    /// todo
     pub fn init(env: *base.ModuleEnv) IR {
         return IR{
             .env = env,
             .function_sets = .{},
         };
     }
-
+    /// todo
     pub fn deinit(self: *IR) void {
         self.function_sets.deinit(self.env.gpa);
     }

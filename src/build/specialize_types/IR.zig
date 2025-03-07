@@ -21,6 +21,7 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
+/// todo
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
@@ -36,6 +37,7 @@ pub fn init(env: *base.ModuleEnv) Self {
     };
 }
 
+/// todo
 pub fn deinit(self: *Self) void {
     self.exposed_values.deinit(self.env.gpa);
     self.exposed_functions.deinit(self.env.gpa);
@@ -48,6 +50,7 @@ pub fn deinit(self: *Self) void {
     self.when_branches.deinit(self.env.gpa);
 }
 
+/// todo
 pub const Type = union(enum) {
     primitive: types.Primitive,
     box: Type.Idx,
@@ -57,13 +60,17 @@ pub const Type = union(enum) {
     func: struct {
         ret_then_args: Type.NonEmptySlice,
     },
-
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const Expr = union(enum) {
     let: Def,
     str: StringLiteral,
@@ -120,16 +127,21 @@ pub const Expr = union(enum) {
 
     compiler_bug: Problem.Compiler,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
-
+    /// todo
     pub const Typed = struct {
         expr: Expr.Idx,
         type: Type.Idx,
-
+        /// todo
         pub const List = collections.SafeMultiList(@This());
+        /// todo
         pub const Slice = Typed.List.Slice;
     };
 };
@@ -141,11 +153,13 @@ pub const Def = struct {
     pattern_vars: TypedIdent.Slice,
     expr: Expr.Idx,
     expr_type: Type.Idx,
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const WhenBranch = struct {
     /// The pattern(s) to match the value against
     patterns: Pattern.NonEmptySlice,
@@ -153,31 +167,35 @@ pub const WhenBranch = struct {
     guard: ?Expr.Idx,
     /// The expression to produce if the pattern matches
     value: Expr.Idx,
-
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const Function = struct {
     args: Pattern.Slice,
     return_type: Type.Idx,
     expr: Expr.Idx,
 };
 
-pub const StructDestruct = struct {
+/// todopub const StructDestruct = struct {
     ident: Ident.Idx,
     field: Ident.Idx,
     kind: Kind,
-
+    /// todo
     pub const Kind = union(enum) {
         required,
         guard: Pattern.Typed,
     };
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const Pattern = union(enum) {
     identifier: Ident.Idx,
     as: struct {
@@ -207,25 +225,30 @@ pub const Pattern = union(enum) {
     },
     underscore,
     compiler_bug: Problem.Compiler,
-
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
-
+    /// todo
     pub const Typed = struct {
         pattern: Pattern.Idx,
         type: Type.Idx,
-
+        /// todo
         pub const List = collections.SafeMultiList(@This());
+        /// todo
         pub const Slice = Typed.List.Slice;
     };
 };
-
+/// todo
 pub const TypedIdent = struct {
     pattern: Pattern.Idx,
     type: Type.Idx,
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };

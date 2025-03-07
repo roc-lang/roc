@@ -58,7 +58,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
-/// deinit the IR's memory
+/// Deinit the IR's memory.
 pub fn deinit(self: *Self) void {
     self.env.deinit();
     self.aliases.deinit(self.env.gpa);
@@ -76,8 +76,7 @@ pub fn deinit(self: *Self) void {
     self.ingested_files.deinit(self.env.gpa);
 }
 
-/// represents rigid variables, i.e. those that are not bound to a specific type
-/// but are provided by the user, e.g. the 'a' in `foo: a, a -> a`
+/// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
     named: std.AutoHashMap(TypeIdx, Ident.Idx),
     // with_methods: std.AutoHashMap(TypeVar, WithMethods),
@@ -89,7 +88,7 @@ pub const RigidVariables = struct {
 };
 
 // TODO: don't use symbol in this module, no imports really exist yet?
-/// @Sam -- shouldn't this use the types from src/types/type.zig
+/// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     // Literals
 
@@ -203,33 +202,38 @@ pub const Expr = union(enum) {
     /// Compiles, but will crash if reached
     RuntimeError: Problem.Idx,
 
-    /// todo
+    /// A list of canonicalized expressions.
     pub const List = collections.SafeList(@This());
-    /// todo
+    /// An index into a list of canonicalized expressions.
     pub const Idx = List.Idx;
-    /// todo
+    /// A slice of canonicalized expressions.
     pub const Slice = List.Slice;
-    /// todo
+    /// A non-empty slice of canonicalized expressions.
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
-/// todo
+/// A file of any type that has been ingested into a Roc module
+/// as raw data, e.g. `import "lookups.txt" as lookups : Str`.
+///
+/// These ingestions aren't resolved until the import resolution
+/// compiler stage.
 pub const IngestedFile = struct {
     relative_path: StringLiteral.Idx,
     ident: Ident.Idx,
     type: Annotation,
 
-    /// todo
+    /// A list of ingested files.
     pub const List = collections.SafeList(@This());
-    /// todo
+    /// In index into a list of ingested files.
     pub const Idx = List.Idx;
-    /// todo
+    /// A slice of ingested files.
     pub const Slice = List.Slice;
-    /// todo
+    /// A non-empty slice of ingested files.
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
-/// todo
+/// A definition of a value (or destructured values) that
+/// takes its value from an expression.
 pub const Def = struct {
     pattern: Pattern.Idx,
     pattern_region: Region,

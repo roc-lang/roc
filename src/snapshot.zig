@@ -19,6 +19,7 @@ fn warn(comptime fmt_str: []const u8, args: anytype) void {
     std.log.warn(fmt_str, args);
 }
 
+/// cli entrypoint for snapshot tool
 pub fn main() !void {
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};
     defer {

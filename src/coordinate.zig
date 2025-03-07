@@ -32,10 +32,11 @@ const exitOnOom = collections.utils.exitOnOom;
 const DEFAULT_MAIN_FILENAME: []const u8 = "main.roc";
 const BUILTIN_FILENAMES: []const []const u8 = &.{};
 
+/// todo
 pub const TypecheckResult = union(enum) {
     success: Success,
     err: Err,
-
+    /// todo
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
@@ -43,7 +44,7 @@ pub const TypecheckResult = union(enum) {
         resolve_irs: ModuleWork(resolve.IR).Store,
         type_stores: ModuleWork(Type.Store).Store,
     };
-
+    /// todo
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
         discovery_err: ModuleDiscoveryResult.Err,
@@ -56,7 +57,7 @@ pub const TypecheckResult = union(enum) {
             packages: Package.Store,
             cycle: std.ArrayList(ModuleWork(void)),
         },
-
+        /// todo
         pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
             switch (err.*) {
                 .package_root_search_err => {},
@@ -149,10 +150,11 @@ pub fn typecheckModule(
     };
 }
 
+/// todo
 pub const BuildResult = union(enum) {
     success: Success,
     typecheck_err: TypecheckResult.Err,
-
+    /// todo
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
@@ -232,16 +234,16 @@ pub fn prepareModuleForCodegen(
         .refcount_irs = all_refcounted,
     } };
 }
-
+/// todo
 pub const ModuleDiscoveryResult = union(enum) {
     success: Success,
     err: Err,
-
+    /// todo
     pub const Success = struct {
         packages: Package.Store,
         root: PackageRoot,
     };
-
+    /// todo
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
         failed_to_open_root_dir: Filesystem.OpenError,
@@ -251,7 +253,7 @@ pub const ModuleDiscoveryResult = union(enum) {
         failed_to_walk_files: anyerror,
         failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
         failed_to_read_root_file: Filesystem.OpenError,
-
+        /// todo
         pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
             switch (err.*) {
                 .package_root_search_err => {},
@@ -389,7 +391,7 @@ const PackageRoot = struct {
         self.gpa.free(self.entry_relative_path);
     }
 };
-
+/// todo
 pub const PackageRootSearchErr = error{
     invalid_abs_path_for_entry,
     entry_not_in_a_directory,

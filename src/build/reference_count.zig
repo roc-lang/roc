@@ -5,6 +5,8 @@ const lower = @import("./lower_statements.zig");
 const ModuleWork = base.ModuleWork;
 
 const Self = @This();
+
+/// Represents the program intermediate representation after adding refcounting instructions.
 pub const IR = @import("./reference_count/IR.zig");
 
 /// Check ownership of function arguments and add refcounting instructions where necessary.
