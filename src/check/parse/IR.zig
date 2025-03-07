@@ -1708,11 +1708,28 @@ pub const NodeStore = struct {
 
                     return node;
                 },
-                .type_decl => {
-                    const node = sexpr.Expr.init(env.gpa, "type_decl");
-                    // TODO
-                    // header: TypeHeaderIdx,
-                    // anno: TypeAnnoIdx,
+                // (type_decl (header <name> [<args>]) <annotation>)
+                .type_decl => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "type_decl");
+                    var header = sexpr.Expr.init(env.gpa, "header");
+
+                    // pattern
+                    {
+                        const ty_header = ir.store.getTypeHeader(a.header);
+
+                        header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
+
+                        for (ir.store.tokenSlice(ty_header.args)) |b| {
+                            header.appendStringChild(env.gpa, ir.resolve(b));
+                        }
+
+                        node.appendNodeChild(env.gpa, &header);
+                    }
+                    // annotation
+                    {
+                        var annotation = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &annotation);
+                    }
 
                     return node;
                 },

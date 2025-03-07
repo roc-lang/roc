@@ -22,8 +22,39 @@ SomeFunc a : Maybe(a), a -> Maybe(a)
         'SomeFunc'
         'add_one'
         'main!')
-    (type_decl)
-    (type_decl)
-    (type_decl)
-    (type_decl)
-    (type_decl))
+    (type_decl
+        (header
+            'Map'
+            'a'
+            'b')
+        (fn
+            (tag
+                'List'
+                (ty_var 'b'))
+            (tag
+                'List'
+                (ty_var 'a'))
+            (fn
+                (ty_var 'b')
+                (ty_var 'a'))))
+    (type_decl
+        (header 'Foo')
+        (tuple
+            (tag 'Bar')
+            (tag 'Baz')))
+    (type_decl
+        (header 'Some' 'a')
+        (record '<field>' '<field>'))
+    (type_decl
+        (header 'Maybe' 'a')
+        (tag_union 'TODO tags' 'TODO open_anno'))
+    (type_decl
+        (header 'SomeFunc' 'a')
+        (fn
+            (tag
+                'Maybe'
+                (ty_var 'a'))
+            (tag
+                'Maybe'
+                (ty_var 'a'))
+            (ty_var 'a'))))
