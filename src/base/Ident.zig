@@ -69,7 +69,7 @@ pub const Store = struct {
         self.attributes.deinit(gpa);
     }
 
-    /// insert a new identifier into the store
+    /// Insert a new identifier into the store.
     pub fn insert(self: *Store, gpa: std.mem.Allocator, ident: Ident, region: Region) Idx {
         const idx = self.interner.insert(gpa, ident.raw_text, region);
         self.exposing_modules.append(gpa, @enumFromInt(0)) catch |err| exitOnOom(err);
@@ -81,13 +81,18 @@ pub const Store = struct {
         };
     }
 
-    /// generate a unique identifier
+    /// Generate a new identifier that is unique within this module.
+    ///
+    /// We keep a counter per `Ident.Store` that gets incremented each
+    /// time this method is called. The new ident is named based on said
+    /// counter, which cannot overlap with user-defined idents since those
+    /// cannot start with a digit.
     pub fn genUnique(self: *Store, gpa: std.mem.Allocator) Idx {
         var id = self.next_unique_name;
         self.next_unique_name += 1;
 
         // Manually render the text into a buffer to avoid allocating
-        // a string as the string interner will copy the text anyway.
+        // a string, as the string interner will copy the text anyway.
 
         var digit_index: u8 = 9;
         // The max u32 value is 4294967295 which is 10 digits
@@ -100,7 +105,6 @@ pub const Store = struct {
             digit_index -= 1;
         }
 
-        // const name_length = if (id < 10) 1 else ;
         const name = str_buffer[digit_index..];
 
         const idx = self.interner.insert(gpa, name, Region.zero());
@@ -119,8 +123,10 @@ pub const Store = struct {
         };
     }
 
-    /// asserts two identifiers have the same text,
-    /// e.g. "foo" and "foo"
+    /// Checks whether two identifiers have the same text.
+    ///
+    /// This runs in constant time because it just checks if both idents
+    /// point to the same deduped string.
     pub fn identsHaveSameText(
         self: *const Store,
         first_idx: Idx,
@@ -132,18 +138,19 @@ pub const Store = struct {
         );
     }
 
-    /// get the text for an identifier
+    /// Get the text for an identifier.
     pub fn getText(self: *const Store, idx: Idx) []u8 {
         return self.interner.getText(@enumFromInt(@as(u32, idx.idx)));
     }
 
-    /// get the region for an identifier
+    /// Get the region for an identifier.
     pub fn getRegion(self: *const Store, idx: Idx) Region {
         return self.interner.getRegion(@enumFromInt(@as(u32, idx.idx)));
     }
 
-    /// get the module for an identifier
-    /// TODO -- Sam can you confirm this is correct?
+    // TODO: should this get moved out of here and into canonicalization?
+    //
+    /// Get the index of the imported module for an identifier.
     pub fn getExposingModule(self: *const Store, idx: Idx) ModuleImport.Idx {
         return self.exposing_modules.items[@as(usize, idx.idx)];
     }

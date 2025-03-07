@@ -180,7 +180,8 @@ pub const Function = struct {
     expr: Expr.Idx,
 };
 
-/// todopub const StructDestruct = struct {
+/// todo
+pub const StructDestruct = struct {
     ident: Ident.Idx,
     field: Ident.Idx,
     kind: Kind,
