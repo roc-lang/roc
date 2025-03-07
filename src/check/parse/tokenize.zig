@@ -114,6 +114,7 @@ pub const Token = struct {
         KwElse,
         KwExpect,
         KwExposes,
+        KwExposing,
         KwGenerates,
         KwHas,
         KwHosted,
@@ -146,6 +147,7 @@ pub const Token = struct {
         .{ "else", .KwElse },
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
+        .{ "exposing", .KwExposing },
         .{ "generates", .KwGenerates },
         .{ "has", .KwHas },
         .{ "hosted", .KwHosted },
@@ -192,6 +194,7 @@ pub const Token = struct {
             .KwElse,
             .KwExpect,
             .KwExposes,
+            .KwExposing,
             .KwGenerates,
             .KwHas,
             .KwHosted,
@@ -1742,6 +1745,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwExposes => {
                 try buf2.appendSlice(alloc, "exposes");
+            },
+            .KwExposing => {
+                try buf2.appendSlice(alloc, "exposing");
             },
             .KwGenerates => {
                 try buf2.appendSlice(alloc, "generates");

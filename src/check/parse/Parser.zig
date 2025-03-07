@@ -345,6 +345,15 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform);
 }
 
+pub fn parseIdent(self: *Parser) ?tokenize.Token.Idx {
+    if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+        const pos = self.pos;
+        self.advance();
+        return pos;
+    }
+    return null;
+}
+
 pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
     switch (self.peek()) {
         .KwImport => {
@@ -356,14 +365,44 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                 self.advance();
             }
             if (self.peek() == .UpperIdent or (qualifier != null and self.peek() == .NoSpaceDotUpperIdent)) {
+                var exposes: IR.NodeStore.TokenSpan = .{ .span = .{ .start = 0, .len = 0 } };
+                const module_name_tok = self.pos;
+                if (self.peekNext() == .KwExposing) {
+                    self.advance(); // Advance past ident
+                    self.advance(); // Advance past KwExposing
+                    self.expect(.OpenSquare) catch {
+                        return self.pushMalformed(IR.NodeStore.StatementIdx, .import_exposing_no_open);
+                    };
+                    const scratch_top = self.store.scratchTokenTop();
+                    while (self.peek() != .CloseSquare) {
+                        if (self.parseIdent()) |ident| {
+                            self.store.addScratchToken(ident);
+                        } else {
+                            break;
+                        }
+                        self.expect(.Comma) catch {
+                            break;
+                        };
+                    }
+                    self.expect(.CloseSquare) catch {
+                        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        self.expect(.CloseSquare) catch {};
+                        self.store.clearScratchTokensFrom(scratch_top);
+                        return self.pushMalformed(IR.NodeStore.StatementIdx, .import_exposing_no_close);
+                    };
+                    exposes = self.store.tokenSpanFrom(scratch_top);
+                } else {
+                    self.advance(); // Advance past identifier
+                }
                 const statement_idx = self.store.addStatement(.{ .import = .{
-                    .module_name_tok = self.pos,
+                    .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
                     .alias_tok = null,
-                    .exposes = .{ .span = .{ .start = 0, .len = 0 } },
+                    .exposes = exposes,
                     .region = .{ .start = start, .end = self.pos },
                 } });
-                self.advance();
                 if (self.peek() == .Newline) {
                     self.advance();
                 }

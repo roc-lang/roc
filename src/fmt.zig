@@ -75,6 +75,18 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .import => |i| {
             fmt.buffer.appendSlice(fmt.gpa, "import ") catch |err| exitOnOom(err);
             fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
+            if (i.exposes.span.len > 0) {
+                fmt.pushAll(" exposing [");
+                var n: usize = 0;
+                for (fmt.ast.store.tokenSlice(i.exposes)) |tok| {
+                    fmt.pushTokenText(tok);
+                    if (n < i.exposes.span.len - 1) {
+                        fmt.pushAll(", ");
+                    }
+                    n += 1;
+                }
+                fmt.push(']');
+            }
             return .extra_newline_needed;
         },
         .type_decl => |d| {
@@ -834,7 +846,7 @@ test "Syntax grab bag" {
     try moduleFmtsSame(
         \\app [main!] { pf: platform "../basic-cli/platform.roc" }
         \\
-        \\import pf.Stdout
+        \\import pf.Stdout exposing [line!, write!]
         \\
         \\Map a b : List(a), (a -> b) -> List(b)
         \\

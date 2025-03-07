@@ -46,6 +46,8 @@ pub const Diagnostic = struct {
         expected_platform_string,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
+        import_exposing_no_open,
+        import_exposing_no_close,
     };
 };
 
@@ -639,18 +641,25 @@ pub const NodeStore = struct {
                     .qualified = 0,
                     .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
                 };
-                const extra_data_start = store.extra_data.items.len;
+                var ed_start: u32 = i.exposes.span.start;
                 if (i.qualifier_tok) |tok| {
                     rhs.qualified = 1;
+                    if (ed_start == 0) {
+                        ed_start = @intCast(store.extra_data.items.len);
+                    }
+
                     store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 if (i.alias_tok) |tok| {
                     rhs.aliased = 1;
+                    if (ed_start == 0) {
+                        ed_start = @intCast(store.extra_data.items.len);
+                    }
                     store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 node.data.rhs = @as(u32, @bitCast(rhs));
                 if (node.data.rhs > 0) {
-                    node.data.lhs = @as(u32, @intCast(extra_data_start));
+                    node.data.lhs = ed_start;
                 }
             },
             .type_decl => |d| {
@@ -1090,7 +1099,7 @@ pub const NodeStore = struct {
             },
             .import => {
                 const rhs = @as(ImportRhs, @bitCast(node.data.rhs));
-                var extra_data_pos = node.data.lhs;
+                var extra_data_pos = node.data.lhs + rhs.num_exposes;
                 var qualifier_tok: ?TokenIdx = null;
                 var alias_tok: ?TokenIdx = null;
                 if (rhs.qualified == 1) {
@@ -1099,18 +1108,19 @@ pub const NodeStore = struct {
                 }
                 if (rhs.aliased == 1) {
                     alias_tok = store.extra_data.items[extra_data_pos];
-                    extra_data_pos += 1;
                 }
-                return .{ .import = .{
+                const i = .{
                     .module_name_tok = node.main_token,
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
                     .exposes = .{ .span = .{
-                        .start = extra_data_pos,
+                        .start = node.data.lhs,
                         .len = rhs.num_exposes,
                     } },
                     .region = emptyRegion(),
-                } };
+                };
+                const imp = .{ .import = i };
+                return imp;
             },
             .expect => {
                 return .{ .expect = .{
