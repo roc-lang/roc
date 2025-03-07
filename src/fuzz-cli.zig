@@ -22,6 +22,7 @@ pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
     zig_fuzz_test_inner(buf, len, false);
 }
 
+/// todo
 pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
