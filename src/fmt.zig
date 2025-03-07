@@ -435,6 +435,10 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.push(']');
             fmt.newline();
         },
+        .malformed => {
+            fmt.pushAll("<malformed_header>");
+            fmt.newline();
+        },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});
         },

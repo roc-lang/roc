@@ -1064,6 +1064,9 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .malformed => {
+                return .malformed;
+            },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1599,6 +1602,7 @@ pub const NodeStore = struct {
             // TODO: complete this
             region: Region,
         },
+        malformed,
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
@@ -1612,6 +1616,9 @@ pub const NodeStore = struct {
                     }
 
                     return header_node;
+                },
+                .malformed => {
+                    return sexpr.Expr.init(env.gpa, "malformed");
                 },
                 else => @panic("not implemented"),
             }
@@ -1940,6 +1947,14 @@ pub const NodeStore = struct {
                     ident_sexpr.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
                     ident_sexpr.appendStringChild(env.gpa, ir.resolve(ident.token));
                     return ident_sexpr;
+                },
+                .list => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "list");
+                    for (ir.store.exprSlice(a.items)) |b| {
+                        var child = ir.store.getExpr(b).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    return node;
                 },
                 else => {
                     std.debug.print("Format for Expr {}", .{self});

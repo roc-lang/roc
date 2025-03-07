@@ -1,14 +1,21 @@
 ~~~META
 description=Import statement
 ~~~SOURCE
-module [decoder]
+<malformed_header>
+
+modAle
+
+[decoder]
 
 import json.Json
 
 decoder = Utf8.decode
 ~~~PARSE
 (file
-    (header 'decoder')
+    (malformed)
+    (ident '' 'modAle')
+    (list
+        (ident '' 'decoder'))
     (import
         'json'
         '.Json'

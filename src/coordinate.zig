@@ -506,6 +506,9 @@ fn parseDependenciesFromPackageRoot(
             .start = 0,
             .len = 0,
         } },
+        .malformed => {
+            @panic("TODO -- what should we do for a malformed node here?? raise a compiler problem I assume");
+        },
     };
 
     for (parse_ast.store.recordFieldSlice(package_list)) |package_import| {

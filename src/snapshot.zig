@@ -304,6 +304,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     var parse_ast = parse.parse(&module_env, content.source);
     defer parse_ast.deinit();
 
+    if (parse_ast.errors.len > 0) {
+        warn("file {s}: contained {d} errors, skipping", .{ snapshot_path, parse_ast.errors.len });
+        return false;
+    }
+
     // Format the source code
     var formatter = fmt.init(parse_ast);
     defer formatter.deinit();
