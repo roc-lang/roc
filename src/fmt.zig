@@ -1,3 +1,5 @@
+//! Formatting logic for Roc modules.
+
 const std = @import("std");
 const IR = @import("check/parse/IR.zig");
 const Node = IR.Node;

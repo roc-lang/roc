@@ -32,11 +32,12 @@ const exitOnOom = collections.utils.exitOnOom;
 const DEFAULT_MAIN_FILENAME: []const u8 = "main.roc";
 const BUILTIN_FILENAMES: []const []const u8 = &.{};
 
-/// todo
+/// The result of attempting to typecheck a module and all its dependencies.
 pub const TypecheckResult = union(enum) {
     success: Success,
     err: Err,
-    /// todo
+
+    /// Data returned on the successful typechecking of a module.
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
@@ -44,7 +45,8 @@ pub const TypecheckResult = union(enum) {
         resolve_irs: ModuleWork(resolve.IR).Store,
         type_stores: ModuleWork(Type.Store).Store,
     };
-    /// todo
+
+    /// Failure to typecheck a module.
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
         discovery_err: ModuleDiscoveryResult.Err,
@@ -57,7 +59,8 @@ pub const TypecheckResult = union(enum) {
             packages: Package.Store,
             cycle: std.ArrayList(ModuleWork(void)),
         },
-        /// todo
+
+        /// Deinitialize the memory for a `TypecheckResult.Err`.
         pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
             switch (err.*) {
                 .package_root_search_err => {},
@@ -150,11 +153,12 @@ pub fn typecheckModule(
     };
 }
 
-/// todo
+/// The result of attempting to prepare a module and its dependencies for codegen.
 pub const BuildResult = union(enum) {
     success: Success,
     typecheck_err: TypecheckResult.Err,
-    /// todo
+
+    /// The data returned on a successful attempt to prepare a module for codegen.
     pub const Success = struct {
         packages: Package.Store,
         main_module_idx: ModuleWorkIdx,
@@ -234,16 +238,19 @@ pub fn prepareModuleForCodegen(
         .refcount_irs = all_refcounted,
     } };
 }
-/// todo
+
+/// The result of an attempt to discover all modules in all packages for compilation.
 pub const ModuleDiscoveryResult = union(enum) {
     success: Success,
     err: Err,
-    /// todo
+
+    /// The data returned when all modules in all packages are successfully discovered.
     pub const Success = struct {
         packages: Package.Store,
         root: PackageRoot,
     };
-    /// todo
+
+    /// Errors that can occur when attempting to discover all modules in all used packages.
     pub const Err = union(enum) {
         package_root_search_err: PackageRootSearchErr,
         failed_to_open_root_dir: Filesystem.OpenError,
@@ -253,7 +260,8 @@ pub const ModuleDiscoveryResult = union(enum) {
         failed_to_walk_files: anyerror,
         failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
         failed_to_read_root_file: Filesystem.OpenError,
-        /// todo
+
+        /// Deinitialize the memory for this `Err`.
         pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
             switch (err.*) {
                 .package_root_search_err => {},
@@ -391,7 +399,8 @@ const PackageRoot = struct {
         self.gpa.free(self.entry_relative_path);
     }
 };
-/// todo
+
+/// Errors that can occur when trying to find the root of a package.
 pub const PackageRootSearchErr = error{
     invalid_abs_path_for_entry,
     entry_not_in_a_directory,

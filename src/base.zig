@@ -1,3 +1,5 @@
+//! Basic types that are useful throughout the compiler.
+
 const std = @import("std");
 const parse = @import("check/parse.zig");
 const module_work = @import("base/module_work.zig");
@@ -21,14 +23,16 @@ pub const ModuleWork = module_work.ModuleWork;
 /// re-export ModuleWorkIdx
 pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
 
-/// todo
+/// Whether a function calls itself.
 pub const Recursive = enum {
     NotRecursive,
     Recursive,
+    /// Functions that only recurse at the very end of the function body,
+    /// meaning they can be converted to loops when compiled.
     TailRecursive,
 };
 
-/// todo
+/// The manner in which a function was called, useful for giving better feedback to users.
 pub const CalledVia = enum {};
 
 /// Represents a value written as-is in a Roc source file.

@@ -1,11 +1,11 @@
-/// Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
-///
-/// To run:
-///  1. zig build fuzz-tokenize
-///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
-///
-/// Other afl commands also available in `./zig-out/AFLplusplus/bin`
-///
+//! Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
+//!
+//! To run:
+//!  1. zig build fuzz-tokenize
+//!  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
+//!
+//! Other afl commands also available in `./zig-out/AFLplusplus/bin`
+
 const std = @import("std");
 const base = @import("base.zig");
 const tokenize = @import("check/parse/tokenize.zig");
@@ -15,11 +15,10 @@ pub export fn zig_fuzz_init() void {}
 
 /// Hook for AFL++ to run the fuzz test.
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zig_fuzz_test_inner(buf, len, false);
+    zigFuzzTestInner(buf, len, false);
 }
 
-/// helper for zig_fuzz_test
-pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
+fn zigFuzzTestInner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var gpa_impl = std.heap.GeneralPurposeAllocator(.{}){};

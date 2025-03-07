@@ -13,7 +13,7 @@ const exitOnOom = collections.utils.exitOnOom;
 const Self = @This();
 
 const ROC_EXTENSION = ".roc";
-const DEFAULT_MAIN_FILENAME = "main.roc";
+const DEFAULT_MAIN_FILENAME = "main" ++ ROC_EXTENSION;
 
 /// The full download URL for the package,
 /// including the name, content hash, and version.
@@ -34,10 +34,10 @@ relative_filepaths: std.ArrayListUnmanaged([]const u8),
 /// All packages depended on by this package.
 dependencies: Dependency.List,
 
-/// A type-safe ArrayList of Package's
+/// A type-safe list of packages.
 const List = collections.SafeList(@This());
 
-/// Index of the Package
+/// An index into a list of packages.
 pub const Idx = List.Idx;
 
 /// A .roc file within a package.
@@ -54,13 +54,13 @@ pub const Module = struct {
     /// that would take an allocation that we'd like to avoid.
     filepath_relative_to_package_root: []const u8,
 
-    /// A type-safe ArrayList of package Module's
+    /// A type-safe list of package modules.
     pub const List = collections.SafeList(@This());
 
-    /// Index of the package Module
+    /// An index into a list of package modules.
     pub const Idx = Module.List.Idx;
 
-    /// represents an error that occurs when parsing a package module name
+    /// Problems that might arise when parsing a package module's name.
     pub const NameError = error{
         BadPathName,
         non_ascii_path,
@@ -70,7 +70,7 @@ pub const Module = struct {
         invalid_extension,
     };
 
-    /// Parse a package module given its relative path from the package's root dir.
+    /// Parse a package module given its filepath relative to the package's root dir.
     pub fn fromRelativePath(
         relative_path: []const u8,
         string_arena: *std.heap.ArenaAllocator,
@@ -136,24 +136,20 @@ pub const Module = struct {
 
 /// The URL for a package downloaded from the internet.
 pub const Url = struct {
-    /// Valid URLs must end in one of these:
-    ///
-    /// - .tar
-    /// - .tar.gz
-    /// - .tar.br
+    /// Valid URLs must end in one of these.
     const VALID_ARCHIVE_EXTENSIONS: [3][]const u8 = .{ ".tar", ".tar.gz", ".tar.br" };
 
-    const ROC_EXTENSION = ".roc";
-
-    /// Since the TLD (top level domain) `.zip` is now available, there is a new attack
-    /// vector where malicous URLs can be used to confuse the reader.
-    /// Example of a URL which would take you to example.zip:
-    /// https://github.com∕kubernetes∕kubernetes∕archive∕refs∕tags∕@example.zip
-    /// roc employs a checksum mechanism to prevent tampering with packages.
-    /// Nevertheless we should avoid such issues earlier.
-    /// You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
     const MISLEADING_CHARACTERS_IN_URL: [5]u32 = .{
-        '@', // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+        // Since the TLD (top level domain) `.zip` is now available, there is a new attack
+        // vector where malicous URLs can be used to confuse the reader.
+        // Example of a URL which would take you to example.zip:
+        // https://github.com∕kubernetes∕kubernetes∕archive∕refs∕tags∕@example.zip
+        // roc employs a checksum mechanism to prevent tampering with packages.
+        // Nevertheless we should avoid such issues earlier.
+        // You can read more here: https://medium.com/@bobbyrsec/the-dangers-of-googles-zip-tld-5e1e675e59a5
+        //
+        // @ - For now we avoid usage of the @, to avoid the "tld zip" attack vector
+        '@',
         '\u{2044}', // U+2044 ==  ⁄ Fraction Slash
         '\u{2215}', // U+2215 ==  ∕ Division Slash
         '\u{FF0F}', // U+2215 == ／ Fullwidth Solidus
@@ -169,6 +165,7 @@ pub const Url = struct {
     /// The (usually semantic) version of this package.
     version: []const u8,
 
+    /// Errors that might arise when parsing a package URL's data.
     pub const ParseErr = error{
         missing_https,
         misleading_character,
@@ -235,6 +232,8 @@ pub const Url = struct {
         try std.testing.expectError(error.missing_https, Url.parse(url));
     }
 
+    // TODO: check unicode characters in a package URL
+    //
     // test "url_problem_misleading_characters" {
     //     const examples: [1][]const u8 = .{
     //         "https://user:password@example.com/",
@@ -262,13 +261,14 @@ pub const Url = struct {
     }
 };
 
-/// represents a dependency in a package
+/// A data pointer to another package that is referred to within
+/// the current package using a shorthand, e.g. the `cli` in `import cli.Stdout`.
 pub const Dependency = struct {
     shorthand: []const u8,
     shorthand_region: Region,
     package: Pkg,
 
-    /// represents an error that occurs when adding a dependency to a package
+    /// Errors that can arise when adding a dependency package to another package.
     pub const AddError = union(enum) {
         empty_shorthand,
         duplicate_shorthand: struct {
@@ -278,36 +278,38 @@ pub const Dependency = struct {
         bad_url: Url.ParseErr,
     };
 
-    /// represents a package in a dependency
+    /// The package that is depended on, or the error that arose when attempting
+    /// to add said dependency.
     pub const Pkg = union(enum) {
         idx: Idx,
         err: AddError,
     };
 
-    /// a type-safe list of dependencies
+    /// a type-safe list of dependencies.
     pub const List = collections.SafeList(@This());
 };
 
-/// a store of packages
+/// All packages used in a Roc project.
 pub const Store = struct {
     packages: List,
     indices_by_url: std.StringHashMapUnmanaged(Idx),
     string_arena: std.heap.ArenaAllocator,
 
-    /// the index for the builtins package
+    /// The index for the builtins package, always 0.
     pub const builtins_idx: Idx = @enumFromInt(0);
 
-    /// the index for the primary or "self" package
-    /// this represents the current module being compiled
+    /// The index for the primary or "self" package:
+    /// this represents the current package being compiled.
     pub const primary_idx: Idx = @enumFromInt(1);
 
-    /// a result of initializing the store which may
-    /// fail due to errors such as not finding the builtins or primary root modules
+    /// A result of initializing the store which may fail
+    /// when processing the builtins or finding the root modules
+    /// in the builtins or primary package.
     pub const InitResult = union(enum) {
         success: Store,
         err: Err,
 
-        /// represents an error that occurred during initialization of a package store
+        /// Errors that may arise when initializing a `Package.Store`.
         pub const Err = union(enum) {
             could_not_find_builtins_root_module,
             could_not_find_primary_root_module,
@@ -316,7 +318,7 @@ pub const Store = struct {
                 filename: []const u8,
             },
 
-            /// deinit the error memory
+            /// Deinitialize this `Err`s memory.
             pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
                 switch (err.*) {
                     .could_not_find_builtins_root_module => {},
@@ -329,7 +331,8 @@ pub const Store = struct {
         };
     };
 
-    /// initializes a new package store
+    /// Initialize a `Package.Store` from the files in the builtins
+    /// and the primary package.
     pub fn init(
         gpa: std.mem.Allocator,
         primary_root_module_absdir: []const u8,
@@ -357,6 +360,7 @@ pub const Store = struct {
         });
 
         // TODO: implement compilation of builtins
+        //
         // var builtin_root_idx: ?Idx = null;
         // for (builtin_filenames.items) |builtin_filename| {
         //     const module = Module.fromRelativePath(builtin_filename, &string_arena) catch |err| {
@@ -415,7 +419,7 @@ pub const Store = struct {
         } };
     }
 
-    /// deinit the store's memory
+    /// Deinitialize the `Store`'s memory.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         for (self.packages.items.items) |*package| {
             package.modules.deinit(gpa);
@@ -428,7 +432,7 @@ pub const Store = struct {
         self.string_arena.deinit();
     }
 
-    /// add a new package to the store
+    /// Add a new package to the `Package.Store`.
     pub fn add(
         self: *Store,
         url_data: Url,
@@ -472,12 +476,12 @@ pub const Store = struct {
         return idx;
     }
 
-    /// find a package in the store by it's URL
+    /// Find a package in the store by its URL.
     pub fn findWithUrl(self: *const Store, url: []const u8) ?Idx {
         return self.indices_by_url.get(url);
     }
 
-    /// add a dependency to a package in the store
+    /// Add a dependency to a package in the store.
     pub fn addDependencyToPackage(
         self: *Store,
         gpa: std.mem.Allocator,

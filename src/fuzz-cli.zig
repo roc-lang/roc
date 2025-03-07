@@ -1,14 +1,14 @@
-/// This is just a silly fuzz test to start getting the infra setup.
-/// It shows the basic that other fuzz tests likely should build off of.
-///
-/// Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
-///
-/// To run:
-///  1. zig build fuzz-cli
-///  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/cli/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
-///
-/// Other afl commands also available in `./zig-out/AFLplusplus/bin`
-///
+//! This is just a silly fuzz test to start getting the infra setup.
+//! It shows the basic that other fuzz tests likely should build off of.
+//!
+//! Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
+//!
+//! To run:
+//!  1. zig build fuzz-cli
+//!  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/cli/ -o /tmp/cli-out/ zig-out/bin/fuzz-cli
+//!
+//! Other afl commands also available in `./zig-out/AFLplusplus/bin`
+
 const std = @import("std");
 const cli = @import("cli.zig");
 const RocCmd = cli.RocCmd;
@@ -19,11 +19,10 @@ pub export fn zig_fuzz_init() void {}
 
 /// Hook for AFL++ to run the fuzz test.
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zig_fuzz_test_inner(buf, len, false);
+    zigFuzzTestInner(buf, len, false);
 }
 
-/// helper for zig_fuzz_test
-pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
+fn zigFuzzTestInner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};

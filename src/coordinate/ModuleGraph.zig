@@ -23,7 +23,7 @@ modules: std.ArrayList(ModuleWork(can.IR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
-/// todo
+/// Deinitialize the memory of this `ModuleGraph`.
 pub fn deinit(self: *Self) void {
     self.modules.deinit();
     for (self.adjacencies.items) |adjacency_list| {
@@ -32,7 +32,7 @@ pub fn deinit(self: *Self) void {
     self.adjacencies.deinit();
 }
 
-/// todo
+/// The result of attempting to construct a `ModuleGraph`.
 pub const ConstructResult = union(enum) {
     success: Self,
     failed_to_open_module: struct {
@@ -163,12 +163,14 @@ const Attributes = struct {
     on_stack: bool,
 };
 
-/// Strongly connected components
+/// The strongly-connected components of a `ModuleGraph`.
+///
+/// <https://en.wikipedia.org/wiki/Strongly_connected_component>
 pub const Sccs = struct {
     groups: std.ArrayList(std.ArrayList(usize)),
 };
 
-/// todo
+/// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
     ordered: ModuleWork(can.IR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),
