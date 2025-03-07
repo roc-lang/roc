@@ -116,6 +116,7 @@ pub fn pushDiagnostic(self: *Parser, tag: IR.Diagnostic.Tag, region: IR.Region) 
 }
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t {
+    std.debug.panic("!!!! pushMalformed t={any} tag={s}\n", .{ t, @tagName(tag) });
     const pos = self.pos;
     self.advanceOne(); // TODO: find a better point to advance to
     self.diagnostics.append(self.gpa, .{
@@ -207,7 +208,7 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         // .KwPackage => {},
         // .KwHosted => {},
         else => {
-            return self.store.addMalformed(IR.NodeStore.HeaderIdx, .missing_header, self.pos);
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .missing_header);
         },
     }
 }
@@ -217,32 +218,24 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
     const start = self.pos;
 
-    self.advance();
+    self.advance(); // Advance past KwModule
 
     // Get exposes
-    if (self.peek() != .OpenSquare) {
+    self.expect(.OpenSquare) catch {
         std.debug.panic("TODO: Handle header with no exposes open bracket: {s}", .{@tagName(self.peek())});
-    }
-    self.advance();
-    const scratch_top = self.store.scratchTokenTop();
-    while (self.peek() != .CloseSquare) {
-        if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
-            std.debug.panic("TODO: Handler header bad exposes contents: {s}", .{@tagName(self.peek())});
+    };
+    const scratch_top = self.store.scratchExposedItemTop();
+    self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+        std.debug.print("Ended at {s}\n", .{@tagName(self.peek())});
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            self.advance();
         }
-
-        self.store.addScratchToken(self.pos);
-        self.advance();
-
-        if (self.peek() != .Comma) {
-            break;
-        }
-        self.advance();
-    }
-    if (self.peek() != .CloseSquare) {
-        std.debug.panic("TODO: Handle Bad header no closing exposes bracket: {s}", .{@tagName(self.peek())});
-    }
-    const exposes = self.store.tokenSpanFrom(scratch_top);
-    self.advance();
+        self.expect(.CloseSquare) catch {};
+        self.store.clearScratchExposedItemsFrom(scratch_top);
+        std.debug.print("Expected CloseSquare, got {s}\n", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
+    };
+    const exposes = self.store.exposedItemSpanFrom(scratch_top);
 
     return self.store.addHeader(.{ .module = .{
         .region = .{ .start = start, .end = self.pos },
@@ -258,41 +251,30 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     var platform_name: ?TokenIdx = null;
 
     std.debug.assert(self.peek() == .KwApp);
-    self.advance();
+    self.advance(); // Advance past KwApp
 
     // Get provides
-    if (self.peek() != .OpenSquare) {
+    self.expect(.OpenSquare) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides_open_square);
-    }
-    self.advance();
-    const scratch_top = self.store.scratchTokenTop();
-    while (self.peek() != .CloseSquare) {
-        if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
-            self.store.clearScratchTokensFrom(scratch_top);
-            return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides);
+    };
+    const scratch_top = self.store.scratchExposedItemTop();
+    self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+        std.debug.print("Ended at {s}\n", .{@tagName(self.peek())});
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            self.advance();
         }
-
-        self.store.addScratchToken(self.pos);
-        self.advance();
-
-        if (self.peek() != .Comma) {
-            break;
-        }
-        self.advance();
-    }
-    if (self.peek() != .CloseSquare) {
-        self.store.clearScratchTokensFrom(scratch_top);
-        return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides_close_square);
-    }
-    const provides = self.store.tokenSpanFrom(scratch_top);
-    self.advance();
+        self.expect(.CloseSquare) catch {};
+        self.store.clearScratchExposedItemsFrom(scratch_top);
+        std.debug.print("Expected CloseSquare, got {s}\n", .{@tagName(self.peek())});
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
+    };
+    const provides = self.store.exposedItemSpanFrom(scratch_top);
 
     // Get platform and packages
     const fields_scratch_top = self.store.scratchRecordFieldTop();
-    if (self.peek() != .OpenCurly) {
+    self.expect(.OpenCurly) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_open_curly);
-    }
-    self.advance();
+    };
     while (self.peek() != .CloseCurly) {
         const entry_start = self.pos;
         if (self.peek() != .LowerIdent) {
@@ -362,6 +344,74 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform);
 }
 
+pub fn parseIdent(self: *Parser) ?tokenize.Token.Idx {
+    if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
+        const pos = self.pos;
+        self.advance();
+        return pos;
+    }
+    return null;
+}
+
+pub fn parseExposedItem(self: *Parser) IR.NodeStore.ExposedItemIdx {
+    const start = self.pos;
+    var end = start;
+    switch (self.peek()) {
+        .LowerIdent => {
+            var as: ?TokenIdx = null;
+            if (self.peekNext() == .KwAs) {
+                self.advance(); // Advance past LowerIdent
+                self.advance(); // Advance past KwAs
+                as = self.pos;
+                self.expect(.LowerIdent) catch {
+                    return self.pushMalformed(IR.NodeStore.ExposedItemIdx, .unexpected_token);
+                };
+                end = self.pos;
+            } else {
+                self.advance(); // Advance past LowerIdent
+            }
+            const ei = self.store.addExposedItem(.{ .lower_ident = .{
+                .region = .{ .start = start, .end = end },
+                .ident = start,
+                .as = as,
+            } });
+
+            return ei;
+        },
+        .UpperIdent => {
+            var as: ?TokenIdx = null;
+            if (self.peekNext() == .KwAs) {
+                self.advance(); // Advance past UpperIdent
+                self.advance(); // Advance past KwAs
+                as = self.pos;
+                self.expect(.UpperIdent) catch {
+                    return self.pushMalformed(IR.NodeStore.ExposedItemIdx, .unexpected_token);
+                };
+                end = self.pos;
+            } else if (self.peekNext() == .DotStar) {
+                self.advance(); // Advance past UpperIdent
+                self.advance(); // Advance past DotStar
+                return self.store.addExposedItem(.{ .upper_ident_star = .{
+                    .region = .{ .start = start, .end = self.pos },
+                    .ident = start,
+                } });
+            } else {
+                self.advance(); // Advance past UpperIdent
+            }
+            const ei = self.store.addExposedItem(.{ .upper_ident = .{
+                .region = .{ .start = start, .end = end },
+                .ident = start,
+                .as = as,
+            } });
+
+            return ei;
+        },
+        else => {
+            return self.pushMalformed(IR.NodeStore.ExposedItemIdx, .unexpected_token);
+        },
+    }
+}
+
 /// parse a roc statement
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
@@ -369,21 +419,51 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
     switch (self.peek()) {
         .KwImport => {
             const start = self.pos;
-            self.advance();
+            self.advance(); // Advance past KwImport
             var qualifier: ?TokenIdx = null;
+            var alias_tok: ?TokenIdx = null;
             if (self.peek() == .LowerIdent) {
                 qualifier = self.pos;
-                self.advance();
+                self.advance(); // Advance past LowerIdent
             }
             if (self.peek() == .UpperIdent or (qualifier != null and self.peek() == .NoSpaceDotUpperIdent)) {
+                var exposes: IR.NodeStore.ExposedItemSpan = .{ .span = .{ .start = 0, .len = 0 } };
+                const module_name_tok = self.pos;
+                if (self.peekNext() == .KwAs) {
+                    self.advance(); // Advance past UpperIdent
+                    self.advance(); // Advance past KwAs
+                    alias_tok = self.pos;
+                    self.expect(.UpperIdent) catch {
+                        const malformed = self.pushMalformed(IR.NodeStore.StatementIdx, .unexpected_token);
+                        self.advance();
+                        return malformed;
+                    };
+                } else if (self.peekNext() == .KwExposing) {
+                    self.advance(); // Advance past ident
+                    self.advance(); // Advance past KwExposing
+                    self.expect(.OpenSquare) catch {
+                        return self.pushMalformed(IR.NodeStore.StatementIdx, .import_exposing_no_open);
+                    };
+                    const scratch_top = self.store.scratchExposedItemTop();
+                    self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+                        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+                            self.advance();
+                        }
+                        self.expect(.CloseSquare) catch {};
+                        self.store.clearScratchExposedItemsFrom(scratch_top);
+                        return self.pushMalformed(IR.NodeStore.StatementIdx, .import_exposing_no_close);
+                    };
+                    exposes = self.store.exposedItemSpanFrom(scratch_top);
+                } else {
+                    self.advance(); // Advance past identifier
+                }
                 const statement_idx = self.store.addStatement(.{ .import = .{
-                    .module_name_tok = self.pos,
+                    .module_name_tok = module_name_tok,
                     .qualifier_tok = qualifier,
-                    .alias_tok = null,
-                    .exposes = .{ .span = .{ .start = 0, .len = 0 } },
+                    .alias_tok = alias_tok,
+                    .exposes = exposes,
                     .region = .{ .start = start, .end = self.pos },
                 } });
-                self.advance();
                 if (self.peek() == .Newline) {
                     self.advance();
                 }
@@ -683,7 +763,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
         }
     }
     if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
-        std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}", .{ self.pos, @tagName(self.peek()) });
+        std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}\n", .{ self.pos, @tagName(self.peek()) });
     }
     const patterns = self.store.patternSpanFrom(patterns_scratch_top);
     return self.store.addPattern(.{ .alternatives = .{
@@ -888,7 +968,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const condition = self.parseExpr();
             const then = self.parseExpr();
             if (self.peek() != .KwElse) {
-                std.debug.panic("TODO: problem for no else {s}@{d}", .{ @tagName(self.peek()), self.pos });
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .no_else);
             }
             self.advance();
             const else_idx = self.parseExpr();
