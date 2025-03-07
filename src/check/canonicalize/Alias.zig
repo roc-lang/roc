@@ -1,3 +1,5 @@
+//! A type that references another type.
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const types = @import("../../types.zig");
@@ -17,36 +19,51 @@ is_builtin: bool,
 // pub typ: Type,
 kind: Kind,
 
+/// A list of aliases.
 pub const List = collections.SafeMultiList(@This());
+/// An index into a SafeMultiList of aliases.
 pub const Idx = List.Idx;
+/// A slice into a list of aliases.
 pub const Slice = List.Slice;
 
+/// The kind of an alias, as exposed in a siloed module.
 pub const Kind = union(enum) {
-    ImportedUnknown,
-    ImportedCustomUnion,
-    Custom: Custom,
-    Structural: Structural,
-    Malformed: Malformed,
+    /// An alias that could be either structural or nominal.
+    imported_unknown,
+    /// An alias that must be nominal because it has exposed tags
+    /// associated with its import.
+    imported_nominal_union,
+    /// A locally-defined nominal alias.
+    nominal: Nominal,
+    /// A locally-defined structural alias.
+    structural: Structural,
+    /// An invalid alias that can still be referred to by definitions.
+    malformed: Malformed,
 };
 
-pub const Custom = struct {
+/// The data for a nominal alias, e.g. `Foo := [Foo(Str)]`
+pub const Nominal = struct {
     type_variables: Var.Slice,
     recursion_variables: std.AutoHashMap(TypeIdx, Ident.Idx),
 };
-
+/// The data for a structural alias, e.g. `Foo : { bar : Str }`
 pub const Structural = struct {
     type_variables: Var.Slice,
 };
-
+/// A malformed alias that can still be referred to by other entities.
 pub const Malformed = struct {
     problem: Problem,
 };
 
+/// A type variable defined at header of an alias to refer to a type
+/// variable within its definition.
 pub const Var = struct {
     name: Ident.Idx,
     region: Region,
     type_var: TypeIdx,
 
+    /// A list of alias type variables.
     pub const List = collections.SafeMultiList(@This());
+    /// A slice of alias type variables.
     pub const Slice = Var.List.Slice;
 };

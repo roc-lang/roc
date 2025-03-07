@@ -14,6 +14,8 @@ const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
+
+/// The intermediate representation of a canonicalized Roc program.
 pub const IR = @import("canonicalize/IR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical

@@ -4,7 +4,7 @@ const canonicalize = @import("check/canonicalize.zig");
 
 const Package = base.Package;
 
-// TODO: implement
+/// TODO: implement
 pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8) ?canonicalize.IR {
     _ = file_hash;
     _ = roc_version;
@@ -12,6 +12,7 @@ pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const 
     return null;
 }
 
+/// TODO: implement
 pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []const u8 {
     _ = url_data;
     _ = gpa;

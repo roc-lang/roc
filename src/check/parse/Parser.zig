@@ -10,6 +10,7 @@ const TokenIdx = Token.Idx;
 
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
+/// A parser which tokenizes and parses source code into an abstract syntax tree.
 pub const Parser = @This();
 
 gpa: std.mem.Allocator,
@@ -19,6 +20,7 @@ store: IR.NodeStore,
 scratch_nodes: std.ArrayListUnmanaged(IR.Node.Idx),
 diagnostics: std.ArrayListUnmanaged(IR.Diagnostic),
 
+/// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
     const estimated_node_count = (tokens.tokens.len + 2) / 2;
     const store = IR.NodeStore.initWithCapacity(tokens.env.gpa, estimated_node_count);
@@ -33,12 +35,14 @@ pub fn init(tokens: TokenizedBuffer) Parser {
     };
 }
 
+/// deninit the parser memory
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
 }
 
 const TestError = error{TestError};
+
 fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) TestError!void {
     const messages = [128]tokenize.Diagnostic;
     const tokenizer = tokenize.Tokenizer.init(source, messages[0..], std.testing.allocator);
@@ -52,6 +56,7 @@ fn test_parser(source: []const u8, run: fn (parser: Parser) TestError!void) Test
     try run(parser);
 }
 
+/// helper to advance the parser until a non-newline token is encountered
 pub fn advance(self: *Parser) void {
     while (true) {
         self.pos += 1;
@@ -63,6 +68,7 @@ pub fn advance(self: *Parser) void {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
 }
 
+///
 pub fn advanceOne(self: *Parser) void {
     self.pos += 1;
     // We have an EndOfFile token that we never expect to advance past
@@ -71,6 +77,7 @@ pub fn advanceOne(self: *Parser) void {
 
 const ExpectError = error{expected_not_found};
 
+/// look ahead at the next token and return an error if it does not have the expected tag
 pub fn expect(self: *Parser, expected: Token.Tag) !void {
     if (self.peek() != expected) {
         return ExpectError.expected_not_found;
@@ -78,17 +85,21 @@ pub fn expect(self: *Parser, expected: Token.Tag) !void {
     self.advance();
 }
 
+/// look ahead at the next token
+///
+/// **note** caller is responsible to ensure this isn't the last token
 pub fn peek(self: *Parser) Token.Tag {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
-
+/// todo -- what is this?
 pub fn peekLast(self: Parser) ?Token.Tag {
     if (self.pos == 0) {
         return null;
     }
     return self.tok_buf.tokens.items(.tag)[self.pos - 1];
 }
+/// peek at the next available token
 pub fn peekNext(self: Parser) Token.Tag {
     const next = self.pos + 1;
     if (next >= self.tok_buf.tokens.len) {
@@ -96,13 +107,14 @@ pub fn peekNext(self: Parser) Token.Tag {
     }
     return self.tok_buf.tokens.items(.tag)[next];
 }
+/// add a diagnostic error
 pub fn pushDiagnostic(self: *Parser, tag: IR.Diagnostic.Tag, region: IR.Region) void {
     self.diagnostics.append(self.gpa, .{
         .tag = tag,
         .region = region,
     }) catch |err| exitOnOom(err);
 }
-
+/// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t {
     const pos = self.pos;
     self.advanceOne(); // TODO: find a better point to advance to
@@ -112,7 +124,9 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t 
     }) catch |err| exitOnOom(err);
     return self.store.addMalformed(t, tag, pos);
 }
-
+/// parse a `.roc` module
+///
+/// the tokens are provided at Parser initialisation
 pub fn parseFile(self: *Parser) void {
     self.store.emptyScratch();
     _ = self.store.addFile(.{
@@ -236,6 +250,9 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     } });
 }
 
+/// parse an `.roc` application header
+///
+/// e.g. `module [ foo ]`
 pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     var platform: ?IR.NodeStore.ExprIdx = null;
     var platform_name: ?TokenIdx = null;
@@ -345,6 +362,9 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform);
 }
 
+/// parse a roc statement
+///
+/// e.g. `import Foo`, or `foo = 2 + x`
 pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
     switch (self.peek()) {
         .KwImport => {
@@ -499,6 +519,7 @@ const Alternatives = enum {
     alternatives_forbidden,
 };
 
+/// todo -- what does this do?
 pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternIdx {
     const outer_start = self.pos;
     const patterns_scratch_top = self.store.scratchPatternTop();
@@ -678,6 +699,7 @@ fn parsePatternWithAlts(self: *Parser) IR.NodeStore.PatternIdx {
     return self.parsePattern(.alternatives_allowed);
 }
 
+/// todo
 pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.NodeStore.PatternRecordFieldIdx {
     const field_start = self.pos;
     if (self.peek() == .DoubleDot) {
@@ -723,10 +745,12 @@ pub fn parsePatternRecordField(self: *Parser, alternatives: Alternatives) IR.Nod
     });
 }
 
+/// todo
 pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
     return self.parseExprWithBp(0);
 }
 
+/// todo
 pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
     const start = self.pos;
     var expr: ?IR.NodeStore.ExprIdx = null;
@@ -963,6 +987,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
     return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
 }
 
+/// todo
 fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeStore.ExprIdx {
     var expression = e;
     // Check for an apply...
@@ -992,6 +1017,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeSt
     return expression;
 }
 
+/// todo
 pub fn parseRecordField(self: *Parser) IR.NodeStore.RecordFieldIdx {
     const start = self.pos;
     self.expect(.LowerIdent) catch {
@@ -1012,6 +1038,7 @@ pub fn parseRecordField(self: *Parser) IR.NodeStore.RecordFieldIdx {
     });
 }
 
+/// todo
 pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
@@ -1026,6 +1053,7 @@ pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
     });
 }
 
+/// todo
 pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
     std.debug.assert(self.peek() == .StringStart);
     const start = self.pos;
@@ -1073,6 +1101,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
     return expr;
 }
 
+/// todo
 pub fn parseStringPattern(self: *Parser) IR.NodeStore.PatternIdx {
     const start = self.pos;
     const inner = parseStringExpr(self);
@@ -1084,6 +1113,7 @@ pub fn parseStringPattern(self: *Parser) IR.NodeStore.PatternIdx {
     return patt_idx;
 }
 
+/// todo
 pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
@@ -1116,6 +1146,7 @@ const TyFnArgs = enum {
     looking_for_args,
 };
 
+/// todo
 pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.TypeAnnoIdx {
     const start = self.pos;
     var anno: ?IR.NodeStore.TypeAnnoIdx = null;
@@ -1265,10 +1296,12 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
     std.debug.panic("Never handled type annotation", .{});
 }
 
+/// todo
 pub fn parseTypeAnnoInCollection(self: *Parser) IR.NodeStore.TypeAnnoIdx {
     return self.parseTypeAnno(.looking_for_args);
 }
 
+/// todo
 pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
     const field_start = self.pos;
     if (self.peek() != .LowerIdent) {
@@ -1295,6 +1328,7 @@ pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
     });
 }
 
+/// todo
 pub fn addProblem(self: *Parser, diagnostic: IR.Diagnostic) void {
     self.diagnostics.append(diagnostic) catch |err| exitOnOom(err);
 }

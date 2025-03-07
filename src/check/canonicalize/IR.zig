@@ -3,16 +3,13 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
-
 const Alias = @import("./Alias.zig");
-
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleImport = base.ModuleImport;
 const StringLiteral = base.StringLiteral;
 const TypeIdx = types.Type.Idx;
 const Problem = problem.Problem;
-
 const Self = @This();
 
 env: base.ModuleEnv,
@@ -61,6 +58,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
     };
 }
 
+/// Deinit the IR's memory.
 pub fn deinit(self: *Self) void {
     self.env.deinit();
     self.aliases.deinit(self.env.gpa);
@@ -78,6 +76,7 @@ pub fn deinit(self: *Self) void {
     self.ingested_files.deinit(self.env.gpa);
 }
 
+/// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
     named: std.AutoHashMap(TypeIdx, Ident.Idx),
     // with_methods: std.AutoHashMap(TypeVar, WithMethods),
@@ -89,7 +88,7 @@ pub const RigidVariables = struct {
 };
 
 // TODO: don't use symbol in this module, no imports really exist yet?
-
+/// An expression that has been canonicalized.
 pub const Expr = union(enum) {
     // Literals
 
@@ -203,23 +202,38 @@ pub const Expr = union(enum) {
     /// Compiles, but will crash if reached
     RuntimeError: Problem.Idx,
 
+    /// A list of canonicalized expressions.
     pub const List = collections.SafeList(@This());
+    /// An index into a list of canonicalized expressions.
     pub const Idx = List.Idx;
+    /// A slice of canonicalized expressions.
     pub const Slice = List.Slice;
+    /// A non-empty slice of canonicalized expressions.
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// A file of any type that has been ingested into a Roc module
+/// as raw data, e.g. `import "lookups.txt" as lookups : Str`.
+///
+/// These ingestions aren't resolved until the import resolution
+/// compiler stage.
 pub const IngestedFile = struct {
     relative_path: StringLiteral.Idx,
     ident: Ident.Idx,
     type: Annotation,
 
+    /// A list of ingested files.
     pub const List = collections.SafeList(@This());
+    /// In index into a list of ingested files.
     pub const Idx = List.Idx;
+    /// A slice of ingested files.
     pub const Slice = List.Slice;
+    /// A non-empty slice of ingested files.
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// A definition of a value (or destructured values) that
+/// takes its value from an expression.
 pub const Def = struct {
     pattern: Pattern.Idx,
     pattern_region: Region,
@@ -240,11 +254,15 @@ pub const Def = struct {
         Ignored: TypeIdx,
     };
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const Annotation = struct {
     signature: TypeIdx,
     // introduced_variables: IntroducedVariables,
@@ -252,31 +270,41 @@ pub const Annotation = struct {
     region: Region,
 };
 
+/// todo
 pub const IntValue = struct {
     bytes: [16]u8,
     kind: Kind,
 
+    /// todo
     pub const Kind = enum { i128, u128 };
 };
 
+/// todo
 pub const ExprAtRegion = struct {
     expr: Expr.Idx,
     region: Region,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const TypedExprAtRegion = struct {
     expr: Expr.Idx,
     type_var: TypeIdx,
     region: Region,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const Function = struct {
     return_var: TypeIdx,
     fx_var: TypeIdx,
@@ -285,14 +313,18 @@ pub const Function = struct {
     region: Region,
 };
 
+/// todo
 pub const IfBranch = struct {
     cond: ExprAtRegion,
     body: ExprAtRegion,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const When = struct {
     /// The actual condition of the when expression.
     loc_cond: ExprAtRegion.Idx,
@@ -307,10 +339,13 @@ pub const When = struct {
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Idx = List.Idx;
 };
 
+/// todo
 pub const WhenBranchPattern = struct {
     pattern: PatternAtRegion,
     /// Degenerate branch patterns are those that don't fully bind symbols that the branch body
@@ -318,10 +353,13 @@ pub const WhenBranchPattern = struct {
     /// Degenerate patterns emit a runtime error if reached in a program.
     degenerate: bool,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const WhenBranch = struct {
     patterns: WhenBranchPattern.Slice,
     value: ExprAtRegion.Idx,
@@ -329,7 +367,9 @@ pub const WhenBranch = struct {
     /// Whether this branch is redundant in the `when` it appears in
     redundant: RedundantMark,
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
 
@@ -401,6 +441,7 @@ pub const Pattern = union(enum) {
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const PatternAtRegion = struct {
     pattern: Pattern.Idx,
     region: Region,
@@ -410,6 +451,7 @@ pub const PatternAtRegion = struct {
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const TypedPatternAtRegion = struct {
     pattern: Pattern.Idx,
     region: Region,
@@ -420,6 +462,7 @@ pub const TypedPatternAtRegion = struct {
     pub const Slice = List.Slice;
 };
 
+/// todo
 pub const RecordDestruct = struct {
     type_var: TypeIdx,
     region: Region,
@@ -427,12 +470,16 @@ pub const RecordDestruct = struct {
     ident: Ident.Idx,
     kind: Kind,
 
+    /// todo
     pub const Kind = union(enum) {
         Required,
         Guard: TypedPatternAtRegion.Idx,
     };
 
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+
+    /// todo
     pub const Slice = List.Slice;
 };
 
@@ -442,6 +489,7 @@ pub const RedundantMark = TypeIdx;
 /// Marks whether a when expression is exhaustive using a variable.
 pub const ExhaustiveMark = TypeIdx;
 
+/// todo
 pub const Content = union(enum) {
     /// A type variable which the user did not name in an annotation,
     ///
@@ -469,6 +517,7 @@ pub const Content = union(enum) {
     Effectful,
 };
 
+/// todo
 pub const FlatType = union(enum) {
     Apply: struct {
         ident: Ident.Idx,
@@ -508,16 +557,20 @@ pub const FlatType = union(enum) {
     EmptyRecord,
     EmptyTagUnion,
 
+    /// todo
     pub const RecordField = struct {
         name: Ident.Idx,
         type_var: TypeIdx,
         // type: Reco,
 
+        /// todo
         pub const List = collections.SafeMultiList(@This());
+        /// todo
         pub const Slice = List.Slice;
     };
 };
 
+/// todo
 pub const TagExt = union(enum) {
     /// This tag extension variable measures polymorphism in the openness of the tag,
     /// or the lack thereof. It can only be unified with

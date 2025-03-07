@@ -19,6 +19,7 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+/// deinit the IR's memory
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
@@ -29,6 +30,7 @@ pub const Diagnostic = struct {
     tag: Tag,
     region: Region,
 
+    /// different types of diagnostic errors
     pub const Tag = enum {
         bad_indent,
         multiple_platforms,
@@ -2334,11 +2336,13 @@ pub const NodeStore = struct {
     }
 };
 
+/// Resolve a token index to a string slice from the source code.
 pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
     const range = self.tokens.resolve(token);
     return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
 
+/// todo -- I'm not sure what this is
 pub const ImportRhs = packed struct { aliased: u1, qualified: u1, num_exposes: u30 };
 
 // Check that all packed structs are 4 bytes size as they as cast to

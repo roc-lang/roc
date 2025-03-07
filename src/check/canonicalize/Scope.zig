@@ -21,6 +21,7 @@ custom_tags: std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx) = .{},
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
 
+/// Initialize a new scope.
 pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []const struct { alias: Alias.Idx, name: Ident.Idx },
@@ -47,6 +48,7 @@ pub fn init(
     return scope;
 }
 
+/// Deinitialize a scope's memory
 pub fn deinit(self: *Self) void {
     self.custom_tags.deinit(self.env.gpa);
     self.levels.deinit(self.env.gpa);
@@ -67,6 +69,7 @@ pub fn genUnique(self: *Self) Ident.Idx {
     return unique_idx;
 }
 
+/// todo
 pub fn Contains(item_kind: Level.ItemKind) type {
     return union(enum) {
         InScope: Level.Name(item_kind),
@@ -75,6 +78,7 @@ pub fn Contains(item_kind: Level.ItemKind) type {
     };
 }
 
+/// todo
 pub fn LookupResult(item_kind: Level.ItemKind) type {
     return union(enum) {
         InScope: Level.Name(item_kind),
@@ -82,12 +86,13 @@ pub fn LookupResult(item_kind: Level.ItemKind) type {
     };
 }
 
+/// todo
 pub const Level = struct {
     idents: std.ArrayListUnmanaged(IdentInScope) = .{},
     aliases: std.ArrayListUnmanaged(AliasInScope) = .{},
-
+    /// todo
     pub const ItemKind = enum { ident, alias };
-
+    /// todo
     pub fn Item(comptime item_kind: ItemKind) type {
         return switch (item_kind) {
             .ident => IdentInScope,
@@ -95,6 +100,7 @@ pub const Level = struct {
         };
     }
 
+    /// todo
     pub fn ItemName(comptime item_kind: ItemKind) type {
         return switch (item_kind) {
             .ident => Ident.Idx,
@@ -102,41 +108,43 @@ pub const Level = struct {
         };
     }
 
+    /// todo
     pub fn items(level: *Level, comptime item_kind: ItemKind) *std.ArrayListUnmanaged(Item(item_kind)) {
         return switch (item_kind) {
             .ident => &level.idents,
             .alias => &level.aliases,
         };
     }
-
+    /// todo
     pub const IdentInScope = struct {
         scope_name: Ident.Idx,
         ident: Ident.Idx,
     };
-
+    /// todo
     pub const AliasInScope = struct {
         scope_name: Ident.Idx,
         alias: Alias.Idx,
     };
-
+    /// todo
     pub fn deinit(self: *Level, gpa: std.mem.Allocator) void {
         self.idents.deinit(gpa);
         self.aliases.deinit(gpa);
     }
 };
 
+/// todo
 pub const Levels = struct {
     env: *base.ModuleEnv,
     levels: std.ArrayListUnmanaged(Level) = .{},
-
+    /// todo
     pub fn deinit(self: *Levels) void {
         self.levels.deinit(self.env.gpa);
     }
-
+    /// todo
     pub fn enter(self: *Levels) void {
         self.levels.append(self.env.gpa, .{}) catch |err| exitOnOom(err);
     }
-
+    /// todo
     pub fn exit(self: *Levels) void {
         if (self.levels.items.len <= 1) {
             self.env.problems.append(self.env.gpa, Problem.Compiler.make(.{
@@ -146,11 +154,10 @@ pub const Levels = struct {
             _ = self.levels.pop();
         }
     }
-
+    /// todo
     pub fn iter(self: *Levels, comptime item_kind: Level.ItemKind) Iterator(item_kind) {
         return Iterator(item_kind).new(self);
     }
-
     fn contains(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -165,7 +172,7 @@ pub const Levels = struct {
 
         return null;
     }
-
+    /// todo
     pub fn lookup(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -200,7 +207,7 @@ pub const Levels = struct {
         self.env.problems.append(problem) catch |err| exitOnOom(err);
         return LookupResult{ .Problem = problem };
     }
-
+    /// todo
     pub fn introduce(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -228,13 +235,13 @@ pub const Levels = struct {
 
         return scope_item;
     }
-
+    /// todo
     pub fn Iterator(comptime item_kind: Level.ItemKind) type {
         return struct {
             levels: *Levels,
             level_index: usize,
             prior_item_index: usize,
-
+            /// todo
             pub fn empty(levels: *Levels) Iterator(item_kind) {
                 return Iterator(item_kind){
                     .levels = levels,
@@ -242,7 +249,7 @@ pub const Levels = struct {
                     .prior_item_index = 0,
                 };
             }
-
+            /// todo
             pub fn new(scope_levels: *Levels) Iterator(item_kind) {
                 if (scope_levels.levels.items.len == 0) {
                     return empty(scope_levels);
@@ -263,7 +270,7 @@ pub const Levels = struct {
                     .prior_item_index = prior_item_index,
                 };
             }
-
+            /// todo
             pub fn next(
                 self: *Iterator(item_kind),
             ) ?Level.ItemName(item_kind) {
@@ -287,7 +294,7 @@ pub const Levels = struct {
 
                 return next_item.scope_name;
             }
-
+            /// todo
             pub fn nextData(
                 self: *Iterator(item_kind),
             ) ?Level.Item(item_kind) {

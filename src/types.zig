@@ -1,9 +1,10 @@
-const type_mod = @import("types/type.zig");
-
+/// re-export the number primitive types
 pub const num = @import("types/num.zig");
 
-pub const Type = type_mod.Type;
+/// re-export the Type primitive
+pub const Type = @import("types/type.zig").Type;
 
+// todo -- we probably don't need this anymmore.. remove in follow-up PR
 /// Lowest level of the type system, representing the most fundamental or atomic types
 pub const Primitive = union(enum) {
     Int: Int,
@@ -12,6 +13,7 @@ pub const Primitive = union(enum) {
     Str,
     Crash,
 
+    /// todo
     pub const Int = enum {
         U8,
         I8,
@@ -24,13 +26,13 @@ pub const Primitive = union(enum) {
         U128,
         I128,
     };
-
+    /// todo
     pub const Float = enum {
         F32,
         F64,
         Dec,
     };
-
+    /// todo
     pub const Num = union(enum) {
         Int: Int,
         Float: Float,

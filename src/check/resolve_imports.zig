@@ -3,6 +3,9 @@ const base = @import("../base.zig");
 const can = @import("canonicalize.zig");
 
 const Self = @This();
+
+/// The intermediate representation of a combined Roc program, including all of the
+/// relevant modules such a builtins, or imported packages.
 pub const IR = @import("resolve_imports/IR.zig");
 
 /// Resolve modules that were nominally imported in silo-compiled modules to

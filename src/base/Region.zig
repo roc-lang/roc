@@ -9,10 +9,16 @@ start: Position,
 end: Position,
 
 // Okay to use a non-multi list because both fields are the same size
+/// A type-safe ArrayList of Ranges's
 pub const List = collections.SafeList(@This());
+
+/// Index of the Region
 pub const Idx = List.Idx;
+
+/// Slice of the Region's
 pub const Slice = List.Slice;
 
+/// create an empty Region
 pub fn zero() Region {
     return Region{
         .start = Position.zero(),
@@ -20,6 +26,7 @@ pub fn zero() Region {
     };
 }
 
+/// string formating for a Region
 pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);

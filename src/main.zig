@@ -36,11 +36,13 @@ const usage =
     \\ -h, --help       Print usage
 ;
 
+/// log a fatal error and exit the process with a non-zero code
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.log.err(format, args);
     std.process.exit(1);
 }
 
+/// cli entrypoint
 pub fn main() !void {
     const gpa = std.heap.c_allocator;
 

@@ -34,7 +34,10 @@ relative_filepaths: std.ArrayListUnmanaged([]const u8),
 /// All packages depended on by this package.
 dependencies: Dependency.List,
 
+/// A type-safe ArrayList of Package's
 const List = collections.SafeList(@This());
+
+/// Index of the Package
 pub const Idx = List.Idx;
 
 /// A .roc file within a package.
@@ -51,9 +54,13 @@ pub const Module = struct {
     /// that would take an allocation that we'd like to avoid.
     filepath_relative_to_package_root: []const u8,
 
+    /// A type-safe ArrayList of package Module's
     pub const List = collections.SafeList(@This());
+
+    /// Index of the package Module
     pub const Idx = Module.List.Idx;
 
+    /// represents an error that occurs when parsing a package module name
     pub const NameError = error{
         BadPathName,
         non_ascii_path,
@@ -255,11 +262,13 @@ pub const Url = struct {
     }
 };
 
+/// represents a dependency in a package
 pub const Dependency = struct {
     shorthand: []const u8,
     shorthand_region: Region,
     package: Pkg,
 
+    /// represents an error that occurs when adding a dependency to a package
     pub const AddError = union(enum) {
         empty_shorthand,
         duplicate_shorthand: struct {
@@ -269,26 +278,36 @@ pub const Dependency = struct {
         bad_url: Url.ParseErr,
     };
 
+    /// represents a package in a dependency
     pub const Pkg = union(enum) {
         idx: Idx,
         err: AddError,
     };
 
+    /// a type-safe list of dependencies
     pub const List = collections.SafeList(@This());
 };
 
+/// a store of packages
 pub const Store = struct {
     packages: List,
     indices_by_url: std.StringHashMapUnmanaged(Idx),
     string_arena: std.heap.ArenaAllocator,
 
+    /// the index for the builtins package
     pub const builtins_idx: Idx = @enumFromInt(0);
+
+    /// the index for the primary or "self" package
+    /// this represents the current module being compiled
     pub const primary_idx: Idx = @enumFromInt(1);
 
+    /// a result of initializing the store which may
+    /// fail due to errors such as not finding the builtins or primary root modules
     pub const InitResult = union(enum) {
         success: Store,
         err: Err,
 
+        /// represents an error that occurred during initialization of a package store
         pub const Err = union(enum) {
             could_not_find_builtins_root_module,
             could_not_find_primary_root_module,
@@ -297,6 +316,7 @@ pub const Store = struct {
                 filename: []const u8,
             },
 
+            /// deinit the error memory
             pub fn deinit(err: *Err, gpa: std.mem.Allocator) void {
                 switch (err.*) {
                     .could_not_find_builtins_root_module => {},
@@ -309,6 +329,7 @@ pub const Store = struct {
         };
     };
 
+    /// initializes a new package store
     pub fn init(
         gpa: std.mem.Allocator,
         primary_root_module_absdir: []const u8,
@@ -394,6 +415,7 @@ pub const Store = struct {
         } };
     }
 
+    /// deinit the store's memory
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         for (self.packages.items.items) |*package| {
             package.modules.deinit(gpa);
@@ -406,6 +428,7 @@ pub const Store = struct {
         self.string_arena.deinit();
     }
 
+    /// add a new package to the store
     pub fn add(
         self: *Store,
         url_data: Url,
@@ -449,10 +472,12 @@ pub const Store = struct {
         return idx;
     }
 
+    /// find a package in the store by it's URL
     pub fn findWithUrl(self: *const Store, url: []const u8) ?Idx {
         return self.indices_by_url.get(url);
     }
 
+    /// add a dependency to a package in the store
     pub fn addDependencyToPackage(
         self: *Store,
         gpa: std.mem.Allocator,

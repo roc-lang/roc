@@ -16,6 +16,7 @@ dirName: *const fn (absolute_path: []const u8) ?[]const u8,
 baseName: *const fn (absolute_path: []const u8) ?[]const u8,
 canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8,
 
+/// todo
 pub fn default() Self {
     return Self{
         .fileExists = &fileExists,
@@ -27,15 +28,20 @@ pub fn default() Self {
     };
 }
 
+/// todo
 pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.Error || error{StreamTooLong};
 
+/// todo
 pub const OpenError = std.fs.File.OpenError || std.fs.Dir.AccessError;
 
+/// todo
 pub const CanonicalizeError = error{ FileNotFound, Unknown, OutOfMemory } || std.posix.RealPathError;
 
+/// todo
 pub const Dir = struct {
     dir: std.fs.Dir,
 
+    /// todo
     pub const Entry = std.fs.Dir.Entry;
 
     const openOptions = std.fs.Dir.OpenDirOptions{
@@ -46,6 +52,7 @@ pub const Dir = struct {
         .no_follow = true,
     };
 
+    /// todo
     pub fn openParent(dir: *Dir) OpenError!?Dir {
         return dir.dir.openDir("..", openOptions) catch |err| {
             switch (err) {
@@ -55,6 +62,7 @@ pub const Dir = struct {
         };
     }
 
+    /// todo
     pub fn hasFile(dir: *Dir, filename: []const u8) !bool {
         dir.dir.access(filename, .{}) catch |err| {
             switch (err) {
@@ -66,6 +74,7 @@ pub const Dir = struct {
         return true;
     }
 
+    /// todo
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
         return dir.dir.realpathAlloc(allocator, filename) catch |err| {
             switch (err) {
@@ -75,10 +84,12 @@ pub const Dir = struct {
         };
     }
 
+    /// todo
     pub fn close(dir: *Dir) void {
         dir.dir.close();
     }
 
+    /// todo
     pub fn findAllFilesRecursively(
         dir: *Dir,
         gpa: std.mem.Allocator,

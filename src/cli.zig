@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
+/// A sub-command for the roc cli tool
 pub const RocCmd = enum {
     roc_run,
     roc_build,
@@ -40,6 +41,7 @@ test "parse cli subcommands" {
     try testing.expectEqual(RocCmd.parse(""), null);
 }
 
+/// Option flags for the roc cli tool
 pub const RocOpt = struct {
     opt: enum {
         none,

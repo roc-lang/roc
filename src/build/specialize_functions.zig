@@ -6,6 +6,8 @@ const func_solve = @import("./solve_functions.zig");
 const ModuleWork = base.ModuleWork;
 
 const Self = @This();
+
+/// Represents the program intermediate representation after specializing functions.
 pub const IR = @import("./specialize_functions/IR.zig");
 
 /// For every function that takes a function as an argument:
