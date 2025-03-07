@@ -186,6 +186,11 @@ pub fn SafeMultiList(comptime T: type) type {
             self.items.set(@intFromEnum(idx), value);
         }
 
+        // TODO: consider removing this, or at least renaming to imply this is not a zero-cost operation
+        pub fn get(self: *const SafeMultiList(T), idx: Idx) T {
+            return self.items.get(@intFromEnum(idx));
+        }
+
         /// Make sure that the backing array has at least capacity for the specified number of elements.
         pub fn ensureTotalCapacity(self: *SafeMultiList(T), gpa: Allocator, capacity: usize) void {
             self.items.ensureTotalCapacity(gpa, capacity) catch |err| exitOnOom(err);

@@ -19,10 +19,10 @@ pub export fn zig_fuzz_init() void {}
 
 /// Hook for AFL++ to run the fuzz test.
 pub export fn zig_fuzz_test(buf: [*]u8, len: isize) void {
-    zigFuzzTestInner(buf, len, false);
+    zig_fuzz_test_inner(buf, len, false);
 }
 
-fn zigFuzzTestInner(buf: [*]u8, len: isize, debug: bool) void {
+pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
     // We reinitialize the gpa on every loop of the fuzzer.
     // This enables the gpa to do leak checking on each iteration.
     var general_purpose_allocator = std.heap.GeneralPurposeAllocator(.{}){};
