@@ -1,0 +1,29 @@
+~~~META
+description=Various type declarations
+~~~SOURCE
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+
+Map a b : List(a), (a -> b) -> List(b)
+
+Foo : (Bar, Baz)
+
+Some a : { foo : Ok(a), bar : Something }
+
+Maybe a : [Some(a), None]
+
+SomeFunc a : Maybe(a), a -> Maybe(a)
+~~~PARSE
+(file
+    (header
+        'Map'
+        'Foo'
+        'Some'
+        'Maybe'
+        'SomeFunc'
+        'add_one'
+        'main!')
+    (type_decl)
+    (type_decl)
+    (type_decl)
+    (type_decl)
+    (type_decl))
