@@ -2,7 +2,8 @@
 //!
 //! To run:
 //!  1. zig build fuzz-tokenize
-//!  2. ./zig-out/AFLplusplus/bin/afl-fuzz -i src/fuzz-corpus/tokenize/ -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
+//!  2. zig build snapshot -- --fuzz-corpus /tmp/corpus
+//!  3. ./zig-out/AFLplusplus/bin/afl-fuzz -i /tmp/corpus -o /tmp/tokenize-out/ zig-out/bin/fuzz-tokenize
 //!
 //! Other afl commands also available in `./zig-out/AFLplusplus/bin`
 
