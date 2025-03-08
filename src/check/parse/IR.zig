@@ -1712,7 +1712,7 @@ pub const NodeStore = struct {
                     return import_node;
                 },
                 else => {
-                    std.log.err("format for statement {}", .{self});
+                    std.debug.print("format for statement {}", .{self});
                     @panic("not implemented");
                 },
             }
@@ -1943,7 +1943,7 @@ pub const NodeStore = struct {
                     return ident_sexpr;
                 },
                 else => {
-                    std.log.err("Format for Expr {}", .{self});
+                    std.debug.print("Format for Expr {}", .{self});
                     @panic("not implemented yet");
                 },
             }

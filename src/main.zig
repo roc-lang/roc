@@ -38,7 +38,7 @@ const usage =
 
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.log.err(format, args);
+    std.io.getStdErr().writer().print(format, args) catch unreachable;
     std.process.exit(1);
 }
 
@@ -53,8 +53,9 @@ pub fn main() !void {
 }
 
 fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
+    const stderr = std.io.getStdErr().writer();
     if (args.len <= 1) {
-        std.log.info("{s}", .{usage});
+        try stderr.print("{s}", .{usage});
         fatal("expected command argument", .{});
     }
 
@@ -80,7 +81,7 @@ fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
         try rocHelp();
     } else {
-        std.log.info("{s}", .{usage});
+        try stderr.print("{s}", .{usage});
         fatal("unknown command: {s}", .{cmd});
     }
 }
