@@ -1750,12 +1750,10 @@ pub const NodeStore = struct {
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
-                .@"return" => {
-                    const node = sexpr.Expr.init(env.gpa, "return");
-                    // : struct {
-                    //     expr: ExprIdx,
-                    //     region: Region,
-                    // },
+                .@"return" => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "return");
+                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
                 .type_anno => |a| {

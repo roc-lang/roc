@@ -10,6 +10,8 @@ decoder = Utf8.decode
 crash "something"
 
 expect 1 == 1
+
+return 2
 ~~~PARSE
 (file
     (header 'decoder')
@@ -25,4 +27,5 @@ expect 1 == 1
         (binop
             '=='
             (int '1')
-            (int '1'))))
+            (int '1')))
+    (return (int '2')))
