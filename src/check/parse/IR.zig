@@ -1738,33 +1738,33 @@ pub const NodeStore = struct {
 
                     return node;
                 },
+                // (crash <expr>)
                 .crash => |a| {
                     var node = sexpr.Expr.init(env.gpa, "crash");
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
+                // (expect <body>)
                 .expect => |a| {
                     var node = sexpr.Expr.init(env.gpa, "expect");
                     var child = ir.store.getExpr(a.body).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
+                // (return <expr>)
                 .@"return" => |a| {
                     var node = sexpr.Expr.init(env.gpa, "return");
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
+                // (type_anno <annotation>)
                 .type_anno => |a| {
                     var node = sexpr.Expr.init(env.gpa, "type_anno");
-
                     node.appendStringChild(env.gpa, ir.resolve(a.name));
-
                     var child = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
-
                     node.appendNodeChild(env.gpa, &child);
-
                     return node;
                 },
             }
