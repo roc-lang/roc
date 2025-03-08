@@ -664,7 +664,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
-            else => {},
+            else => std.debug.panic("TODO: Handle parsing pattern starting with: {s}", .{@tagName(self.peek())}),
         }
 
         if (pattern) |p| {
