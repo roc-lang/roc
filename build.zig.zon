@@ -3,9 +3,9 @@
     .version = "0.0.0",
     .minimum_zig_version = "0.14.0",
     .dependencies = .{
-        .zig_afl_kit = .{
-            .url = "git+https://github.com/kristoff-it/zig-afl-kit#1e9fcaa08361307d16a9bde82b4a7fd4560ce502",
-            .hash = "12200b1b5e8c711d81e1bf10c11510dac6bd5dd8034c55d15904d8b2587572378a7b",
+        .afl_kit = .{
+            .url = "git+https://github.com/bhansconnect/zig-afl-kit?ref=zig-0.14.0#323ec465fe33f0e4820648e713b70ffc494fb0c6",
+            .hash = "afl_kit-0.1.0-uhOgGDQdAADv-nfytsC3tGTQMfaG11pR-NV87LKev3H8",
             .lazy = true,
         },
         .roc_deps_aarch64_macos_none = .{
