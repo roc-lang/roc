@@ -43,6 +43,10 @@ pub fn main() !void {
         if (std.mem.eql(u8, arg, "--verbose")) {
             verbose_log = true;
         } else if (std.mem.eql(u8, arg, "--fuzz-corpus")) {
+            if (maybe_fuzz_corpus_path != null) {
+                std.log.err("`--fuzz-corpus` should only be specified once.", .{});
+                std.process.exit(1);
+            }
             expect_fuzz_corpus_path = true;
         } else if (expect_fuzz_corpus_path) {
             maybe_fuzz_corpus_path = arg;
@@ -58,15 +62,21 @@ pub fn main() !void {
                 \\Arguments:
                 \\  snapshot_paths  Paths to snapshot files or directories
             ;
-            std.log.info("{s}", .{usage});
+            std.log.info(usage, .{});
             std.process.exit(0);
         } else {
             try snapshot_paths.append(arg);
         }
     }
 
+    if (expect_fuzz_corpus_path) {
+        std.log.err("Expected fuzz corpus path, but none was provided", .{});
+        std.process.exit(1);
+    }
+
     if (maybe_fuzz_corpus_path != null) {
         log("copying SOURCE from snapshots to: {s}", .{maybe_fuzz_corpus_path.?});
+        try std.fs.cwd().makePath(maybe_fuzz_corpus_path.?);
     }
 
     const snapshots_dir = "src/snapshots";
