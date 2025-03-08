@@ -34,16 +34,16 @@ pub fn zig_fuzz_test_inner(buf: [*]u8, len: isize, debug: bool) void {
 
     const result = fmt.moduleFmtsStable(gpa, input, debug) catch |err|
         switch (err) {
-        error.ParseFailed => {
-            // No issue. Just bad input we couldn't parse.
-            return;
-        },
-        error.SecondParseFailed => {
-            @panic("Parsing of formatter output failed");
-        },
-        error.FormattingNotStable => {
-            @panic("Formatting not stable");
-        },
-    };
+            error.ParseFailed => {
+                // No issue. Just bad input we couldn't parse.
+                return;
+            },
+            error.SecondParseFailed => {
+                @panic("Parsing of formatter output failed");
+            },
+            error.FormattingNotStable => {
+                @panic("Formatting not stable");
+            },
+        };
     gpa.free(result);
 }
