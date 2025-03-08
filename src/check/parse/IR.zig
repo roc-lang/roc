@@ -1702,8 +1702,13 @@ pub const NodeStore = struct {
                     );
 
                     // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                    for (ir.store.tokenSlice(import.exposes)) |tok| {
-                        node.appendStringChild(env.gpa, ir.resolve(tok));
+                    const exposed_slice = ir.store.tokenSlice(import.exposes);
+                    if (exposed_slice.len > 0) {
+                        var exposed = sexpr.Expr.init(env.gpa, "exposing");
+                        for (ir.store.tokenSlice(import.exposes)) |tok| {
+                            exposed.appendStringChild(env.gpa, ir.resolve(tok));
+                        }
+                        node.appendNodeChild(env.gpa, &exposed);
                     }
 
                     return node;
