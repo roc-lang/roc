@@ -1,7 +1,7 @@
 .{
     .name = .roc,
     .version = "0.0.0",
-    .minimum_zig_version = "0.13.0",
+    .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .zig_afl_kit = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit#1e9fcaa08361307d16a9bde82b4a7fd4560ce502",
