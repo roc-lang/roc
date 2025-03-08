@@ -1744,12 +1744,10 @@ pub const NodeStore = struct {
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
-                .expect => {
-                    const node = sexpr.Expr.init(env.gpa, "expect");
-                    // : struct {
-                    //     body: ExprIdx,
-                    //     region: Region,
-                    // },
+                .expect => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "expect");
+                    var child = ir.store.getExpr(a.body).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
                 .@"return" => {

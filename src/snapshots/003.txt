@@ -8,6 +8,8 @@ import json.Json
 decoder = Utf8.decode
 
 crash "something"
+
+expect 1 == 1
 ~~~PARSE
 (file
     (header 'decoder')
@@ -18,4 +20,9 @@ crash "something"
     (decl
         (ident 'decoder')
         (ident 'Utf8' '.decode'))
-    (crash (string 'something')))
+    (crash (string 'something'))
+    (expect
+        (binop
+            '=='
+            (int '1')
+            (int '1'))))
