@@ -948,6 +948,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent) {
             const tok = self.peek();
             if (tok == .NoSpaceDotInt) { // NoSpaceDotInt
+                std.debug.panic("TODO: Handle NoSpaceDotInt case", .{});
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
                 const ident = self.store.addExpr(.{ .ident = .{
