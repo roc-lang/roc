@@ -1738,13 +1738,10 @@ pub const NodeStore = struct {
 
                     return node;
                 },
-                .crash => {
-                    const node = sexpr.Expr.init(env.gpa, "crash");
-                    // : struct {
-                    //     expr: ExprIdx,
-                    //     region: Region,
-                    // },
-
+                .crash => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "crash");
+                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
                 .expect => {

@@ -6,6 +6,8 @@ module [decoder]
 import json.Json
 
 decoder = Utf8.decode
+
+crash "something"
 ~~~PARSE
 (file
     (header 'decoder')
@@ -15,4 +17,5 @@ decoder = Utf8.decode
         '')
     (decl
         (ident 'decoder')
-        (ident 'Utf8' '.decode')))
+        (ident 'Utf8' '.decode'))
+    (crash (string 'something')))
