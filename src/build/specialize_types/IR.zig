@@ -1,6 +1,6 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const types = @import("../../types.zig");
+const types_module = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
@@ -52,7 +52,7 @@ pub fn deinit(self: *Self) void {
 
 /// todo
 pub const Type = union(enum) {
-    primitive: types.Primitive,
+    primitive: types_module.Primitive,
     box: Type.Idx,
     list: Type.Idx,
     @"struct": Type.NonEmptySlice,

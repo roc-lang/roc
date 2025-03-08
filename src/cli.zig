@@ -113,7 +113,7 @@ fn splitArgs(allocator: std.mem.Allocator, str: []const u8) ![]const []const u8 
     var args = std.ArrayList([]const u8).init(allocator);
     errdefer args.deinit();
 
-    var iter = std.mem.split(u8, str, " ");
+    var iter = std.mem.splitScalar(u8, str, ' ');
     while (iter.next()) |arg| {
         if (arg.len > 0) {
             try args.append(arg);

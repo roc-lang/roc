@@ -22,12 +22,12 @@ canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) Canoni
 /// Get the default filesystem manager.
 pub fn default() Self {
     return Self{
-        .fileExists = &fileExists,
-        .readFile = &readFile,
-        .openDir = &openDir,
-        .dirName = &dirName,
-        .baseName = &baseName,
-        .canonicalize = &canonicalize,
+        .fileExists = &fileExistsDefault,
+        .readFile = &readFileDefault,
+        .openDir = &openDirDefault,
+        .dirName = &dirNameDefault,
+        .baseName = &baseNameDefault,
+        .canonicalize = &canonicalizeDefault,
     };
 }
 
@@ -121,7 +121,7 @@ pub const Dir = struct {
     }
 };
 
-fn fileExists(absolute_path: []const u8) OpenError!bool {
+fn fileExistsDefault(absolute_path: []const u8) OpenError!bool {
     std.fs.accessAbsolute(absolute_path, .{}) catch |err| {
         switch (err) {
             error.FileNotFound => return false,
@@ -133,7 +133,7 @@ fn fileExists(absolute_path: []const u8) OpenError!bool {
 }
 
 /// Reads the contents of a file at the given relative path.
-fn readFile(relative_path: []const u8, allocator: std.mem.Allocator) ReadError![]const u8 {
+fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) ReadError![]const u8 {
     const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
@@ -143,7 +143,7 @@ fn readFile(relative_path: []const u8, allocator: std.mem.Allocator) ReadError![
     return contents;
 }
 
-fn openDir(absolute_path: []const u8) OpenError!Dir {
+fn openDirDefault(absolute_path: []const u8) OpenError!Dir {
     const dir = std.fs.openDirAbsolute(absolute_path, Dir.openOptions) catch |err| {
         return switch (err) {
             error.FileNotFound => error.FileNotFound,
@@ -154,15 +154,15 @@ fn openDir(absolute_path: []const u8) OpenError!Dir {
     return Dir{ .dir = dir };
 }
 
-fn dirName(absolute_path: []const u8) ?[]const u8 {
+fn dirNameDefault(absolute_path: []const u8) ?[]const u8 {
     return std.fs.path.dirname(absolute_path);
 }
 
-fn baseName(absolute_path: []const u8) ?[]const u8 {
+fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
     return std.fs.path.basename(absolute_path);
 }
 
-fn canonicalize(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
     return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
         return switch (err) {
             error.FileNotFound => error.FileNotFound,

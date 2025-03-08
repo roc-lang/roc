@@ -801,13 +801,13 @@ pub const Tokenizer = struct {
 
     fn consumeBraceCloseAndContinueStringInterp(self: *Tokenizer, brace: BraceKind) void {
         std.debug.assert(self.cursor.peek() == close_curly or self.cursor.peek() == ']' or self.cursor.peek() == ')');
-        if (self.stack.items.len == 0) {
+        const last = self.stack.pop();
+        if (last == null) {
             self.cursor.pushMessageHere(.OverClosedBrace);
             self.cursor.pos += 1;
             return;
         }
-        const last = self.stack.pop();
-        switch (last) {
+        switch (last.?) {
             .round => {
                 if (brace != .round) {
                     self.cursor.pushMessageHere(.MismatchedBrace);

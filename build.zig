@@ -143,7 +143,7 @@ fn add_fuzz_target(
         .optimize = .ReleaseSafe,
     });
 
-    // TODO: Once 0.14.0 is released, uncomment this. Will make fuzzing work better.
+    // TODO: look into enabling this, I think it may only work on linux for 0.14.0
     // fuzz_obj.root_module.fuzz = true;
     fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
     fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
@@ -158,7 +158,7 @@ fn add_fuzz_target(
         .optimize = .Debug,
         .link_libc = true,
     });
-    install_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
+    install_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     b.installArtifact(install_repro);
 
     const run_cmd = b.addRunArtifact(install_repro);
@@ -175,14 +175,14 @@ fn add_fuzz_target(
         .optimize = .Debug,
         .link_libc = true,
     });
-    check_repro.root_module.addImport("fuzz_test", &fuzz_obj.root_module);
+    check_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     check_step.dependOn(&check_repro.step);
 
     if (fuzz and build_afl) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
-        const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
+        const afl = b.lazyImport(@This(), "afl_kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
     }
@@ -215,7 +215,7 @@ fn addMainExe(
 
         exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
-        try addStaticLlvmOptionsToModule(&exe.root_module);
+        try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
     return exe;
@@ -269,7 +269,7 @@ fn llvmPaths(
         std.process.exit(1);
     }
     const triple = supported_deps_triples.get(raw_triple).?;
-    const deps_name = b.fmt("roc-deps-{s}", .{triple});
+    const deps_name = b.fmt("roc_deps_{s}", .{triple});
     const deps = b.lazyDependency(deps_name, .{}) orelse return null;
     const lazy_llvm_path = deps.path(".");
     // TODO: Is this ok to do in the zig build system?
@@ -283,20 +283,20 @@ fn llvmPaths(
 }
 
 const supported_deps_triples = std.StaticStringMap([]const u8).initComptime(.{
-    .{ "aarch64-macos-none", "aarch64-macos-none" },
-    .{ "aarch64-linux-musl", "aarch64-linux-musl" },
-    .{ "aarch64-windows-gnu", "aarch64-windows-gnu" },
-    .{ "arm-linux-musleabihf", "arm-linux-musleabihf" },
-    .{ "x86-linux-musl", "x86-linux-musl" },
-    .{ "x86_64-linux-musl", "x86_64-linux-musl" },
-    .{ "x86_64-macos-none", "x86_64-macos-none" },
-    .{ "x86_64-windows-gnu", "x86_64-windows-gnu" },
+    .{ "aarch64-macos-none", "aarch64_macos_none" },
+    .{ "aarch64-linux-musl", "aarch64_linux_musl" },
+    .{ "aarch64-windows-gnu", "aarch64_windows_gnu" },
+    .{ "arm-linux-musleabihf", "arm_linux_musleabihf" },
+    .{ "x86-linux-musl", "x86_linux_musl" },
+    .{ "x86_64-linux-musl", "x86_64_linux_musl" },
+    .{ "x86_64-macos-none", "x86_64_macos_none" },
+    .{ "x86_64-windows-gnu", "x86_64_windows_gnu" },
     // We also support the gnu linux targets.
     // For those, we just map to musl.
-    .{ "aarch64-linux-gnu", "aarch64-linux-musl" },
-    .{ "arm-linux-gnueabihf", "arm-linux-musleabihf" },
-    .{ "x86-linux-gnu", "x86-linux-musl" },
-    .{ "x86_64-linux-gnu", "x86_64-linux-musl" },
+    .{ "aarch64-linux-gnu", "aarch64_linux_musl" },
+    .{ "arm-linux-gnueabihf", "arm_linux_musleabihf" },
+    .{ "x86-linux-gnu", "x86_linux_musl" },
+    .{ "x86_64-linux-gnu", "x86_64_linux_musl" },
 });
 
 // The following is lifted from the zig compiler.

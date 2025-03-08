@@ -285,7 +285,9 @@ fn sccRecurseIntoGraph(
         var scc = std.ArrayList(usize).init(self.gpa);
 
         while (true) {
-            const scc_item = stack.pop();
+            // Current must be on the stack.
+            // We are guaranteed to find it before emptying the stack.
+            const scc_item = stack.pop() orelse unreachable;
             all_attributes[scc_item].on_stack = false;
             scc.append(scc_item) catch |err| exitOnOom(err);
 

@@ -862,11 +862,10 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
 
                 const statements = self.store.statementSpanFrom(scratch_top);
 
-                const body = .{
+                expr = self.store.addExpr(.{ .block = .{
                     .statements = statements,
                     .region = .{ .start = start, .end = self.pos },
-                };
-                expr = self.store.addExpr(.{ .block = body });
+                } });
             }
         },
         .OpBar => {
