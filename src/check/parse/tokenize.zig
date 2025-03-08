@@ -1613,9 +1613,15 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append(alloc, '!');
             },
             .OpAnd => {
-                std.debug.assert(length == 2);
-                try buf2.append(alloc, '&');
-                try buf2.append(alloc, '&');
+                std.debug.assert(length == 2 or length == 3);
+                if (length == 2) {
+                    try buf2.append(alloc, '&');
+                    try buf2.append(alloc, '&');
+                } else {
+                    try buf2.append(alloc, 'a');
+                    try buf2.append(alloc, 'n');
+                    try buf2.append(alloc, 'd');
+                }
             },
             .OpAmpersand => {
                 std.debug.assert(length == 1);
@@ -1632,8 +1638,13 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .OpOr => {
                 std.debug.assert(length == 2);
-                try buf2.append(alloc, '|');
-                try buf2.append(alloc, '|');
+                if (buf[token.offset] == 'o') {
+                    try buf2.append(alloc, 'o');
+                    try buf2.append(alloc, 'r');
+                } else {
+                    try buf2.append(alloc, '|');
+                    try buf2.append(alloc, '|');
+                }
             },
             .OpBar => {
                 std.debug.assert(length == 1);
