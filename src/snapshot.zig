@@ -6,7 +6,7 @@ const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 
 var verbose_log: bool = false;
-var prng = std.rand.DefaultPrng.init(1234567890);
+var prng = std.Random.DefaultPrng.init(1234567890);
 
 const rand = prng.random();
 

@@ -327,7 +327,7 @@ fn discoverModulesStartingFromEntry(
         gpa,
     )) |err| return .{ .err = .{ .parse_deps = err } };
 
-    while (desired_dep_queue.popOrNull()) |next_dep| {
+    while (desired_dep_queue.pop()) |next_dep| {
         const dep_package_idx = if (package_store.findWithUrl(next_dep.url)) |dep_idx|
             dep_idx
         else blk: {
