@@ -356,7 +356,20 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
         // create a pseudo-random name for our file
         const rand_file_name = [_][]const u8{
-            maybe_fuzz_corpus_path.?, &[_]u8{ rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), rand.intRangeAtMost(u8, 'a', 'z'), '.', 'r', 'o', 'c' },
+            maybe_fuzz_corpus_path.?, &[_]u8{
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                rand.intRangeAtMost(u8, 'a', 'z'),
+                '.',
+                'r',
+                'o',
+                'c',
+            },
         };
 
         const corpus_file_path = try std.fs.path.join(gpa, &rand_file_name);
