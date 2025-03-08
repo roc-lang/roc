@@ -182,7 +182,7 @@ fn add_fuzz_target(
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
-        const afl = b.lazyImport(@This(), "zig-afl-kit") orelse return;
+        const afl = b.lazyImport(@This(), "zig_afl_kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
         fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
     }

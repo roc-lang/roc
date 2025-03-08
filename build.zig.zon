@@ -5,7 +5,7 @@
     .dependencies = .{
         .zig_afl_kit = .{
             .url = "git+https://github.com/kristoff-it/zig-afl-kit#1e9fcaa08361307d16a9bde82b4a7fd4560ce502",
-            .hash = "122065a5f839ca9174542c621a0311695b49db71b58b50b232891571902775405642",
+            .hash = "12200b1b5e8c711d81e1bf10c11510dac6bd5dd8034c55d15904d8b2587572378a7b",
             .lazy = true,
         },
         .roc_deps_aarch64_macos_none = .{
