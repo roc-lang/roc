@@ -214,7 +214,7 @@ pub const Levels = struct {
         scope_item: Level.Item(item_kind),
     ) Level.Item(item_kind) {
         if (self.contains(item_kind, scope_item.scope_name)) |item_in_scope| {
-            const can_problem = switch (item_kind) {
+            const can_problem: Problem.Canonicalize = switch (item_kind) {
                 .ident => .{ .IdentAlreadyInScope = .{
                     .original_ident = item_in_scope.scope_name,
                     .shadow = scope_item.scope_name,

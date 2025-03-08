@@ -1500,10 +1500,9 @@ pub const NodeStore = struct {
                 } };
             },
             .ty_fn => {
-                const ret = .{ .id = store.extra_data.items[@as(usize, @intCast(node.main_token))] };
                 return .{ .@"fn" = .{
                     .region = emptyRegion(),
-                    .ret = ret,
+                    .ret = .{ .id = store.extra_data.items[@as(usize, @intCast(node.main_token))] },
                     .args = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
