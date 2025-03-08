@@ -140,6 +140,10 @@ fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
 
     var parse_ast = parse.parse(&module_env, contents);
     defer parse_ast.deinit();
+    if (parse_ast.errors.len > 0) {
+        // TODO: pretty print the parse failures.
+        fatal("Failed to parse '{s}' for formatting.\nErrors:\n{any}\n", .{ roc_file_path, parse_ast.errors });
+    }
 
     var formatter = fmt.init(parse_ast);
     defer formatter.deinit();
