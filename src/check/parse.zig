@@ -82,7 +82,7 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
 
                 std.debug.print(
                     "({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
-                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.toOwnedSlice() catch |err| exitOnOom(err) },
+                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.items },
                 );
             },
             else => {

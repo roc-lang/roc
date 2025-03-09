@@ -915,7 +915,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const condition = self.parseExpr();
             const then = self.parseExpr();
             if (self.peek() != .KwElse) {
-                std.debug.panic("TODO: problem for no else {s}@{d}", .{ @tagName(self.peek()), self.pos });
+                // std.debug.panic("TODO: problem for no else {s}@{d}", .{ @tagName(self.peek()), self.pos });
+                const reason: IR.Diagnostic.Tag = .expr_if_missing_else;
+                self.pushDiagnostic(reason, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+                return self.store.addExpr(.{ .malformed = .{ .reason = reason } });
             }
             self.advance();
             const else_idx = self.parseExpr();
