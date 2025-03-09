@@ -54,6 +54,7 @@ pub const Diagnostic = struct {
         header_unexpected_token,
         header_expected_close_bracket,
         pattern_unexpected_token,
+        ty_anno_unexpected_token,
     };
 
     // TODO this is a hack just to get something in the snapshots...
@@ -1036,6 +1037,9 @@ pub const NodeStore = struct {
                 node.tag = .ty_parens;
                 node.data.lhs = p.anno.id;
             },
+            .malformed => {
+                node.tag = .malformed;
+            },
         }
 
         const nid = store.nodes.append(store.gpa, node);
@@ -1805,6 +1809,9 @@ pub const NodeStore = struct {
         parens: struct {
             anno: TypeAnnoIdx,
             region: Region,
+        },
+        malformed: struct {
+            reason: Diagnostic.Tag,
         },
 
         const TagUnionRhs = packed struct { open: u1, tags_len: u31 };

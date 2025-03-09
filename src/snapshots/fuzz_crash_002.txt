@@ -1,0 +1,23 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+modu:;::::::::::::::le[%
+~~~PARSE_ERRORS
+PARSE ERROR ty_anno_unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token
+PARSE ERROR unexpected_token

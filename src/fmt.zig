@@ -569,6 +569,9 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
         .underscore => |_| {
             fmt.push('_');
         },
+        .malformed => {
+            // TODO how should we format a malformed here?
+        },
     }
 }
 

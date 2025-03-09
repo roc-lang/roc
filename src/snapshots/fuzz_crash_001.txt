@@ -1,5 +1,5 @@
 ~~~META
-description=crashes
+description=fuzz crash
 ~~~SOURCE
 mo|%
 ~~~PARSE_ERRORS
