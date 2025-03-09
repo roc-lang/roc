@@ -58,6 +58,7 @@ pub const Diagnostic = struct {
         statement_unexpected_eof,
         string_unexpected_token,
         expr_if_missing_else,
+        expr_no_space_dot_int,
     };
 
     // TODO this is a hack just to get something in the snapshots...

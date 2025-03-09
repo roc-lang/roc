@@ -980,7 +980,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent) {
             const tok = self.peek();
             if (tok == .NoSpaceDotInt) { // NoSpaceDotInt
-                std.debug.panic("TODO: Handle NoSpaceDotInt case", .{});
+                // std.debug.panic("TODO: Handle NoSpaceDotInt case", .{});
+                const reason: IR.Diagnostic.Tag = .expr_no_space_dot_int;
+                self.pushDiagnostic(reason, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+                return self.store.addExpr(.{ .malformed = .{ .reason = reason } });
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
                 const ident = self.store.addExpr(.{ .ident = .{
