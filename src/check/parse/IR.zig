@@ -2033,6 +2033,16 @@ pub const NodeStore = struct {
                     }
                     return node;
                 },
+                .tag => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "tag");
+                    node.appendStringChild(env.gpa, ir.resolve(a.token));
+                    return node;
+                },
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
+                },
                 else => {
                     std.debug.print("Format for Expr {}", .{self});
                     @panic("not implemented yet");
