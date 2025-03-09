@@ -889,6 +889,11 @@ pub const NodeStore = struct {
             .ellipsis => |_| {
                 node.tag = .ellipsis;
             },
+            .malformed => |m| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(m.reason);
+                node.data.rhs = 0;
+            },
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
