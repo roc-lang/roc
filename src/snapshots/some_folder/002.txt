@@ -6,6 +6,12 @@ module [foo, bar]
 foo = "one"
 
 bar = "two"
+~~~FORMATTED
+module [foo, bar]
+
+foo = "one"
+
+bar = "two"
 ~~~PARSE
 (file
     (header 'foo' 'bar')

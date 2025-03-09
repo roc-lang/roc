@@ -54,6 +54,20 @@ pub const Diagnostic = struct {
         header_unexpected_token,
         header_expected_close_bracket,
     };
+
+    // TODO this is a hack just to get something in the snapshots...
+    pub fn not_terrible_error(self: Diagnostic, source: []const u8, writer: anytype) !void {
+
+        // this is definitely not right... are these token indexes or source bytes?
+        const start: u32 = self.region.start;
+        const end: u32 = self.region.end;
+        const snippet = source[start..end];
+
+        try writer.writeAll("PARSE ERROR ");
+        try writer.writeAll(@tagName(self.tag));
+        try writer.writeAll(snippet);
+        try writer.writeAll("\n");
+    }
 };
 
 /// The first and last token consumed by a Node

@@ -149,18 +149,21 @@ const Section = union(enum) {
     source,
     formatted,
     parse,
+    parser_errors,
 
     pub const META = "~~~META";
     pub const SOURCE = "~~~SOURCE";
     pub const FORMATTED = "~~~FORMATTED";
     pub const PARSE = "~~~PARSE";
+    pub const PARSE_ERRORS = "~~~PARSE_ERRORS";
 
     fn next(self: Section) ?Section {
         return switch (self) {
             .meta => .source,
             .source => .formatted,
             .formatted => .parse,
-            .parse => null,
+            .parse => .parser_errors,
+            .parser_errors => null,
         };
     }
 
@@ -169,6 +172,7 @@ const Section = union(enum) {
         if (std.mem.eql(u8, str, SOURCE)) return .source;
         if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
         if (std.mem.eql(u8, str, PARSE)) return .parse;
+        if (std.mem.eql(u8, str, PARSE_ERRORS)) return .parser_errors;
         return null;
     }
 
@@ -178,6 +182,7 @@ const Section = union(enum) {
             .source => SOURCE,
             .formatted => FORMATTED,
             .parse => PARSE,
+            .parser_errors => PARSE_ERRORS,
             .None => "",
         };
     }
@@ -213,10 +218,6 @@ const Content = struct {
             .source = source,
             .formatted = formatted,
         };
-    }
-
-    fn has_formatted_section(self: Content) bool {
-        return self.formatted != null;
     }
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
@@ -281,7 +282,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Parse the file to find section boundaries
-    const content = extractSections(gpa, file_content) catch |err| {
+    var content = extractSections(gpa, file_content) catch |err| {
         switch (err) {
             Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
                 warn("ignoring file {s}: {s}", .{ snapshot_path, @errorName(err) });
@@ -304,22 +305,25 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     var parse_ast = parse.parse(&module_env, content.source);
     defer parse_ast.deinit();
 
-    if (parse_ast.errors.len > 0) {
-        warn("skipping file {s} as it contains {d} errors", .{ snapshot_path, parse_ast.errors.len });
-        return false;
-    }
-
-    // Format the source code
-    var formatter = fmt.init(parse_ast);
-    defer formatter.deinit();
-    const formatted_output = formatter.formatFile();
-    defer gpa.free(formatted_output);
-
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
-    // Write the new AST to the parse section
-    try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
+    const has_parse_errors = parse_ast.errors.len > 0;
+    // if (parse_ast.errors.len > 0) {
+    //     warn("skipping file {s} as it contains {d} errors", .{ snapshot_path, parse_ast.errors.len });
+    //     return false;
+    // }
+
+    if (!has_parse_errors) {
+        // Write the new AST to the parse section
+        try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
+
+        // Format the source code
+        var formatter = fmt.init(parse_ast);
+        defer formatter.deinit();
+        content.formatted = formatter.formatFile();
+        // defer gpa.free(formatted_output);
+    }
 
     // Rewrite the file with updated sections
     var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
@@ -335,26 +339,36 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // If there's an explicit FORMATTED section, keep the source as-is
     // and update the FORMATTED section
-    if (content.has_formatted_section()) {
+    if (content.formatted != null) {
         try file.writer().writeAll(Section.SOURCE);
         try file.writer().writeAll("\n");
         try file.writer().writeAll(content.source);
         try file.writer().writeAll("\n");
         try file.writer().writeAll(Section.FORMATTED);
         try file.writer().writeAll("\n");
-        try file.writer().writeAll(formatted_output);
+        try file.writer().writeAll(content.formatted.?);
         try file.writer().writeAll("\n");
+
+        gpa.free(content.formatted.?);
     } else {
         // Otherwise, update SOURCE directly with the formatted output
         try file.writer().writeAll(Section.SOURCE);
         try file.writer().writeAll("\n");
-        try file.writer().writeAll(formatted_output);
+        try file.writer().writeAll(content.source);
         try file.writer().writeAll("\n");
     }
 
-    try file.writer().writeAll(Section.PARSE);
-    try file.writer().writeAll("\n");
-    try file.writer().writeAll(parse_buffer.items);
+    if (!has_parse_errors) {
+        try file.writer().writeAll(Section.PARSE);
+        try file.writer().writeAll("\n");
+        try file.writer().writeAll(parse_buffer.items);
+    } else {
+        try file.writer().writeAll(Section.PARSE_ERRORS);
+        try file.writer().writeAll("\n");
+        for (parse_ast.errors) |err| {
+            try err.not_terrible_error(content.source, file);
+        }
+    }
 
     // If flag --fuzz-corpus is passed, so write the SOURCE to our corpus
     if (maybe_fuzz_corpus_path != null) {
