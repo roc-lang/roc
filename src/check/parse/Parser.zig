@@ -684,7 +684,15 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                     .region = .{ .start = start, .end = self.pos },
                 } });
             },
-            else => std.debug.panic("TODO: Handle parsing pattern starting with: {s}", .{@tagName(self.peek())}),
+            else => {
+                // std.debug.panic("TODO: Handle parsing pattern starting with: {s}", .{@tagName(self.peek())})
+                const reason: IR.Diagnostic.Tag = .pattern_unexpected_token;
+                self.pushDiagnostic(reason, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+                return self.store.addPattern(.{ .malformed = .{ .reason = reason } });
+            },
         }
 
         if (pattern) |p| {

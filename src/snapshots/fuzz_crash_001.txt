@@ -1,0 +1,7 @@
+~~~META
+description=crashes
+~~~SOURCE
+mo|%
+~~~PARSE_ERRORS
+PARSE ERROR pattern_unexpected_token
+PARSE ERROR unexpected_token

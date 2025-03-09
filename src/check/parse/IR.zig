@@ -53,6 +53,7 @@ pub const Diagnostic = struct {
         header_expected_open_bracket,
         header_unexpected_token,
         header_expected_close_bracket,
+        pattern_unexpected_token,
     };
 
     // TODO this is a hack just to get something in the snapshots...
@@ -615,7 +616,9 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
             },
-            else => {},
+            else => {
+                // TODO -- should this be ignoring other header types??
+            },
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
@@ -747,6 +750,9 @@ pub const NodeStore = struct {
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
+            },
+            .malformed => {
+                node.tag = .malformed;
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1853,6 +1859,9 @@ pub const NodeStore = struct {
             patterns: PatternSpan,
             region: Region,
         },
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
@@ -1861,6 +1870,11 @@ pub const NodeStore = struct {
 
                     node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
 
+                    return node;
+                },
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
                 else => @panic("formatting for this pattern not yet implemented"),
