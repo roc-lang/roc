@@ -155,7 +155,8 @@ pub fn parseFile(self: *Parser) void {
         }
     }
 
-    std.debug.assert(self.store.scratch_statements.items.len > 0);
+    // TODO: fix me, blows up on empty input
+    // std.debug.assert(self.store.scratch_statements.items.len > 0);
 
     _ = self.store.addFile(.{
         .header = header,
@@ -221,13 +222,25 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
     // Get exposes
     if (self.peek() != .OpenSquare) {
-        std.debug.panic("TODO: Handle header with no exposes open bracket: {s}", .{@tagName(self.peek())});
+        // std.debug.panic("TODO: Handle header with no exposes open bracket: {s}", .{@tagName(self.peek())});
+        const reason: IR.Diagnostic.Tag = .header_expected_open_bracket;
+        self.pushDiagnostic(reason, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+        return self.store.addHeader(.{ .malformed = .{ .reason = reason } });
     }
     self.advance();
     const scratch_top = self.store.scratchTokenTop();
     while (self.peek() != .CloseSquare) {
         if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
-            std.debug.panic("TODO: Handler header bad exposes contents: {s}", .{@tagName(self.peek())});
+            // std.debug.panic("TODO: Handler header bad exposes contents: {s}", .{@tagName(self.peek())});
+            const reason: IR.Diagnostic.Tag = .header_unexpected_token;
+            self.pushDiagnostic(reason, .{
+                .start = self.pos,
+                .end = self.pos,
+            });
+            return self.store.addHeader(.{ .malformed = .{ .reason = reason } });
         }
 
         self.store.addScratchToken(self.pos);
@@ -239,8 +252,15 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         self.advance();
     }
     if (self.peek() != .CloseSquare) {
-        std.debug.panic("TODO: Handle Bad header no closing exposes bracket: {s}", .{@tagName(self.peek())});
+        // std.debug.panic("TODO: Handle Bad header no closing exposes bracket: {s}", .{@tagName(self.peek())});
+        const reason: IR.Diagnostic.Tag = .header_expected_close_bracket;
+        self.pushDiagnostic(reason, .{
+            .start = self.pos,
+            .end = self.pos,
+        });
+        return self.store.addHeader(.{ .malformed = .{ .reason = reason } });
     }
+
     const exposes = self.store.tokenSpanFrom(scratch_top);
     self.advance();
 

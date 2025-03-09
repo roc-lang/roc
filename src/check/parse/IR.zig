@@ -49,6 +49,10 @@ pub const Diagnostic = struct {
         expected_platform_string,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
+        expect_closing_paren,
+        header_expected_open_bracket,
+        header_unexpected_token,
+        header_expected_close_bracket,
     };
 };
 
