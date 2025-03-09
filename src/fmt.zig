@@ -45,15 +45,28 @@ pub fn resetWith(fmt: *Formatter, ast: IR) void {
 /// Emits a string containing the well-formed source of a Roc parse IR (AST).
 /// The resulting string is owned by the caller.
 pub fn formatFile(fmt: *Formatter) []const u8 {
+    var ignore_newline_for_first_statement = false;
+
     fmt.ast.store.emptyScratch();
     const file = fmt.ast.store.getFile();
-    fmt.formatHeader(file.header);
+    const maybe_output = fmt.formatHeader(file.header);
+    if (maybe_output == FormattedOutput.nothing_formatted) {
+        ignore_newline_for_first_statement = true;
+    }
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
     for (fmt.ast.store.statementSlice(file.statements)) |s| {
-        fmt.ensureNewline();
-        if (newline_behavior == .extra_newline_needed) {
-            fmt.newline();
+
+        // If there was nothing formatted because the header was malformed,
+        // then we don't want to add a newline
+        if (ignore_newline_for_first_statement) {
+            ignore_newline_for_first_statement = false;
+        } else {
+            fmt.ensureNewline();
+            if (newline_behavior == .extra_newline_needed) {
+                fmt.newline();
+            }
         }
+
         newline_behavior = fmt.formatStatement(s);
     }
     return fmt.buffer.toOwnedSlice(fmt.gpa) catch |err| exitOnOom(err);
@@ -392,7 +405,10 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
     }
 }
 
-fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
+/// The caller may need to know if anything was formatted, to handle newlines correctly.
+const FormattedOutput = enum { something_formatted, nothing_formatted };
+
+fn formatHeader(fmt: *Formatter, hi: HeaderIdx) FormattedOutput {
     const header = fmt.ast.store.getHeader(hi);
     switch (header) {
         .app => |a| {
@@ -428,6 +444,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             }
             fmt.pushAll(" }");
             fmt.newline();
+            return FormattedOutput.something_formatted;
         },
         .module => |m| {
             fmt.pushAll("module [");
@@ -441,9 +458,11 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             }
             fmt.push(']');
             fmt.newline();
+            return FormattedOutput.something_formatted;
         },
         .malformed => {
-            // TODO how should we format a malformed here?
+            // we have a malformed header... don't output anything as no header was parsed
+            return FormattedOutput.nothing_formatted;
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});

@@ -3,7 +3,6 @@ description=fuzz crash
 ~~~SOURCE
 modu
 ~~~FORMATTED
-
 modu
 ~~~PARSE
 (file

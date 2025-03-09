@@ -3,7 +3,6 @@ description=fuzz crash
 ~~~SOURCE
 F
 ~~~FORMATTED
-
 F
 ~~~PARSE
 (file
