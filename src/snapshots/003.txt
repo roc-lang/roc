@@ -6,6 +6,12 @@ module [decoder]
 import json.Json
 
 decoder = Utf8.decode
+
+crash "something"
+
+expect 1 == 1
+
+return 2
 ~~~PARSE
 (file
     (header 'decoder')
@@ -15,4 +21,11 @@ decoder = Utf8.decode
         '')
     (decl
         (ident 'decoder')
-        (ident 'Utf8' '.decode')))
+        (ident 'Utf8' '.decode'))
+    (crash (string 'something'))
+    (expect
+        (binop
+            '=='
+            (int '1')
+            (int '1')))
+    (return (int '2')))

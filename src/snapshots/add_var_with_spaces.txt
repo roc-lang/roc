@@ -1,0 +1,19 @@
+~~~META
+description=Add a variable with spaces
+~~~SOURCE
+module [add2]
+
+add2 = x +      2
+~~~FORMATTED
+module [add2]
+
+add2 = x + 2
+~~~PARSE
+(file
+    (header 'add2')
+    (decl
+        (ident 'add2')
+        (binop
+            '+'
+            (ident '' 'x')
+            (int '2'))))

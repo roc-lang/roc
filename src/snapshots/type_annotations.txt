@@ -1,0 +1,45 @@
+~~~META
+description=Various type annotations
+~~~SOURCE
+module []
+
+foo : U64
+bar : Thing(a, b, _)
+baz : (a, b, c)
+add_one : (U8, U16 -> U32)
+main! : List(String) -> Result({}, _)
+~~~PARSE
+(file
+    (header)
+    (type_anno
+        'foo'
+        (tag 'U64'))
+    (type_anno
+        'bar'
+        (tag
+            'Thing'
+            (ty_var 'a')
+            (ty_var 'b')
+            (_)))
+    (type_anno
+        'baz'
+        (tuple
+            (ty_var 'a')
+            (ty_var 'b')
+            (ty_var 'c')))
+    (type_anno
+        'add_one'
+        (fn
+            (tag 'U32')
+            (tag 'U8')
+            (tag 'U16')))
+    (type_anno
+        'main!'
+        (fn
+            (tag
+                'Result'
+                (record)
+                (_))
+            (tag
+                'List'
+                (tag 'String')))))

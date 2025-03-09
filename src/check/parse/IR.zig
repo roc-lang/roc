@@ -1677,42 +1677,95 @@ pub const NodeStore = struct {
 
                     return decl_node;
                 },
-                .expr => |expr_stmt| {
-                    const expr = ir.store.getExpr(expr_stmt.expr);
-                    const expr_node = expr.toSExpr(env, ir);
-                    return expr_node;
+                .expr => |expr| {
+                    return ir.store.getExpr(expr.expr).toSExpr(env, ir);
                 },
                 .import => |import| {
-                    var import_node = sexpr.Expr.init(env.gpa, "import");
+                    var node = sexpr.Expr.init(env.gpa, "import");
 
                     // Module Qualifier e.g. `pf` in `import pf.Stdout`
-                    import_node.appendStringChild(
+                    node.appendStringChild(
                         env.gpa,
                         if (import.qualifier_tok) |tok| ir.resolve(tok) else "",
                     );
 
                     // Module Name e.g. `Stdout` in `import pf.Stdout`
-                    import_node.appendStringChild(
+                    node.appendStringChild(
                         env.gpa,
                         ir.resolve(import.module_name_tok),
                     );
 
                     // Module Alias e.g. `OUT` in `import pf.Stdout as OUT`
-                    import_node.appendStringChild(
+                    node.appendStringChild(
                         env.gpa,
                         if (import.alias_tok) |tok| ir.resolve(tok) else "",
                     );
 
                     // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                    for (ir.store.tokenSlice(import.exposes)) |tok| {
-                        import_node.appendStringChild(env.gpa, ir.resolve(tok));
+                    const exposed_slice = ir.store.tokenSlice(import.exposes);
+                    if (exposed_slice.len > 0) {
+                        var exposed = sexpr.Expr.init(env.gpa, "exposing");
+                        for (ir.store.tokenSlice(import.exposes)) |tok| {
+                            exposed.appendStringChild(env.gpa, ir.resolve(tok));
+                        }
+                        node.appendNodeChild(env.gpa, &exposed);
                     }
 
-                    return import_node;
+                    return node;
                 },
-                else => {
-                    std.debug.print("format for statement {}", .{self});
-                    @panic("not implemented");
+                // (type_decl (header <name> [<args>]) <annotation>)
+                .type_decl => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "type_decl");
+                    var header = sexpr.Expr.init(env.gpa, "header");
+
+                    // pattern
+                    {
+                        const ty_header = ir.store.getTypeHeader(a.header);
+
+                        header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
+
+                        for (ir.store.tokenSlice(ty_header.args)) |b| {
+                            header.appendStringChild(env.gpa, ir.resolve(b));
+                        }
+
+                        node.appendNodeChild(env.gpa, &header);
+                    }
+                    // annotation
+                    {
+                        var annotation = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &annotation);
+                    }
+
+                    return node;
+                },
+                // (crash <expr>)
+                .crash => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "crash");
+                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                // (expect <body>)
+                .expect => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "expect");
+                    var child = ir.store.getExpr(a.body).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                // (return <expr>)
+                .@"return" => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "return");
+                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                // (type_anno <annotation>)
+                .type_anno => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "type_anno");
+                    node.appendStringChild(env.gpa, ir.resolve(a.name));
+                    var child = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
                 },
             }
         }
@@ -1761,6 +1814,75 @@ pub const NodeStore = struct {
         },
 
         const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            switch (self) {
+                // (ty_var <var>)
+                .ty_var => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "ty_var");
+                    node.appendStringChild(env.gpa, ir.resolve(a.tok));
+                    return node;
+                },
+                // (_)
+                .underscore => {
+                    return sexpr.Expr.init(env.gpa, "_");
+                },
+                // (tag [<args>])
+                .tag => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "tag");
+                    node.appendStringChild(env.gpa, ir.resolve(a.tok));
+                    for (ir.store.typeAnnoSlice(a.args)) |b| {
+                        var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    return node;
+                },
+                .tag_union => {
+                    var node = sexpr.Expr.init(env.gpa, "tag_union");
+                    node.appendStringChild(env.gpa, "TODO tags");
+                    node.appendStringChild(env.gpa, "TODO open_anno");
+                    return node;
+                },
+                // (tuple [<elems>])
+                .tuple => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "tuple");
+                    for (ir.store.typeAnnoSlice(a.annos)) |b| {
+                        var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    return node;
+                },
+                // (record [<fields>])
+                .record => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "record");
+                    for (ir.store.annoRecordFieldSlice(a.fields)) |_| {
+                        // TODO print S-expression for each field
+                        node.appendStringChild(env.gpa, "<field>");
+                    }
+                    return node;
+                },
+                // (fn <ret> [<args>])
+                .@"fn" => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "fn");
+
+                    // return value
+                    var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &ret);
+
+                    // arguments
+                    for (ir.store.typeAnnoSlice(a.args)) |b| {
+                        var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+
+                    return node;
+                },
+                // ignore parens... use inner
+                .parens => |a| {
+                    return ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                },
+            }
+        }
     };
 
     pub const AnnoRecordField = struct {
@@ -1918,6 +2040,11 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
+                .int => |int| {
+                    var expr = sexpr.Expr.init(env.gpa, "int");
+                    expr.appendStringChild(env.gpa, ir.resolve(int.token));
+                    return expr;
+                },
                 .string => |str| {
                     var sexpr_str = sexpr.Expr.init(env.gpa, "string");
                     for (ir.store.exprSlice(str.parts)) |part_id| {
@@ -1932,8 +2059,41 @@ pub const NodeStore = struct {
                     const owned_str: []u8 = env.gpa.dupe(u8, text) catch |err| exitOnOom(err);
                     return sexpr.Expr{ .string = owned_str };
                 },
+                // (tag <tag>)
+                .tag => |tag| {
+                    var node = sexpr.Expr.init(env.gpa, "tag");
+                    node.appendStringChild(env.gpa, ir.resolve(tag.token));
+                    return node;
+                },
                 .block => |block| {
                     return block.toSExpr(env, ir);
+                },
+                // (binop <op> <lhs> <rhs>)
+                .bin_op => |binop| {
+                    var binop_sexpr = sexpr.Expr.init(env.gpa, "binop");
+
+                    binop_sexpr.appendStringChild(env.gpa, ir.resolve(binop.operator));
+
+                    var lhs = ir.store.getExpr(binop.left).toSExpr(env, ir);
+                    var rhs = ir.store.getExpr(binop.right).toSExpr(env, ir);
+                    binop_sexpr.appendNodeChild(env.gpa, &lhs);
+                    binop_sexpr.appendNodeChild(env.gpa, &rhs);
+
+                    return binop_sexpr;
+                },
+                // (if_then_else <condition> <then> <else>)
+                .if_then_else => |stmt| {
+                    var node = sexpr.Expr.init(env.gpa, "if_then_else");
+
+                    var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir);
+                    var then = ir.store.getExpr(stmt.then).toSExpr(env, ir);
+                    var else_ = ir.store.getExpr(stmt.@"else").toSExpr(env, ir);
+
+                    node.appendNodeChild(env.gpa, &condition);
+                    node.appendNodeChild(env.gpa, &then);
+                    node.appendNodeChild(env.gpa, &else_);
+
+                    return node;
                 },
                 .ident => |ident| {
                     var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
@@ -1955,6 +2115,7 @@ pub const NodeStore = struct {
         rest: bool,
         region: Region,
     };
+
     pub const RecordField = struct {
         name: TokenIdx,
         value: ?ExprIdx,
@@ -1967,6 +2128,7 @@ pub const NodeStore = struct {
         body: ExprIdx,
         region: Region,
     };
+
     pub const WhenBranch = struct {
         pattern: PatternIdx,
         body: ExprIdx,
@@ -1979,6 +2141,7 @@ pub const NodeStore = struct {
         operator: TokenIdx,
         region: Region,
     };
+
     pub const Unary = struct {
         operator: TokenIdx,
         expr: ExprIdx,
