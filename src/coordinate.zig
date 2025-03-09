@@ -462,6 +462,7 @@ fn findRootOfPackage(
 const ParsePackageDepsErr = union(enum) {
     failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
     failed_to_read_root_file: Filesystem.ReadError,
+    malformed_header,
 };
 
 fn parseDependenciesFromPackageRoot(
@@ -507,7 +508,8 @@ fn parseDependenciesFromPackageRoot(
             .len = 0,
         } },
         .malformed => {
-            @panic("TODO -- what should we do for a malformed node here?? raise a compiler problem I assume");
+            // @Sam -- does this look right?
+            return ParsePackageDepsErr.malformed_header;
         },
     };
 

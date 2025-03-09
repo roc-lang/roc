@@ -23,6 +23,7 @@ errors: []const Diagnostic,
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
+    self.store.gpa.free(self.errors);
 }
 
 /// Diagnostics related to parsing
@@ -1065,7 +1066,18 @@ pub const NodeStore = struct {
                 } };
             },
             .malformed => {
-                return .malformed;
+                // TODO -- what should we do here?
+                const reason: Diagnostic.Tag = @enumFromInt(node.data.lhs);
+                // switch (reason) {
+                //     .missing_header => {
+                //         // std.debug.print("MISSING HEADER: {}\n", .{reason});
+                //         return .malformed;
+                //     },
+                //     else => {
+                //         @panic("ASDFASDF");
+                //     },
+                // }
+                return .{ .malformed = .{ .reason = reason } };
             },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
@@ -1602,7 +1614,9 @@ pub const NodeStore = struct {
             // TODO: complete this
             region: Region,
         },
-        malformed,
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
@@ -1617,8 +1631,10 @@ pub const NodeStore = struct {
 
                     return header_node;
                 },
-                .malformed => {
-                    return sexpr.Expr.init(env.gpa, "malformed");
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
                 },
                 else => @panic("not implemented"),
             }

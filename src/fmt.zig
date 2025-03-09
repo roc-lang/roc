@@ -436,8 +436,11 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.newline();
         },
         .malformed => {
-            fmt.pushAll("<malformed_header>");
-            fmt.newline();
+            // TODO what should we do here?
+            // const node = fmt.ast.store.nodes.get(@enumFromInt(hi.id));
+            // const source = fmt.ast.resolve(node.main_token);
+            // std.debug.print("MALFORMED SOURCE {s}\n", .{source});
+            // fmt.pushAll(source);
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});

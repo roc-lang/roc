@@ -305,7 +305,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     defer parse_ast.deinit();
 
     if (parse_ast.errors.len > 0) {
-        warn("file {s}: contained {d} errors, skipping", .{ snapshot_path, parse_ast.errors.len });
+        warn("skipping file {s} as it contains {d} errors", .{ snapshot_path, parse_ast.errors.len });
         return false;
     }
 

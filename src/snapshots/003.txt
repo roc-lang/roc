@@ -1,7 +1,6 @@
 ~~~META
 description=Import statement
 ~~~SOURCE
-<malformed_header>
 
 modAle
 
@@ -12,7 +11,7 @@ import json.Json
 decoder = Utf8.decode
 ~~~PARSE
 (file
-    (malformed)
+    (malformed 'missing_header')
     (ident '' 'modAle')
     (list
         (ident '' 'decoder'))
