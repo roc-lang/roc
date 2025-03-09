@@ -106,6 +106,10 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             fmt.formatExpr(r.expr);
             return .extra_newline_needed;
         },
+        .malformed => {
+            // TODO how should we format a malformed here?
+            return .no_extra_newline;
+        },
     }
 }
 

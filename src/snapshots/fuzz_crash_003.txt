@@ -1,0 +1,6 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ = "te
+~~~PARSE_ERRORS
+PARSE ERROR unexpected_token

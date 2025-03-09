@@ -144,9 +144,6 @@ pub fn parseFile(self: *Parser) void {
     const scratch_top = self.store.scratchStatementTop();
 
     while (self.peek() != .EndOfFile) {
-        if (self.peek() == .EndOfFile) {
-            break;
-        }
         const current_scratch_top = self.store.scratchStatementTop();
         if (self.parseStmt()) |idx| {
             std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
@@ -1092,7 +1089,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
     // StringStart, StringPart, OpenStringInterpolation, <expr>, CloseStringInterpolation, StringPart, StringEnd
     self.advanceOne();
     const scratch_top = self.store.scratchExprTop();
-    while (true) {
+    while (self.peek() != .EndOfFile) {
         switch (self.peek()) {
             .StringEnd => {
                 self.advanceOne();
@@ -1117,8 +1114,14 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
             },
             else => {
                 // Something is broken in the tokenizer if we get here!
-                std.debug.print("Unexpected token in string: {s}\n", .{@tagName(self.peek())});
-                unreachable;
+                // std.debug.print("Unexpected token in string: {s}\n", .{@tagName(self.peek())});
+                // unreachable;
+                const reason: IR.Diagnostic.Tag = .string_unexpected_token;
+                self.pushDiagnostic(reason, .{
+                    .start = self.pos,
+                    .end = self.pos,
+                });
+                return self.store.addExpr(.{ .malformed = .{ .reason = reason } });
             },
         }
     }
@@ -1301,8 +1304,6 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
                 .start = self.pos,
                 .end = self.pos,
             });
-            // anno = self.store.addTypeAnno(.{ .malformed = .{ .reason = reason } });
-            // self.advance();
             return self.store.addTypeAnno(.{ .malformed = .{ .reason = reason } });
         },
     }

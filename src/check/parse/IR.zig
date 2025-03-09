@@ -55,6 +55,8 @@ pub const Diagnostic = struct {
         header_expected_close_bracket,
         pattern_unexpected_token,
         ty_anno_unexpected_token,
+        statement_unexpected_eof,
+        string_unexpected_token,
     };
 
     // TODO this is a hack just to get something in the snapshots...
@@ -688,6 +690,11 @@ pub const NodeStore = struct {
                 node.data.lhs = a.name;
                 node.data.rhs = a.anno.id;
             },
+            .malformed => |m| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(m.reason);
+                node.data.rhs = 0;
+            },
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
@@ -752,8 +759,10 @@ pub const NodeStore = struct {
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
             },
-            .malformed => {
+            .malformed => |a| {
                 node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1037,8 +1046,10 @@ pub const NodeStore = struct {
                 node.tag = .ty_parens;
                 node.data.lhs = p.anno.id;
             },
-            .malformed => {
+            .malformed => |a| {
                 node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
             },
         }
 
@@ -1703,6 +1714,9 @@ pub const NodeStore = struct {
             anno: TypeAnnoIdx,
             region: Region,
         },
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         pub const Import = struct {
             module_name_tok: TokenIdx,
@@ -1970,6 +1984,9 @@ pub const NodeStore = struct {
             region: Region,
         },
         block: Body,
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         pub fn as_string_part_region(self: @This()) !Region {
             switch (self) {
