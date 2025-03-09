@@ -43,13 +43,20 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
 
 fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
     const pos_usize = @as(usize, @intCast(pos));
+
+    if (newlines.items.len == 0) {
+        return 0;
+    }
+
     var lineno: u32 = 0;
-    while (lineno < newlines.items.len) {
+
+    while (lineno + 1 < newlines.items.len) {
         if (newlines.items[lineno + 1] > pos_usize) {
             return lineno;
         }
         lineno += 1;
     }
+
     return lineno;
 }
 
@@ -73,7 +80,12 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 const end_line_num = lineNum(newlines, message.end);
                 const end_col = message.end - newlines.items[end_line_num];
 
-                const src = source[newlines.items[start_line_num]..newlines.items[end_line_num + 1]];
+                const end_index = if (end_line_num + 1 < newlines.items.len)
+                    end_line_num + 1
+                else
+                    end_line_num;
+
+                const src = source[newlines.items[start_line_num]..newlines.items[end_index]];
                 var spaces = std.ArrayList(u8).init(allocator);
                 defer spaces.deinit();
                 for (0..start_col) |_| {
