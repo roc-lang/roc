@@ -634,6 +634,9 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
             },
+            .malformed => {
+                @panic("use addMalformed instead");
+            },
             else => {},
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -749,10 +752,8 @@ pub const NodeStore = struct {
                 node.data.lhs = a.name;
                 node.data.rhs = a.anno.id;
             },
-            .malformed => |m| {
-                node.tag = .malformed;
-                node.data.lhs = @intFromEnum(m.reason);
-                node.data.rhs = 0;
+            .malformed => {
+                @panic("use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -818,10 +819,8 @@ pub const NodeStore = struct {
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
             },
-            .malformed => |a| {
-                node.tag = .malformed;
-                node.data.lhs = @intFromEnum(a.reason);
-                node.data.rhs = 0;
+            .malformed => {
+                @panic("use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -948,10 +947,8 @@ pub const NodeStore = struct {
             .ellipsis => |_| {
                 node.tag = .ellipsis;
             },
-            .malformed => |m| {
-                node.tag = .malformed;
-                node.data.lhs = @intFromEnum(m.reason);
-                node.data.rhs = 0;
+            .malformed => {
+                @panic("use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1110,10 +1107,8 @@ pub const NodeStore = struct {
                 node.tag = .ty_parens;
                 node.data.lhs = p.anno.id;
             },
-            .malformed => |a| {
-                node.tag = .malformed;
-                node.data.lhs = @intFromEnum(a.reason);
-                node.data.rhs = 0;
+            .malformed => {
+                @panic("use addMalformed instead");
             },
         }
 
@@ -1548,9 +1543,7 @@ pub const NodeStore = struct {
                 } };
             },
             .malformed => {
-                return .{ .malformed = .{
-                    .reason = @enumFromInt(node.data.lhs),
-                } };
+                return .{ .malformed = .{ .reason = @enumFromInt(node.data.lhs) } };
             },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
@@ -1781,7 +1774,7 @@ pub const NodeStore = struct {
                     return header_node;
                 },
                 .malformed => |a| {
-                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    var node = sexpr.Expr.init(env.gpa, "malformed_header");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -2116,7 +2109,7 @@ pub const NodeStore = struct {
                     return ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
                 },
                 .malformed => |a| {
-                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    var node = sexpr.Expr.init(env.gpa, "malformed_expr");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -2187,7 +2180,7 @@ pub const NodeStore = struct {
                     return node;
                 },
                 .malformed => |a| {
-                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -2347,9 +2340,9 @@ pub const NodeStore = struct {
                     }
                     return node;
                 },
-                // (malformed <reason>)
+                // (malformed_expr <reason>)
                 .malformed => |a| {
-                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    var node = sexpr.Expr.init(env.gpa, "malformed_expr");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },

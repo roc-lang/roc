@@ -612,7 +612,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                             self.advance();
                         }
                         self.store.clearScratchPatternsFrom(scratch_top);
-                        return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                        return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
                     };
                     const args = self.store.patternSpanFrom(scratch_top);
                     pattern = self.store.addPattern(.{ .tag = .{
@@ -650,7 +650,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                         self.advance();
                     }
                     self.store.clearScratchPatternsFrom(scratch_top);
-                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
                 };
                 const patterns = self.store.patternSpanFrom(scratch_top);
 
@@ -671,7 +671,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 }
                 const fields = self.store.patternRecordFieldSpanFrom(scratch_top);
                 if (self.peek() != .CloseCurly) {
-                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
                 }
                 self.advance();
                 pattern = self.store.addPattern(.{ .record = .{
@@ -686,7 +686,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 if (self.peek() == .KwAs) {
                     self.advance();
                     if (self.peek() != .LowerIdent) {
-                        return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                        return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
                     }
                     name = self.pos;
                     end = self.pos;
@@ -711,7 +711,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                         self.advance();
                     }
                     self.store.clearScratchPatternsFrom(scratch_top);
-                    return self.pushMalformed(IR.NodeStore.PatternIdx, .unexpected_token);
+                    return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
                 };
                 const patterns = self.store.patternSpanFrom(scratch_top);
 
@@ -721,13 +721,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 } });
             },
             else => {
-                // std.debug.panic("TODO: Handle parsing pattern starting with: {s}", .{@tagName(self.peek())})
-                const reason: IR.Diagnostic.Tag = .pattern_unexpected_token;
-                self.pushDiagnostic(reason, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
-                return self.store.addPattern(.{ .malformed = .{ .reason = reason } });
+                return self.store.addMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token, self.pos);
             },
         }
 

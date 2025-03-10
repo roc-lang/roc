@@ -15,7 +15,7 @@ check.parse.IR.Diagnostic.Tag.missing_header
 LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file
-    (malformed 'missing_header')
+    (malformed_header 'missing_header')
     (record (field 'o'))
     (decl
         (ident 'foo')

@@ -7,7 +7,7 @@ check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 UpperIdent,EndOfFile
 ~~~PARSE
-(file (malformed 'missing_header'))
+(file (malformed_header 'missing_header'))
 ~~~FORMATTED
 
 ~~~END

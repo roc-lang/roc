@@ -9,7 +9,7 @@ check.parse.IR.Diagnostic.Tag.missing_header
 OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file
-    (malformed 'missing_header')
+    (malformed_header 'missing_header')
     (string 'te'))
 ~~~FORMATTED
 "te"
