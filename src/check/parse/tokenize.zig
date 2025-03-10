@@ -807,7 +807,6 @@ pub const Tokenizer = struct {
             self.cursor.pos += 1;
             return;
         }
-        std.debug.print("LAST {?}\nBRACE: {?}\n", .{ last, brace });
         switch (last.?) {
             .round => {
                 if (brace != .round) {
@@ -1099,11 +1098,9 @@ pub const Tokenizer = struct {
                     self.consumeBraceCloseAndContinueStringInterp(.round);
                 },
                 ']' => {
-                    std.debug.print("Closing SQUARE brace at position {}\n", .{self.cursor.pos});
                     self.consumeBraceCloseAndContinueStringInterp(.square);
                 },
                 close_curly => {
-                    std.debug.print("Closing CURLY brace at position {}\n", .{self.cursor.pos});
                     self.consumeBraceCloseAndContinueStringInterp(.curly);
                 },
 

@@ -1,0 +1,29 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+H{o,
+    ]
+
+foo =
+
+    "on        (string 'onmo %')))
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.AsciiControl
+check.parse.tokenize.Diagnostic.Tag.MismatchedBrace
+check.parse.tokenize.Diagnostic.Tag.UnclosedString
+~~~FORMATTED
+H
+
+{ o }
+
+foo = "on        (string 'onmo %')))"
+~~~TOKENS
+UpperIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (tag 'H')
+    (record (field 'o'))
+    (decl
+        (ident 'foo')
+        (string 'on        (string 'onmo %')))')))
