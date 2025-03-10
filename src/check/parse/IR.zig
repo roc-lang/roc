@@ -1,3 +1,15 @@
+//!
+//! This file implements the Intermediate Representation (IR) for Roc's parser.
+//!
+//! The IR provides a structured, tree-based representation of Roc source code after parsing
+//!
+//! The design uses an arena-based memory allocation strategy with a "multi-list" approach where nodes
+//! are stored in a flat list but cross-referenced via indices rather than pointers. This improves
+//! memory locality and efficiency.
+//!
+//! The implementation includes comprehensive facilities for building, manipulating, and traversing
+//! the IR, as well as converting it to S-expressions for debugging and visualization.
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const sexpr = @import("../../base/sexpr.zig");
@@ -19,7 +31,6 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
-/// deinit the IR's memory
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
@@ -2706,8 +2717,15 @@ pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
     return self.source[@intCast(range.start.offset)..@intCast(range.end.offset)];
 }
 
-/// todo -- I'm not sure what this is
-pub const ImportRhs = packed struct { aliased: u1, qualified: u1, num_exposes: u30 };
+/// Contains properties of the thing to the right of the `import` keyword.
+pub const ImportRhs = packed struct {
+    /// e.g. 1 in case `SomeModule` is an alias in `import SomeModule exposing [...]`
+    aliased: u1,
+    /// 1 in case the import is qualified, e.g. `pf` in `import pf.Stdout ...`
+    qualified: u1,
+    /// The number of things in the exposes list. e.g. 3 in `import SomeModule exposing [a1, a2, a3]`
+    num_exposes: u30,
+};
 
 // Check that all packed structs are 4 bytes size as they as cast to
 // and from a u32

@@ -1,5 +1,5 @@
 //! This is just a silly fuzz test to start getting the infra setup.
-//! It shows the basic that other fuzz tests likely should build off of.
+//! It shows the basics that other fuzz tests likely should build off of.
 //!
 //! Note: Compiling the fuzz tests requires llvm and does not currently work in our nix shell on all systems.
 //!
