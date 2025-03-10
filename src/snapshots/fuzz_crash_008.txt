@@ -1,8 +1,14 @@
 ~~~META
 description=fuzz crash
 ~~~SOURCE
+||1
+~~~FORMATTED
 || 1
 ~~~TOKENS
-OpOr,Int,EndOfFile
-~~~PARSE_ERRORS
-PARSE ERROR unexpected_token
+OpBar,OpBar,Int,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (lambda
+        (args)
+        (int '1')))

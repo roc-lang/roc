@@ -287,7 +287,7 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Parse the file to find section boundaries
-    var content = extractSections(gpa, file_content) catch |err| {
+    const content = extractSections(gpa, file_content) catch |err| {
         switch (err) {
             Error.MissingSnapshotHeader, Error.MissingSnapshotSource => {
                 warn("ignoring file {s}: {s}", .{ snapshot_path, @errorName(err) });
@@ -318,13 +318,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
     }
 
-    // Format the source code
-    if (!has_parse_errors and content.formatted != null) {
-        var formatter = fmt.init(parse_ast);
-        defer formatter.deinit();
-        content.formatted = formatter.formatFile();
-    }
-
     // Rewrite the file with updated sections
     var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
         log("failed to create file '{s}': {s}", .{ snapshot_path, @errorName(err) });
@@ -342,12 +335,19 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     try file.writer().writeAll(content.source);
     try file.writer().writeAll("\n");
 
-    if (content.formatted != null) {
-        try file.writer().writeAll(Section.FORMATTED);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(content.formatted.?);
-        try file.writer().writeAll("\n");
-        gpa.free(content.formatted.?);
+    // Format the source code
+    if (!has_parse_errors) {
+        var formatter = fmt.init(parse_ast);
+        defer formatter.deinit();
+        const formatted = formatter.formatFile();
+        defer gpa.free(formatted);
+
+        if (!std.mem.eql(u8, formatted, content.source)) {
+            try file.writer().writeAll(Section.FORMATTED);
+            try file.writer().writeAll("\n");
+            try file.writer().writeAll(formatted);
+            try file.writer().writeAll("\n");
+        }
     }
 
     // Check if tokens should be included
