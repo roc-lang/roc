@@ -1,0 +1,13 @@
+~~~META
+description=
+~~~SOURCE
+module
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,EndOfFile
+~~~PARSE
+(file (malformed 'header_expected_open_bracket'))
+~~~FORMATTED
+
+~~~END

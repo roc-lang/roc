@@ -634,11 +634,6 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
             },
-            .malformed => |a| {
-                node.tag = .malformed;
-                node.data.lhs = @intFromEnum(a.reason);
-                node.data.rhs = 0;
-            },
             else => {},
         }
         const nid = store.nodes.append(store.gpa, node);

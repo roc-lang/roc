@@ -508,7 +508,6 @@ fn parseDependenciesFromPackageRoot(
             .len = 0,
         } },
         .malformed => {
-            // @Sam -- does this look right?
             return ParsePackageDepsErr.malformed_header;
         },
     };

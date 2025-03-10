@@ -220,13 +220,7 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
     // Get exposes
     self.expect(.OpenSquare) catch {
-        // std.debug.panic("TODO: Handle header with no exposes open bracket: {s}", .{@tagName(self.peek())});
-        const reason: IR.Diagnostic.Tag = .header_expected_open_bracket;
-        self.pushDiagnostic(reason, .{
-            .start = self.pos,
-            .end = self.pos,
-        });
-        return self.store.addHeader(.{ .malformed = .{ .reason = reason } });
+        return self.store.addMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_bracket, self.pos);
     };
     const scratch_top = self.store.scratchExposedItemTop();
     self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
