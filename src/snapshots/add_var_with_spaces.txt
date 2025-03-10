@@ -10,7 +10,8 @@ module [add2]
 add2 = x + 2
 ~~~PARSE
 (file
-    (header 'add2')
+    (header
+        (exposed_item (lower_ident 'add2')))
     (decl
         (ident 'add2')
         (binop

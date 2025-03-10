@@ -8,7 +8,9 @@ foo = "one"
 bar = "two"
 ~~~PARSE
 (file
-    (header 'foo' 'bar')
+    (header
+        (exposed_item (lower_ident 'foo'))
+        (exposed_item (lower_ident 'bar')))
     (decl
         (ident 'foo')
         (string 'one'))
