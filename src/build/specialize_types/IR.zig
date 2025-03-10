@@ -21,7 +21,6 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-/// todo
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
@@ -37,7 +36,6 @@ pub fn init(env: *base.ModuleEnv) Self {
     };
 }
 
-/// todo
 pub fn deinit(self: *Self) void {
     self.exposed_values.deinit(self.env.gpa);
     self.exposed_functions.deinit(self.env.gpa);

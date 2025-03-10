@@ -1,7 +1,5 @@
-/// re-export the number primitive types
 pub const num = @import("types/num.zig");
 
-/// re-export the Type primitive
 pub const Type = @import("types/type.zig").Type;
 
 // todo -- we probably don't need this anymmore.. remove in follow-up PR

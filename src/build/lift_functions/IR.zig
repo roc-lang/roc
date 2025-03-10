@@ -21,7 +21,6 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-/// todo
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
