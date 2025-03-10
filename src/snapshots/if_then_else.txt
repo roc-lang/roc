@@ -14,7 +14,8 @@ module [foo]
 foo = if true A else B
 ~~~PARSE
 (file
-    (header 'foo')
+    (header
+        (exposed_item (lower_ident 'foo')))
     (decl
         (ident 'foo')
         (if_then_else
