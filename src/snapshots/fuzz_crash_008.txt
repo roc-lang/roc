@@ -4,8 +4,6 @@ description=fuzz crash
 ||1
 ~~~PROBLEMS
 check.parse.tokenize.Diagnostic.Tag.AsciiControl
-~~~FORMATTED
-| | 1
 ~~~TOKENS
 OpBar,OpBar,Int,EndOfFile
 ~~~PARSE
@@ -14,3 +12,6 @@ OpBar,OpBar,Int,EndOfFile
     (lambda
         (args)
         (int '1')))
+~~~FORMATTED
+| | 1
+~~~END

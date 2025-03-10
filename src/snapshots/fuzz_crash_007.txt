@@ -8,3 +8,14 @@ check.parse.IR.Diagnostic.Tag.unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (malformed 'expr_no_space_dot_int')
+    (malformed 'unexpected_token')
+    (malformed 'unexpected_token'))
+~~~FORMATTED
+
+
+
+~~~END

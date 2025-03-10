@@ -229,8 +229,10 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         });
         return self.store.addHeader(.{ .malformed = .{ .reason = reason } });
     }
+
     self.advance();
     const scratch_top = self.store.scratchTokenTop();
+
     while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
         if (self.peek() != .LowerIdent and self.peek() != .UpperIdent) {
             // std.debug.panic("TODO: Handler header bad exposes contents: {s}", .{@tagName(self.peek())});
@@ -482,18 +484,10 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                 } });
                 return statement_idx;
             } else {
-                // If not a decl
-                const expr = self.parseExpr();
-                const statement_idx = self.store.addStatement(.{ .expr = .{
-                    .expr = expr,
-                    .region = .{ .start = start, .end = start },
-                } });
-                if (self.peek() == .Newline) {
-                    self.advance();
-                }
-                return statement_idx;
+                // continue to parse final expression
             }
         },
+        // Expect to parse a Type Annotation, e.g. `Foo a : (a,a)`
         .UpperIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpColon or self.peekNext() == .LowerIdent) {
@@ -509,27 +503,24 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
+            } else {
+                // continue to parse final expression
             }
-            const expr = self.parseExpr();
-            const statement_idx = self.store.addStatement(.{ .expr = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            return statement_idx;
         },
-        else => {
-            const start = self.pos;
-            const expr = self.parseExpr();
-            const statement_idx = self.store.addStatement(.{ .expr = .{
-                .expr = expr,
-                .region = .{ .start = start, .end = self.pos },
-            } });
-            if (self.peek() == .Newline) {
-                self.advance();
-            }
-            return statement_idx;
-        },
+        else => {},
     }
+
+    // We didn't find any statements, so we must be parsing the final expression.
+    const start = self.pos;
+    const expr = self.parseExpr();
+    const statement_idx = self.store.addStatement(.{ .expr = .{
+        .expr = expr,
+        .region = .{ .start = start, .end = self.pos },
+    } });
+    if (self.peek() == .Newline) {
+        self.advance();
+    }
+    return statement_idx;
 }
 
 /// Whether Pattern Alternatives are allowed in the current context

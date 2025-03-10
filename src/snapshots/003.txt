@@ -1,12 +1,15 @@
 ~~~META
 description=Import statement
-exclude_tokens=true
 ~~~SOURCE
 module [decoder]
 
 import json.Json
 
 decoder = Utf8.decode
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE
 (file
     (header 'decoder')
@@ -17,3 +20,6 @@ decoder = Utf8.decode
     (decl
         (ident 'decoder')
         (ident 'Utf8' '.decode')))
+~~~FORMATTED
+NO CHANGE
+~~~END

@@ -7,3 +7,10 @@ check.parse.IR.Diagnostic.Tag.header_unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 KwModule,OpenSquare,OpPercent,EndOfFile
+~~~PARSE
+(file
+    (malformed 'header_unexpected_token')
+    (malformed 'unexpected_token'))
+~~~FORMATTED
+
+~~~END

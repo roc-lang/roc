@@ -2,9 +2,14 @@
 description=fuzz crash
 ~~~SOURCE
 modu
+~~~PROBLEMS
+NIL
 ~~~TOKENS
 LowerIdent,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
     (ident '' 'modu'))
+~~~FORMATTED
+NO CHANGE
+~~~END

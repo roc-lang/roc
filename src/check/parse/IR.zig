@@ -56,6 +56,7 @@ pub const Diagnostic = struct {
         pattern_unexpected_token,
         ty_anno_unexpected_token,
         statement_unexpected_eof,
+        statement_unexpected_token,
         string_unexpected_token,
         expr_if_missing_else,
         expr_no_space_dot_int,
@@ -606,6 +607,11 @@ pub const NodeStore = struct {
                 node.tag = .module_header;
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
+            },
+            .malformed => |a| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
             },
             else => {},
         }
@@ -1427,6 +1433,11 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1548,6 +1559,9 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                     .anno = .{ .id = node.data.lhs },
                 } };
+            },
+            .malformed => {
+                return .{ .malformed = .{ .reason = @enumFromInt(node.data.lhs) } };
             },
             else => {
                 std.debug.panic("Expected a valid type annotation node, found {s}", .{@tagName(node.tag)});
@@ -1755,8 +1769,17 @@ pub const NodeStore = struct {
 
                     return import_node;
                 },
+                .type_anno => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "type_anno");
+                    node.appendStringChild(env.gpa, ir.resolve(a.name));
+
+                    var anno = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &anno);
+
+                    return node;
+                },
                 else => {
-                    std.debug.print("format for statement {}", .{self});
+                    std.debug.print("\n\nERROR toSExpr for Statement: {}\n", .{self});
                     @panic("not implemented");
                 },
             }
@@ -1809,6 +1832,20 @@ pub const NodeStore = struct {
         },
 
         const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            _ = ir;
+            switch (self) {
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
+                },
+                else => {
+                    std.debug.panic("TODO toSExpr for TypeAnno: {}", .{self});
+                },
+            }
+        }
     };
 
     pub const AnnoRecordField = struct {

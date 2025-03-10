@@ -22,9 +22,10 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
     tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 
-    if (result.messages.len > 0) {
-        tokenizeReport(env.gpa, source, result.messages);
-    }
+    // TODO I think we should remove this... it's always printing to stderr
+    // if (result.messages.len > 0) {
+    //     tokenizeReport(env.gpa, source, result.messages);
+    // }
 
     for (result.messages) |msg| {
         _ = env.problems.append(env.gpa, .{ .tokenize = msg });
@@ -68,6 +69,9 @@ fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
     return lineno;
 }
 
+/// TODO -- I think we should change this to be a method on Diagnostic
+/// and then we can have the caller use this to format to a writer
+/// this would be helpful for e.g. the snapshot tool which writes to a file instead of stderr
 fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []const tokenize.Diagnostic) void {
     std.debug.print("Found the {d} following issues while parsing:\n", .{msgs.len});
     var newlines = std.ArrayList(usize).init(allocator);
@@ -101,12 +105,12 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 }
 
                 std.debug.print(
-                    "({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
+                    "TOKENIZE ERROR: ({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
                     .{ start_line_num, start_col, end_line_num, end_col, src, spaces.items },
                 );
             },
             else => {
-                std.debug.print("MSG: {any}", .{message});
+                std.debug.print("TOKENIZE ERROR: {any}\n", .{message});
             },
         }
     }

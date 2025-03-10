@@ -2,9 +2,14 @@
 description=fuzz crash
 ~~~SOURCE
 F
+~~~PROBLEMS
+NIL
 ~~~TOKENS
 UpperIdent,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
     (tag 'F'))
+~~~FORMATTED
+NO CHANGE
+~~~END

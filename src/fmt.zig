@@ -308,6 +308,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .ellipsis => |_| {
             fmt.pushAll("...");
         },
+        .malformed => {
+            // format nothing for malformed expressions
+        },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
         },

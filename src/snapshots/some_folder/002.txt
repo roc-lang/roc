@@ -1,12 +1,15 @@
 ~~~META
 description=Basic example to develop the snapshot methodology
-exclude_tokens=true
 ~~~SOURCE
 module [foo, bar]
 
 foo = "one"
 
 bar = "two"
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file
     (header 'foo' 'bar')
@@ -16,3 +19,6 @@ bar = "two"
     (decl
         (ident 'bar')
         (string 'two')))
+~~~FORMATTED
+NO CHANGE
+~~~END
