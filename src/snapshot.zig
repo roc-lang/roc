@@ -332,25 +332,17 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     try file.writer().writeAll(content.meta);
     try file.writer().writeAll("\n");
 
-    // If there's an explicit FORMATTED section, keep the source as-is
-    // and update the FORMATTED section
+    try file.writer().writeAll(Section.SOURCE);
+    try file.writer().writeAll("\n");
+    try file.writer().writeAll(content.source);
+    try file.writer().writeAll("\n");
+
     if (content.formatted != null) {
-        try file.writer().writeAll(Section.SOURCE);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(content.source);
-        try file.writer().writeAll("\n");
         try file.writer().writeAll(Section.FORMATTED);
         try file.writer().writeAll("\n");
         try file.writer().writeAll(content.formatted.?);
         try file.writer().writeAll("\n");
-
         gpa.free(content.formatted.?);
-    } else {
-        // Otherwise, update SOURCE directly with the formatted output
-        try file.writer().writeAll(Section.SOURCE);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(content.source);
-        try file.writer().writeAll("\n");
     }
 
     if (!has_parse_errors) {
