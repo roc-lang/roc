@@ -652,7 +652,7 @@ pub const NodeStore = struct {
                     .qualified = 0,
                     .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
                 };
-                
+
                 const extra_data_start = store.extra_data.items.len;
                 if (i.qualifier_tok) |tok| {
                     rhs.qualified = 1;
