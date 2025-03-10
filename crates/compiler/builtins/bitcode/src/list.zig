@@ -517,9 +517,9 @@ pub fn listSwap(
     const source_ptr = @as([*]u8, @ptrCast(newList.bytes));
 
     swapElements(source_ptr, element_width, @as(usize,
-        // We already verified that both indices are less than the stored list length,
-        // which is usize, so casting them to usize will definitely be lossless.
-        @intCast(index_1)), @as(usize, @intCast(index_2)), copy);
+    // We already verified that both indices are less than the stored list length,
+    // which is usize, so casting them to usize will definitely be lossless.
+    @intCast(index_1)), @as(usize, @intCast(index_2)), copy);
 
     return newList;
 }
