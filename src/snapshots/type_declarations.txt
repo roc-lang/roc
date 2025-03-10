@@ -15,13 +15,13 @@ SomeFunc a : Maybe(a), a -> Maybe(a)
 ~~~PARSE
 (file
     (header
-        'Map'
-        'Foo'
-        'Some'
-        'Maybe'
-        'SomeFunc'
-        'add_one'
-        'main!')
+        (exposed_item (upper_ident 'Map'))
+        (exposed_item (upper_ident 'Foo'))
+        (exposed_item (upper_ident 'Some'))
+        (exposed_item (upper_ident 'Maybe'))
+        (exposed_item (upper_ident 'SomeFunc'))
+        (exposed_item (lower_ident 'add_one'))
+        (exposed_item (lower_ident 'main!')))
     (type_decl
         (header
             'Map'
