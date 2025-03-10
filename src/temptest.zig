@@ -1,6 +1,6 @@
-const std = @import("std");
-
 //! This is a test
+
+const std = @import("std");
 
 /// pub comment
 pub fn main() !void {
