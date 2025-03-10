@@ -12,8 +12,10 @@ while read -r file; do
     errors=$(awk '
         /^pub / {
             if (prev !~ /^\/\/\//) {
-                # Only init and deinit functions should not have doc comments
-                if ($0 !~ /pub.*fn init\(/ && $0 !~ /pub.*fn deinit/) {
+                # Skip doc comment requirements for init, deinit, and @import
+                if ($0 !~ /pub.*fn init\(/ && 
+                    $0 !~ /pub.*fn deinit/ && 
+                    $0 !~ /pub.*@import/) {
                     print FILENAME ":" FNR ": pub declaration without doc comment `///`"
                 }
             }
