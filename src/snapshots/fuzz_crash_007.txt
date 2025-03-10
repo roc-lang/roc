@@ -2,9 +2,9 @@
 description=fuzz crash
 ~~~SOURCE
 ff8.8.d
+~~~PROBLEMS
+check.parse.IR.Diagnostic.Tag.expr_no_space_dot_int
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
-~~~PARSE_ERRORS
-PARSE ERROR expr_no_space_dot_int
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token

@@ -2,6 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
 ||1
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.AsciiControl
 ~~~FORMATTED
 | | 1
 ~~~TOKENS

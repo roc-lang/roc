@@ -2,8 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
 mo|%
+~~~PROBLEMS
+check.parse.IR.Diagnostic.Tag.pattern_unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 LowerIdent,OpBar,OpPercent,EndOfFile
-~~~PARSE_ERRORS
-PARSE ERROR pattern_unexpected_token
-PARSE ERROR unexpected_token

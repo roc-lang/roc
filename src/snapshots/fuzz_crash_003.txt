@@ -2,7 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
  = "te
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.UnclosedString
+check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 OpAssign,StringStart,StringPart,EndOfFile
-~~~PARSE_ERRORS
-PARSE ERROR unexpected_token

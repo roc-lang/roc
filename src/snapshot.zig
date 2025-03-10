@@ -149,24 +149,24 @@ const Section = union(enum) {
     source,
     formatted,
     parse,
-    parser_errors,
     tokens,
+    problems,
 
     pub const META = "~~~META";
     pub const SOURCE = "~~~SOURCE";
     pub const FORMATTED = "~~~FORMATTED";
     pub const PARSE = "~~~PARSE";
-    pub const PARSE_ERRORS = "~~~PARSE_ERRORS";
     pub const TOKENS = "~~~TOKENS";
+    pub const PROBLEMS = "~~~PROBLEMS";
 
     fn next(self: Section) ?Section {
         return switch (self) {
             .meta => .source,
-            .source => .formatted,
+            .source => .problems,
+            .problems => .formatted,
             .formatted => .tokens,
             .tokens => .parse,
-            .parse => .parser_errors,
-            .parser_errors => null,
+            .parse => .null,
         };
     }
 
@@ -175,8 +175,8 @@ const Section = union(enum) {
         if (std.mem.eql(u8, str, SOURCE)) return .source;
         if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
         if (std.mem.eql(u8, str, PARSE)) return .parse;
-        if (std.mem.eql(u8, str, PARSE_ERRORS)) return .parser_errors;
         if (std.mem.eql(u8, str, TOKENS)) return .tokens;
+        if (std.mem.eql(u8, str, PROBLEMS)) return .problems;
         return null;
     }
 
@@ -186,8 +186,8 @@ const Section = union(enum) {
             .source => SOURCE,
             .formatted => FORMATTED,
             .parse => PARSE,
-            .parser_errors => PARSE_ERRORS,
             .tokens => TOKENS,
+            .problems => PROBLEMS,
             .None => "",
         };
     }
@@ -335,6 +335,16 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     try file.writer().writeAll(content.source);
     try file.writer().writeAll("\n");
 
+    if (module_env.problems.len() > 0) {
+        try file.writer().writeAll(Section.PROBLEMS);
+        try file.writer().writeAll("\n");
+        var iter = module_env.problems.iterIndices();
+        while (iter.next()) |problem_idx| {
+            try module_env.problems.get(problem_idx).format("", .{}, file);
+            try file.writer().writeAll("\n");
+        }
+    }
+
     // Format the source code
     if (!has_parse_errors) {
         var formatter = fmt.init(parse_ast);
@@ -376,12 +386,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try file.writer().writeAll(Section.PARSE);
         try file.writer().writeAll("\n");
         try file.writer().writeAll(parse_buffer.items);
-    } else {
-        try file.writer().writeAll(Section.PARSE_ERRORS);
-        try file.writer().writeAll("\n");
-        for (parse_ast.errors) |err| {
-            try err.not_terrible_error(content.source, file);
-        }
     }
 
     // If flag --fuzz-corpus is passed, so write the SOURCE to our corpus

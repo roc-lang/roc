@@ -26,10 +26,18 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
         tokenizeReport(env.gpa, source, result.messages);
     }
 
+    for (result.messages) |msg| {
+        _ = env.problems.append(env.gpa, .{ .tokenize = msg });
+    }
+
     var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     parser.parseFile();
+
+    for (parser.diagnostics.items) |msg| {
+        _ = env.problems.append(env.gpa, .{ .parser = msg });
+    }
 
     const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
 

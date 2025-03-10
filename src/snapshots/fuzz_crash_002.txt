@@ -2,24 +2,24 @@
 description=fuzz crash
 ~~~SOURCE
 modu:;::::::::::::::le[%
+~~~PROBLEMS
+check.parse.IR.Diagnostic.Tag.ty_anno_unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
-~~~PARSE_ERRORS
-PARSE ERROR ty_anno_unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
-PARSE ERROR unexpected_token
