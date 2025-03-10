@@ -83,7 +83,7 @@ pub const Problem = union(enum) {
         _ = fmt;
         _ = options;
 
-        // use a stack allocation for printing our tag errors...
+        // use a stack allocation for printing our tag errors
         var buf: [1000]u8 = undefined;
 
         switch (self) {

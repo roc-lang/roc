@@ -120,7 +120,6 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             return .extra_newline_needed;
         },
         .malformed => {
-            // TODO how should we format a malformed here?
             return .no_extra_newline;
         },
     }
@@ -233,6 +232,8 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             // TODO -- this is a hack to avoid ambiguity with no arguments,
             // if we parse it again without the space it will be parsed as
             // a logical OR `||` instead
+            //
+            // desired behaviour described here https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20spike/near/504453049
             if (arg_slice.len == 0) {
                 fmt.pushAll(" ");
             }
@@ -409,7 +410,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
             }
         },
         .malformed => {
-            // TODO how should we format a malformed here?
+            // format nothing for malformed patterns
         },
     }
 }
@@ -602,7 +603,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
             fmt.push('_');
         },
         .malformed => {
-            // TODO how should we format a malformed here?
+            // format nothing for malformed type annotations
         },
     }
 }

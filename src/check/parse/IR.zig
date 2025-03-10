@@ -607,9 +607,7 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
             },
-            else => {
-                // TODO -- should this be ignoring other header types??
-            },
+            else => {},
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
@@ -1098,18 +1096,7 @@ pub const NodeStore = struct {
                 } };
             },
             .malformed => {
-                // TODO -- what should we do here?
-                const reason: Diagnostic.Tag = @enumFromInt(node.data.lhs);
-                // switch (reason) {
-                //     .missing_header => {
-                //         // std.debug.print("MISSING HEADER: {}\n", .{reason});
-                //         return .malformed;
-                //     },
-                //     else => {
-                //         @panic("ASDFASDF");
-                //     },
-                // }
-                return .{ .malformed = .{ .reason = reason } };
+                return .{ .malformed = .{ .reason = @enumFromInt(node.data.lhs) } };
             },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
