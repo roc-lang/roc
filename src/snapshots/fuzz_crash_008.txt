@@ -1,8 +1,12 @@
 ~~~META
 description=fuzz crash
 ~~~SOURCE
-F
+||1
+~~~FORMATTED
+|| 1
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (tag 'F'))
+    (lambda
+        (args)
+        (int '1')))

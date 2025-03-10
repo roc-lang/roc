@@ -292,8 +292,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
     };
 
-    // std.debug.print("FILE: {s}\n{}\n", .{ snapshot_path, content });
-
     // Generate the PARSE section
     var parse_buffer = std.ArrayList(u8).init(gpa);
     defer parse_buffer.deinit();
@@ -309,20 +307,17 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     parse_ast.store.emptyScratch();
 
     const has_parse_errors = parse_ast.errors.len > 0;
-    // if (parse_ast.errors.len > 0) {
-    //     warn("skipping file {s} as it contains {d} errors", .{ snapshot_path, parse_ast.errors.len });
-    //     return false;
-    // }
 
+    // Write the new AST to the parse section
     if (!has_parse_errors) {
-        // Write the new AST to the parse section
         try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
+    }
 
-        // Format the source code
+    // Format the source code
+    if (!has_parse_errors and content.formatted != null) {
         var formatter = fmt.init(parse_ast);
         defer formatter.deinit();
         content.formatted = formatter.formatFile();
-        // defer gpa.free(formatted_output);
     }
 
     // Rewrite the file with updated sections
