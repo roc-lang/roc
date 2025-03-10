@@ -344,15 +344,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform);
 }
 
-pub fn parseIdent(self: *Parser) ?tokenize.Token.Idx {
-    if (self.peek() == .LowerIdent or self.peek() == .UpperIdent) {
-        const pos = self.pos;
-        self.advance();
-        return pos;
-    }
-    return null;
-}
-
+/// Parses an ExposedItem, adding it to the NodeStore and returning the Idx
 pub fn parseExposedItem(self: *Parser) IR.NodeStore.ExposedItemIdx {
     const start = self.pos;
     var end = start;
