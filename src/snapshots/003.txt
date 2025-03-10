@@ -1,5 +1,6 @@
 ~~~META
 description=Import statement
+exclude_tokens=true
 ~~~SOURCE
 module [decoder]
 

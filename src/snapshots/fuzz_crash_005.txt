@@ -1,0 +1,10 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+modu
+~~~TOKENS
+LowerIdent,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (ident '' 'modu'))

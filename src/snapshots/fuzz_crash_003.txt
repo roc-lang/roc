@@ -1,0 +1,8 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ = "te
+~~~TOKENS
+OpAssign,StringStart,StringPart,EndOfFile
+~~~PARSE_ERRORS
+PARSE ERROR unexpected_token

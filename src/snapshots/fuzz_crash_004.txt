@@ -1,0 +1,10 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+F
+~~~TOKENS
+UpperIdent,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (tag 'F'))

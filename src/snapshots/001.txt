@@ -1,5 +1,6 @@
 ~~~META
 description=Example to develop the snapshot methodology, includes FORMATTED section
+exclude_tokens=true
 ~~~SOURCE
 module     [
 # some crazy formatting
