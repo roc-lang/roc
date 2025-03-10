@@ -35,7 +35,6 @@ pub fn init(tokens: TokenizedBuffer) Parser {
     };
 }
 
-/// deninit the parser memory
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);

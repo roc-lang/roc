@@ -25,14 +25,14 @@ pub const FunctionSet = struct {
 pub const IR = struct {
     env: *base.ModuleEnv,
     function_sets: FunctionSet.List,
-    /// todo
+
     pub fn init(env: *base.ModuleEnv) IR {
         return IR{
             .env = env,
             .function_sets = .{},
         };
     }
-    /// todo
+
     pub fn deinit(self: *IR) void {
         self.function_sets.deinit(self.env.gpa);
     }
