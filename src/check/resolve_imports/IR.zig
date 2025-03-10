@@ -41,7 +41,6 @@ pub fn init(env: *base.ModuleEnv) Self {
     };
 }
 
-/// deinitialise the IR's memory
 pub fn deinit(self: *Self) void {
     self.regions.deinit(self.env.gpa);
     self.exprs.deinit(self.env.gpa);

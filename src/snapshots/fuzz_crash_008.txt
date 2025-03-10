@@ -4,14 +4,14 @@ description=fuzz crash
 ||1
 ~~~PROBLEMS
 check.parse.tokenize.Diagnostic.Tag.AsciiControl
+check.parse.IR.Diagnostic.Tag.missing_header
+check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
 OpBar,OpBar,Int,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (lambda
-        (args)
-        (int '1')))
+    (malformed 'unexpected_token'))
 ~~~FORMATTED
-| | 1
+
 ~~~END

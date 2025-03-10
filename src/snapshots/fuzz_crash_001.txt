@@ -3,6 +3,7 @@ description=fuzz crash
 ~~~SOURCE
 mo|%
 ~~~PROBLEMS
+check.parse.IR.Diagnostic.Tag.missing_header
 check.parse.IR.Diagnostic.Tag.pattern_unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
@@ -10,10 +11,7 @@ LowerIdent,OpBar,OpPercent,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (ident '' 'mo')
     (malformed 'unexpected_token'))
 ~~~FORMATTED
-mo
-
 
 ~~~END

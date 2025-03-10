@@ -3,13 +3,11 @@ description=fuzz crash
 ~~~SOURCE
 F
 ~~~PROBLEMS
-NIL
+check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 UpperIdent,EndOfFile
 ~~~PARSE
-(file
-    (malformed 'missing_header')
-    (tag 'F'))
+(file (malformed 'missing_header'))
 ~~~FORMATTED
-NO CHANGE
+
 ~~~END

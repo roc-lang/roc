@@ -13,11 +13,14 @@ jobs:
               with:
                 version: 0.14.0
 
-            - run: |
+            - name: zig lints
+              run: |
                 ./ci/zig_lints.sh
-              
+
                 zig build check-fmt
-                
+
+            - name: zig check
+              run: |
                 # -Dllvm incurs a costly download step, leave that for later.
                 # Just the do super fast check step for now.
                 zig build check -Dfuzz

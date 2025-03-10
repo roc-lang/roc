@@ -3,7 +3,8 @@ description=fuzz crash
 ~~~SOURCE
 modu:;::::::::::::::le[%
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.ty_anno_unexpected_token
+check.parse.IR.Diagnostic.Tag.missing_header
+check.parse.IR.Diagnostic.Tag.unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
@@ -26,9 +27,7 @@ LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (type_anno
-        'modu'
-        (malformed 'ty_anno_unexpected_token'))
+    (malformed 'unexpected_token')
     (malformed 'unexpected_token')
     (malformed 'unexpected_token')
     (malformed 'unexpected_token')
@@ -47,7 +46,7 @@ LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon
     (ident '' 'le')
     (malformed 'unexpected_token'))
 ~~~FORMATTED
-modu : 
+
 
 
 

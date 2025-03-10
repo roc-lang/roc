@@ -3,14 +3,12 @@ description=
 ~~~SOURCE
 module[%
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.header_unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.import_exposing_no_close
 ~~~TOKENS
 KwModule,OpenSquare,OpPercent,EndOfFile
 ~~~PARSE
-(file
-    (malformed 'header_unexpected_token')
-    (malformed 'unexpected_token'))
+(file (malformed 'import_exposing_no_close'))
 ~~~FORMATTED
 
 ~~~END

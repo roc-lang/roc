@@ -3,7 +3,7 @@ description=fuzz crash
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.expr_no_space_dot_int
+check.parse.IR.Diagnostic.Tag.missing_header
 check.parse.IR.Diagnostic.Tag.unexpected_token
 check.parse.IR.Diagnostic.Tag.unexpected_token
 ~~~TOKENS
@@ -11,11 +11,9 @@ LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (malformed 'expr_no_space_dot_int')
     (malformed 'unexpected_token')
     (malformed 'unexpected_token'))
 ~~~FORMATTED
-
 
 
 ~~~END

@@ -1,7 +1,5 @@
-/// re-export the number primitive types
 pub const num = @import("types/num.zig");
 
-/// re-export the Type primitive
 pub const Type = @import("types/type.zig").Type;
 
 // todo -- we probably don't need this anymmore.. remove in follow-up PR
@@ -14,7 +12,7 @@ pub const Primitive = union(enum) {
     Crash,
 };
 
-/// todo
+/// All Roc Int types
 pub const Int = enum {
     U8,
     I8,
@@ -27,13 +25,15 @@ pub const Int = enum {
     U128,
     I128,
 };
-/// todo
+
+/// All Roc Float types
 pub const Float = enum {
     F32,
     F64,
     Dec,
 };
-/// todo
+
+/// Roc Num types; Int and Float
 pub const Num = union(enum) {
     Int: Int,
     Float: Float,

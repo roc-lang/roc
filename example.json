@@ -1,0 +1,4 @@
+{
+  "description": "Basic example to develop the snapshot methodology",
+  "source": "module [foo, bar]\n\nfoo = \"one\"\n\nbar = \"two\""
+}

@@ -27,11 +27,10 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
-              - 'ci/zig-lints.sh'
+              - 'ci/zig_lints.sh'
       - uses: dorny/paths-filter@v3
         id: other_filter
         with:
-          predicate-quantifier: 'every'
           filters: |
             other_than_zig:
               - '**/*'
@@ -39,7 +38,7 @@ jobs:
               - '!build.zig'
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
-              - '!ci/zig-lints.sh'
+              - '!ci/zig_lints.sh'
 
   call-zig-workflow:
     needs: check-changes

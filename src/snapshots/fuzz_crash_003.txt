@@ -4,15 +4,13 @@ description=fuzz crash
  = "te
 ~~~PROBLEMS
 check.parse.tokenize.Diagnostic.Tag.UnclosedString
-check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (malformed 'unexpected_token')
     (string 'te'))
 ~~~FORMATTED
-
 "te"
 ~~~END

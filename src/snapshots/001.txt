@@ -15,7 +15,8 @@ NIL
 KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file
-    (header 'foo')
+    (header
+        (exposed_item (lower_ident 'foo')))
     (decl
         (ident 'foo')
         (string 'one')))

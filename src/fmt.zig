@@ -90,6 +90,22 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .import => |i| {
             fmt.buffer.appendSlice(fmt.gpa, "import ") catch |err| exitOnOom(err);
             fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
+            if (i.alias_tok) |a| {
+                fmt.pushAll(" as ");
+                fmt.pushTokenText(a);
+            }
+            if (i.exposes.span.len > 0) {
+                fmt.pushAll(" exposing [");
+                var n: usize = 0;
+                for (fmt.ast.store.exposedItemSlice(i.exposes)) |tok| {
+                    fmt.formatExposedItem(tok);
+                    if (n < i.exposes.span.len - 1) {
+                        fmt.pushAll(", ");
+                    }
+                    n += 1;
+                }
+                fmt.push(']');
+            }
             return .extra_newline_needed;
         },
         .type_decl => |d| {
@@ -418,6 +434,30 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
     }
 }
 
+fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) void {
+    const item = fmt.ast.store.getExposedItem(idx);
+    switch (item) {
+        .lower_ident => |i| {
+            fmt.pushTokenText(i.ident);
+            if (i.as) |a| {
+                fmt.pushAll(" as ");
+                fmt.pushTokenText(a);
+            }
+        },
+        .upper_ident => |i| {
+            fmt.pushTokenText(i.ident);
+            if (i.as) |a| {
+                fmt.pushAll(" as ");
+                fmt.pushTokenText(a);
+            }
+        },
+        .upper_ident_star => |i| {
+            fmt.pushTokenText(i.ident);
+            fmt.pushAll(".*");
+        },
+    }
+}
+
 /// The caller may need to know if anything was formatted, to handle newlines correctly.
 const FormattedOutput = enum { something_formatted, nothing_formatted };
 
@@ -428,10 +468,9 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) FormattedOutput {
             fmt.pushAll("app [");
             // Format provides
             var i: usize = 0;
-            for (fmt.ast.store.tokenSlice(a.provides)) |p| {
-                fmt.pushTokenText(p);
-                i += 1;
-                if (i < a.provides.span.len) {
+            for (fmt.ast.store.exposedItemSlice(a.provides)) |p| {
+                fmt.formatExposedItem(p);
+                if (i < a.provides.span.len - 1) {
                     fmt.pushAll(", ");
                 }
             }
@@ -462,8 +501,8 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) FormattedOutput {
         .module => |m| {
             fmt.pushAll("module [");
             var i: usize = 0;
-            for (fmt.ast.store.tokenSlice(m.exposes)) |p| {
-                fmt.pushTokenText(p);
+            for (fmt.ast.store.exposedItemSlice(m.exposes)) |p| {
+                fmt.formatExposedItem(p);
                 i += 1;
                 if (i < m.exposes.span.len) {
                     fmt.pushAll(", ");
@@ -881,7 +920,11 @@ test "Syntax grab bag" {
     try moduleFmtsSame(
         \\app [main!] { pf: platform "../basic-cli/platform.roc" }
         \\
-        \\import pf.Stdout
+        \\import pf.Stdout exposing [line!, write!]
+        \\
+        \\import Something exposing [func as function, Type as ValueCategory, Custom.*]
+        \\
+        \\import BadName as GoodName
         \\
         \\Map a b : List(a), (a -> b) -> List(b)
         \\

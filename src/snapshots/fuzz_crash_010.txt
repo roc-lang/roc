@@ -11,19 +11,17 @@ foo =
 check.parse.tokenize.Diagnostic.Tag.AsciiControl
 check.parse.tokenize.Diagnostic.Tag.MismatchedBrace
 check.parse.tokenize.Diagnostic.Tag.UnclosedString
+check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 UpperIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file
     (malformed 'missing_header')
-    (tag 'H')
     (record (field 'o'))
     (decl
         (ident 'foo')
         (string 'on        (string 'onmo %')))')))
 ~~~FORMATTED
-H
-
 { o }
 
 foo = "on        (string 'onmo %')))"

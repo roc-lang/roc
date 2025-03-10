@@ -12,7 +12,9 @@ NIL
 KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file
-    (header 'foo' 'bar')
+    (header
+        (exposed_item (lower_ident 'foo'))
+        (exposed_item (lower_ident 'bar')))
     (decl
         (ident 'foo')
         (string 'one'))

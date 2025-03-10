@@ -18,7 +18,6 @@ stmts: Stmt.List,
 idents_with_layouts: IdentWithLayout.List,
 list_literal_elems: ListLiteralElem.List,
 
-/// todo
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
@@ -32,7 +31,6 @@ pub fn init(env: *base.ModuleEnv) Self {
     };
 }
 
-/// todo
 pub fn deinit(self: *Self) void {
     self.procedures.deinit(self.env.gpa);
     self.constants.deinit(self.env.gpa);

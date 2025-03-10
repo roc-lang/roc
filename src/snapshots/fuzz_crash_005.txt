@@ -3,13 +3,11 @@ description=fuzz crash
 ~~~SOURCE
 modu
 ~~~PROBLEMS
-NIL
+check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 LowerIdent,EndOfFile
 ~~~PARSE
-(file
-    (malformed 'missing_header')
-    (ident '' 'modu'))
+(file (malformed 'missing_header'))
 ~~~FORMATTED
-NO CHANGE
+
 ~~~END
