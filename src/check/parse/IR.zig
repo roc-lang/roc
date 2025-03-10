@@ -23,6 +23,7 @@ errors: []const Diagnostic,
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
+    self.store.gpa.free(self.errors);
 }
 
 /// Diagnostics related to parsing
@@ -48,6 +49,17 @@ pub const Diagnostic = struct {
         expected_platform_string,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
+        expect_closing_paren,
+        header_expected_open_bracket,
+        header_unexpected_token,
+        header_expected_close_bracket,
+        pattern_unexpected_token,
+        ty_anno_unexpected_token,
+        statement_unexpected_eof,
+        statement_unexpected_token,
+        string_unexpected_token,
+        expr_if_missing_else,
+        expr_no_space_dot_int,
     };
 };
 
@@ -596,6 +608,11 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
             },
+            .malformed => |a| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
+            },
             else => {},
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -665,6 +682,11 @@ pub const NodeStore = struct {
                 node.data.lhs = a.name;
                 node.data.rhs = a.anno.id;
             },
+            .malformed => |m| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(m.reason);
+                node.data.rhs = 0;
+            },
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
@@ -728,6 +750,11 @@ pub const NodeStore = struct {
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
+            },
+            .malformed => |a| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -853,6 +880,11 @@ pub const NodeStore = struct {
             },
             .ellipsis => |_| {
                 node.tag = .ellipsis;
+            },
+            .malformed => |m| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(m.reason);
+                node.data.rhs = 0;
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1011,6 +1043,11 @@ pub const NodeStore = struct {
                 node.tag = .ty_parens;
                 node.data.lhs = p.anno.id;
             },
+            .malformed => |a| {
+                node.tag = .malformed;
+                node.data.lhs = @intFromEnum(a.reason);
+                node.data.rhs = 0;
+            },
         }
 
         const nid = store.nodes.append(store.gpa, node);
@@ -1063,6 +1100,9 @@ pub const NodeStore = struct {
                     } },
                     .region = emptyRegion(),
                 } };
+            },
+            .malformed => {
+                return .{ .malformed = .{ .reason = @enumFromInt(node.data.lhs) } };
             },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
@@ -1393,6 +1433,11 @@ pub const NodeStore = struct {
                     .region = emptyRegion(),
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1515,6 +1560,9 @@ pub const NodeStore = struct {
                     .anno = .{ .id = node.data.lhs },
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{ .reason = @enumFromInt(node.data.lhs) } };
+            },
             else => {
                 std.debug.panic("Expected a valid type annotation node, found {s}", .{@tagName(node.tag)});
             },
@@ -1599,6 +1647,9 @@ pub const NodeStore = struct {
             // TODO: complete this
             region: Region,
         },
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         const AppHeaderRhs = packed struct { num_packages: u10, num_provides: u22 };
 
@@ -1612,6 +1663,11 @@ pub const NodeStore = struct {
                     }
 
                     return header_node;
+                },
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
                 },
                 else => @panic("not implemented"),
             }
@@ -1651,6 +1707,9 @@ pub const NodeStore = struct {
             name: TokenIdx,
             anno: TypeAnnoIdx,
             region: Region,
+        },
+        malformed: struct {
+            reason: Diagnostic.Tag,
         },
 
         pub const Import = struct {
@@ -1767,6 +1826,9 @@ pub const NodeStore = struct {
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
+                else => {
+                    std.debug.panic("implement toSExpr for Statement: {}", .{self});
+                },
             }
         }
     };
@@ -1811,6 +1873,9 @@ pub const NodeStore = struct {
         parens: struct {
             anno: TypeAnnoIdx,
             region: Region,
+        },
+        malformed: struct {
+            reason: Diagnostic.Tag,
         },
 
         const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
@@ -1881,6 +1946,11 @@ pub const NodeStore = struct {
                 .parens => |a| {
                     return ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
                 },
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
+                },
             }
         }
     };
@@ -1934,6 +2004,9 @@ pub const NodeStore = struct {
             patterns: PatternSpan,
             region: Region,
         },
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
@@ -1942,6 +2015,11 @@ pub const NodeStore = struct {
 
                     node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
 
+                    return node;
+                },
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
                 else => @panic("formatting for this pattern not yet implemented"),
@@ -2030,6 +2108,9 @@ pub const NodeStore = struct {
             region: Region,
         },
         block: Body,
+        malformed: struct {
+            reason: Diagnostic.Tag,
+        },
 
         pub fn as_string_part_region(self: @This()) !Region {
             switch (self) {
@@ -2068,19 +2149,6 @@ pub const NodeStore = struct {
                 .block => |block| {
                     return block.toSExpr(env, ir);
                 },
-                // (binop <op> <lhs> <rhs>)
-                .bin_op => |binop| {
-                    var binop_sexpr = sexpr.Expr.init(env.gpa, "binop");
-
-                    binop_sexpr.appendStringChild(env.gpa, ir.resolve(binop.operator));
-
-                    var lhs = ir.store.getExpr(binop.left).toSExpr(env, ir);
-                    var rhs = ir.store.getExpr(binop.right).toSExpr(env, ir);
-                    binop_sexpr.appendNodeChild(env.gpa, &lhs);
-                    binop_sexpr.appendNodeChild(env.gpa, &rhs);
-
-                    return binop_sexpr;
-                },
                 // (if_then_else <condition> <then> <else>)
                 .if_then_else => |stmt| {
                     var node = sexpr.Expr.init(env.gpa, "if_then_else");
@@ -2101,8 +2169,100 @@ pub const NodeStore = struct {
                     ident_sexpr.appendStringChild(env.gpa, ir.resolve(ident.token));
                     return ident_sexpr;
                 },
+                // (list [<child>])
+                .list => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "list");
+                    for (ir.store.exprSlice(a.items)) |b| {
+                        var child = ir.store.getExpr(b).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    return node;
+                },
+                // (malformed <reason>)
+                .malformed => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "malformed");
+                    node.appendStringChild(env.gpa, @tagName(a.reason));
+                    return node;
+                },
+                // (float <value>)
+                .float => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "float");
+                    node.appendStringChild(env.gpa, ir.resolve(a.token));
+                    return node;
+                },
+                // (tuple [<item>])
+                .tuple => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "tuple");
+
+                    for (ir.store.exprSlice(a.items)) |item| {
+                        var child = ir.store.getExpr(item).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+
+                    return node;
+                },
+                // (record [(field <name> <?value> ?optional)])
+                .record => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "record");
+
+                    for (ir.store.recordFieldSlice(a.fields)) |field_idx| {
+                        const record_field = ir.store.getRecordField(field_idx);
+                        var record_field_node = sexpr.Expr.init(env.gpa, "field");
+                        record_field_node.appendStringChild(env.gpa, ir.resolve(record_field.name));
+                        if (record_field.value != null) {
+                            var value_node = ir.store.getExpr(record_field.value.?).toSExpr(env, ir);
+                            record_field_node.appendNodeChild(env.gpa, &value_node);
+                        }
+                        if (record_field.optional) {
+                            record_field_node.appendStringChild(env.gpa, "optional");
+                        }
+                        node.appendNodeChild(env.gpa, &record_field_node);
+                    }
+
+                    return node;
+                },
+                // (apply <fn> [<args>])
+                .apply => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "apply");
+                    var apply_fn = ir.store.getExpr(a.@"fn").toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &apply_fn);
+
+                    for (ir.store.exprSlice(a.args)) |arg| {
+                        var arg_node = ir.store.getExpr(arg).toSExpr(env, ir);
+                        node.appendNodeChild(env.gpa, &arg_node);
+                    }
+
+                    return node;
+                },
+                .field_access => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "field_access");
+                    var child = a.toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                // (binop <op> <lhs> <rhs>)
+                .bin_op => |a| {
+                    return a.toSExpr(env, ir);
+                },
+                .lambda => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "lambda");
+
+                    // arguments
+                    var args = sexpr.Expr.init(env.gpa, "args");
+                    for (ir.store.patternSlice(a.args)) |arg| {
+                        var arg_node = ir.store.getPattern(arg).toSExpr(env, ir);
+                        args.appendNodeChild(env.gpa, &arg_node);
+                    }
+                    node.appendNodeChild(env.gpa, &args);
+
+                    // body
+                    var body = ir.store.getExpr(a.body).toSExpr(env, ir);
+                    node.appendNodeChild(env.gpa, &body);
+
+                    return node;
+                },
                 else => {
-                    std.debug.print("Format for Expr {}", .{self});
+                    std.debug.print("\n\n toSExpr not implement for Expr {}\n\n", .{self});
                     @panic("not implemented yet");
                 },
             }
@@ -2140,6 +2300,19 @@ pub const NodeStore = struct {
         right: ExprIdx,
         operator: TokenIdx,
         region: Region,
+
+        /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
+        pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var node = sexpr.Expr.init(env.gpa, "binop");
+            node.appendStringChild(env.gpa, ir.resolve(self.operator));
+
+            var left = ir.store.getExpr(self.left).toSExpr(env, ir);
+            node.appendNodeChild(env.gpa, &left);
+
+            var right = ir.store.getExpr(self.right).toSExpr(env, ir);
+            node.appendNodeChild(env.gpa, &right);
+            return node;
+        }
     };
 
     pub const Unary = struct {

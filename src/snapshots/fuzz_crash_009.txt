@@ -1,0 +1,29 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ f{o,
+     ]
+
+foo =
+
+    "onmo %
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.MismatchedBrace
+check.parse.tokenize.Diagnostic.Tag.UnclosedString
+~~~TOKENS
+LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (ident '' 'f')
+    (record (field 'o'))
+    (decl
+        (ident 'foo')
+        (string 'onmo %')))
+~~~FORMATTED
+f
+
+{ o }
+
+foo = "onmo %"
+~~~END

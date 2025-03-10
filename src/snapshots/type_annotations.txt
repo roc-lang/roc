@@ -8,6 +8,10 @@ bar : Thing(a, b, _)
 baz : (a, b, c)
 add_one : (U8, U16 -> U32)
 main! : List(String) -> Result({}, _)
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
 (file
     (header)
@@ -43,3 +47,6 @@ main! : List(String) -> Result({}, _)
             (tag
                 'List'
                 (tag 'String')))))
+~~~FORMATTED
+NO CHANGE
+~~~END

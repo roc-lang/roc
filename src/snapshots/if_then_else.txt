@@ -8,10 +8,10 @@ foo = if true A
     else {
     B
     }
-~~~FORMATTED
-module [foo]
-
-foo = if true A else B
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,UpperIdent,Newline,KwElse,OpenCurly,Newline,UpperIdent,Newline,CloseCurly,EndOfFile
 ~~~PARSE
 (file
     (header 'foo')
@@ -21,3 +21,8 @@ foo = if true A else B
             (ident '' 'true')
             (tag 'A')
             (block (tag 'B')))))
+~~~FORMATTED
+module [foo]
+
+foo = if true A else B
+~~~END

@@ -12,6 +12,10 @@ crash "something"
 expect 1 == 1
 
 return 2
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,Newline,KwCrash,StringStart,StringPart,StringEnd,Newline,KwExpect,Int,OpEquals,Int,Newline,KwReturn,Int,EndOfFile
 ~~~PARSE
 (file
     (header 'decoder')
@@ -29,3 +33,6 @@ return 2
             (int '1')
             (int '1')))
     (return (int '2')))
+~~~FORMATTED
+NO CHANGE
+~~~END

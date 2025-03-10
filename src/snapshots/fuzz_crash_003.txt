@@ -1,0 +1,18 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ = "te
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.UnclosedString
+check.parse.IR.Diagnostic.Tag.unexpected_token
+~~~TOKENS
+OpAssign,StringStart,StringPart,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (malformed 'unexpected_token')
+    (string 'te'))
+~~~FORMATTED
+
+"te"
+~~~END

@@ -1,0 +1,17 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+||1
+~~~PROBLEMS
+check.parse.tokenize.Diagnostic.Tag.AsciiControl
+~~~TOKENS
+OpBar,OpBar,Int,EndOfFile
+~~~PARSE
+(file
+    (malformed 'missing_header')
+    (lambda
+        (args)
+        (int '1')))
+~~~FORMATTED
+| | 1
+~~~END

@@ -22,14 +22,23 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
     tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 
-    if (result.messages.len > 0) {
-        tokenizeReport(env.gpa, source, result.messages);
+    // TODO I think we should remove this... it's always printing to stderr
+    // if (result.messages.len > 0) {
+    //     tokenizeReport(env.gpa, source, result.messages);
+    // }
+
+    for (result.messages) |msg| {
+        _ = env.problems.append(env.gpa, .{ .tokenize = msg });
     }
 
     var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     parser.parseFile();
+
+    for (parser.diagnostics.items) |msg| {
+        _ = env.problems.append(env.gpa, .{ .parser = msg });
+    }
 
     const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
 
@@ -43,16 +52,26 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
 
 fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
     const pos_usize = @as(usize, @intCast(pos));
+
+    if (newlines.items.len == 0) {
+        return 0;
+    }
+
     var lineno: u32 = 0;
-    while (lineno < newlines.items.len) {
+
+    while (lineno + 1 < newlines.items.len) {
         if (newlines.items[lineno + 1] > pos_usize) {
             return lineno;
         }
         lineno += 1;
     }
+
     return lineno;
 }
 
+/// TODO -- I think we should change this to be a method on Diagnostic
+/// and then we can have the caller use this to format to a writer
+/// this would be helpful for e.g. the snapshot tool which writes to a file instead of stderr
 fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []const tokenize.Diagnostic) void {
     std.debug.print("Found the {d} following issues while parsing:\n", .{msgs.len});
     var newlines = std.ArrayList(usize).init(allocator);
@@ -73,7 +92,12 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 const end_line_num = lineNum(newlines, message.end);
                 const end_col = message.end - newlines.items[end_line_num];
 
-                const src = source[newlines.items[start_line_num]..newlines.items[end_line_num + 1]];
+                const end_index = if (end_line_num + 1 < newlines.items.len)
+                    end_line_num + 1
+                else
+                    end_line_num;
+
+                const src = source[newlines.items[start_line_num]..newlines.items[end_index]];
                 var spaces = std.ArrayList(u8).init(allocator);
                 defer spaces.deinit();
                 for (0..start_col) |_| {
@@ -81,12 +105,12 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 }
 
                 std.debug.print(
-                    "({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
-                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.toOwnedSlice() catch |err| exitOnOom(err) },
+                    "TOKENIZE ERROR: ({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
+                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.items },
                 );
             },
             else => {
-                std.debug.print("MSG: {any}", .{message});
+                std.debug.print("TOKENIZE ERROR: {any}\n", .{message});
             },
         }
     }

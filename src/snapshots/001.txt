@@ -9,13 +9,18 @@ module     [
 foo =
 
     "one"
-~~~FORMATTED
-module [foo]
-
-foo = "one"
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file
     (header 'foo')
     (decl
         (ident 'foo')
         (string 'one')))
+~~~FORMATTED
+module [foo]
+
+foo = "one"
+~~~END
