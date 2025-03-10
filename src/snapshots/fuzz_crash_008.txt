@@ -3,7 +3,7 @@ description=fuzz crash
 ~~~SOURCE
 ||1
 ~~~FORMATTED
-|| 1
+| | 1
 ~~~TOKENS
 OpBar,OpBar,Int,EndOfFile
 ~~~PARSE

@@ -230,6 +230,13 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             var i: usize = 0;
             const arg_slice = fmt.ast.store.patternSlice(l.args);
 
+            // TODO -- this is a hack to avoid ambiguity with no arguments,
+            // if we parse it again without the space it will be parsed as
+            // a logical OR `||` instead
+            if (arg_slice.len == 0) {
+                fmt.pushAll(" ");
+            }
+
             for (arg_slice) |arg| {
                 fmt.formatPattern(arg);
                 if (i < (l.args.span.len - 1)) {
