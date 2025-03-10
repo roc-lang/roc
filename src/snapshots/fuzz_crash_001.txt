@@ -2,6 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
 mo|%
+~~~TOKENS
+LowerIdent,OpBar,OpPercent,EndOfFile
 ~~~PARSE_ERRORS
 PARSE ERROR pattern_unexpected_token
 PARSE ERROR unexpected_token

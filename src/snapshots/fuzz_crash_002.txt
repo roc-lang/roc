@@ -2,6 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
 modu:;::::::::::::::le[%
+~~~TOKENS
+LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
 ~~~PARSE_ERRORS
 PARSE ERROR ty_anno_unexpected_token
 PARSE ERROR unexpected_token

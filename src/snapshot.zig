@@ -150,18 +150,21 @@ const Section = union(enum) {
     formatted,
     parse,
     parser_errors,
+    tokens,
 
     pub const META = "~~~META";
     pub const SOURCE = "~~~SOURCE";
     pub const FORMATTED = "~~~FORMATTED";
     pub const PARSE = "~~~PARSE";
     pub const PARSE_ERRORS = "~~~PARSE_ERRORS";
+    pub const TOKENS = "~~~TOKENS";
 
     fn next(self: Section) ?Section {
         return switch (self) {
             .meta => .source,
             .source => .formatted,
-            .formatted => .parse,
+            .formatted => .tokens,
+            .tokens => .parse,
             .parse => .parser_errors,
             .parser_errors => null,
         };
@@ -173,6 +176,7 @@ const Section = union(enum) {
         if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
         if (std.mem.eql(u8, str, PARSE)) return .parse;
         if (std.mem.eql(u8, str, PARSE_ERRORS)) return .parser_errors;
+        if (std.mem.eql(u8, str, TOKENS)) return .tokens;
         return null;
     }
 
@@ -183,6 +187,7 @@ const Section = union(enum) {
             .formatted => FORMATTED,
             .parse => PARSE,
             .parser_errors => PARSE_ERRORS,
+            .tokens => TOKENS,
             .None => "",
         };
     }
@@ -343,6 +348,28 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         try file.writer().writeAll(content.formatted.?);
         try file.writer().writeAll("\n");
         gpa.free(content.formatted.?);
+    }
+
+    // Check if tokens should be included
+    const exclude_tokens = std.mem.indexOf(u8, content.meta, "exclude_tokens=true") != null;
+    if (!exclude_tokens) {
+        try file.writer().writeAll(Section.TOKENS);
+        try file.writer().writeAll("\n");
+        const tokenizedBuffer = parse_ast.tokens;
+        const tokens = tokenizedBuffer.tokens.items(.tag);
+        var first = true;
+        for (tokens) |tok| {
+
+            // only write a comma if not the first token
+            if (first) {
+                first = false;
+            } else {
+                try file.writer().writeAll(",");
+            }
+
+            try file.writer().writeAll(@tagName(tok));
+        }
+        try file.writer().writeAll("\n");
     }
 
     if (!has_parse_errors) {

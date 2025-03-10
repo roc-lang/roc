@@ -1,5 +1,6 @@
 ~~~META
 description=Basic example to develop the snapshot methodology
+exclude_tokens=true
 ~~~SOURCE
 module [foo, bar]
 

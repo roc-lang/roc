@@ -228,7 +228,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .lambda => |l| {
             fmt.push('|');
             var i: usize = 0;
-            for (fmt.ast.store.patternSlice(l.args)) |arg| {
+            const arg_slice = fmt.ast.store.patternSlice(l.args);
+
+            for (arg_slice) |arg| {
                 fmt.formatPattern(arg);
                 if (i < (l.args.span.len - 1)) {
                     fmt.pushAll(", ");

@@ -903,6 +903,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
                 return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token);
             };
             const args = self.store.patternSpanFrom(scratch_top);
+
             const body = self.parseExpr();
             expr = self.store.addExpr(.{ .lambda = .{
                 .body = body,

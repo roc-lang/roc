@@ -2,6 +2,8 @@
 description=
 ~~~SOURCE
 module[%
+~~~TOKENS
+KwModule,OpenSquare,OpPercent,EndOfFile
 ~~~PARSE_ERRORS
 PARSE ERROR header_unexpected_token
 PARSE ERROR unexpected_token

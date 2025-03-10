@@ -2,6 +2,8 @@
 description=fuzz crash
 ~~~SOURCE
 ff8.8.d
+~~~TOKENS
+LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE_ERRORS
 PARSE ERROR expr_no_space_dot_int
 PARSE ERROR unexpected_token
