@@ -104,6 +104,7 @@ pub const Token = struct {
         Dot,
         DoubleDot,
         TripleDot,
+        DotStar,
         OpColon,
         OpArrow,
         OpFatArrow,
@@ -118,6 +119,7 @@ pub const Token = struct {
         KwElse,
         KwExpect,
         KwExposes,
+        KwExposing,
         KwGenerates,
         KwHas,
         KwHosted,
@@ -150,6 +152,7 @@ pub const Token = struct {
         .{ "else", .KwElse },
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
+        .{ "exposing", .KwExposing },
         .{ "generates", .KwGenerates },
         .{ "has", .KwHas },
         .{ "hosted", .KwHosted },
@@ -196,6 +199,7 @@ pub const Token = struct {
             .KwElse,
             .KwExpect,
             .KwExposes,
+            .KwExposing,
             .KwGenerates,
             .KwHas,
             .KwHosted,
@@ -898,6 +902,9 @@ pub const Tokenizer = struct {
                         } else if (n == open_curly) {
                             self.cursor.pos += 1;
                             self.output.pushTokenNormal(.Dot, start, 1);
+                        } else if (n == '*') {
+                            self.cursor.pos += 2;
+                            self.output.pushTokenNormal(.DotStar, start, 2);
                         } else {
                             self.cursor.pos += 1;
                             self.output.pushTokenNormal(.Dot, start, 1);
@@ -1720,6 +1727,11 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append(alloc, '.');
                 try buf2.append(alloc, '.');
             },
+            .DotStar => {
+                std.debug.assert(length == 2);
+                try buf2.append(alloc, '.');
+                try buf2.append(alloc, '*');
+            },
             .OpColon => {
                 std.debug.assert(length == 1);
                 try buf2.append(alloc, ':');
@@ -1762,6 +1774,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwExposes => {
                 try buf2.appendSlice(alloc, "exposes");
+            },
+            .KwExposing => {
+                try buf2.appendSlice(alloc, "exposing");
             },
             .KwGenerates => {
                 try buf2.appendSlice(alloc, "generates");

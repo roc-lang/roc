@@ -48,6 +48,9 @@ pub const Diagnostic = struct {
         expected_platform_string,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
+        import_exposing_no_open,
+        import_exposing_no_close,
+        no_else,
     };
 };
 
@@ -164,6 +167,11 @@ pub const Node = struct {
         /// * rhs - extra_data index
         /// * extra_data format: [[where node index]?, type_term node index]
         type_anno,
+
+        // Exposed items
+        exposed_item_lower,
+        exposed_item_upper,
+        exposed_item_upper_star,
 
         // Type terms
 
@@ -431,6 +439,7 @@ pub const NodeStore = struct {
     scratch_when_branches: std.ArrayListUnmanaged(WhenBranchIdx),
     scratch_type_annos: std.ArrayListUnmanaged(TypeAnnoIdx),
     scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
+    scratch_exposed_items: std.ArrayListUnmanaged(ExposedItemIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
@@ -449,6 +458,7 @@ pub const NodeStore = struct {
             .scratch_when_branches = .{},
             .scratch_type_annos = .{},
             .scratch_anno_record_fields = .{},
+            .scratch_exposed_items = .{},
         };
 
         store.nodes.ensureTotalCapacity(gpa, capacity);
@@ -467,6 +477,7 @@ pub const NodeStore = struct {
         store.scratch_when_branches.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
         store.scratch_type_annos.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
         store.scratch_anno_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
+        store.scratch_exposed_items.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
 
         return store;
     }
@@ -494,6 +505,7 @@ pub const NodeStore = struct {
         store.scratch_when_branches.deinit(store.gpa);
         store.scratch_type_annos.deinit(store.gpa);
         store.scratch_anno_record_fields.deinit(store.gpa);
+        store.scratch_exposed_items.deinit(store.gpa);
     }
 
     /// Ensures that all scratch buffers in the store
@@ -508,6 +520,7 @@ pub const NodeStore = struct {
         store.scratch_when_branches.shrinkRetainingCapacity(0);
         store.scratch_type_annos.shrinkRetainingCapacity(0);
         store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
+        store.scratch_exposed_items.shrinkRetainingCapacity(0);
     }
 
     // Node Type Idx types
@@ -516,6 +529,8 @@ pub const NodeStore = struct {
     pub const BodyIdx = struct { id: u32 };
     /// An index for a Header node. Should not be constructed externally.
     pub const HeaderIdx = struct { id: u32 };
+    /// An index for a ExposedItem node. Should not be constructed externally.
+    pub const ExposedItemIdx = struct { id: u32 };
     /// An index for a Statement node. Should not be constructed externally.
     pub const StatementIdx = struct { id: u32 };
     /// An index for a Pattern node. Should not be constructed externally.
@@ -583,7 +598,7 @@ pub const NodeStore = struct {
                 // }
                 node.tag = .app_header;
                 node.main_token = app.platform_name;
-                node.data.lhs = app.packages.span.start;
+                node.data.lhs = app.provides.span.start;
                 node.data.rhs = @as(u32, @bitCast(Header.AppHeaderRhs{
                     .num_packages = @as(u10, @intCast(app.packages.span.len)),
                     .num_provides = @as(u22, @intCast(app.provides.span.len)),
@@ -598,6 +613,45 @@ pub const NodeStore = struct {
             },
             else => {},
         }
+        const nid = store.nodes.append(store.gpa, node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
+    pub fn addExposedItem(store: *NodeStore, item: ExposedItem) ExposedItemIdx {
+        var node = Node{
+            .tag = .malformed,
+            .main_token = 0,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+        };
+
+        switch (item) {
+            .lower_ident => |i| {
+                node.tag = .exposed_item_lower;
+                node.main_token = i.ident;
+                if (i.as) |a| {
+                    std.debug.assert(a > 0);
+                    node.data.lhs = a;
+                    node.data.rhs = 1;
+                }
+            },
+            .upper_ident => |i| {
+                node.tag = .exposed_item_upper;
+                node.main_token = i.ident;
+                if (i.as) |a| {
+                    std.debug.assert(a > 0);
+                    node.data.lhs = a;
+                    node.data.rhs = 1;
+                }
+            },
+            .upper_ident_star => |i| {
+                node.tag = .exposed_item_upper_star;
+                node.main_token = i.ident;
+            },
+        }
+
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
     }
@@ -641,18 +695,25 @@ pub const NodeStore = struct {
                     .qualified = 0,
                     .num_exposes = @as(u30, @intCast(i.exposes.span.len)),
                 };
-                const extra_data_start = store.extra_data.items.len;
+                var ed_start: u32 = i.exposes.span.start;
                 if (i.qualifier_tok) |tok| {
                     rhs.qualified = 1;
+                    if (ed_start == 0) {
+                        ed_start = @intCast(store.extra_data.items.len);
+                    }
+
                     store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 if (i.alias_tok) |tok| {
                     rhs.aliased = 1;
+                    if (ed_start == 0) {
+                        ed_start = @intCast(store.extra_data.items.len);
+                    }
                     store.extra_data.append(store.gpa, tok) catch |err| exitOnOom(err);
                 }
                 node.data.rhs = @as(u32, @bitCast(rhs));
                 if (node.data.rhs > 0) {
-                    node.data.lhs = @as(u32, @intCast(extra_data_start));
+                    node.data.lhs = ed_start;
                 }
             },
             .type_decl => |d| {
@@ -1037,18 +1098,21 @@ pub const NodeStore = struct {
             .app_header => {
                 const extra_data_start = node.data.lhs;
                 const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
-                const platform_idx = @as(usize, @intCast(extra_data_start + rhs.num_packages + rhs.num_provides)) - 1;
+                var platform_idx = @as(usize, @intCast(extra_data_start + rhs.num_packages + rhs.num_provides)) + 1;
+                if (platform_idx < extra_data_start) {
+                    platform_idx = @intCast(extra_data_start);
+                }
                 const platform = store.extra_data.items[platform_idx];
                 return .{
                     .app = .{
                         .platform = .{ .id = platform },
                         .platform_name = node.main_token,
                         .packages = .{ .span = .{
-                            .start = extra_data_start,
+                            .start = extra_data_start + rhs.num_provides,
                             .len = rhs.num_packages,
                         } },
                         .provides = .{ .span = .{
-                            .start = extra_data_start + rhs.num_packages,
+                            .start = extra_data_start,
                             .len = rhs.num_provides,
                         } },
                         .region = emptyRegion(),
@@ -1066,6 +1130,49 @@ pub const NodeStore = struct {
             },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
+            },
+        }
+    }
+
+    pub fn getExposedItem(store: *NodeStore, item: ExposedItemIdx) ExposedItem {
+        const node = store.nodes.get(@enumFromInt(item.id));
+        switch (node.tag) {
+            .exposed_item_lower => {
+                if (node.data.rhs == 1) {
+                    return .{ .lower_ident = .{
+                        .region = emptyRegion(),
+                        .ident = node.main_token,
+                        .as = node.data.lhs,
+                    } };
+                }
+                return .{ .lower_ident = .{
+                    .region = emptyRegion(),
+                    .ident = node.main_token,
+                    .as = null,
+                } };
+            },
+            .exposed_item_upper => {
+                if (node.data.rhs == 1) {
+                    return .{ .upper_ident = .{
+                        .region = emptyRegion(),
+                        .ident = node.main_token,
+                        .as = node.data.lhs,
+                    } };
+                }
+                return .{ .upper_ident = .{
+                    .region = emptyRegion(),
+                    .ident = node.main_token,
+                    .as = null,
+                } };
+            },
+            .exposed_item_upper_star => {
+                return .{ .upper_ident_star = .{
+                    .region = emptyRegion(),
+                    .ident = node.main_token,
+                } };
+            },
+            else => {
+                std.debug.panic("Expected a valid exposed item tag, got {s}", .{@tagName(node.tag)});
             },
         }
     }
@@ -1092,7 +1199,7 @@ pub const NodeStore = struct {
             },
             .import => {
                 const rhs = @as(ImportRhs, @bitCast(node.data.rhs));
-                var extra_data_pos = node.data.lhs;
+                var extra_data_pos = node.data.lhs + rhs.num_exposes;
                 var qualifier_tok: ?TokenIdx = null;
                 var alias_tok: ?TokenIdx = null;
                 if (rhs.qualified == 1) {
@@ -1101,18 +1208,19 @@ pub const NodeStore = struct {
                 }
                 if (rhs.aliased == 1) {
                     alias_tok = store.extra_data.items[extra_data_pos];
-                    extra_data_pos += 1;
                 }
-                return .{ .import = .{
+                const i = Statement.Import{
                     .module_name_tok = node.main_token,
                     .qualifier_tok = qualifier_tok,
                     .alias_tok = alias_tok,
                     .exposes = .{ .span = .{
-                        .start = extra_data_pos,
+                        .start = node.data.lhs,
                         .len = rhs.num_exposes,
                     } },
                     .region = emptyRegion(),
-                } };
+                };
+                const imp = Statement{ .import = i };
+                return imp;
             },
             .expect => {
                 return .{ .expect = .{
@@ -1576,18 +1684,18 @@ pub const NodeStore = struct {
     /// Represents a module header.
     pub const Header = union(enum) {
         app: struct {
-            provides: TokenSpan, // This should probably be a Interned Ident token
+            provides: ExposedItemSpan, // This should probably be a Interned Ident token
             platform: ExprIdx,
             platform_name: TokenIdx,
             packages: RecordFieldSpan,
             region: Region,
         },
         module: struct {
-            exposes: TokenSpan,
+            exposes: ExposedItemSpan,
             region: Region,
         },
         package: struct {
-            provides: TokenSpan,
+            provides: ExposedItemSpan,
             packages: RecordFieldSpan,
             region: Region,
         },
@@ -1607,14 +1715,67 @@ pub const NodeStore = struct {
                 .module => |module| {
                     var header_node = sexpr.Expr.init(env.gpa, "header");
 
-                    for (ir.store.tokenSlice(module.exposes)) |exposed_idx| {
-                        header_node.appendStringChild(env.gpa, ir.resolve(exposed_idx));
+                    for (ir.store.exposedItemSlice(module.exposes)) |exposed| {
+                        const item = ir.store.getExposedItem(exposed);
+                        var item_node = item.toSExpr(env, ir);
+                        header_node.appendNodeChild(env.gpa, &item_node);
                     }
 
                     return header_node;
                 },
                 else => @panic("not implemented"),
             }
+        }
+    };
+
+    pub const ExposedItem = union(enum) {
+        lower_ident: struct {
+            as: ?TokenIdx,
+            ident: TokenIdx,
+            region: Region,
+        },
+        upper_ident: struct {
+            as: ?TokenIdx,
+            ident: TokenIdx,
+            region: Region,
+        },
+        upper_ident_star: struct {
+            ident: TokenIdx,
+            region: Region,
+        },
+
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
+            var node = sexpr.Expr.init(env.gpa, "exposed_item");
+            var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
+            switch (self) {
+                .lower_ident => |i| {
+                    const token = ir.tokens.tokens.get(i.ident);
+                    const text = env.idents.getText(token.extra.interned);
+                    inner_node.appendStringChild(env.gpa, text);
+                    if (i.as) |a| {
+                        const as_tok = ir.tokens.tokens.get(a);
+                        const as_text = env.idents.getText(as_tok.extra.interned);
+                        inner_node.appendStringChild(env.gpa, as_text);
+                    }
+                },
+                .upper_ident => |i| {
+                    const token = ir.tokens.tokens.get(i.ident);
+                    const text = env.idents.getText(token.extra.interned);
+                    inner_node.appendStringChild(env.gpa, text);
+                    if (i.as) |a| {
+                        const as_tok = ir.tokens.tokens.get(a);
+                        const as_text = env.idents.getText(as_tok.extra.interned);
+                        inner_node.appendStringChild(env.gpa, as_text);
+                    }
+                },
+                .upper_ident_star => |i| {
+                    const token = ir.tokens.tokens.get(i.ident);
+                    const text = env.idents.getText(token.extra.interned);
+                    inner_node.appendStringChild(env.gpa, text);
+                },
+            }
+            node.appendNodeChild(env.gpa, &inner_node);
+            return node;
         }
     };
 
@@ -1657,7 +1818,7 @@ pub const NodeStore = struct {
             module_name_tok: TokenIdx,
             qualifier_tok: ?TokenIdx,
             alias_tok: ?TokenIdx,
-            exposes: TokenSpan,
+            exposes: ExposedItemSpan,
             region: Region,
         };
 
@@ -1702,11 +1863,13 @@ pub const NodeStore = struct {
                     );
 
                     // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
-                    const exposed_slice = ir.store.tokenSlice(import.exposes);
+                    const exposed_slice = ir.store.exposedItemSlice(import.exposes);
                     if (exposed_slice.len > 0) {
                         var exposed = sexpr.Expr.init(env.gpa, "exposing");
-                        for (ir.store.tokenSlice(import.exposes)) |tok| {
-                            exposed.appendStringChild(env.gpa, ir.resolve(tok));
+                        for (ir.store.exposedItemSlice(import.exposes)) |e| {
+                            var exposed_item = &ir.store.getExposedItem(e);
+                            var exposed_item_sexpr = exposed_item.toSExpr(env, ir);
+                            exposed.appendNodeChild(env.gpa, &exposed_item_sexpr);
                         }
                         node.appendNodeChild(env.gpa, &exposed);
                     }
@@ -2162,6 +2325,7 @@ pub const NodeStore = struct {
     pub const WhenBranchSpan = struct { span: DataSpan };
     pub const TypeAnnoSpan = struct { span: DataSpan };
     pub const AnnoRecordFieldSpan = struct { span: DataSpan };
+    pub const ExposedItemSpan = struct { span: DataSpan };
 
     /// Returns the start position for a new Span of ExprIdxs in scratch
     pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -2494,6 +2658,44 @@ pub const NodeStore = struct {
     /// Returns a new Token slice so that the caller can iterate through
     /// all items in the span.
     pub fn tokenSlice(store: *NodeStore, span: TokenSpan) []TokenIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+    }
+
+    /// Returns the start position for a new Span of exposedItemIdxs in scratch
+    pub fn scratchExposedItemTop(store: *NodeStore) u32 {
+        return @as(u32, @intCast(store.scratch_anno_record_fields.items.len));
+    }
+
+    /// Places a new ExposedItemIdx in the scratch.  Will panic on OOM.
+    pub fn addScratchExposedItem(store: *NodeStore, idx: ExposedItemIdx) void {
+        store.scratch_exposed_items.append(store.gpa, idx) catch |err| exitOnOom(err);
+    }
+
+    /// Creates a new span starting at start.  Moves the items from scratch
+    /// to extra_data as appropriate.
+    pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) ExposedItemSpan {
+        const end = store.scratch_exposed_items.items.len;
+        defer store.scratch_exposed_items.shrinkRetainingCapacity(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        while (i < end) {
+            store.extra_data.append(store.gpa, store.scratch_exposed_items.items[i].id) catch |err| exitOnOom(err);
+            i += 1;
+        }
+        const span = DataSpan{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
+        return .{ .span = span };
+    }
+
+    /// Clears any ExposedItemIds added to scratch from start until the end.
+    /// Should be used wherever the scratch items will not be used,
+    /// as in when parsing fails.
+    pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
+        store.scratch_exposed_items.shrinkRetainingCapacity(start);
+    }
+
+    /// Returns a new ExposedItem slice so that the caller can iterate through
+    /// all items in the span.
+    pub fn exposedItemSlice(store: *NodeStore, span: ExposedItemSpan) []ExposedItemIdx {
         return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 };

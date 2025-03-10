@@ -100,6 +100,10 @@ fn testSExprHelper(source: []const u8, expected: []const u8) !void {
     // parse our source
     var parse_ast = parse(&env, source);
     defer parse_ast.deinit();
+    std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors) catch {
+        std.debug.print("Tokens:\n{any}", .{parse_ast.tokens.tokens.items(.tag)});
+        std.debug.panic("Test failed with parse errors", .{});
+    };
 
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
@@ -126,7 +130,9 @@ test "example s-expr" {
 
     const expected =
         \\(file
-        \\    (header 'foo' 'bar')
+        \\    (header
+        \\        (exposed_item (lower_ident 'foo'))
+        \\        (exposed_item (lower_ident 'bar')))
         \\    (decl
         \\        (ident 'foo')
         \\        (string 'hey'))

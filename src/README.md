@@ -4,7 +4,7 @@ This table provides a summary of progress for the zig compiler re-write and shou
 
 |                          | Str & Num * | Functions  | Modules | Collections | Records &  Tuples | Recursive  Types | Static  Dispatch |
 |--------------------------|:-----------:|:----------:|:-------:|:-----------:|:-----------------:|:----------------:|:----------------:|
-| **Parse**                | 🚧          | 🚧         |         |             |                   |                  |                  |
+| **Parse**                | 🪫          | 🪫         | 🚧      | 🪫          |  🪫               |  🪫              |  🪫              |
 | **Canonicalize**         | 🚧          | 🚧         |         |             |                   |                  |                  |
 | **Resolve Imports**      |             |            |         |             |                   |                  |                  |
 | **Check Types**          |             |            |         |             |                   |                  |                  |
