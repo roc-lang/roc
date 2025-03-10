@@ -412,6 +412,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 rand.intRangeAtMost(u8, 'a', 'z'),
                 rand.intRangeAtMost(u8, 'a', 'z'),
                 rand.intRangeAtMost(u8, 'a', 'z'),
+                '.',
+                'r',
+                'o',
+                'c',
             },
         };
 

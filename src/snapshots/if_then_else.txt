@@ -1,0 +1,28 @@
+~~~META
+description=Example if-then-else statement
+~~~SOURCE
+module [foo]
+
+foo = if true A
+
+    else {
+    B
+    }
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,UpperIdent,Newline,KwElse,OpenCurly,Newline,UpperIdent,Newline,CloseCurly,EndOfFile
+~~~PARSE
+(file
+    (header 'foo')
+    (decl
+        (ident 'foo')
+        (if_then_else
+            (ident '' 'true')
+            (tag 'A')
+            (block (tag 'B')))))
+~~~FORMATTED
+module [foo]
+
+foo = if true A else B
+~~~END

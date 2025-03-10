@@ -1,0 +1,52 @@
+~~~META
+description=Various type annotations
+~~~SOURCE
+module []
+
+foo : U64
+bar : Thing(a, b, _)
+baz : (a, b, c)
+add_one : (U8, U16 -> U32)
+main! : List(String) -> Result({}, _)
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
+~~~PARSE
+(file
+    (header)
+    (type_anno
+        'foo'
+        (tag 'U64'))
+    (type_anno
+        'bar'
+        (tag
+            'Thing'
+            (ty_var 'a')
+            (ty_var 'b')
+            (_)))
+    (type_anno
+        'baz'
+        (tuple
+            (ty_var 'a')
+            (ty_var 'b')
+            (ty_var 'c')))
+    (type_anno
+        'add_one'
+        (fn
+            (tag 'U32')
+            (tag 'U8')
+            (tag 'U16')))
+    (type_anno
+        'main!'
+        (fn
+            (tag
+                'Result'
+                (record)
+                (_))
+            (tag
+                'List'
+                (tag 'String')))))
+~~~FORMATTED
+NO CHANGE
+~~~END
