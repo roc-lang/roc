@@ -116,7 +116,6 @@ pub fn pushDiagnostic(self: *Parser, tag: IR.Diagnostic.Tag, region: IR.Region) 
 }
 /// add a malformed token
 pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag) t {
-    std.debug.panic("!!!! pushMalformed t={any} tag={s}\n", .{ t, @tagName(tag) });
     const pos = self.pos;
     self.advanceOne(); // TODO: find a better point to advance to
     self.diagnostics.append(self.gpa, .{
@@ -226,13 +225,11 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     };
     const scratch_top = self.store.scratchExposedItemTop();
     self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
-        std.debug.print("Ended at {s}\n", .{@tagName(self.peek())});
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
         self.expect(.CloseSquare) catch {};
         self.store.clearScratchExposedItemsFrom(scratch_top);
-        std.debug.print("Expected CloseSquare, got {s}\n", .{@tagName(self.peek())});
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
     };
     const exposes = self.store.exposedItemSpanFrom(scratch_top);
@@ -259,13 +256,11 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     };
     const scratch_top = self.store.scratchExposedItemTop();
     self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
-        std.debug.print("Ended at {s}\n", .{@tagName(self.peek())});
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
         self.expect(.CloseSquare) catch {};
         self.store.clearScratchExposedItemsFrom(scratch_top);
-        std.debug.print("Expected CloseSquare, got {s}\n", .{@tagName(self.peek())});
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
     };
     const provides = self.store.exposedItemSpanFrom(scratch_top);
