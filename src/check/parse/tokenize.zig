@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 const base = @import("../../base.zig");
@@ -328,7 +329,107 @@ pub const Diagnostic = struct {
         OverClosedBrace,
         MismatchedBrace,
     };
+
+    pub fn toStr(self: Diagnostic, gpa: Allocator, source: []const u8, writer: anytype) !void {
+        var newlines = std.ArrayList(usize).init(gpa);
+        defer newlines.deinit();
+        try newlines.append(0);
+
+        var pos: usize = 0;
+        for (source) |c| {
+            if (c == '\n') {
+                try newlines.append(pos);
+            }
+            pos += 1;
+        }
+
+        switch (self.tag) {
+            .MismatchedBrace => {
+                const start_line_num = lineNum(newlines, self.begin);
+                const start_col = self.begin - newlines.items[start_line_num];
+                const end_line_num = lineNum(newlines, self.end);
+                const end_col = self.end - newlines.items[end_line_num];
+
+                const end_index = if (end_line_num + 1 < newlines.items.len)
+                    end_line_num + 1
+                else
+                    end_line_num;
+
+                const src = source[newlines.items[start_line_num]..newlines.items[end_index]];
+                var spaces = std.ArrayList(u8).init(gpa);
+                defer spaces.deinit();
+                for (0..start_col) |_| {
+                    try spaces.append(' ');
+                }
+
+                const error_message = try std.fmt.allocPrint(
+                    gpa,
+                    "TOKENIZE: ({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
+                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.items },
+                );
+                defer gpa.free(error_message);
+
+                try writer.writeAll(error_message);
+            },
+            else => {
+                const start_line_num = lineNum(newlines, self.begin);
+                const start_col = self.begin - newlines.items[start_line_num];
+                const end_line_num = lineNum(newlines, self.end);
+                const end_col = self.end - newlines.items[end_line_num];
+
+                const end_index = if (end_line_num + 1 < newlines.items.len)
+                    newlines.items[end_line_num + 1]
+                else
+                    source.len;
+
+                const line_start = newlines.items[start_line_num];
+                const src_line = source[line_start..end_index];
+
+                var spaces = std.ArrayList(u8).init(gpa);
+                defer spaces.deinit();
+                for (0..start_col) |_| {
+                    try spaces.append(' ');
+                }
+
+                var carets = std.ArrayList(u8).init(gpa);
+                defer carets.deinit();
+                for (0..end_col - start_col) |_| {
+                    try carets.append('^');
+                }
+                if (carets.items.len == 0) {
+                    try carets.append('^');
+                }
+
+                const error_message = try std.fmt.allocPrint(
+                    gpa,
+                    "TOKENIZE: ({d}:{d}-{d}:{d}) {s}:\n{s}\n{s}{s}\n",
+                    .{ start_line_num + 1, start_col + 1, end_line_num + 1, end_col + 1, @tagName(self.tag), src_line, spaces.items, carets.items },
+                );
+                defer gpa.free(error_message);
+                try writer.writeAll(error_message);
+            },
+        }
+    }
 };
+
+fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
+    const pos_usize = @as(usize, @intCast(pos));
+
+    if (newlines.items.len == 0) {
+        return 0;
+    }
+
+    var lineno: u32 = 0;
+
+    while (lineno + 1 < newlines.items.len) {
+        if (newlines.items[lineno + 1] > pos_usize) {
+            return lineno;
+        }
+        lineno += 1;
+    }
+
+    return lineno;
+}
 
 /// The cursor is our current position in the input text, and it collects messages.
 /// Note that instead of allocating its own message list, the caller must pass in a pre-allocated

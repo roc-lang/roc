@@ -337,7 +337,8 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         if (module_env.problems.len() > 0) {
             var iter = module_env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
-                try module_env.problems.get(problem_idx).format("", .{}, file);
+                const problem = module_env.problems.get(problem_idx);
+                try problem.toStr(gpa, content.source, file);
                 try file.writer().writeAll("\n");
             }
         } else {

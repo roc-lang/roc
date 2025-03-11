@@ -8,9 +8,21 @@ foo =
 
     "on        (string 'onmo %')))
 ~~~PROBLEMS
-check.parse.tokenize.Diagnostic.Tag.AsciiControl
-check.parse.tokenize.Diagnostic.Tag.MismatchedBrace
-check.parse.tokenize.Diagnostic.Tag.UnclosedString
+TOKENIZE: (2:4-2:4) AsciiControl:
+
+    ]
+   ^
+
+TOKENIZE: (1:6-1:6) Expected the correct closing brace here:
+
+    ]
+      ^
+
+TOKENIZE: (6:7-6:36) UnclosedString:
+
+    "on        (string 'onmo %')))
+      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
 check.parse.IR.Diagnostic.Tag.missing_header
 ~~~TOKENS
 UpperIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile

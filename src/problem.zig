@@ -79,17 +79,16 @@ pub const Problem = union(enum) {
     pub const Idx = List.Idx;
 
     /// Format a `Problem` for display.
-    pub fn format(self: @This(), comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-        _ = fmt;
-        _ = options;
+    pub fn toStr(self: @This(), gpa: Allocator, source: []const u8, writer: anytype) !void {
 
         // use a stack allocation for printing our tag errors
         var buf: [1000]u8 = undefined;
 
         switch (self) {
             .tokenize => |a| {
-                const str = try std.fmt.bufPrint(&buf, "{}", .{a.tag});
-                try writer.writeAll(str);
+                try a.toStr(gpa, source, writer);
+                // const str = try std.fmt.bufPrint(&buf, "{}", .{a.tag});
+                // try writer.writeAll(str);
             },
             .parser => |a| {
                 const str = try std.fmt.bufPrint(&buf, "{}", .{a.tag});
