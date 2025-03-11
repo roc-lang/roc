@@ -184,14 +184,30 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.pushTokenText(i.token);
         },
         .list => |l| {
+            const multiline = fmt.ast.regionIsMultiline(l.region);
             fmt.push('[');
+            if (multiline) {
+                fmt.curr_indent += 1;
+            }
             var i: usize = 0;
             for (fmt.ast.store.exprSlice(l.items)) |item| {
+                if (multiline) {
+                    fmt.newline();
+                    fmt.pushIndent();
+                }
                 fmt.formatExpr(item);
-                if (i < (l.items.span.len - 1)) {
+                if (!multiline and i < (l.items.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
+                if (multiline) {
+                    fmt.push(',');
+                }
                 i += 1;
+            }
+            if (multiline) {
+                fmt.curr_indent -= 1;
+                fmt.newline();
+                fmt.pushIndent();
             }
             fmt.push(']');
         },
@@ -967,6 +983,23 @@ test "BinOp with higher BP right" {
     try exprFmtsSame(expr, .no_debug);
     try exprFmtsTo(expr, "(1 + (2 * 3))", .debug_binop);
     // try exprBinOpIs(expr, .OpStar);
+}
+
+test "Multiline list formatting" {
+    const expr = "[1,2,3,]";
+    const expr2 =
+        \\[1, 2,
+        \\  3]
+    ;
+    const expected =
+        \\[
+        \\    1,
+        \\    2,
+        \\    3,
+        \\]
+    ;
+    try exprFmtsTo(expr, expected, .no_debug);
+    try exprFmtsTo(expr2, expected, .no_debug);
 }
 
 test "BinOp omnibus" {

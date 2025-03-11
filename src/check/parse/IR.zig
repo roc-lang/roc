@@ -31,6 +31,25 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+/// Returns true if the given region spans multiple lines.
+pub fn regionIsMultiline(self: *IR, region: Region) bool {
+    var i = region.start;
+    const tags = self.tokens.tokens.items(.tag);
+    while (i <= region.end) {
+        if (tags[i] == .Newline) {
+            return true;
+        }
+        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
+            tags[i + 1] == .CloseRound or
+            tags[i + 1] == .CloseCurly))
+        {
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
@@ -93,6 +112,7 @@ pub const Node = struct {
     tag: Tag,
     data: Data,
     main_token: TokenIdx,
+    region: Region,
 
     pub const List = collections.SafeMultiList(Node);
 
@@ -477,6 +497,7 @@ pub const NodeStore = struct {
             .tag = .root,
             .main_token = 0,
             .data = .{ .lhs = 0, .rhs = 0 },
+            .region = .{ .start = 0, .end = 0 },
         });
         store.extra_data.ensureTotalCapacity(gpa, capacity / 2) catch |err| exitOnOom(err);
         store.scratch_statements.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
@@ -568,11 +589,12 @@ pub const NodeStore = struct {
     // ------------------------------------------------------------------------
 
     /// Any node type can be malformed, but must come with a diagnostic reason
-    pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag, token: TokenIdx) t {
+    pub fn addMalformed(store: *NodeStore, comptime t: type, reason: Diagnostic.Tag, region: Region) t {
         const nid = store.nodes.append(store.gpa, .{
             .tag = .malformed,
-            .main_token = token,
+            .main_token = 0,
             .data = .{ .lhs = @intFromEnum(reason), .rhs = 0 },
+            .region = region,
         });
         return .{ .id = @intFromEnum(nid) };
     }
@@ -586,6 +608,7 @@ pub const NodeStore = struct {
                 .lhs = file.statements.span.start,
                 .rhs = file.statements.span.len,
             },
+            .region = file.region,
         });
     }
 
@@ -597,6 +620,7 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
         switch (header) {
             .app => |app| {
@@ -614,6 +638,7 @@ pub const NodeStore = struct {
                     .num_packages = @as(u10, @intCast(app.packages.span.len)),
                     .num_provides = @as(u22, @intCast(app.provides.span.len)),
                 }));
+                node.region = app.region;
 
                 store.extra_data.append(store.gpa, app.platform.id) catch |err| exitOnOom(err);
             },
@@ -621,6 +646,7 @@ pub const NodeStore = struct {
                 node.tag = .module_header;
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
+                node.region = mod.region;
             },
             else => {},
         }
@@ -636,6 +662,7 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
 
         switch (item) {
@@ -647,6 +674,7 @@ pub const NodeStore = struct {
                     node.data.lhs = a;
                     node.data.rhs = 1;
                 }
+                node.region = i.region;
             },
             .upper_ident => |i| {
                 node.tag = .exposed_item_upper;
@@ -656,10 +684,12 @@ pub const NodeStore = struct {
                     node.data.lhs = a;
                     node.data.rhs = 1;
                 }
+                node.region = i.region;
             },
             .upper_ident_star => |i| {
                 node.tag = .exposed_item_upper_star;
                 node.main_token = i.ident;
+                node.region = i.region;
             },
         }
 
@@ -675,31 +705,38 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
         switch (statement) {
             .decl => |d| {
                 node.tag = .decl;
                 node.data.lhs = d.pattern.id;
                 node.data.rhs = d.body.id;
+                node.region = d.region;
             },
             .expr => |expr| {
                 node.tag = .expr;
                 node.data.lhs = expr.expr.id;
+                node.region = expr.region;
             },
             .crash => |c| {
                 node.tag = .crash;
                 node.data.lhs = c.expr.id;
+                node.region = c.region;
             },
             .expect => |e| {
                 node.tag = .expect;
                 node.data.lhs = e.body.id;
+                node.region = e.region;
             },
             .@"return" => |r| {
                 node.tag = .@"return";
                 node.data.lhs = r.expr.id;
+                node.region = r.region;
             },
             .import => |i| {
                 node.tag = .import;
+                node.region = i.region;
                 node.main_token = i.module_name_tok;
                 var rhs = ImportRhs{
                     .aliased = 0,
@@ -729,11 +766,13 @@ pub const NodeStore = struct {
             },
             .type_decl => |d| {
                 node.tag = .type_decl;
+                node.region = d.region;
                 node.data.lhs = d.header.id;
                 node.data.rhs = d.anno.id;
             },
             .type_anno => |a| {
                 node.tag = .type_anno;
+                node.region = a.region;
                 node.data.lhs = a.name;
                 node.data.rhs = a.anno.id;
             },
@@ -750,53 +789,64 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
         switch (pattern) {
             .ident => |i| {
                 node.tag = .ident_patt;
+                node.region = i.region;
                 node.main_token = i.ident_tok;
             },
             .tag => |t| {
                 node.tag = .tag_patt;
+                node.region = t.region;
                 node.main_token = t.tag_tok;
                 node.data.lhs = t.args.span.start;
                 node.data.rhs = t.args.span.len;
             },
             .number => |n| {
                 node.tag = .number_patt;
+                node.region = n.region;
                 node.main_token = n.number_tok;
             },
             .string => |s| {
                 node.tag = .string_patt;
+                node.region = s.region;
                 node.main_token = s.string_tok;
                 node.data.lhs = s.expr.id;
             },
             .record => |r| {
                 node.tag = .record_patt;
+                node.region = r.region;
                 node.data.lhs = r.fields.span.start;
                 node.data.rhs = r.fields.span.len;
             },
             .list => |l| {
                 node.tag = .list_patt;
+                node.region = l.region;
                 node.data.lhs = l.patterns.span.start;
                 node.data.rhs = l.patterns.span.len;
             },
             .list_rest => |r| {
                 node.tag = .list_rest_patt;
+                node.region = r.region;
                 if (r.name) |n| {
                     node.data.lhs = n;
                 }
             },
             .tuple => |t| {
                 node.tag = .tuple_patt;
+                node.region = t.region;
                 node.data.lhs = t.patterns.span.start;
                 node.data.rhs = t.patterns.span.len;
             },
-            .underscore => |_| {
+            .underscore => |u| {
                 node.tag = .underscore_patt;
+                node.region = u.region;
             },
             .alternatives => |a| {
                 std.debug.assert(a.patterns.span.len > 1);
+                node.region = a.region;
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
@@ -814,48 +864,58 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
         switch (expr) {
             .int => |e| {
                 node.tag = .int;
+                node.region = e.region;
                 node.main_token = e.token;
             },
             .float => |e| {
                 node.tag = .float;
+                node.region = e.region;
                 node.main_token = e.token;
             },
             .string_part => |e| {
                 node.tag = .string_part;
+                node.region = e.region;
                 node.main_token = e.token;
             },
             .string => |e| {
                 node.tag = .string;
+                node.region = e.region;
                 node.main_token = e.token;
                 node.data.lhs = e.parts.span.start;
                 node.data.rhs = e.parts.span.len;
             },
             .list => |l| {
                 node.tag = .list;
+                node.region = l.region;
                 node.main_token = l.region.start;
                 node.data.lhs = l.items.span.start;
                 node.data.rhs = l.items.span.len;
             },
             .tuple => |t| {
                 node.tag = .tuple;
+                node.region = t.region;
                 node.data.lhs = t.items.span.start;
                 node.data.rhs = t.items.span.len;
             },
             .record => |r| {
                 node.tag = .record;
+                node.region = r.region;
                 node.data.lhs = r.fields.span.start;
                 node.data.rhs = r.fields.span.len;
             },
             .tag => |e| {
                 node.tag = .tag;
+                node.region = e.region;
                 node.main_token = e.token;
             },
             .lambda => |l| {
                 node.tag = .lambda;
+                node.region = l.region;
                 node.data.lhs = l.args.span.start;
                 node.data.rhs = l.args.span.len;
                 const body_idx = store.extra_data.items.len;
@@ -864,6 +924,7 @@ pub const NodeStore = struct {
             },
             .apply => |app| {
                 node.tag = .apply;
+                node.region = app.region;
                 node.data.lhs = app.args.span.start;
                 node.data.rhs = app.args.span.len;
                 const fn_ed_idx = store.extra_data.items.len;
@@ -873,26 +934,31 @@ pub const NodeStore = struct {
             .record_updater => |_| {},
             .field_access => |fa| {
                 node.tag = .field_access;
+                node.region = fa.region;
                 node.data.lhs = fa.left.id;
                 node.data.rhs = fa.right.id;
             },
             .bin_op => |op| {
                 node.tag = .bin_op;
+                node.region = op.region;
                 node.main_token = op.operator;
                 node.data.lhs = op.left.id;
                 node.data.rhs = op.right.id;
             },
             .suffix_single_question => |op| {
                 node.tag = .suffix_single_question;
+                node.region = op.region;
                 node.data.lhs = op.expr.id;
             },
             .unary_op => |u| {
                 node.tag = .unary_op;
+                node.region = u.region;
                 node.main_token = u.operator;
                 node.data.lhs = u.expr.id;
             },
             .if_then_else => |i| {
                 node.tag = .if_then_else;
+                node.region = i.region;
                 node.data.lhs = i.condition.id;
                 node.data.rhs = @as(u32, @intCast(store.extra_data.items.len));
                 store.extra_data.append(store.gpa, i.then.id) catch |err| exitOnOom(err);
@@ -900,12 +966,14 @@ pub const NodeStore = struct {
             },
             .match => |m| {
                 node.tag = .match;
+                node.region = m.region;
                 node.data.lhs = m.branches.span.start;
                 node.data.rhs = m.branches.span.len;
                 store.extra_data.append(store.gpa, m.expr.id) catch |err| exitOnOom(err);
             },
             .ident => |id| {
                 node.tag = .ident;
+                node.region = id.region;
                 node.main_token = id.token;
                 if (id.qualifier) |qualifier| {
                     node.data.lhs = qualifier;
@@ -914,17 +982,20 @@ pub const NodeStore = struct {
             },
             .dbg => |d| {
                 node.tag = .dbg;
+                node.region = d.region;
                 node.data.lhs = d.expr.id;
             },
             .record_builder => |_| {},
             .block => |body| {
                 node.tag = .block;
+                node.region = body.region;
                 node.main_token = 0;
                 node.data.lhs = body.statements.span.start;
                 node.data.rhs = body.statements.span.len;
             },
-            .ellipsis => |_| {
+            .ellipsis => |e| {
                 node.tag = .ellipsis;
+                node.region = e.region;
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -939,6 +1010,7 @@ pub const NodeStore = struct {
                 .lhs = if (field.rest) 1 else 0,
                 .rhs = 0,
             },
+            .region = field.region,
         };
         if (field.value) |value| {
             node.data.rhs = value.id;
@@ -953,7 +1025,7 @@ pub const NodeStore = struct {
             .name = node.main_token,
             .value = if (node.data.rhs == 0) null else .{ .id = node.data.rhs },
             .rest = node.data.lhs == 1,
-            .region = emptyRegion(),
+            .region = node.region,
         };
     }
 
@@ -965,6 +1037,7 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = field.region,
         };
         node.tag = .record_field;
         node.main_token = field.name;
@@ -987,6 +1060,7 @@ pub const NodeStore = struct {
                 .lhs = branch.pattern.id,
                 .rhs = branch.body.id,
             },
+            .region = branch.region,
         };
 
         const nid = store.nodes.append(store.gpa, node);
@@ -1001,6 +1075,7 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = header.region,
         };
 
         node.data.lhs = header.args.span.start;
@@ -1018,6 +1093,7 @@ pub const NodeStore = struct {
                 .lhs = @as(u32, @intCast(field.name)),
                 .rhs = @as(u32, @intCast(field.ty.id)),
             },
+            .region = field.region,
         };
 
         const nid = store.nodes.append(store.gpa, node);
@@ -1032,24 +1108,29 @@ pub const NodeStore = struct {
                 .lhs = 0,
                 .rhs = 0,
             },
+            .region = emptyRegion(),
         };
 
         switch (anno) {
             .ty_var => |v| {
                 node.tag = .ty_var;
+                node.region = v.region;
                 node.main_token = v.tok;
             },
-            .underscore => |_| {
+            .underscore => |u| {
                 node.tag = .ty_underscore;
+                node.region = u.region;
             },
             .tag => |t| {
                 node.tag = .ty_tag;
+                node.region = t.region;
                 node.main_token = t.tok;
                 node.data.lhs = t.args.span.start;
                 node.data.rhs = t.args.span.len;
             },
             .tag_union => |tu| {
                 node.tag = .ty_union;
+                node.region = tu.region;
                 node.data.lhs = tu.tags.span.start;
                 var rhs = TypeAnno.TagUnionRhs{
                     .open = 0,
@@ -1063,16 +1144,19 @@ pub const NodeStore = struct {
             },
             .tuple => |t| {
                 node.tag = .ty_tuple;
+                node.region = t.region;
                 node.data.lhs = t.annos.span.start;
                 node.data.rhs = t.annos.span.len;
             },
             .record => |r| {
                 node.tag = .ty_record;
+                node.region = r.region;
                 node.data.lhs = r.fields.span.start;
                 node.data.rhs = r.fields.span.len;
             },
             .@"fn" => |f| {
                 node.tag = .ty_fn;
+                node.region = f.region;
                 node.data.lhs = f.args.span.start;
                 node.data.rhs = f.args.span.len;
                 const ret_idx = store.extra_data.items.len;
@@ -1081,6 +1165,7 @@ pub const NodeStore = struct {
             },
             .parens => |p| {
                 node.tag = .ty_parens;
+                node.region = p.region;
                 node.data.lhs = p.anno.id;
             },
         }
@@ -1100,7 +1185,7 @@ pub const NodeStore = struct {
         return .{
             .header = .{ .id = header },
             .statements = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-            .region = .{ .start = 0, .end = 0 },
+            .region = node.region,
         };
     }
     pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
@@ -1126,7 +1211,7 @@ pub const NodeStore = struct {
                             .start = extra_data_start,
                             .len = rhs.num_provides,
                         } },
-                        .region = emptyRegion(),
+                        .region = node.region,
                     },
                 };
             },
@@ -1136,7 +1221,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             else => {
@@ -1151,13 +1236,13 @@ pub const NodeStore = struct {
             .exposed_item_lower => {
                 if (node.data.rhs == 1) {
                     return .{ .lower_ident = .{
-                        .region = emptyRegion(),
+                        .region = node.region,
                         .ident = node.main_token,
                         .as = node.data.lhs,
                     } };
                 }
                 return .{ .lower_ident = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .ident = node.main_token,
                     .as = null,
                 } };
@@ -1165,20 +1250,20 @@ pub const NodeStore = struct {
             .exposed_item_upper => {
                 if (node.data.rhs == 1) {
                     return .{ .upper_ident = .{
-                        .region = emptyRegion(),
+                        .region = node.region,
                         .ident = node.main_token,
                         .as = node.data.lhs,
                     } };
                 }
                 return .{ .upper_ident = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .ident = node.main_token,
                     .as = null,
                 } };
             },
             .exposed_item_upper_star => {
                 return .{ .upper_ident_star = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .ident = node.main_token,
                 } };
             },
@@ -1199,13 +1284,13 @@ pub const NodeStore = struct {
                 return .{ .decl = .{
                     .pattern = .{ .id = node.data.lhs },
                     .body = .{ .id = node.data.rhs },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .expr => {
                 return .{ .expr = .{
                     .expr = .{ .id = node.data.lhs },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .import => {
@@ -1228,7 +1313,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = rhs.num_exposes,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 };
                 const imp = Statement{ .import = i };
                 return imp;
@@ -1236,31 +1321,31 @@ pub const NodeStore = struct {
             .expect => {
                 return .{ .expect = .{
                     .body = .{ .id = node.data.lhs },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .crash => {
                 return .{ .crash = .{
                     .expr = .{ .id = node.data.lhs },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .@"return" => {
                 return .{ .@"return" = .{
                     .expr = .{ .id = node.data.lhs },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .type_decl => {
                 return .{ .type_decl = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .header = .{ .id = node.data.lhs },
                     .anno = .{ .id = node.data.rhs },
                 } };
             },
             .type_anno => {
                 return .{ .type_anno = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .name = node.data.lhs,
                     .anno = .{ .id = node.data.rhs },
                 } };
@@ -1277,7 +1362,7 @@ pub const NodeStore = struct {
             .ident_patt => {
                 return .{ .ident = .{
                     .ident_tok = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .tag_patt => {
@@ -1287,25 +1372,25 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .string_patt => {
                 return .{ .string = .{
                     .string_tok = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
             .number_patt => {
                 return .{ .number = .{
                     .number_tok = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .record_patt => {
                 return .{ .record = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .fields = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1314,7 +1399,7 @@ pub const NodeStore = struct {
             },
             .list_patt => {
                 return .{ .list = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .patterns = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1323,13 +1408,13 @@ pub const NodeStore = struct {
             },
             .list_rest_patt => {
                 return .{ .list_rest = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .name = if (node.data.lhs == 0) null else node.data.lhs,
                 } };
             },
             .tuple_patt => {
                 return .{ .tuple = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .patterns = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1338,7 +1423,7 @@ pub const NodeStore = struct {
             },
             .alternatives_patt => {
                 return .{ .alternatives = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .patterns = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1347,7 +1432,7 @@ pub const NodeStore = struct {
             },
             .underscore_patt => {
                 return .{ .underscore = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             else => {
@@ -1362,7 +1447,7 @@ pub const NodeStore = struct {
             .int => {
                 return .{ .int = .{
                     .token = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .ident => {
@@ -1373,18 +1458,18 @@ pub const NodeStore = struct {
                 return .{ .ident = .{
                     .token = node.main_token,
                     .qualifier = qualifier,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .tag => {
                 return .{ .tag = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .token = node.main_token,
                 } };
             },
             .string_part => {
                 return .{ .string_part = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .token = node.main_token,
                 } };
             },
@@ -1395,7 +1480,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .list => {
@@ -1404,7 +1489,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .tuple => {
@@ -1413,7 +1498,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .record => {
@@ -1422,7 +1507,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .field_access => {
@@ -1430,7 +1515,7 @@ pub const NodeStore = struct {
                     .left = .{ .id = node.data.lhs },
                     .right = .{ .id = node.data.rhs },
                     .operator = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .lambda => {
@@ -1439,7 +1524,7 @@ pub const NodeStore = struct {
                         .id = @as(u32, @intCast(store.extra_data.items[@as(usize, @intCast(node.main_token))])),
                     },
                     .args = .{ .span = .{ .start = node.data.lhs, .len = node.data.rhs } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .apply => {
@@ -1450,12 +1535,12 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .suffix_single_question => {
                 return .{ .suffix_single_question = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .operator = node.main_token,
                     .expr = .{ .id = node.data.lhs },
                 } };
@@ -1466,7 +1551,7 @@ pub const NodeStore = struct {
                 const then_ed = store.extra_data.items[then_idx];
                 const else_ed = store.extra_data.items[else_idx];
                 return .{ .if_then_else = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .condition = .{ .id = node.data.lhs },
                     .then = .{ .id = then_ed },
                     .@"else" = .{ .id = else_ed },
@@ -1475,7 +1560,7 @@ pub const NodeStore = struct {
             .match => {
                 const expr_idx = @as(usize, @intCast(node.data.lhs + node.data.rhs));
                 return .{ .match = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .expr = .{ .id = store.extra_data.items[expr_idx] },
                     .branches = .{ .span = .{
                         .start = node.data.lhs,
@@ -1485,7 +1570,7 @@ pub const NodeStore = struct {
             },
             .dbg => {
                 return .{ .dbg = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .expr = .{ .id = node.data.lhs },
                 } };
             },
@@ -1494,7 +1579,7 @@ pub const NodeStore = struct {
                     .left = .{ .id = node.data.lhs },
                     .right = .{ .id = node.data.rhs },
                     .operator = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .block => {
@@ -1504,12 +1589,12 @@ pub const NodeStore = struct {
                 } };
                 return .{ .block = .{
                     .statements = statements,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .ellipsis => {
                 return .{ .ellipsis = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             else => {
@@ -1527,14 +1612,14 @@ pub const NodeStore = struct {
             .name = name,
             .value = value,
             .optional = optional,
-            .region = emptyRegion(),
+            .region = node.region,
         };
     }
 
     pub fn getBranch(store: *NodeStore, branch: WhenBranchIdx) WhenBranch {
         const node = store.nodes.get(@enumFromInt(branch.id));
         return .{
-            .region = emptyRegion(),
+            .region = node.region,
             .pattern = .{ .id = node.data.lhs },
             .body = .{ .id = node.data.rhs },
         };
@@ -1544,7 +1629,7 @@ pub const NodeStore = struct {
         const node = store.nodes.get(@enumFromInt(header.id));
         std.debug.assert(node.tag == .ty_header);
         return .{
-            .region = emptyRegion(),
+            .region = node.region,
             .name = node.main_token,
             .args = .{ .span = .{
                 .start = node.data.lhs,
@@ -1556,7 +1641,7 @@ pub const NodeStore = struct {
     pub fn getAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) AnnoRecordField {
         const node = store.nodes.get(@enumFromInt(idx.id));
         return .{
-            .region = emptyRegion(),
+            .region = node.region,
             .name = node.data.lhs,
             .ty = .{ .id = node.data.rhs },
         };
@@ -1569,12 +1654,12 @@ pub const NodeStore = struct {
             .ty_var => {
                 return .{ .ty_var = .{
                     .tok = node.main_token,
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .ty_underscore => {
                 return .{ .underscore = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .ty_tag => {
@@ -1584,7 +1669,7 @@ pub const NodeStore = struct {
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
-                    .region = emptyRegion(),
+                    .region = node.region,
                 } };
             },
             .ty_union => {
@@ -1592,7 +1677,7 @@ pub const NodeStore = struct {
                 const tags_ed_end = node.data.lhs + rhs.tags_len;
 
                 return .{ .tag_union = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .open_anno = if (rhs.open == 1) .{ .id = store.extra_data.items[tags_ed_end] } else null,
                     .tags = .{ .span = .{
                         .start = node.data.lhs,
@@ -1602,7 +1687,7 @@ pub const NodeStore = struct {
             },
             .ty_tuple => {
                 return .{ .tuple = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .annos = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1611,7 +1696,7 @@ pub const NodeStore = struct {
             },
             .ty_record => {
                 return .{ .record = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .fields = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1620,7 +1705,7 @@ pub const NodeStore = struct {
             },
             .ty_fn => {
                 return .{ .@"fn" = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .ret = .{ .id = store.extra_data.items[@as(usize, @intCast(node.main_token))] },
                     .args = .{ .span = .{
                         .start = node.data.lhs,
@@ -1630,7 +1715,7 @@ pub const NodeStore = struct {
             },
             .ty_parens => {
                 return .{ .parens = .{
-                    .region = emptyRegion(),
+                    .region = node.region,
                     .anno = .{ .id = node.data.lhs },
                 } };
             },
@@ -2199,6 +2284,7 @@ pub const NodeStore = struct {
         record_builder: struct {
             mapper: ExprIdx,
             fields: RecordFieldIdx,
+            region: Region,
         },
         ellipsis: struct {
             region: Region,
