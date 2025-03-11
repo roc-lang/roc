@@ -191,7 +191,7 @@ test "s-expression" {
         foo.toStringPretty(buf.writer().any());
         const expected =
             \\(foo
-            \\    'bar'
+            \\    "bar"
             \\    -123
             \\    (baz 456 7.89e2))
         ;
