@@ -1146,14 +1146,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
             },
             else => {
                 // Something is broken in the tokenizer if we get here!
-                // std.debug.print("Unexpected token in string: {s}\n", .{@tagName(self.peek())});
-                // unreachable;
-                const reason: IR.Diagnostic.Tag = .string_unexpected_token;
-                self.pushDiagnostic(reason, .{
-                    .start = self.pos,
-                    .end = self.pos,
-                });
-                return self.store.addExpr(.{ .malformed = .{ .reason = reason } });
+                return self.store.addMalformed(IR.NodeStore.ExprIdx, .string_unexpected_token, self.pos);
             },
         }
     }
@@ -1211,7 +1204,7 @@ const TyFnArgs = enum {
     looking_for_args,
 };
 
-/// todo
+/// Parse a type annotation, e.g. `Foo(a) : (a,Str,I64)`
 pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.TypeAnnoIdx {
     const start = self.pos;
     var anno: ?IR.NodeStore.TypeAnnoIdx = null;
@@ -1330,13 +1323,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
             self.advance(); // Advance past Underscore
         },
         else => {
-            // std.debug.panic("Could not parse type annotation, got {s}@{d}", .{ @tagName(self.peek()), self.pos });
-            const reason: IR.Diagnostic.Tag = .ty_anno_unexpected_token;
-            self.pushDiagnostic(reason, .{
-                .start = self.pos,
-                .end = self.pos,
-            });
-            return self.store.addTypeAnno(.{ .malformed = .{ .reason = reason } });
+            return self.store.addMalformed(IR.NodeStore.TypeAnnoIdx, .ty_anno_unexpected_token, self.pos);
         },
     }
 
