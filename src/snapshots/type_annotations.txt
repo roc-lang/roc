@@ -14,7 +14,7 @@ NIL
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
 (file
-    (header)
+    (module)
     (type_anno
         'foo'
         (tag 'U64'))

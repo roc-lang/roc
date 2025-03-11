@@ -1762,8 +1762,13 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
+                .app => {
+                    var node = sexpr.Expr.init(env.gpa, "app");
+                    node.appendStringChild(env.gpa, "TODO implement toSExpr for app module header");
+                    return node;
+                },
                 .module => |module| {
-                    var header_node = sexpr.Expr.init(env.gpa, "header");
+                    var header_node = sexpr.Expr.init(env.gpa, "module");
 
                     for (ir.store.exposedItemSlice(module.exposes)) |exposed| {
                         const item = ir.store.getExposedItem(exposed);
@@ -1773,12 +1778,26 @@ pub const NodeStore = struct {
 
                     return header_node;
                 },
+                .package => {
+                    var node = sexpr.Expr.init(env.gpa, "package");
+                    node.appendStringChild(env.gpa, "TODO implement toSExpr for package module header");
+                    return node;
+                },
+                .platform => {
+                    var node = sexpr.Expr.init(env.gpa, "platform");
+                    node.appendStringChild(env.gpa, "TODO implement toSExpr for platform module header");
+                    return node;
+                },
+                .hosted => {
+                    var node = sexpr.Expr.init(env.gpa, "hosted");
+                    node.appendStringChild(env.gpa, "TODO implement toSExpr for hosted module header");
+                    return node;
+                },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_header");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
-                else => @panic("not implemented"),
             }
         }
     };

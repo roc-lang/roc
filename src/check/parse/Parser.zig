@@ -266,11 +266,12 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     self.expect(.OpenCurly) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_open_curly);
     };
-    self.advance();
+
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         const entry_start = self.pos;
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+            std.debug.print("GOT {}", .{self.peek()});
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_or_platform_name);
         }
         const name_tok = self.pos;

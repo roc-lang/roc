@@ -10,7 +10,7 @@ NIL
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,OpPlus,Int,EndOfFile
 ~~~PARSE
 (file
-    (header
+    (module
         (exposed_item (lower_ident 'add2')))
     (decl
         (ident 'add2')
