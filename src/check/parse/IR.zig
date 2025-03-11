@@ -31,6 +31,28 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+pub fn regionIsMultiline(self: *IR, region: Region) bool {
+    std.debug.print("\n\n=========\n\nLooking for mulitiline region at {any}\n", .{region});
+    var i = region.start;
+    const tags = self.tokens.tokens.items(.tag);
+    std.debug.print("Tokens\n------\n{any}\n\n", .{tags[i .. region.end + 1]});
+    while (i <= region.end) {
+        if (tags[i] == .Newline) {
+            std.debug.print("Found newline at {d}\n", .{i});
+            return true;
+        }
+        if (tags[i] == .Comma and (tags[i + 1] == .CloseSquare or
+            tags[i + 1] == .CloseRound or
+            tags[i + 1] == .CloseCurly))
+        {
+            std.debug.print("Found comma at end of collection at {d}\n", .{i});
+            return true;
+        }
+        i += 1;
+    }
+    return false;
+}
+
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
@@ -871,6 +893,7 @@ pub const NodeStore = struct {
                 node.data.rhs = e.parts.span.len;
             },
             .list => |l| {
+                std.debug.print("Adding list with region {any}\n", .{l.region});
                 node.tag = .list;
                 node.region = l.region;
                 node.main_token = l.region.start;
