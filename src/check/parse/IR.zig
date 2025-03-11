@@ -2179,12 +2179,46 @@ pub const NodeStore = struct {
 
                     return node;
                 },
+                .tag => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .number => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .string => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .record => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .list => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .list_rest => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .tuple => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
+                .underscore => {
+                    return sexpr.Expr.init(env.gpa, "underscore");
+                },
+                .alternatives => {
+                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
+                    @panic("unimplemented");
+                },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
-                else => @panic("formatting for this pattern not yet implemented"),
             }
         }
     };

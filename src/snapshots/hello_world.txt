@@ -1,0 +1,40 @@
+~~~META
+description=Hello world
+~~~SOURCE
+app [main!] { pf: platform "../basic-cli/platform.roc" }
+
+import pf.Stdout
+
+main! = |_| Stdout.line!("Hello, world!")
+~~~PROBLEMS
+check.parse.IR.Diagnostic.Tag.expected_package_or_platform_name
+check.parse.IR.Diagnostic.Tag.unexpected_token
+check.parse.IR.Diagnostic.Tag.unexpected_token
+~~~TOKENS
+KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,EndOfFile
+~~~PARSE
+(file
+    (malformed_header 'expected_package_or_platform_name')
+    (malformed_expr 'unexpected_token')
+    (string '../basic-cli/platform.roc')
+    (malformed_expr 'unexpected_token')
+    (import
+        'pf'
+        '.Stdout'
+        '')
+    (decl
+        (ident 'main!')
+        (lambda
+            (args (underscore))
+            (apply
+                (ident 'Stdout' '.line!')
+                (string 'Hello, world!')))))
+~~~FORMATTED
+
+"../basic-cli/platform.roc"
+
+
+import pf.Stdout
+
+main! = |_| Stdout.line!("Hello, world!")
+~~~END

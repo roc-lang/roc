@@ -38,7 +38,7 @@ pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.
 pub const OpenError = std.fs.File.OpenError || std.fs.Dir.AccessError;
 
 /// All errors that can occur when canonicalizing a filepath.
-pub const CanonicalizeError = error{ FileNotFound, Unknown, OutOfMemory }; // || std.posix.RealPathError;
+pub const CanonicalizeError = error{ FileNotFound, Unknown, OutOfMemory } || std.posix.RealPathError;
 
 /// An abstracted directory handle.
 pub const Dir = struct {
@@ -76,16 +76,12 @@ pub const Dir = struct {
 
     /// Canonicalize the given filepath relative to this dir's path.
     pub fn canonicalize(dir: *Dir, filename: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-        // return dir.dir.realpathAlloc(allocator, filename) catch |err| {
-        //     switch (err) {
-        //         error.OutOfMemory => exitOnOom(error.OutOfMemory),
-        //         else => return err,
-        //     }
-        // };
-        _ = dir;
-        _ = filename;
-        _ = allocator;
-        return "TODO";
+        return dir.dir.realpathAlloc(allocator, filename) catch |err| {
+            switch (err) {
+                error.OutOfMemory => exitOnOom(error.OutOfMemory),
+                else => return err,
+            }
+        };
     }
 
     /// Close this directory.
@@ -167,13 +163,10 @@ fn baseNameDefault(absolute_path: []const u8) ?[]const u8 {
 }
 
 fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
-    // return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
-    //     return switch (err) {
-    //         error.FileNotFound => error.FileNotFound,
-    //         else => error.Unknown,
-    //     };
-    // };
-    _ = root_relative_path;
-    _ = allocator;
-    return "TODO";
+    return std.fs.realpathAlloc(allocator, root_relative_path) catch |err| {
+        return switch (err) {
+            error.FileNotFound => error.FileNotFound,
+            else => error.Unknown,
+        };
+    };
 }

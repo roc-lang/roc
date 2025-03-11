@@ -22,11 +22,6 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
     tokenizer.tokenize();
     const result = tokenizer.finishAndDeinit();
 
-    // TODO I think we should remove this... it's always printing to stderr
-    // if (result.messages.len > 0) {
-    //     tokenizeReport(env.gpa, source, result.messages);
-    // }
-
     for (result.messages) |msg| {
         _ = env.problems.append(env.gpa, .{ .tokenize = msg });
     }
