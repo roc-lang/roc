@@ -217,14 +217,16 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
     // Get exposes
     self.expect(.OpenSquare) catch {
-        return self.store.addMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_bracket, self.pos);
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_square);
     };
     const scratch_top = self.store.scratchExposedItemTop();
     self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
-        self.expect(.CloseSquare) catch {};
+        self.expect(.CloseSquare) catch {
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_close_square);
+        };
         self.store.clearScratchExposedItemsFrom(scratch_top);
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
     };
@@ -255,9 +257,10 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
-        self.expect(.CloseSquare) catch {};
+        self.expect(.CloseSquare) catch {
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_close_square);
+        };
         self.store.clearScratchExposedItemsFrom(scratch_top);
-        return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close);
     };
     const provides = self.store.exposedItemSpanFrom(scratch_top);
 
@@ -271,7 +274,6 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         const entry_start = self.pos;
         if (self.peek() != .LowerIdent) {
             self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
-            std.debug.print("GOT {}", .{self.peek()});
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_or_platform_name);
         }
         const name_tok = self.pos;
@@ -719,7 +721,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
                 } });
             },
             else => {
-                return self.store.addMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token, self.pos);
+                return self.pushMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_token);
             },
         }
 
@@ -945,7 +947,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const condition = self.parseExpr();
             const then = self.parseExpr();
             if (self.peek() != .KwElse) {
-                return self.store.addMalformed(IR.NodeStore.ExprIdx, .expr_if_missing_else, self.pos);
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .expr_if_missing_else);
             }
             self.advance();
             const else_idx = self.parseExpr();
@@ -1004,7 +1006,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent) {
             const tok = self.peek();
             if (tok == .NoSpaceDotInt) {
-                return self.store.addMalformed(IR.NodeStore.ExprIdx, .expr_no_space_dot_int, self.pos);
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .expr_no_space_dot_int);
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
                 const ident = self.store.addExpr(.{ .ident = .{
@@ -1144,7 +1146,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
             },
             else => {
                 // Something is broken in the tokenizer if we get here!
-                return self.store.addMalformed(IR.NodeStore.ExprIdx, .string_unexpected_token, self.pos);
+                return self.pushMalformed(IR.NodeStore.ExprIdx, .string_unexpected_token);
             },
         }
     }
@@ -1321,7 +1323,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
             self.advance(); // Advance past Underscore
         },
         else => {
-            return self.store.addMalformed(IR.NodeStore.TypeAnnoIdx, .ty_anno_unexpected_token, self.pos);
+            return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .ty_anno_unexpected_token);
         },
     }
 

@@ -5,7 +5,7 @@ module []
 
 foo = if tru then 0
 ~~~PROBLEMS
-NIL
+PARSER: expr_if_missing_else
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,LowerIdent,Int,EndOfFile
 ~~~PARSE
@@ -13,12 +13,9 @@ KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,Lowe
     (module)
     (decl
         (ident "foo")
-        (malformed_expr "expr_if_missing_else"))
-    (int "0"))
+        (malformed_expr "expr_if_missing_else")))
 ~~~FORMATTED
 module []
 
 foo = 
-
-0
 ~~~END

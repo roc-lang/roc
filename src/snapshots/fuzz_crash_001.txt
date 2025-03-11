@@ -4,6 +4,7 @@ description=fuzz crash
 mo|%
 ~~~PROBLEMS
 PARSER: missing_header
+PARSER: pattern_unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,OpBar,OpPercent,EndOfFile
