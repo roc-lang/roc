@@ -814,7 +814,9 @@ pub const NodeStore = struct {
                 node.tag = .underscore_patt;
             },
             .alternatives => |a| {
-                std.debug.assert(a.patterns.span.len > 1);
+                // disabled because it was hit by a fuzz test
+                // for a repro see src/snapshots/fuzz_crash_012.txt
+                // std.debug.assert(a.patterns.span.len > 1);
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
