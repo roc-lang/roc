@@ -1,0 +1,18 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ = "te
+~~~PROBLEMS
+TOKENIZE: (1:5-1:7) UnclosedString:
+ = "te
+    ^^
+PARSER: missing_header
+~~~TOKENS
+OpAssign,StringStart,StringPart,EndOfFile
+~~~PARSE
+(file
+    (malformed_header "missing_header")
+    (string "te"))
+~~~FORMATTED
+"te"
+~~~END

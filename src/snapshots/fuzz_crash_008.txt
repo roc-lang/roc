@@ -1,0 +1,19 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+||1
+~~~PROBLEMS
+TOKENIZE: (1:2-1:2) AsciiControl:
+||1
+ ^
+PARSER: missing_header
+PARSER: unexpected_token
+~~~TOKENS
+OpBar,OpBar,Int,EndOfFile
+~~~PARSE
+(file
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token"))
+~~~FORMATTED
+
+~~~END

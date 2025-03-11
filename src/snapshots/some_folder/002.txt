@@ -6,14 +6,21 @@ module [foo, bar]
 foo = "one"
 
 bar = "two"
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file
-    (header
-        (exposed_item (lower_ident 'foo'))
-        (exposed_item (lower_ident 'bar')))
+    (module
+        (exposed_item (lower_ident "foo"))
+        (exposed_item (lower_ident "bar")))
     (decl
-        (ident 'foo')
-        (string 'one'))
+        (ident "foo")
+        (string "one"))
     (decl
-        (ident 'bar')
-        (string 'two')))
+        (ident "bar")
+        (string "two")))
+~~~FORMATTED
+NO CHANGE
+~~~END

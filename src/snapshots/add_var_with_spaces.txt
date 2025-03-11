@@ -4,17 +4,22 @@ description=Add a variable with spaces
 module [add2]
 
 add2 = x +      2
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,OpPlus,Int,EndOfFile
+~~~PARSE
+(file
+    (module
+        (exposed_item (lower_ident "add2")))
+    (decl
+        (ident "add2")
+        (binop
+            "+"
+            (ident "" "x")
+            (int "2"))))
 ~~~FORMATTED
 module [add2]
 
 add2 = x + 2
-~~~PARSE
-(file
-    (header
-        (exposed_item (lower_ident 'add2')))
-    (decl
-        (ident 'add2')
-        (binop
-            '+'
-            (ident '' 'x')
-            (int '2'))))
+~~~END

@@ -1,0 +1,31 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ f{o,
+     ]
+
+foo =
+
+    "onmo %
+~~~PROBLEMS
+TOKENIZE: (2:6-2:6) MismatchedBrace:
+     ]
+     ^
+TOKENIZE: (6:6-6:12) UnclosedString:
+    "onmo %
+     ^^^^^^
+PARSER: missing_header
+~~~TOKENS
+LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
+~~~PARSE
+(file
+    (malformed_header "missing_header")
+    (record (field "o"))
+    (decl
+        (ident "foo")
+        (string "onmo %")))
+~~~FORMATTED
+{ o }
+
+foo = "onmo %"
+~~~END

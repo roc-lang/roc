@@ -9,14 +9,19 @@ module     [
 foo =
 
     "one"
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,StringEnd,EndOfFile
+~~~PARSE
+(file
+    (module
+        (exposed_item (lower_ident "foo")))
+    (decl
+        (ident "foo")
+        (string "one")))
 ~~~FORMATTED
 module [foo]
 
 foo = "one"
-~~~PARSE
-(file
-    (header
-        (exposed_item (lower_ident 'foo')))
-    (decl
-        (ident 'foo')
-        (string 'one')))
+~~~END

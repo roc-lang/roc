@@ -12,49 +12,56 @@ Some a : { foo : Ok(a), bar : Something }
 Maybe a : [Some(a), None]
 
 SomeFunc a : Maybe(a), a -> Maybe(a)
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,UpperIdent,LowerIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Newline,UpperIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,Newline,UpperIdent,LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Newline,UpperIdent,LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,Newline,UpperIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,EndOfFile
 ~~~PARSE
 (file
-    (header
-        (exposed_item (upper_ident 'Map'))
-        (exposed_item (upper_ident 'Foo'))
-        (exposed_item (upper_ident 'Some'))
-        (exposed_item (upper_ident 'Maybe'))
-        (exposed_item (upper_ident 'SomeFunc'))
-        (exposed_item (lower_ident 'add_one'))
-        (exposed_item (lower_ident 'main!')))
+    (module
+        (exposed_item (upper_ident "Map"))
+        (exposed_item (upper_ident "Foo"))
+        (exposed_item (upper_ident "Some"))
+        (exposed_item (upper_ident "Maybe"))
+        (exposed_item (upper_ident "SomeFunc"))
+        (exposed_item (lower_ident "add_one"))
+        (exposed_item (lower_ident "main!")))
     (type_decl
         (header
-            'Map'
-            'a'
-            'b')
+            "Map"
+            "a"
+            "b")
         (fn
             (tag
-                'List'
-                (ty_var 'b'))
+                "List"
+                (ty_var "b"))
             (tag
-                'List'
-                (ty_var 'a'))
+                "List"
+                (ty_var "a"))
             (fn
-                (ty_var 'b')
-                (ty_var 'a'))))
+                (ty_var "b")
+                (ty_var "a"))))
     (type_decl
-        (header 'Foo')
+        (header "Foo")
         (tuple
-            (tag 'Bar')
-            (tag 'Baz')))
+            (tag "Bar")
+            (tag "Baz")))
     (type_decl
-        (header 'Some' 'a')
-        (record '<field>' '<field>'))
+        (header "Some" "a")
+        (record "<field>" "<field>"))
     (type_decl
-        (header 'Maybe' 'a')
-        (tag_union 'TODO tags' 'TODO open_anno'))
+        (header "Maybe" "a")
+        (tag_union "TODO tags" "TODO open_anno"))
     (type_decl
-        (header 'SomeFunc' 'a')
+        (header "SomeFunc" "a")
         (fn
             (tag
-                'Maybe'
-                (ty_var 'a'))
+                "Maybe"
+                (ty_var "a"))
             (tag
-                'Maybe'
-                (ty_var 'a'))
-            (ty_var 'a'))))
+                "Maybe"
+                (ty_var "a"))
+            (ty_var "a"))))
+~~~FORMATTED
+NO CHANGE
+~~~END

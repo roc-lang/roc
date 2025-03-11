@@ -1,0 +1,21 @@
+~~~META
+description=
+~~~SOURCE
+module []
+
+foo = if tru then 0
+~~~PROBLEMS
+PARSER: no_else
+~~~TOKENS
+KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,LowerIdent,Int,EndOfFile
+~~~PARSE
+(file
+    (module)
+    (decl
+        (ident "foo")
+        (malformed_expr "no_else")))
+~~~FORMATTED
+module []
+
+foo = 
+~~~END

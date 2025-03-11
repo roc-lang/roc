@@ -462,6 +462,7 @@ fn findRootOfPackage(
 const ParsePackageDepsErr = union(enum) {
     failed_to_canonicalize_root_file: Filesystem.CanonicalizeError,
     failed_to_read_root_file: Filesystem.ReadError,
+    malformed_header,
 };
 
 fn parseDependenciesFromPackageRoot(
@@ -506,6 +507,9 @@ fn parseDependenciesFromPackageRoot(
             .start = 0,
             .len = 0,
         } },
+        .malformed => {
+            return ParsePackageDepsErr.malformed_header;
+        },
     };
 
     for (parse_ast.store.recordFieldSlice(package_list)) |package_import| {

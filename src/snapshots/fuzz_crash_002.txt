@@ -1,0 +1,68 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+modu:;::::::::::::::le[%
+~~~PROBLEMS
+PARSER: missing_header
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+~~~TOKENS
+LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
+~~~PARSE
+(file
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (ident "" "le")
+    (malformed_expr "unexpected_token"))
+~~~FORMATTED
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+le
+
+
+~~~END

@@ -1,0 +1,20 @@
+~~~META
+description=two strings
+~~~SOURCE
+module []
+
+"one"
+
+"two"
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,CloseSquare,Newline,StringStart,StringPart,StringEnd,Newline,StringStart,StringPart,StringEnd,EndOfFile
+~~~PARSE
+(file
+    (module)
+    (string "one")
+    (string "two"))
+~~~FORMATTED
+NO CHANGE
+~~~END

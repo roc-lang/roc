@@ -1,0 +1,18 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+ ||(|(l888888888|
+~~~PROBLEMS
+PARSER: missing_header
+PARSER: pattern_unexpected_token
+PARSER: pattern_unexpected_token
+PARSER: unexpected_token
+~~~TOKENS
+OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,EndOfFile
+~~~PARSE
+(file
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token"))
+~~~FORMATTED
+
+~~~END

@@ -1,0 +1,21 @@
+~~~META
+description=
+~~~SOURCE
+module []
+
+foo = asd.0
+~~~PROBLEMS
+PARSER: expr_no_space_dot_int
+~~~TOKENS
+KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,EndOfFile
+~~~PARSE
+(file
+    (module)
+    (decl
+        (ident "foo")
+        (malformed_expr "expr_no_space_dot_int")))
+~~~FORMATTED
+module []
+
+foo = 
+~~~END

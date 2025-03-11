@@ -12,21 +12,28 @@ crash "something"
 expect 1 == 1
 
 return 2
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,Newline,KwCrash,StringStart,StringPart,StringEnd,Newline,KwExpect,Int,OpEquals,Int,Newline,KwReturn,Int,EndOfFile
 ~~~PARSE
 (file
-    (header
-        (exposed_item (lower_ident 'decoder')))
+    (module
+        (exposed_item (lower_ident "decoder")))
     (import
-        'json'
-        '.Json'
-        '')
+        "json"
+        ".Json"
+        "")
     (decl
-        (ident 'decoder')
-        (ident 'Utf8' '.decode'))
-    (crash (string 'something'))
+        (ident "decoder")
+        (ident "Utf8" ".decode"))
+    (crash (string "something"))
     (expect
         (binop
-            '=='
-            (int '1')
-            (int '1')))
-    (return (int '2')))
+            "=="
+            (int "1")
+            (int "1")))
+    (return (int "2")))
+~~~FORMATTED
+NO CHANGE
+~~~END

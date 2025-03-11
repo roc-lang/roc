@@ -8,17 +8,22 @@ foo = if true A
     else {
     B
     }
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,UpperIdent,Newline,KwElse,OpenCurly,Newline,UpperIdent,Newline,CloseCurly,EndOfFile
+~~~PARSE
+(file
+    (module
+        (exposed_item (lower_ident "foo")))
+    (decl
+        (ident "foo")
+        (if_then_else
+            (ident "" "true")
+            (tag "A")
+            (block (tag "B")))))
 ~~~FORMATTED
 module [foo]
 
 foo = if true A else B
-~~~PARSE
-(file
-    (header
-        (exposed_item (lower_ident 'foo')))
-    (decl
-        (ident 'foo')
-        (if_then_else
-            (ident '' 'true')
-            (tag 'A')
-            (block (tag 'B')))))
+~~~END

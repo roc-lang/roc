@@ -6,6 +6,7 @@
 //! our commitment to "always inform, never block" and to boost development speed.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
 const collections = @import("collections.zig");
 
@@ -14,6 +15,8 @@ const Region = base.Region;
 
 /// Represents a problem encountered during the compilation process.
 pub const Problem = union(enum) {
+    tokenize: @import("check/parse/tokenize.zig").Diagnostic,
+    parser: @import("check/parse/IR.zig").Diagnostic,
     canonicalize: Canonicalize,
     compiler: Compiler,
 
@@ -74,4 +77,27 @@ pub const Problem = union(enum) {
     pub const List = collections.SafeList(@This());
     /// An index into a list of problems.
     pub const Idx = List.Idx;
+
+    /// Format a `Problem` for display.
+    pub fn toStr(self: @This(), gpa: Allocator, source: []const u8, writer: anytype) !void {
+
+        // use a stack allocation for printing our tag errors
+        var buf: [1000]u8 = undefined;
+
+        switch (self) {
+            .tokenize => |a| try a.toStr(gpa, source, writer),
+            .parser => |a| {
+                const err_msg = try std.fmt.bufPrint(&buf, "PARSER: {s}", .{@tagName(a.tag)});
+                try writer.writeAll(err_msg);
+            },
+            .canonicalize => |err| {
+                const err_msg = try std.fmt.bufPrint(&buf, "CAN: {?}", .{err});
+                try writer.writeAll(err_msg);
+            },
+            .compiler => |err| {
+                const err_msg = try std.fmt.bufPrint(&buf, "COMPILER: {?}", .{err});
+                try writer.writeAll(err_msg);
+            },
+        }
+    }
 };
