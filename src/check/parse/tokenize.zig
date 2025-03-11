@@ -1142,13 +1142,8 @@ pub const Tokenizer = struct {
 
                 // Ampersand (&)
                 '&' => {
-                    if (self.cursor.peekAt(1) == '&') {
-                        self.cursor.pos += 2;
-                        self.output.pushTokenNormal(.OpAnd, start, 2);
-                    } else {
-                        self.cursor.pos += 1;
-                        self.output.pushTokenNormal(.OpAmpersand, start, 1);
-                    }
+                    self.cursor.pos += 1;
+                    self.output.pushTokenNormal(.OpAmpersand, start, 1);
                 },
 
                 // Comma (,)
@@ -1170,10 +1165,7 @@ pub const Tokenizer = struct {
 
                 // Pipe (|)
                 '|' => {
-                    if (self.cursor.peekAt(1) == '|') {
-                        self.cursor.pos += 2;
-                        self.output.pushTokenNormal(.OpOr, start, 2);
-                    } else if (self.cursor.peekAt(1) == '>') {
+                    if (self.cursor.peekAt(1) == '>') {
                         self.cursor.pos += 2;
                         self.output.pushTokenNormal(.OpPizza, start, 2);
                     } else {
@@ -1808,15 +1800,10 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 try buf2.append(alloc, '!');
             },
             .OpAnd => {
-                std.debug.assert(length == 2 or length == 3);
-                if (length == 2) {
-                    try buf2.append(alloc, '&');
-                    try buf2.append(alloc, '&');
-                } else {
-                    try buf2.append(alloc, 'a');
-                    try buf2.append(alloc, 'n');
-                    try buf2.append(alloc, 'd');
-                }
+                std.debug.assert(length == 3);
+                try buf2.append(alloc, 'a');
+                try buf2.append(alloc, 'n');
+                try buf2.append(alloc, 'd');
             },
             .OpAmpersand => {
                 std.debug.assert(length == 1);
@@ -1833,13 +1820,8 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .OpOr => {
                 std.debug.assert(length == 2);
-                if (buf[token.offset] == 'o') {
-                    try buf2.append(alloc, 'o');
-                    try buf2.append(alloc, 'r');
-                } else {
-                    try buf2.append(alloc, '|');
-                    try buf2.append(alloc, '|');
-                }
+                try buf2.append(alloc, 'o');
+                try buf2.append(alloc, 'r');
             },
             .OpBar => {
                 std.debug.assert(length == 1);
