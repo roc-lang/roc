@@ -8,15 +8,12 @@ foo =
 
     "onmo %
 ~~~PROBLEMS
-TOKENIZE: (1:6-1:6) Expected the correct closing brace here:
-
+TOKENIZE: (2:6-2:6) MismatchedBrace:
      ]
-      ^
-
-TOKENIZE: (6:7-6:13) UnclosedString:
-
+     ^
+TOKENIZE: (6:6-6:12) UnclosedString:
     "onmo %
-      ^^^^^^
+     ^^^^^^
 PARSER: missing_header
 ~~~TOKENS
 LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
