@@ -3,9 +3,9 @@ description=fuzz crash
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.missing_header
-check.parse.IR.Diagnostic.Tag.unexpected_token
-check.parse.IR.Diagnostic.Tag.unexpected_token
+PARSER: missing_header
+PARSER: unexpected_token
+PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE

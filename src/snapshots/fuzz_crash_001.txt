@@ -3,8 +3,8 @@ description=fuzz crash
 ~~~SOURCE
 mo|%
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.missing_header
-check.parse.IR.Diagnostic.Tag.unexpected_token
+PARSER: missing_header
+PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,OpBar,OpPercent,EndOfFile
 ~~~PARSE

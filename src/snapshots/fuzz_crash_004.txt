@@ -3,7 +3,7 @@ description=fuzz crash
 ~~~SOURCE
 F
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.missing_header
+PARSER: missing_header
 ~~~TOKENS
 UpperIdent,EndOfFile
 ~~~PARSE

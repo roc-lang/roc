@@ -6,8 +6,7 @@ description=fuzz crash
 TOKENIZE: (1:5-1:7) UnclosedString:
  = "te
     ^^
-
-check.parse.IR.Diagnostic.Tag.missing_header
+PARSER: missing_header
 ~~~TOKENS
 OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE

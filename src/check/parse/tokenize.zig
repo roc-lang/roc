@@ -402,7 +402,7 @@ pub const Diagnostic = struct {
 
                 const error_message = try std.fmt.allocPrint(
                     gpa,
-                    "TOKENIZE: ({d}:{d}-{d}:{d}) {s}:\n{s}\n{s}{s}\n",
+                    "TOKENIZE: ({d}:{d}-{d}:{d}) {s}:\n{s}\n{s}{s}",
                     .{ start_line_num + 1, start_col + 1, end_line_num + 1, end_col + 1, @tagName(self.tag), src_line, spaces.items, carets.items },
                 );
                 defer gpa.free(error_message);

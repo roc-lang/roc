@@ -6,9 +6,8 @@ description=fuzz crash
 TOKENIZE: (1:2-1:2) AsciiControl:
 ||1
  ^
-
-check.parse.IR.Diagnostic.Tag.missing_header
-check.parse.IR.Diagnostic.Tag.unexpected_token
+PARSER: missing_header
+PARSER: unexpected_token
 ~~~TOKENS
 OpBar,OpBar,Int,EndOfFile
 ~~~PARSE

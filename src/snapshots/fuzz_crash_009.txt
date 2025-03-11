@@ -17,8 +17,7 @@ TOKENIZE: (6:7-6:13) UnclosedString:
 
     "onmo %
       ^^^^^^
-
-check.parse.IR.Diagnostic.Tag.missing_header
+PARSER: missing_header
 ~~~TOKENS
 LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
 ~~~PARSE

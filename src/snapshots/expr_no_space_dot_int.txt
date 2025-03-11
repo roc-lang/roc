@@ -5,7 +5,7 @@ module []
 
 foo = asd.0
 ~~~PROBLEMS
-check.parse.IR.Diagnostic.Tag.unexpected_token
+PARSER: unexpected_token
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,EndOfFile
 ~~~PARSE

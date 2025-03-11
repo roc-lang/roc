@@ -85,20 +85,18 @@ pub const Problem = union(enum) {
         var buf: [1000]u8 = undefined;
 
         switch (self) {
-            .tokenize => |a| {
-                try a.toStr(gpa, source, writer);
-                // const str = try std.fmt.bufPrint(&buf, "{}", .{a.tag});
-                // try writer.writeAll(str);
-            },
+            .tokenize => |a| try a.toStr(gpa, source, writer),
             .parser => |a| {
-                const str = try std.fmt.bufPrint(&buf, "{}", .{a.tag});
-                try writer.writeAll(str);
+                const err_msg = try std.fmt.bufPrint(&buf, "PARSER: {s}", .{@tagName(a.tag)});
+                try writer.writeAll(err_msg);
             },
-            .canonicalize => {
-                try writer.writeAll("CAN ERROR");
+            .canonicalize => |err| {
+                const err_msg = try std.fmt.bufPrint(&buf, "CAN: {?}", .{err});
+                try writer.writeAll(err_msg);
             },
-            .compiler => {
-                try writer.writeAll("COMPILER ERROR");
+            .compiler => |err| {
+                const err_msg = try std.fmt.bufPrint(&buf, "COMPILER: {?}", .{err});
+                try writer.writeAll(err_msg);
             },
         }
     }
