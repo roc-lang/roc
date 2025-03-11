@@ -54,7 +54,7 @@ fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
 }
 
 fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []const tokenize.Diagnostic) void {
-    std.debug.print("Found the {d} following issues while parsing:\n", .{msgs.len});
+    std.debug.print("Found the {d} following issues while tokenizing:\n", .{msgs.len});
     var newlines = std.ArrayList(usize).init(allocator);
     defer newlines.deinit();
     newlines.append(0) catch |err| exitOnOom(err);
@@ -86,7 +86,7 @@ fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []cons
                 );
             },
             else => {
-                std.debug.print("MSG: {any}", .{message});
+                std.debug.print("MSG: {any}\n", .{message});
             },
         }
     }

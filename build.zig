@@ -119,6 +119,7 @@ pub fn build(b: *std.Build) void {
             use_system_afl,
             check_step,
             target,
+            optimize,
             name,
         );
     }
@@ -131,6 +132,7 @@ fn add_fuzz_target(
     use_system_afl: bool,
     check_step: *Step,
     target: ResolvedTarget,
+    optimize: OptimizeMode,
     name: []const u8,
 ) void {
     // We always include the repro scripts (no dependencies).
@@ -155,7 +157,7 @@ fn add_fuzz_target(
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = optimize,
         .link_libc = true,
     });
     install_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
@@ -172,7 +174,7 @@ fn add_fuzz_target(
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
-        .optimize = .Debug,
+        .optimize = optimize,
         .link_libc = true,
     });
     check_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
