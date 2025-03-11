@@ -31,10 +31,10 @@ jobs:
       - uses: dorny/paths-filter@v3
         id: other_filter
         with:
+          # Makes it so that every pattern below must match.
+          # This enables the negative patterns to disable this job.
+          predicate-quantifier: 'every'
           filters: |
-            # Makes it so that every pattern below must match.
-            # This enables the negative patterns to disable this job.
-            predicate-quantifier: 'every'
             other_than_zig:
               - '**/*'
               - '!src/**'
