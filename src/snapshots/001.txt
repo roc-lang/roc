@@ -16,10 +16,10 @@ KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerId
 ~~~PARSE
 (file
     (module
-        (exposed_item (lower_ident 'foo')))
+        (exposed_item (lower_ident "foo")))
     (decl
-        (ident 'foo')
-        (string 'one')))
+        (ident "foo")
+        (string "one")))
 ~~~FORMATTED
 module [foo]
 

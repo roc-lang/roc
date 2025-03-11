@@ -19,21 +19,21 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDo
 ~~~PARSE
 (file
     (module
-        (exposed_item (lower_ident 'decoder')))
+        (exposed_item (lower_ident "decoder")))
     (import
-        'json'
-        '.Json'
-        '')
+        "json"
+        ".Json"
+        "")
     (decl
-        (ident 'decoder')
-        (ident 'Utf8' '.decode'))
-    (crash (string 'something'))
+        (ident "decoder")
+        (ident "Utf8" ".decode"))
+    (crash (string "something"))
     (expect
         (binop
-            '=='
-            (int '1')
-            (int '1')))
-    (return (int '2')))
+            "=="
+            (int "1")
+            (int "1")))
+    (return (int "2")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -11,13 +11,13 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIden
 ~~~PARSE
 (file
     (module
-        (exposed_item (lower_ident 'add2')))
+        (exposed_item (lower_ident "add2")))
     (decl
-        (ident 'add2')
+        (ident "add2")
         (binop
-            '+'
-            (ident '' 'x')
-            (int '2'))))
+            "+"
+            (ident "" "x")
+            (int "2"))))
 ~~~FORMATTED
 module [add2]
 

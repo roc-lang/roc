@@ -393,10 +393,8 @@ pub const Diagnostic = struct {
 
                 var carets = std.ArrayList(u8).init(gpa);
                 defer carets.deinit();
-                for (0..end_col - start_col) |_| {
-                    try carets.append('^');
-                }
-                if (carets.items.len == 0) {
+                const caret_length = if (self.end > self.begin) self.end - self.begin else 1;
+                for (0..caret_length) |_| {
                     try carets.append('^');
                 }
 

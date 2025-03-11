@@ -13,14 +13,14 @@ KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,O
 ~~~PARSE
 (file
     (module
-        (exposed_item (lower_ident 'foo'))
-        (exposed_item (lower_ident 'bar')))
+        (exposed_item (lower_ident "foo"))
+        (exposed_item (lower_ident "bar")))
     (decl
-        (ident 'foo')
-        (string 'one'))
+        (ident "foo")
+        (string "one"))
     (decl
-        (ident 'bar')
-        (string 'two')))
+        (ident "bar")
+        (string "two")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

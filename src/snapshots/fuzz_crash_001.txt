@@ -9,8 +9,8 @@ PARSER: unexpected_token
 LowerIdent,OpBar,OpPercent,EndOfFile
 ~~~PARSE
 (file
-    (malformed_header 'missing_header')
-    (malformed_expr 'unexpected_token'))
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token"))
 ~~~FORMATTED
 
 ~~~END

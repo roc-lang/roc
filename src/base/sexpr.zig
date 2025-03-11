@@ -129,7 +129,7 @@ pub const Expr = union(enum) {
 
                 try writer.print(")", .{});
             },
-            .string => |s| try writer.print("'{s}'", .{s}),
+            .string => |s| try writer.print("\"{s}\"", .{s}),
             .signed_int => |i| try writer.print("{d}", .{i}),
             .unsigned_int => |u| try writer.print("{d}", .{u}),
             .float => |f| try writer.print("{any}", .{f}),

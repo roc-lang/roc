@@ -7,7 +7,7 @@ NIL
 ~~~TOKENS
 KwModule,EndOfFile
 ~~~PARSE
-(file (malformed_header 'header_expected_open_bracket'))
+(file (malformed_header "header_expected_open_bracket"))
 ~~~FORMATTED
 
 ~~~END
