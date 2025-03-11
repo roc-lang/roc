@@ -153,9 +153,6 @@ pub fn parseFile(self: *Parser) void {
         }
     }
 
-    // TODO: fix me, blows up on empty input
-    // std.debug.assert(self.store.scratch_statements.items.len > 0);
-
     _ = self.store.addFile(.{
         .header = header,
         .statements = self.store.statementSpanFrom(scratch_top),
