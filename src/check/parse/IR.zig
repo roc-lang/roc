@@ -31,6 +31,7 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+/// Returns true if the given region spans multiple lines.
 pub fn regionIsMultiline(self: *IR, region: Region) bool {
     std.debug.print("\n\n=========\n\nLooking for mulitiline region at {any}\n", .{region});
     var i = region.start;
