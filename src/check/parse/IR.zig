@@ -2719,7 +2719,7 @@ pub fn resolve(self: *IR, token: TokenIdx) []const u8 {
 
 /// Contains properties of the thing to the right of the `import` keyword.
 pub const ImportRhs = packed struct {
-    /// e.g. 1 in case `SomeModule` is an alias in `import SomeModule exposing [...]`
+    /// e.g. 1 in case we use import `as`: `import Module as Mod`
     aliased: u1,
     /// 1 in case the import is qualified, e.g. `pf` in `import pf.Stdout ...`
     qualified: u1,
