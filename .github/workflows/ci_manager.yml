@@ -32,6 +32,9 @@ jobs:
         id: other_filter
         with:
           filters: |
+            # Makes it so that every pattern below must match.
+            # This enables the negative patterns to disable this job.
+            predicate-quantifier: 'every'
             other_than_zig:
               - '**/*'
               - '!src/**'
