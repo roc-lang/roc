@@ -4,8 +4,8 @@
     .minimum_zig_version = "0.14.0",
     .dependencies = .{
         .afl_kit = .{
-            .url = "git+https://github.com/bhansconnect/zig-afl-kit?ref=zig-0.14.0#323ec465fe33f0e4820648e713b70ffc494fb0c6",
-            .hash = "afl_kit-0.1.0-uhOgGDQdAADv-nfytsC3tGTQMfaG11pR-NV87LKev3H8",
+            .url = "git+https://github.com/bhansconnect/zig-afl-kit?ref=zig-0.14.0#9f09f8e5c29102b94d775305801315320515a2b8",
+            .hash = "afl_kit-0.1.0-uhOgGEEbAADSSVtFLWc0eoZFxVLiELWLNldB9K_f9x5L",
             .lazy = true,
         },
         .roc_deps_aarch64_macos_none = .{

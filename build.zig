@@ -141,13 +141,9 @@ fn add_fuzz_target(
         .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
         .target = target,
-        .optimize = .ReleaseSafe,
+        // Work around instrumentation bugs on mac without giving up perf on linux.
+        .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
-
-    // TODO: look into enabling this, I think it may only work on linux for 0.14.0
-    // fuzz_obj.root_module.fuzz = true;
-    fuzz_obj.root_module.stack_check = false; // not linking with compiler-rt
-    fuzz_obj.root_module.link_libc = true; // afl runtime depends on libc
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
