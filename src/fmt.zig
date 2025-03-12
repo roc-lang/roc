@@ -199,6 +199,9 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
         .int => |i| {
             fmt.pushTokenText(i.token);
         },
+        .float => |f| {
+            fmt.pushTokenText(f.token);
+        },
         .list => |l| {
             const multiline = fmt.ast.regionIsMultiline(l.region);
             fmt.push('[');

@@ -861,6 +861,13 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
                 .region = .{ .start = start, .end = start },
             } });
         },
+        .Float => {
+            self.advance();
+            expr = self.store.addExpr(.{ .float = .{
+                .token = start,
+                .region = .{ .start = start, .end = start },
+            } });
+        },
         .StringStart => {
             expr = self.parseStringExpr();
         },

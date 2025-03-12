@@ -1503,6 +1503,12 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
+            .float => {
+                return .{ .float = .{
+                    .token = node.main_token,
+                    .region = node.region,
+                } };
+            },
             .ident => {
                 var qualifier: ?TokenIdx = null;
                 if (node.data.rhs == 1) {
