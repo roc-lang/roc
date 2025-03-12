@@ -54,7 +54,7 @@ pub fn regionIsMultiline(self: *IR, region: Region) bool {
     return false;
 }
 
-pub fn regionInfo(self: *IR, region: Region) base.DiagnosticPositionInfo {
+pub fn regionInfo(self: *IR, region: Region) base.DiagnosticPosition {
     if (self.newlines == null) {
         @panic("expected newline offsets to have been calculated");
     }
@@ -64,13 +64,13 @@ pub fn regionInfo(self: *IR, region: Region) base.DiagnosticPositionInfo {
 
     if (end.isEmpty()) {
         // use the range from start only
-        const info = base.DiagnosticPositionInfo.get(self.source, self.newlines.?, start.start.offset, start.end.offset) catch {
+        const info = base.DiagnosticPosition.position(self.source, self.newlines.?, start.start.offset, start.end.offset) catch {
             std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
         };
 
         return info;
     } else {
-        const info = base.DiagnosticPositionInfo.get(self.source, self.newlines.?, start.start.offset, end.end.offset) catch {
+        const info = base.DiagnosticPosition.position(self.source, self.newlines.?, start.start.offset, end.end.offset) catch {
             std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
         };
 
@@ -3186,7 +3186,7 @@ pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) 
     // calculate the offsets of newlines once and save in the IR
     // for use in each toSExpr function
     if (ir.newlines == null) {
-        ir.newlines = try base.DiagnosticPositionInfo.countNewlines(env.gpa, ir.source);
+        ir.newlines = try base.DiagnosticPosition.findLineStarts(env.gpa, ir.source);
     }
 
     var node = file.toSExpr(env, ir);
