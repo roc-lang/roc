@@ -783,7 +783,6 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
         .tokens = result.tokens,
         .store = parser.store,
         .errors = errors,
-        .newlines = null,
     };
     defer parse_ast.deinit();
     defer std.testing.allocator.free(parse_ast.errors);

@@ -84,10 +84,10 @@ pub const Expr = union(enum) {
 
     pub fn appendRegionChild(self: *Expr, gpa: Allocator, region: DiagnosticPosition) void {
         self.appendNodeChildUnsafe(gpa, .{ .region = DiagnosticPosition{
-            .start_line = region.start_line,
-            .start_col = region.start_col,
-            .end_line = region.end_line,
-            .end_col = region.end_col,
+            .start_line_idx = region.start_line_idx,
+            .start_col_idx = region.start_col_idx,
+            .end_line_idx = region.end_line_idx,
+            .end_col_idx = region.end_col_idx,
             .line_text = gpa.dupe(u8, region.line_text) catch {
                 @panic("Failed to duplicate string value");
             },
@@ -181,10 +181,11 @@ pub const Expr = union(enum) {
             },
             .region => |region| {
                 try writer.print("({d}:{d}-{d}:{d})", .{
-                    region.start_line,
-                    region.start_col,
-                    region.end_line,
-                    region.end_col,
+                    // add one to display numbers instead of index
+                    region.start_line_idx + 1,
+                    region.start_col_idx + 1,
+                    region.end_line_idx + 1,
+                    region.end_col_idx + 1,
                 });
             },
             .string => |s| try writer.print("\"{s}\"", .{s}),

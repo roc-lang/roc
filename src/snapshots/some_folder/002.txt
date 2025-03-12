@@ -11,16 +11,16 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
-(file (0:0-4:11)
-    (module (0:0-2:3)
-        (exposed_item (0:8-0:11) (lower_ident "foo"))
-        (exposed_item (0:13-0:16) (lower_ident "bar")))
-    (decl (2:0-2:3)
-        (ident (2:0-2:3) "foo")
-        (string (2:6-2:7) "one"))
-    (decl (4:0-4:11)
-        (ident (4:0-4:3) "bar")
-        (string (4:6-4:11) "two")))
+(file (1:1-5:12)
+    (module (1:1-3:4)
+        (exposed_item (1:9-1:12) (lower_ident "foo"))
+        (exposed_item (1:14-1:17) (lower_ident "bar")))
+    (decl (3:1-3:4)
+        (ident (3:1-3:4) "foo")
+        (string (3:7-3:8) "one"))
+    (decl (5:1-5:12)
+        (ident (5:1-5:4) "bar")
+        (string (5:7-5:12) "two")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

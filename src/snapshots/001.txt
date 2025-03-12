@@ -14,12 +14,12 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
-(file (0:0-7:9)
-    (module (0:0-5:3)
-        (exposed_item (2:1-2:4) (lower_ident "foo")))
-    (decl (5:0-7:9)
-        (ident (5:0-5:3) "foo")
-        (string (7:4-7:9) "one")))
+(file (1:1-8:10)
+    (module (1:1-6:4)
+        (exposed_item (3:2-3:5) (lower_ident "foo")))
+    (decl (6:1-8:10)
+        (ident (6:1-6:4) "foo")
+        (string (8:5-8:10) "one")))
 ~~~FORMATTED
 module [foo]
 

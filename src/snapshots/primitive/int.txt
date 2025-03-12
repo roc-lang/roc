@@ -1,0 +1,21 @@
+~~~META
+description=A primitive int
+~~~SOURCE
+module [foo]
+foo = 42
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,Int,EndOfFile
+~~~PARSE
+(file (1:1-2:9)
+    (module (1:1-2:4)
+        (exposed_item (1:9-1:12) (lower_ident "foo")))
+    (decl (2:1-2:9)
+        (ident (2:1-2:4) "foo")
+        (int "42")))
+~~~FORMATTED
+module [foo]
+
+foo = 42
+~~~END

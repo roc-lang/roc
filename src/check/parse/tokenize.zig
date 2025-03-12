@@ -347,7 +347,7 @@ pub const Diagnostic = struct {
 
         var spaces = std.ArrayList(u8).init(gpa);
         defer spaces.deinit();
-        for (0..info.start_col) |_| {
+        for (0..info.start_col_idx) |_| {
             try spaces.append(' ');
         }
 
@@ -362,7 +362,17 @@ pub const Diagnostic = struct {
         const error_message = try std.fmt.allocPrint(
             gpa,
             "TOKENIZE: ({d}:{d}-{d}:{d}) {s}:\n{s}\n{s}{s}",
-            .{ info.start_line + 1, info.start_col + 1, info.end_line + 1, info.end_col + 1, @tagName(self.tag), display_text, spaces.items, carets.items },
+            .{
+                // add one to display numbers instead of index
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+                @tagName(self.tag),
+                display_text,
+                spaces.items,
+                carets.items,
+            },
         );
         defer gpa.free(error_message);
 

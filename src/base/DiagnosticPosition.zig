@@ -3,10 +3,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-start_line: u32,
-start_col: u32,
-end_line: u32,
-end_col: u32,
+// byte indexes into the source text
+start_line_idx: u32,
+start_col_idx: u32,
+end_line_idx: u32,
+end_col_idx: u32,
 line_text: []const u8,
 
 const DiagnosticPosition = @This();
@@ -78,17 +79,17 @@ pub fn position(source: []const u8, line_starts: std.ArrayList(u32), begin: u32,
         return error.EndTooLarge;
     }
 
-    const start_line = lineIdx(line_starts, begin);
-    const start_col = try columnIdx(line_starts, start_line, begin);
-    const end_line = lineIdx(line_starts, end);
-    const end_col = try columnIdx(line_starts, end_line, end);
-    const line_text = getLineText(source, line_starts, start_line);
+    const start_line_idx = lineIdx(line_starts, begin);
+    const start_col_idx = try columnIdx(line_starts, start_line_idx, begin);
+    const end_line_idx = lineIdx(line_starts, end);
+    const end_col_idx = try columnIdx(line_starts, end_line_idx, end);
+    const line_text = getLineText(source, line_starts, start_line_idx);
 
     return .{
-        .start_line = start_line,
-        .start_col = start_col,
-        .end_line = end_line,
-        .end_col = end_col,
+        .start_line_idx = start_line_idx,
+        .start_col_idx = start_col_idx,
+        .end_line_idx = end_line_idx,
+        .end_col_idx = end_col_idx,
         .line_text = line_text,
     };
 }
@@ -162,16 +163,16 @@ test "get" {
     try line_starts.append(12); // After "line1\n"
 
     const info1 = try position(source, line_starts, 2, 4); // "ne" in line0
-    try std.testing.expectEqual(@as(u32, 0), info1.start_line);
-    try std.testing.expectEqual(@as(u32, 2), info1.start_col);
-    try std.testing.expectEqual(@as(u32, 0), info1.end_line);
-    try std.testing.expectEqual(@as(u32, 4), info1.end_col);
+    try std.testing.expectEqual(@as(u32, 0), info1.start_line_idx);
+    try std.testing.expectEqual(@as(u32, 2), info1.start_col_idx);
+    try std.testing.expectEqual(@as(u32, 0), info1.end_line_idx);
+    try std.testing.expectEqual(@as(u32, 4), info1.end_col_idx);
     try std.testing.expectEqualStrings("line0\n", info1.line_text);
 
     const info2 = try position(source, line_starts, 8, 10); // "ne" in line1
-    try std.testing.expectEqual(@as(u32, 1), info2.start_line);
-    try std.testing.expectEqual(@as(u32, 2), info2.start_col);
-    try std.testing.expectEqual(@as(u32, 1), info2.end_line);
-    try std.testing.expectEqual(@as(u32, 4), info2.end_col);
+    try std.testing.expectEqual(@as(u32, 1), info2.start_line_idx);
+    try std.testing.expectEqual(@as(u32, 2), info2.start_col_idx);
+    try std.testing.expectEqual(@as(u32, 1), info2.end_line_idx);
+    try std.testing.expectEqual(@as(u32, 4), info2.end_col_idx);
     try std.testing.expectEqualStrings("line1\n", info2.line_text);
 }

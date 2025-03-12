@@ -13,40 +13,40 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
-(file (0:0-6:37)
-    (module (0:0-2:3))
-    (type_anno (2:0-3:3)
+(file (1:1-7:38)
+    (module (1:1-3:4))
+    (type_anno (3:1-4:4)
         "foo"
-        (tag (2:6-2:9) "U64"))
-    (type_anno (3:0-4:3)
+        (tag (3:7-3:10) "U64"))
+    (type_anno (4:1-5:4)
         "bar"
-        (tag (3:6-4:3)
+        (tag (4:7-5:4)
             "Thing"
-            (ty_var (3:12-3:13) "a")
-            (ty_var (3:15-3:16) "b")
+            (ty_var (4:13-4:14) "a")
+            (ty_var (4:16-4:17) "b")
             (_)))
-    (type_anno (4:0-5:7)
+    (type_anno (5:1-6:8)
         "baz"
-        (tuple (4:6-5:7)
-            (ty_var (4:7-4:8) "a")
-            (ty_var (4:10-4:11) "b")
-            (ty_var (4:13-4:14) "c")))
-    (type_anno (5:0-6:5)
+        (tuple (5:7-6:8)
+            (ty_var (5:8-5:9) "a")
+            (ty_var (5:11-5:12) "b")
+            (ty_var (5:14-5:15) "c")))
+    (type_anno (6:1-7:6)
         "add_one"
-        (fn (5:11-5:26)
-            (tag (5:22-5:25) "U32")
-            (tag (5:11-5:13) "U8")
-            (tag (5:15-5:18) "U16")))
-    (type_anno (6:0-6:37)
+        (fn (6:12-6:27)
+            (tag (6:23-6:26) "U32")
+            (tag (6:12-6:14) "U8")
+            (tag (6:16-6:19) "U16")))
+    (type_anno (7:1-7:38)
         "main!"
-        (fn (6:8-6:37)
-            (tag (6:24-6:37)
+        (fn (7:9-7:38)
+            (tag (7:25-7:38)
                 "Result"
-                (record (6:31-6:34))
+                (record (7:32-7:35))
                 (_))
-            (tag (6:8-6:23)
+            (tag (7:9-7:24)
                 "List"
-                (tag (6:13-6:19) "String")))))
+                (tag (7:14-7:20) "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

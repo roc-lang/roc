@@ -1,15 +1,17 @@
 ~~~META
 description=fuzz crash
 ~~~SOURCE
-mo|%
+||1
 ~~~PROBLEMS
+TOKENIZE: (1:2-1:2) AsciiControl:
+||1
+ ^
 PARSER: missing_header
-PARSER: pattern_unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-LowerIdent,OpBar,OpPercent,EndOfFile
+OpBar,OpBar,Int,EndOfFile
 ~~~PARSE
-(file (0:0-0:4)
+(file (1:1-1:5)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED

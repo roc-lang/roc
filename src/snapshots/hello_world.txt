@@ -11,16 +11,16 @@ NIL
 ~~~TOKENS
 KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,EndOfFile
 ~~~PARSE
-(file (0:0-4:41)
-    (app (0:0-0:3) "TODO implement toSExpr for app module header")
-    (import (2:0-4:5) "pf" ".Stdout" "")
-    (decl (4:0-4:41)
-        (ident (4:0-4:5) "main!")
-        (lambda (4:8-4:41)
+(file (1:1-5:42)
+    (app (1:1-1:4) "TODO implement toSExpr for app module header")
+    (import (3:1-5:6) "pf" ".Stdout" "")
+    (decl (5:1-5:42)
+        (ident (5:1-5:6) "main!")
+        (lambda (5:9-5:42)
             (args (underscore))
-            (apply (4:12-4:41)
-                (ident (4:12-4:24) "Stdout" ".line!")
-                (string (4:25-4:41) "Hello, world!")))))
+            (apply (5:13-5:42)
+                (ident (5:13-5:25) "Stdout" ".line!")
+                (string (5:26-5:42) "Hello, world!")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -10,7 +10,7 @@ PARSER: unexpected_token
 ~~~TOKENS
 OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,EndOfFile
 ~~~PARSE
-(file (0:1-0:17)
+(file (1:2-1:18)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED
