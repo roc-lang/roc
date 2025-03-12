@@ -1,3 +1,5 @@
+//! TODO top comment that explains purpose of file
+
 const std = @import("std");
 const base = @import("../../base.zig");
 const types_module = @import("../../types.zig");
@@ -13,20 +15,20 @@ const Self = @This();
 env: *base.ModuleEnv,
 exposed_values: std.AutoHashMap(Ident.Idx, Expr.Idx),
 exposed_functions: std.AutoHashMap(Ident.Idx, Function),
-/// ??? all types in the module?
+/// All types in the module
 types: Type.List,
-/// ??? all expressions in the module?
+/// All expressions in the module
 exprs: Expr.List,
-/// ??? all typed expressions in the module?
+/// All typed expressions in the module
 typed_exprs: Expr.Typed.List,
-/// ??? all patterns in the module?
+/// All patterns (for pattern matching, destructuring, var name) in the module
 patterns: Pattern.List,
-/// ??? all typed patterns in the module?
+/// All typed patterns in the module
 typed_patterns: Pattern.Typed.List,
-/// ??? all typed identifiers in the module?
+/// All typed identifiers in the module
 typed_idents: TypedIdent.List,
-/// ??? all when branches in the module?
-when_branches: WhenBranch.List,
+/// All match branches in the module
+match_branches: MatchBranch.List,
 
 pub fn init(env: *base.ModuleEnv) Self {
     return Self{
@@ -39,7 +41,7 @@ pub fn init(env: *base.ModuleEnv) Self {
         .patterns = .{},
         .typed_patterns = .{},
         .typed_idents = .{},
-        .when_branches = .{},
+        .match_branches = .{},
     };
 }
 
@@ -52,23 +54,24 @@ pub fn deinit(self: *Self) void {
     self.patterns.deinit(self.env.gpa);
     self.typed_patterns.deinit(self.env.gpa);
     self.typed_idents.deinit(self.env.gpa);
-    self.when_branches.deinit(self.env.gpa);
+    self.match_branches.deinit(self.env.gpa);
 }
 
-/// Represents a Roc type e.g. `U64`, `Str`, `List(U64)`
+/// Represents a concrete (no type variables,...) Roc type e.g. `U64`, `Str`, `List(U64)`
 pub const Type = union(enum) {
     /// e.g. Int, Bool, Str
     primitive: types_module.Primitive,
-    /// Holds unknown Roc type for use with platform or can be used to improve perf in rare cases roc-lang.org/builtins/Box
+    /// Holds unknown Roc type for use with platform or can be used to improve perf in rare cases https://www.roc-lang.org/builtins/Box
     box: Type.Idx,
     /// e.g. List(U64)
     list: Type.Idx,
-    /// ??? Record?
+    /// Records, tuples and tag union payload become structs
     @"struct": Type.NonEmptySlice,
     /// e.g. `[Red, Yellow, Green]`
     tag_union: Type.NonEmptySlice,
+    /// A function that has a return value and 0 or more arguments
     func: struct {
-        /// ???
+        /// A slice containing the return value followed by the arguments
         ret_then_args: Type.NonEmptySlice,
     },
     /// list of Type
@@ -113,11 +116,11 @@ pub const Expr = union(enum) {
         body: Expr.Idx,
         recursive: base.Recursive,
     },
-    /// ??? What's this?
+    /// Represents the empty record `{}`
     unit,
-    /// ??? What's this?
+    /// Record or tuple becomes struct
     @"struct": Expr.NonEmptySlice,
-    /// Should this be called record access?
+    /// Record or tuple access
     struct_access: struct {
         record_expr: Expr.Idx,
         record_type: Type.Idx,
@@ -126,23 +129,23 @@ pub const Expr = union(enum) {
     },
     /// e.g. `Ok(1)`
     tag: struct {
-        /// ??? Numeric representation of the tag variant? How to find the name of the tag?
+        /// Numeric representation of the tag variant
         discriminant: u16,
         /// e.g. `Result` for `Ok(1)`
         tag_union_type: Type.Idx,
         /// e.g. `1` for `Ok(1)`
         args: Expr.Typed.Slice,
     },
-    /// ??? Didn't we change `when` to `match`?
-    when: struct {
-        /// The value being matched on, e.g. `when value is`
+    /// from pattern matching with `match`
+    match: struct {
+        /// The value being matched on, e.g. `match value is`
         value: Expr.Idx,
         /// The type of the value being matched on
         value_type: Type.Idx,
-        /// The return type of all branches and thus the whole when expression
+        /// The return type of all branches and thus the whole match expression
         branch_type: Type.Idx,
-        /// The branches of the when expression
-        branches: WhenBranch.NonEmptySlice,
+        /// The branches of the match expression
+        branches: MatchBranch.NonEmptySlice,
     },
 
     compiler_bug: Problem.Compiler,
@@ -155,7 +158,7 @@ pub const Expr = union(enum) {
     pub const Slice = List.Slice;
     /// Sublist reference into Expr.List that is guaranteed to be non-empty
     pub const NonEmptySlice = List.NonEmptySlice;
-    /// ??? Type annotated expression e.g. `1: U64` ?
+    /// Expression with accompanying type
     pub const Typed = struct {
         expr: Expr.Idx,
         type: Type.Idx,
@@ -168,9 +171,9 @@ pub const Expr = union(enum) {
 
 /// A definition, e.g. `x = foo`
 pub const Def = struct {
-    /// ??? Is pattern for what's to the left of `=`?
+    /// For what's to the left of `=`, could be a var name or destructuring
     pattern: Pattern.Idx,
-    /// Named variables in the pattern, e.g. `a` in `Ok a ->` ??? A when branch is not a Def right?
+    /// Named variables in the pattern, e.g. `a` and `b` in `{a, b} = ...`
     pattern_vars: TypedIdent.Slice,
     /// expression to the right of `=`
     expr: Expr.Idx,
@@ -182,17 +185,17 @@ pub const Def = struct {
     pub const Slice = List.Slice;
 };
 
-/// Branch of a `when` expression, e.g. `Green -> "green"`
-pub const WhenBranch = struct {
+/// Branch of a `match` expression, e.g. `Green -> "green"`
+pub const MatchBranch = struct {
     /// The pattern(s) to match the value against
     patterns: Pattern.NonEmptySlice,
     /// A boolean expression that must be true for this branch to be taken
     guard: ?Expr.Idx,
     /// The expression to produce if the pattern matches
     value: Expr.Idx,
-    /// List of WhenBranch
+    /// List of MatchBranch
     pub const List = collections.SafeList(@This());
-    /// Reference to non-empty sublist into WhenBranch.List
+    /// Reference to non-empty sublist into MatchBranch.List
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
@@ -204,18 +207,15 @@ pub const Function = struct {
     expr: Expr.Idx,
 };
 
-/// ??? For Record destructuring, e.g. `{ x, y } = coords(point)`
+/// For record/tuple destructuring, e.g. `{ x, y: 123 } -> ...` contains two StructDestruct: one for `x` and one for `y`.
 pub const StructDestruct = struct {
-    /// ???
     ident: Ident.Idx,
-    /// ???
     field: Ident.Idx,
     kind: Kind,
-    /// ???
     pub const Kind = union(enum) {
-        /// ???
+        /// e.g `x` in `{ x, y: 123 }` is required
         required,
-        /// ???
+        /// e.g. .{ .num_literal = 123 } in `{ x, y: 123 }`. Keeping the value of y around is not required
         guard: Pattern.Typed,
     };
     /// List of StructDestruct
@@ -224,15 +224,15 @@ pub const StructDestruct = struct {
     pub const Slice = List.Slice;
 };
 
-/// Represents a pattern used in pattern matching e.g. `Ok x` as part of a when branch.
+/// Represents a pattern used in pattern matching e.g. `Ok x` as part of a match branch.
 pub const Pattern = union(enum) {
     /// e.g. `x`
     identifier: Ident.Idx,
-    /// e.g. `.. as tail` in `[head, .. as tail] -> prepend(head, tail)`
+    /// e.g. `{ x, y } as data` in `{ x, y } as data -> call(data)`
     as: struct {
-        /// e.g. `..` in `.. as tail`
+        /// e.g. `{ x, y }` in `{ x, y } as data`
         pattern: Pattern.Idx,
-        /// e.g. `tail` in `.. as tail`
+        /// e.g. `data` in `{ x, y } as data`
         ident: Ident.Idx,
     },
     str_literal: StringLiteral.Idx,
@@ -248,7 +248,7 @@ pub const Pattern = union(enum) {
     /// e.g. `{x, y}` in `{x, y} -> Point(x, y)`
     struct_destructure: struct {
         struct_type: Type.Idx,
-        /// ??? e.g. `x` and `y` in `{x, y}`
+        /// e.g. for `{ x, y: 123 } -> ...` there are two StructDestruct; one for x and one for y.
         destructs: StructDestruct.Slice,
         /// e.g. `..` in `{x, y, ..}`
         opt_spread: ?Pattern.Typed,
@@ -258,11 +258,11 @@ pub const Pattern = union(enum) {
         elem_type: Type.Idx,
         /// e.g. Foo and Bar in `[Foo, Bar, ..]`
         patterns: Pattern.Slice,
-        /// refers to e.g. `.. as tail` in `[head, .. as tail]`
+        /// refers to e.g. `..tail` in `[head, ..tail]`
         opt_rest: ?struct {
             /// position in list of `..`; e.g. 0 in `[.., Foo, Bar]`
             offset: u16,
-            /// e.g. tail in `.. as tail`
+            /// e.g. tail in `..tail`
             name: ?Ident.Idx,
         },
     },
@@ -277,11 +277,9 @@ pub const Pattern = union(enum) {
     pub const Slice = List.Slice;
     /// Sublist reference into Pattern.List that is guaranteed to be non-empty
     pub const NonEmptySlice = List.NonEmptySlice;
-    /// ??? Type annotated pattern e.g. `x: U64`, do we properly support this in a when branch in Roc?
+    /// Pattern with accompanying type
     pub const Typed = struct {
-        /// e.g `x` in `x: U64`
         pattern: Pattern.Idx,
-        /// e.g `U64` in `x: U64`
         type: Type.Idx,
         /// List of Pattern.Typed
         pub const List = collections.SafeMultiList(@This());
@@ -290,11 +288,10 @@ pub const Pattern = union(enum) {
     };
 };
 
-/// Typed Identifier, e.g. `x: U64`
+/// Identifier along with its type
 pub const TypedIdent = struct {
-    /// e.g. `x` in `x: U64`
+    /// e.g. `x`
     pattern: Pattern.Idx,
-    /// e.g. `U64` in `x: U64`
     type: Type.Idx,
     /// List of TypedIdent
     pub const List = collections.SafeMultiList(@This());
