@@ -1,7 +1,7 @@
 ~~~META
-description=A primitive int
+description=A primitive
 ~~~SOURCE
-module []
+module [foo]
 foo = 12.34
 ~~~PROBLEMS
 NIL

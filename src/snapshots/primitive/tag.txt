@@ -2,20 +2,20 @@
 description=A primitive
 ~~~SOURCE
 module [foo]
-foo = 42
+foo = FortyTwo
 ~~~PROBLEMS
 NIL
 ~~~TOKENS
-KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,Int,EndOfFile
+KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,UpperIdent,EndOfFile
 ~~~PARSE
-(file (1:1-2:9)
+(file (1:1-2:15)
     (module (1:1-2:4)
         (exposed_item (1:9-1:12) (lower_ident "foo")))
-    (decl (2:1-2:9)
+    (decl (2:1-2:15)
         (ident (2:1-2:4) "foo")
-        (int (2:7-2:9) "42")))
+        (tag (2:7-2:15) "FortyTwo")))
 ~~~FORMATTED
 module [foo]
 
-foo = 42
+foo = FortyTwo
 ~~~END
