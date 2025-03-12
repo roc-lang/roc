@@ -12,9 +12,9 @@ NIL
 KwModule,OpenSquare,CloseSquare,Newline,StringStart,StringPart,StringEnd,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file (0:0-4:5)
-    (module (0:1-2:3))
-    (string (0:1-2:3) "one")
-    (string (0:1-2:3) "two"))
+    (module (0:0-2:1))
+    (string (2:0-2:1) "one")
+    (string (4:0-4:5) "two"))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

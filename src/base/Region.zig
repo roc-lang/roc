@@ -26,13 +26,17 @@ pub fn zero() Region {
     };
 }
 
+pub fn isEmpty(self: Region) bool {
+    return self.start.offset == 0 and self.end.offset == 0;
+}
+
 /// Write the debug format of a region to a writer.
 pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);
     }
 
-    if (self.start.offset == 0 and self.end.offset == 0) {
+    if (self.isEmpty()) {
         // In tests, it's super common to set all Located values to 0.
         // Also in tests, we don't want to bother printing the locations
         // because it makes failed assertions much harder to read.

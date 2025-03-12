@@ -10,10 +10,10 @@ PARSER: no_else
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,LowerIdent,Int,EndOfFile
 ~~~PARSE
 (file (0:0-2:19)
-    (module (0:1-2:3))
-    (decl (0:1-2:3)
-        (ident (0:1-2:3) "foo")
-        (malformed_expr (0:1-2:3) "no_else")))
+    (module (0:0-2:3))
+    (decl (2:0-2:19)
+        (ident (2:0-2:3) "foo")
+        (malformed_expr "no_else")))
 ~~~FORMATTED
 module []
 

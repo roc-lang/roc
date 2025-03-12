@@ -10,9 +10,9 @@ PARSER: unexpected_token
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE
 (file (0:0-0:7)
-    (malformed_header (0:1-2:3) "missing_header")
-    (malformed_expr (0:1-2:3) "unexpected_token")
-    (malformed_expr (0:1-2:3) "unexpected_token"))
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token"))
 ~~~FORMATTED
 
 

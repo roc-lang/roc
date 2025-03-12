@@ -21,12 +21,12 @@ PARSER: missing_header
 UpperIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file (0:0-4:34)
-    (malformed_header (0:1-2:3) "missing_header")
+    (malformed_header "missing_header")
     (record (0:1-2:3)
         (field "o"))
-    (decl (0:1-2:3)
-        (ident (0:1-2:3) "foo")
-        (string (0:1-2:3) "on        (string 'onmo %')))")))
+    (decl (2:0-4:34)
+        (ident (2:0-2:3) "foo")
+        (string (4:4-4:34) "on        (string 'onmo %')))")))
 ~~~FORMATTED
 { o }
 

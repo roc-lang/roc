@@ -10,17 +10,17 @@ NIL
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,OpPlus,Int,EndOfFile
 ~~~PARSE
 (file (0:0-2:17)
-    (module (0:1-2:3)
-        (exposed_item (0:1-2:3) (0:1-2:3)
+    (module (0:0-2:4)
+        (exposed_item (0:8-0:12)
             (lower_ident "add2")))
-    (decl (0:1-2:3)
-        (ident (0:1-2:3) "add2")
+    (decl (2:0-2:17)
+        (ident (2:0-2:4) "add2")
         (binop
             "+"
-            (ident (0:1-2:3)
+            (ident (2:7-2:8)
                 ""
                 "x")
-            (int (0:1-2:3) "2"))))
+            (int "2"))))
 ~~~FORMATTED
 module [add2]
 

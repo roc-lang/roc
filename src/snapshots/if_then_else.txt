@@ -14,18 +14,18 @@ NIL
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,UpperIdent,Newline,KwElse,OpenCurly,Newline,UpperIdent,Newline,CloseCurly,EndOfFile
 ~~~PARSE
 (file (0:0-6:5)
-    (module (0:1-2:3)
-        (exposed_item (0:1-2:3) (0:1-2:3)
+    (module (0:0-2:3)
+        (exposed_item (0:8-0:11)
             (lower_ident "foo")))
-    (decl (0:1-2:3)
-        (ident (0:1-2:3) "foo")
-        (if_then_else (0:1-2:3)
-            (ident (0:1-2:3)
+    (decl (2:0-6:5)
+        (ident (2:0-2:3) "foo")
+        (if_then_else (2:6-6:5)
+            (ident (2:9-2:13)
                 ""
                 "true")
-            (tag (0:1-2:3) "A")
-            (block (0:1-2:3)
-                (tag (0:1-2:3) "B")))))
+            (tag (2:14-2:15) "A")
+            (block (4:9-6:5)
+                (tag (5:4-5:5) "B")))))
 ~~~FORMATTED
 module [foo]
 

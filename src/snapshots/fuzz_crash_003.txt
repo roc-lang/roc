@@ -11,8 +11,8 @@ PARSER: missing_header
 OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file (0:1-0:6)
-    (malformed_header (0:1-2:3) "missing_header")
-    (string (0:1-2:3) "te"))
+    (malformed_header "missing_header")
+    (string (0:3-0:6) "te"))
 ~~~FORMATTED
 "te"
 ~~~END

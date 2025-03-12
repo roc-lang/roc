@@ -14,39 +14,39 @@ NIL
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
 (file (0:0-6:37)
-    (module (0:1-2:3))
-    (type_anno (0:1-2:3)
+    (module (0:0-2:3))
+    (type_anno (2:0-3:3)
         "foo"
-        (tag (0:1-2:3) "U64"))
-    (type_anno (0:1-2:3)
+        (tag (2:6-2:9) "U64"))
+    (type_anno (3:0-4:3)
         "bar"
-        (tag (0:1-2:3)
+        (tag (3:6-4:3)
             "Thing"
-            (ty_var (0:1-2:3) "a")
-            (ty_var (0:1-2:3) "b")
+            (ty_var (3:12-3:13) "a")
+            (ty_var (3:15-3:16) "b")
             (_)))
-    (type_anno (0:1-2:3)
+    (type_anno (4:0-5:7)
         "baz"
-        (tuple (0:1-2:3)
-            (ty_var (0:1-2:3) "a")
-            (ty_var (0:1-2:3) "b")
-            (ty_var (0:1-2:3) "c")))
-    (type_anno (0:1-2:3)
+        (tuple (4:6-5:7)
+            (ty_var (4:7-4:8) "a")
+            (ty_var (4:10-4:11) "b")
+            (ty_var (4:13-4:14) "c")))
+    (type_anno (5:0-6:5)
         "add_one"
-        (fn (0:1-2:3)
-            (tag (0:1-2:3) "U32")
-            (tag (0:1-2:3) "U8")
-            (tag (0:1-2:3) "U16")))
-    (type_anno (0:1-2:3)
+        (fn (5:11-5:26)
+            (tag (5:22-5:25) "U32")
+            (tag (5:11-5:13) "U8")
+            (tag (5:15-5:18) "U16")))
+    (type_anno (6:0-6:37)
         "main!"
-        (fn (0:1-2:3)
-            (tag (0:1-2:3)
+        (fn (6:8-6:37)
+            (tag (6:24-6:37)
                 "Result"
-                (record (0:1-2:3))
+                (record (6:31-6:34))
                 (_))
-            (tag (0:1-2:3)
+            (tag (6:8-6:23)
                 "List"
-                (tag (0:1-2:3) "String")))))
+                (tag (6:13-6:19) "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
