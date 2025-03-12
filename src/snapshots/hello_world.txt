@@ -20,7 +20,7 @@ KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,
             (args (underscore))
             (apply (5:13-5:42)
                 (ident (5:13-5:25) "Stdout" ".line!")
-                (string (5:26-5:42) "Hello, world!")))))
+                (string (5:26-5:41) (string_part (5:27-5:40) "Hello, world!"))))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -1165,11 +1165,16 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
         }
     }
     const parts = self.store.exprSpanFrom(scratch_top);
-    const expr = self.store.addExpr(.{ .string = .{
-        .token = start,
-        .parts = parts,
-        .region = .{ .start = start, .end = self.pos },
-    } });
+    const expr = self.store.addExpr(.{
+        .string = .{
+            .token = start,
+            .parts = parts,
+            .region = .{
+                .start = start,
+                .end = self.pos -| 1, // we want the previous token's end position here
+            },
+        },
+    });
     return expr;
 }
 

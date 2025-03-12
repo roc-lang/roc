@@ -12,7 +12,7 @@ OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE
 (file (1:2-1:7)
     (malformed_header "missing_header")
-    (string (1:4-1:7) "te"))
+    (string (1:4-1:7) (string_part (1:5-1:7) "te")))
 ~~~FORMATTED
 "te"
 ~~~END

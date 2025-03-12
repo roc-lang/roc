@@ -19,7 +19,7 @@ KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerId
         (exposed_item (3:2-3:5) (lower_ident "foo")))
     (decl (6:1-8:10)
         (ident (6:1-6:4) "foo")
-        (string (8:5-8:10) "one")))
+        (string (8:5-8:10) (string_part (8:6-8:9) "one"))))
 ~~~FORMATTED
 module [foo]
 

@@ -2541,9 +2541,10 @@ pub const NodeStore = struct {
                     return node;
                 },
                 .string_part => |sp| {
-                    const text = ir.resolve(sp.token);
-                    const owned_str: []u8 = env.gpa.dupe(u8, text) catch |err| exitOnOom(err);
-                    return sexpr.Expr{ .string = owned_str };
+                    var node = sexpr.Expr.init(env.gpa, "string_part");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(sp.region, line_starts));
+                    node.appendStringChild(env.gpa, ir.resolve(sp.token));
+                    return node;
                 },
                 // (tag <tag>)
                 .tag => |tag| {

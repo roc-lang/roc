@@ -24,7 +24,8 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDo
     (decl (5:1-7:6)
         (ident (5:1-5:8) "decoder")
         (ident (5:11-5:22) "Utf8" ".decode"))
-    (crash (7:1-7:6) (string (7:7-7:8) "something"))
+    (crash (7:1-7:6)
+        (string (7:7-7:18) (string_part (7:8-7:17) "something")))
     (expect (9:1-11:7)
         (binop
             "=="
