@@ -13,40 +13,40 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
-(file
-    (module)
-    (type_anno
+(file (0:1-2:3)
+    (module (0:1-2:3))
+    (type_anno (0:1-2:3)
         "foo"
-        (tag "U64"))
-    (type_anno
+        (tag (0:1-2:3) "U64"))
+    (type_anno (0:1-2:3)
         "bar"
-        (tag
+        (tag (0:1-2:3)
             "Thing"
-            (ty_var "a")
-            (ty_var "b")
+            (ty_var (0:1-2:3) "a")
+            (ty_var (0:1-2:3) "b")
             (_)))
-    (type_anno
+    (type_anno (0:1-2:3)
         "baz"
-        (tuple
-            (ty_var "a")
-            (ty_var "b")
-            (ty_var "c")))
-    (type_anno
+        (tuple (0:1-2:3)
+            (ty_var (0:1-2:3) "a")
+            (ty_var (0:1-2:3) "b")
+            (ty_var (0:1-2:3) "c")))
+    (type_anno (0:1-2:3)
         "add_one"
-        (fn
-            (tag "U32")
-            (tag "U8")
-            (tag "U16")))
-    (type_anno
+        (fn (0:1-2:3)
+            (tag (0:1-2:3) "U32")
+            (tag (0:1-2:3) "U8")
+            (tag (0:1-2:3) "U16")))
+    (type_anno (0:1-2:3)
         "main!"
-        (fn
-            (tag
+        (fn (0:1-2:3)
+            (tag (0:1-2:3)
                 "Result"
-                (record)
+                (record (0:1-2:3))
                 (_))
-            (tag
+            (tag (0:1-2:3)
                 "List"
-                (tag "String")))))
+                (tag (0:1-2:3) "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

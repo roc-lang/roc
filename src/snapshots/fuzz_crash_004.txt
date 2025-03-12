@@ -7,7 +7,8 @@ PARSER: missing_header
 ~~~TOKENS
 UpperIdent,EndOfFile
 ~~~PARSE
-(file (malformed_header "missing_header"))
+(file (0:1-2:3)
+    (malformed_header (0:1-2:3) "missing_header"))
 ~~~FORMATTED
 
 ~~~END

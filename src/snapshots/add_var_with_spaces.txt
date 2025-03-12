@@ -9,15 +9,18 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,OpPlus,Int,EndOfFile
 ~~~PARSE
-(file
-    (module
-        (exposed_item (lower_ident "add2")))
-    (decl
-        (ident "add2")
+(file (0:1-2:3)
+    (module (0:1-2:3)
+        (exposed_item (0:1-2:3) (0:1-2:3)
+            (lower_ident "add2")))
+    (decl (0:1-2:3)
+        (ident (0:1-2:3) "add2")
         (binop
             "+"
-            (ident "" "x")
-            (int "2"))))
+            (ident (0:1-2:3)
+                ""
+                "x")
+            (int (0:1-2:3) "2"))))
 ~~~FORMATTED
 module [add2]
 

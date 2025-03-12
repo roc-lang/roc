@@ -25,26 +25,28 @@ PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
 ~~~PARSE
-(file
-    (malformed_header "missing_header")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (malformed_expr "unexpected_token")
-    (ident "" "le")
-    (malformed_expr "unexpected_token"))
+(file (0:1-2:3)
+    (malformed_header (0:1-2:3) "missing_header")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (malformed_expr (0:1-2:3) "unexpected_token")
+    (ident (0:1-2:3)
+        ""
+        "le")
+    (malformed_expr (0:1-2:3) "unexpected_token"))
 ~~~FORMATTED
 
 

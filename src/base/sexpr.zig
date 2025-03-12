@@ -3,6 +3,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const testing = std.testing;
+const DiagnosticPositionInfo = @import("DiagnosticPositionInfo.zig");
 
 /// Represents a node in an S-expression tree.
 pub const Expr = union(enum) {
@@ -10,6 +11,7 @@ pub const Expr = union(enum) {
         value: []const u8,
         children: std.ArrayListUnmanaged(Expr),
     },
+    region: DiagnosticPositionInfo,
     string: []const u8,
     signed_int: i128,
     unsigned_int: u128,
@@ -32,6 +34,31 @@ pub const Expr = union(enum) {
         };
     }
 
+    /// Deinitialize the node and all its children.
+    pub fn deinit(self: *Expr, gpa: Allocator) void {
+        switch (self.*) {
+            .node => |*n| {
+                // Free the value string
+                gpa.free(n.value);
+
+                // Recursively free all children
+                for (n.children.items) |*child| {
+                    child.deinit(gpa);
+                }
+
+                // Free the children array itself
+                n.children.deinit(gpa);
+            },
+            .region => |region| {
+                gpa.free(region.line_text);
+            },
+            .string => |str| gpa.free(str),
+            .signed_int, .unsigned_int, .float => {
+                // no-op, nothing to deinit
+            },
+        }
+    }
+
     // Helper function to append a child node to a parent node
     fn appendNodeChildUnsafe(self: *Expr, gpa: Allocator, child: Expr) void {
         switch (self.*) {
@@ -50,6 +77,10 @@ pub const Expr = union(enum) {
             @panic("Failed to duplicate string value");
         };
         self.appendNodeChildUnsafe(gpa, .{ .string = owned_value });
+    }
+
+    pub fn appendRegionChild(self: *Expr, gpa: Allocator, region: DiagnosticPositionInfo) void {
+        self.appendNodeChildUnsafe(gpa, .{ .region = region });
     }
 
     /// Helper function to append a signed integer child
@@ -117,17 +148,33 @@ pub const Expr = union(enum) {
                         }
                     } else {
                         for (n.children.items) |child| {
-                            try writer.print("\n", .{});
+                            switch (child) {
+                                .region => {
+                                    try writer.print(" ", .{});
+                                    try child.toString(writer, indent + 1);
+                                },
+                                else => {
+                                    try writer.print("\n", .{});
 
-                            // Print indentation
-                            try writeIndent(writer, 4 * (indent + 1));
+                                    // Print indentation
+                                    try writeIndent(writer, 4 * (indent + 1));
 
-                            try child.toString(writer, indent + 1);
+                                    try child.toString(writer, indent + 1);
+                                },
+                            }
                         }
                     }
                 }
 
                 try writer.print(")", .{});
+            },
+            .region => |region| {
+                try writer.print("({d}:{d}-{d}:{d})", .{
+                    region.start_line,
+                    region.start_col,
+                    region.end_line,
+                    region.end_col,
+                });
             },
             .string => |s| try writer.print("\"{s}\"", .{s}),
             .signed_int => |i| try writer.print("{d}", .{i}),
@@ -141,28 +188,6 @@ pub const Expr = union(enum) {
         return toString(node, writer, 0) catch {
             @panic("Ran out of memory writing S-expression to writer");
         };
-    }
-
-    /// Deinitialize the node and all its children.
-    pub fn deinit(self: *Expr, gpa: Allocator) void {
-        switch (self.*) {
-            .node => |*n| {
-                // Free the value string
-                gpa.free(n.value);
-
-                // Recursively free all children
-                for (n.children.items) |*child| {
-                    child.deinit(gpa);
-                }
-
-                // Free the children array itself
-                n.children.deinit(gpa);
-            },
-            .string => |str| gpa.free(str),
-            .signed_int, .unsigned_int, .float => {
-                // no-op, nothing to deinit
-            },
-        }
     }
 };
 

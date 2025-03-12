@@ -1777,20 +1777,28 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
-            var file_node = sexpr.Expr.init(env.gpa, "file");
+            var node = sexpr.Expr.init(env.gpa, "file");
+
+            node.appendRegionChild(env.gpa, .{
+                .start_line = 0,
+                .start_col = 1,
+                .end_line = 2,
+                .end_col = 3,
+                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+            });
 
             const header = ir.store.getHeader(self.header);
             var header_node = header.toSExpr(env, ir);
 
-            file_node.appendNodeChild(env.gpa, &header_node);
+            node.appendNodeChild(env.gpa, &header_node);
 
             for (ir.store.statementSlice(self.statements)) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
                 var stmt_node = stmt.toSExpr(env, ir);
-                file_node.appendNodeChild(env.gpa, &stmt_node);
+                node.appendNodeChild(env.gpa, &stmt_node);
             }
 
-            return file_node;
+            return node;
         }
     };
 
@@ -1801,17 +1809,25 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
-            var block_node = sexpr.Expr.init(env.gpa, "block");
+            var node = sexpr.Expr.init(env.gpa, "block");
+
+            node.appendRegionChild(env.gpa, .{
+                .start_line = 0,
+                .start_col = 1,
+                .end_line = 2,
+                .end_col = 3,
+                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+            });
 
             for (ir.store.statementSlice(self.statements)) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
                 var stmt_node = stmt.toSExpr(env, ir);
 
-                block_node.appendNodeChild(env.gpa, &stmt_node);
+                node.appendNodeChild(env.gpa, &stmt_node);
             }
 
-            return block_node;
+            return node;
         }
     };
 
@@ -1851,37 +1867,90 @@ pub const NodeStore = struct {
             switch (self) {
                 .app => {
                     var node = sexpr.Expr.init(env.gpa, "app");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for app module header");
                     return node;
                 },
                 .module => |module| {
-                    var header_node = sexpr.Expr.init(env.gpa, "module");
+                    var node = sexpr.Expr.init(env.gpa, "module");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     for (ir.store.exposedItemSlice(module.exposes)) |exposed| {
                         const item = ir.store.getExposedItem(exposed);
                         var item_node = item.toSExpr(env, ir);
-                        header_node.appendNodeChild(env.gpa, &item_node);
+                        node.appendNodeChild(env.gpa, &item_node);
                     }
 
-                    return header_node;
+                    return node;
                 },
                 .package => {
                     var node = sexpr.Expr.init(env.gpa, "package");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for package module header");
                     return node;
                 },
                 .platform => {
                     var node = sexpr.Expr.init(env.gpa, "platform");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for platform module header");
                     return node;
                 },
                 .hosted => {
                     var node = sexpr.Expr.init(env.gpa, "hosted");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for hosted module header");
                     return node;
                 },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_header");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -1907,7 +1976,25 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var node = sexpr.Expr.init(env.gpa, "exposed_item");
+
+            node.appendRegionChild(env.gpa, .{
+                .start_line = 0,
+                .start_col = 1,
+                .end_line = 2,
+                .end_col = 3,
+                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+            });
+
             var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
+
+            node.appendRegionChild(env.gpa, .{
+                .start_line = 0,
+                .start_col = 1,
+                .end_line = 2,
+                .end_col = 3,
+                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+            });
+
             switch (self) {
                 .lower_ident => |i| {
                     const token = ir.tokens.tokens.get(i.ident);
@@ -1989,7 +2076,15 @@ pub const NodeStore = struct {
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .decl => |decl| {
-                    var decl_node = sexpr.Expr.init(env.gpa, "decl");
+                    var node = sexpr.Expr.init(env.gpa, "decl");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     const pattern = ir.store.getPattern(decl.pattern);
                     const body = ir.store.getExpr(decl.body);
@@ -1997,16 +2092,24 @@ pub const NodeStore = struct {
                     var pattern_node = pattern.toSExpr(env, ir);
                     var body_node = body.toSExpr(env, ir);
 
-                    decl_node.appendNodeChild(env.gpa, &pattern_node);
-                    decl_node.appendNodeChild(env.gpa, &body_node);
+                    node.appendNodeChild(env.gpa, &pattern_node);
+                    node.appendNodeChild(env.gpa, &body_node);
 
-                    return decl_node;
+                    return node;
                 },
                 .expr => |expr| {
                     return ir.store.getExpr(expr.expr).toSExpr(env, ir);
                 },
                 .import => |import| {
                     var node = sexpr.Expr.init(env.gpa, "import");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     // Module Qualifier e.g. `pf` in `import pf.Stdout`
                     node.appendStringChild(
@@ -2030,6 +2133,15 @@ pub const NodeStore = struct {
                     const exposed_slice = ir.store.exposedItemSlice(import.exposes);
                     if (exposed_slice.len > 0) {
                         var exposed = sexpr.Expr.init(env.gpa, "exposing");
+
+                        exposed.appendRegionChild(env.gpa, .{
+                            .start_line = 0,
+                            .start_col = 1,
+                            .end_line = 2,
+                            .end_col = 3,
+                            .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        });
+
                         for (ir.store.exposedItemSlice(import.exposes)) |e| {
                             var exposed_item = &ir.store.getExposedItem(e);
                             var exposed_item_sexpr = exposed_item.toSExpr(env, ir);
@@ -2043,7 +2155,24 @@ pub const NodeStore = struct {
                 // (type_decl (header <name> [<args>]) <annotation>)
                 .type_decl => |a| {
                     var node = sexpr.Expr.init(env.gpa, "type_decl");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var header = sexpr.Expr.init(env.gpa, "header");
+
+                    header.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     // pattern
                     {
@@ -2068,6 +2197,15 @@ pub const NodeStore = struct {
                 // (crash <expr>)
                 .crash => |a| {
                     var node = sexpr.Expr.init(env.gpa, "crash");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
@@ -2075,6 +2213,15 @@ pub const NodeStore = struct {
                 // (expect <body>)
                 .expect => |a| {
                     var node = sexpr.Expr.init(env.gpa, "expect");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var child = ir.store.getExpr(a.body).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
@@ -2082,6 +2229,15 @@ pub const NodeStore = struct {
                 // (return <expr>)
                 .@"return" => |a| {
                     var node = sexpr.Expr.init(env.gpa, "return");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
@@ -2089,6 +2245,15 @@ pub const NodeStore = struct {
                 // (type_anno <annotation>)
                 .type_anno => |a| {
                     var node = sexpr.Expr.init(env.gpa, "type_anno");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(a.name));
                     var child = ir.store.getTypeAnno(a.anno).toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
@@ -2153,6 +2318,15 @@ pub const NodeStore = struct {
                 // (ty_var <var>)
                 .ty_var => |a| {
                     var node = sexpr.Expr.init(env.gpa, "ty_var");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(a.tok));
                     return node;
                 },
@@ -2163,6 +2337,15 @@ pub const NodeStore = struct {
                 // (tag [<args>])
                 .tag => |a| {
                     var node = sexpr.Expr.init(env.gpa, "tag");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(a.tok));
                     for (ir.store.typeAnnoSlice(a.args)) |b| {
                         var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
@@ -2172,6 +2355,15 @@ pub const NodeStore = struct {
                 },
                 .tag_union => {
                     var node = sexpr.Expr.init(env.gpa, "tag_union");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, "TODO tags");
                     node.appendStringChild(env.gpa, "TODO open_anno");
                     return node;
@@ -2179,6 +2371,15 @@ pub const NodeStore = struct {
                 // (tuple [<elems>])
                 .tuple => |a| {
                     var node = sexpr.Expr.init(env.gpa, "tuple");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     for (ir.store.typeAnnoSlice(a.annos)) |b| {
                         var child = ir.store.getTypeAnno(b).toSExpr(env, ir);
                         node.appendNodeChild(env.gpa, &child);
@@ -2188,6 +2389,15 @@ pub const NodeStore = struct {
                 // (record [<fields>])
                 .record => |a| {
                     var node = sexpr.Expr.init(env.gpa, "record");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     for (ir.store.annoRecordFieldSlice(a.fields)) |_| {
                         // TODO print S-expression for each field
                         node.appendStringChild(env.gpa, "<field>");
@@ -2197,6 +2407,14 @@ pub const NodeStore = struct {
                 // (fn <ret> [<args>])
                 .@"fn" => |a| {
                     var node = sexpr.Expr.init(env.gpa, "fn");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     // return value
                     var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir);
@@ -2216,6 +2434,15 @@ pub const NodeStore = struct {
                 },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_expr");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -2281,6 +2508,14 @@ pub const NodeStore = struct {
                 .ident => |ident| {
                     var node = sexpr.Expr.init(env.gpa, "ident");
 
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
 
                     return node;
@@ -2322,6 +2557,15 @@ pub const NodeStore = struct {
                 },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
@@ -2425,18 +2669,36 @@ pub const NodeStore = struct {
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             switch (self) {
                 .int => |int| {
-                    var expr = sexpr.Expr.init(env.gpa, "int");
-                    expr.appendStringChild(env.gpa, ir.resolve(int.token));
-                    return expr;
+                    var node = sexpr.Expr.init(env.gpa, "int");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
+                    node.appendStringChild(env.gpa, ir.resolve(int.token));
+                    return node;
                 },
                 .string => |str| {
-                    var sexpr_str = sexpr.Expr.init(env.gpa, "string");
+                    var node = sexpr.Expr.init(env.gpa, "string");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     for (ir.store.exprSlice(str.parts)) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
                         var part_sexpr = part_expr.toSExpr(env, ir);
-                        sexpr_str.appendNodeChild(env.gpa, &part_sexpr);
+                        node.appendNodeChild(env.gpa, &part_sexpr);
                     }
-                    return sexpr_str;
+                    return node;
                 },
                 .string_part => |sp| {
                     const text = ir.resolve(sp.token);
@@ -2446,6 +2708,15 @@ pub const NodeStore = struct {
                 // (tag <tag>)
                 .tag => |tag| {
                     var node = sexpr.Expr.init(env.gpa, "tag");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(tag.token));
                     return node;
                 },
@@ -2455,6 +2726,14 @@ pub const NodeStore = struct {
                 // (if_then_else <condition> <then> <else>)
                 .if_then_else => |stmt| {
                     var node = sexpr.Expr.init(env.gpa, "if_then_else");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir);
                     var then = ir.store.getExpr(stmt.then).toSExpr(env, ir);
@@ -2467,14 +2746,32 @@ pub const NodeStore = struct {
                     return node;
                 },
                 .ident => |ident| {
-                    var ident_sexpr = sexpr.Expr.init(env.gpa, "ident");
-                    ident_sexpr.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
-                    ident_sexpr.appendStringChild(env.gpa, ir.resolve(ident.token));
-                    return ident_sexpr;
+                    var node = sexpr.Expr.init(env.gpa, "ident");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
+                    node.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
+                    node.appendStringChild(env.gpa, ir.resolve(ident.token));
+                    return node;
                 },
                 // (list [<child>])
                 .list => |a| {
                     var node = sexpr.Expr.init(env.gpa, "list");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     for (ir.store.exprSlice(a.items)) |b| {
                         var child = ir.store.getExpr(b).toSExpr(env, ir);
                         node.appendNodeChild(env.gpa, &child);
@@ -2484,18 +2781,44 @@ pub const NodeStore = struct {
                 // (malformed_expr <reason>)
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_expr");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, @tagName(a.reason));
                     return node;
                 },
                 // (float <value>)
                 .float => |a| {
                     var node = sexpr.Expr.init(env.gpa, "float");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     node.appendStringChild(env.gpa, ir.resolve(a.token));
                     return node;
                 },
                 // (tuple [<item>])
                 .tuple => |a| {
                     var node = sexpr.Expr.init(env.gpa, "tuple");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     for (ir.store.exprSlice(a.items)) |item| {
                         var child = ir.store.getExpr(item).toSExpr(env, ir);
@@ -2507,6 +2830,14 @@ pub const NodeStore = struct {
                 // (record [(field <name> <?value> ?optional)])
                 .record => |a| {
                     var node = sexpr.Expr.init(env.gpa, "record");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     for (ir.store.recordFieldSlice(a.fields)) |field_idx| {
                         const record_field = ir.store.getRecordField(field_idx);
@@ -2527,6 +2858,15 @@ pub const NodeStore = struct {
                 // (apply <fn> [<args>])
                 .apply => |a| {
                     var node = sexpr.Expr.init(env.gpa, "apply");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var apply_fn = ir.store.getExpr(a.@"fn").toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &apply_fn);
 
@@ -2539,6 +2879,15 @@ pub const NodeStore = struct {
                 },
                 .field_access => |a| {
                     var node = sexpr.Expr.init(env.gpa, "field_access");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
+
                     var child = a.toSExpr(env, ir);
                     node.appendNodeChild(env.gpa, &child);
                     return node;
@@ -2549,6 +2898,14 @@ pub const NodeStore = struct {
                 },
                 .lambda => |a| {
                     var node = sexpr.Expr.init(env.gpa, "lambda");
+
+                    node.appendRegionChild(env.gpa, .{
+                        .start_line = 0,
+                        .start_col = 1,
+                        .end_line = 2,
+                        .end_col = 3,
+                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                    });
 
                     // arguments
                     var args = sexpr.Expr.init(env.gpa, "args");

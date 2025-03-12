@@ -13,15 +13,19 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,UpperIdent,Newline,KwElse,OpenCurly,Newline,UpperIdent,Newline,CloseCurly,EndOfFile
 ~~~PARSE
-(file
-    (module
-        (exposed_item (lower_ident "foo")))
-    (decl
-        (ident "foo")
-        (if_then_else
-            (ident "" "true")
-            (tag "A")
-            (block (tag "B")))))
+(file (0:1-2:3)
+    (module (0:1-2:3)
+        (exposed_item (0:1-2:3) (0:1-2:3)
+            (lower_ident "foo")))
+    (decl (0:1-2:3)
+        (ident (0:1-2:3) "foo")
+        (if_then_else (0:1-2:3)
+            (ident (0:1-2:3)
+                ""
+                "true")
+            (tag (0:1-2:3) "A")
+            (block (0:1-2:3)
+                (tag (0:1-2:3) "B")))))
 ~~~FORMATTED
 module [foo]
 

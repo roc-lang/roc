@@ -11,10 +11,10 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,StringStart,StringPart,StringEnd,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
-(file
-    (module)
-    (string "one")
-    (string "two"))
+(file (0:1-2:3)
+    (module (0:1-2:3))
+    (string (0:1-2:3) "one")
+    (string (0:1-2:3) "two"))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
