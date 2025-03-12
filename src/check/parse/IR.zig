@@ -31,6 +31,10 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+// stores the offsets of newlines in the source code
+// only used for pretty-printing the IR toSExpr
+newlines: ?std.ArrayList(u32),
+
 /// Returns true if the given region spans multiple lines.
 pub fn regionIsMultiline(self: *IR, region: Region) bool {
     var i = region.start;
@@ -50,10 +54,29 @@ pub fn regionIsMultiline(self: *IR, region: Region) bool {
     return false;
 }
 
+pub fn regionInfo(self: *IR, region: Region) base.DiagnosticPositionInfo {
+    if (self.newlines == null) {
+        @panic("expected newline offsets to have been calculated");
+    }
+
+    const start = self.tokens.resolve(region.start);
+    const end = self.tokens.resolve(region.end);
+
+    const info = base.DiagnosticPositionInfo.get(self.source, self.newlines.?, start.start.offset, end.end.offset) catch {
+        std.debug.panic("failed to calculate position info for region {?}", .{region});
+    };
+
+    return info;
+}
+
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
     self.store.gpa.free(self.errors);
+
+    if (self.newlines != null) {
+        self.newlines.?.deinit();
+    }
 }
 
 /// Diagnostics related to parsing
@@ -1779,13 +1802,7 @@ pub const NodeStore = struct {
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR) sexpr.Expr {
             var node = sexpr.Expr.init(env.gpa, "file");
 
-            node.appendRegionChild(env.gpa, .{
-                .start_line = 0,
-                .start_col = 1,
-                .end_line = 2,
-                .end_col = 3,
-                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
-            });
+            node.appendRegionChild(env.gpa, ir.regionInfo(self.region));
 
             const header = ir.store.getHeader(self.header);
             var header_node = header.toSExpr(env, ir);
@@ -1816,7 +1833,7 @@ pub const NodeStore = struct {
                 .start_col = 1,
                 .end_line = 2,
                 .end_col = 3,
-                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                .line_text = "",
             });
 
             for (ir.store.statementSlice(self.statements)) |stmt_idx| {
@@ -1873,7 +1890,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for app module header");
@@ -1887,7 +1904,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.exposedItemSlice(module.exposes)) |exposed| {
@@ -1906,7 +1923,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for package module header");
@@ -1920,7 +1937,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for platform module header");
@@ -1934,7 +1951,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, "TODO implement toSExpr for hosted module header");
@@ -1948,7 +1965,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, @tagName(a.reason));
@@ -1982,7 +1999,7 @@ pub const NodeStore = struct {
                 .start_col = 1,
                 .end_line = 2,
                 .end_col = 3,
-                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                .line_text = "",
             });
 
             var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
@@ -1992,7 +2009,7 @@ pub const NodeStore = struct {
                 .start_col = 1,
                 .end_line = 2,
                 .end_col = 3,
-                .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                .line_text = "",
             });
 
             switch (self) {
@@ -2083,7 +2100,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     const pattern = ir.store.getPattern(decl.pattern);
@@ -2108,7 +2125,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     // Module Qualifier e.g. `pf` in `import pf.Stdout`
@@ -2139,7 +2156,7 @@ pub const NodeStore = struct {
                             .start_col = 1,
                             .end_line = 2,
                             .end_col = 3,
-                            .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                            .line_text = "",
                         });
 
                         for (ir.store.exposedItemSlice(import.exposes)) |e| {
@@ -2161,7 +2178,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var header = sexpr.Expr.init(env.gpa, "header");
@@ -2171,7 +2188,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     // pattern
@@ -2203,7 +2220,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
@@ -2219,7 +2236,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var child = ir.store.getExpr(a.body).toSExpr(env, ir);
@@ -2235,7 +2252,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var child = ir.store.getExpr(a.expr).toSExpr(env, ir);
@@ -2251,7 +2268,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(a.name));
@@ -2324,7 +2341,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(a.tok));
@@ -2343,7 +2360,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(a.tok));
@@ -2361,7 +2378,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, "TODO tags");
@@ -2377,7 +2394,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.typeAnnoSlice(a.annos)) |b| {
@@ -2395,7 +2412,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.annoRecordFieldSlice(a.fields)) |_| {
@@ -2413,7 +2430,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     // return value
@@ -2440,7 +2457,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, @tagName(a.reason));
@@ -2513,7 +2530,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(ident.ident_tok));
@@ -2563,7 +2580,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, @tagName(a.reason));
@@ -2676,7 +2693,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(int.token));
@@ -2690,7 +2707,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.exprSlice(str.parts)) |part_id| {
@@ -2714,7 +2731,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(tag.token));
@@ -2732,7 +2749,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var condition = ir.store.getExpr(stmt.condition).toSExpr(env, ir);
@@ -2753,7 +2770,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, if (ident.qualifier != null) ir.resolve(ident.qualifier.?) else "");
@@ -2769,7 +2786,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.exprSlice(a.items)) |b| {
@@ -2787,7 +2804,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, @tagName(a.reason));
@@ -2802,7 +2819,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     node.appendStringChild(env.gpa, ir.resolve(a.token));
@@ -2817,7 +2834,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.exprSlice(a.items)) |item| {
@@ -2836,7 +2853,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     for (ir.store.recordFieldSlice(a.fields)) |field_idx| {
@@ -2864,7 +2881,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var apply_fn = ir.store.getExpr(a.@"fn").toSExpr(env, ir);
@@ -2885,7 +2902,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     var child = a.toSExpr(env, ir);
@@ -2904,7 +2921,7 @@ pub const NodeStore = struct {
                         .start_col = 1,
                         .end_line = 2,
                         .end_col = 3,
-                        .line_text = std.fmt.allocPrint(env.gpa, "TODO", .{}) catch |err| exitOnOom(err),
+                        .line_text = "",
                     });
 
                     // arguments
@@ -3401,6 +3418,12 @@ test {
 /// and write it to the given writer.
 pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
     const file = ir.store.getFile();
+
+    // calculate the offsets of newlines once and save in the IR
+    // for use in each toSExpr function
+    if (ir.newlines == null) {
+        ir.newlines = try base.DiagnosticPositionInfo.countNewlines(env.gpa, ir.source);
+    }
 
     var node = file.toSExpr(env, ir);
     defer node.deinit(env.gpa);

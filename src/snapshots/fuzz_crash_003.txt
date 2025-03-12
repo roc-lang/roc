@@ -10,7 +10,7 @@ PARSER: missing_header
 ~~~TOKENS
 OpAssign,StringStart,StringPart,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:1-0:6)
     (malformed_header (0:1-2:3) "missing_header")
     (string (0:1-2:3) "te"))
 ~~~FORMATTED

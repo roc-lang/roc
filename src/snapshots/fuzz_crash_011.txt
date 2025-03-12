@@ -10,7 +10,7 @@ PARSER: header_expected_open_square
 ~~~TOKENS
 KwModule,UpperIdent,UpperIdent,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-0:10)
     (malformed_header (0:1-2:3) "header_expected_open_square")
     (tag (0:1-2:3) "F"))
 ~~~FORMATTED

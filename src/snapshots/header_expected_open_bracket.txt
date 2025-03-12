@@ -7,7 +7,7 @@ PARSER: header_expected_open_square
 ~~~TOKENS
 KwModule,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-0:6)
     (malformed_header (0:1-2:3) "header_expected_open_square"))
 ~~~FORMATTED
 

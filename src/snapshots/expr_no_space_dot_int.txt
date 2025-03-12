@@ -9,7 +9,7 @@ PARSER: expr_no_space_dot_int
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-2:11)
     (module (0:1-2:3))
     (decl (0:1-2:3)
         (ident (0:1-2:3) "foo")

@@ -11,7 +11,7 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-4:11)
     (module (0:1-2:3)
         (exposed_item (0:1-2:3) (0:1-2:3)
             (lower_ident "foo"))

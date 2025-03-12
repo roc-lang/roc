@@ -17,7 +17,7 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,Newline,KwCrash,StringStart,StringPart,StringEnd,Newline,KwExpect,Int,OpEquals,Int,Newline,KwReturn,Int,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-10:8)
     (module (0:1-2:3)
         (exposed_item (0:1-2:3) (0:1-2:3)
             (lower_ident "decoder")))

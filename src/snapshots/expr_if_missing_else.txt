@@ -9,7 +9,7 @@ PARSER: no_else
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,LowerIdent,LowerIdent,Int,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:0-2:19)
     (module (0:1-2:3))
     (decl (0:1-2:3)
         (ident (0:1-2:3) "foo")

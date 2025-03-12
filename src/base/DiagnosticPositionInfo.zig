@@ -1,3 +1,5 @@
+//! This module provides helpers for calculating position for diagnostics
+//! including the start and end line and column information
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
@@ -47,6 +49,7 @@ fn getLineText(source: []const u8, newlines: std.ArrayList(u32), line: u32) []co
     return source[line_start..line_end];
 }
 
+/// Record the offsets for each newline in the source
 pub fn countNewlines(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
     var newlines = std.ArrayList(u32).init(gpa);
 
@@ -159,14 +162,14 @@ test "get" {
     try newlines.append(6); // After "line0\n"
     try newlines.append(12); // After "line1\n"
 
-    const info1 = get(source, newlines, 2, 4); // "ne" in line0
+    const info1 = try get(source, newlines, 2, 4); // "ne" in line0
     try std.testing.expectEqual(@as(u32, 0), info1.start_line);
     try std.testing.expectEqual(@as(u32, 2), info1.start_col);
     try std.testing.expectEqual(@as(u32, 0), info1.end_line);
     try std.testing.expectEqual(@as(u32, 4), info1.end_col);
     try std.testing.expectEqualStrings("line0\n", info1.line_text);
 
-    const info2 = get(source, newlines, 8, 10); // "ne" in line1
+    const info2 = try get(source, newlines, 8, 10); // "ne" in line1
     try std.testing.expectEqual(@as(u32, 1), info2.start_line);
     try std.testing.expectEqual(@as(u32, 2), info2.start_col);
     try std.testing.expectEqual(@as(u32, 1), info2.end_line);

@@ -80,7 +80,15 @@ pub const Expr = union(enum) {
     }
 
     pub fn appendRegionChild(self: *Expr, gpa: Allocator, region: DiagnosticPositionInfo) void {
-        self.appendNodeChildUnsafe(gpa, .{ .region = region });
+        self.appendNodeChildUnsafe(gpa, .{ .region = DiagnosticPositionInfo{
+            .start_line = region.start_line,
+            .start_col = region.start_col,
+            .end_line = region.end_line,
+            .end_col = region.end_col,
+            .line_text = gpa.dupe(u8, region.line_text) catch {
+                @panic("Failed to duplicate string value");
+            },
+        } });
     }
 
     /// Helper function to append a signed integer child

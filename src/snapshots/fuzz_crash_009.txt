@@ -18,7 +18,7 @@ PARSER: missing_header
 ~~~TOKENS
 LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
 ~~~PARSE
-(file (0:1-2:3)
+(file (0:1-5:11)
     (malformed_header (0:1-2:3) "missing_header")
     (record (0:1-2:3)
         (field "o"))
