@@ -8,14 +8,12 @@ foo = "one"
 bar = "two"
 ~~~PROBLEMS
 NIL
-~~~TOKENS
-KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file (1:1-5:12)
-    (module (1:1-3:4)
+    (module (1:1-1:18)
         (exposed_item (1:9-1:12) (lower_ident "foo"))
         (exposed_item (1:14-1:17) (lower_ident "bar")))
-    (decl (3:1-3:4)
+    (decl (3:1-3:12)
         (ident (3:1-3:4) "foo")
         (string (3:7-3:12) (string_part (3:8-3:11) "one")))
     (decl (5:1-5:12)

@@ -11,11 +11,9 @@ foo =
     "one"
 ~~~PROBLEMS
 NIL
-~~~TOKENS
-KwModule,OpenSquare,Newline,LowerIdent,Comma,Newline,CloseSquare,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,StringEnd,EndOfFile
 ~~~PARSE
 (file (1:1-8:10)
-    (module (1:1-6:4)
+    (module (1:1-4:7)
         (exposed_item (3:2-3:5) (lower_ident "foo")))
     (decl (6:1-8:10)
         (ident (6:1-6:4) "foo")

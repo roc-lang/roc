@@ -1,15 +1,24 @@
 ~~~META
 description=A primitive
+verbose-tokens
 ~~~SOURCE
 module [foo]
 foo = FortyTwo
 ~~~PROBLEMS
 NIL
 ~~~TOKENS
-KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,UpperIdent,EndOfFile
+@0-6	KwModule
+@7-8	OpenSquare
+@8-11	LowerIdent
+@11-12	CloseSquare
+@0-0	Newline
+@13-16	LowerIdent
+@17-18	OpAssign
+@19-27	UpperIdent
+@27-27	EndOfFile
 ~~~PARSE
 (file (1:1-2:15)
-    (module (1:1-2:4)
+    (module (1:1-1:13)
         (exposed_item (1:9-1:12) (lower_ident "foo")))
     (decl (2:1-2:15)
         (ident (2:1-2:4) "foo")

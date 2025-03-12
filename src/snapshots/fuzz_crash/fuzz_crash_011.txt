@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 module P]F
 ~~~PROBLEMS
@@ -8,7 +9,10 @@ module P]F
         ^
 PARSER: header_expected_open_square
 ~~~TOKENS
-KwModule,UpperIdent,UpperIdent,EndOfFile
+@0-6	KwModule
+@7-8	UpperIdent
+@9-10	UpperIdent
+@10-10	EndOfFile
 ~~~PARSE
 (file (1:1-1:11)
     (malformed_header "header_expected_open_square")

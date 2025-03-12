@@ -1,11 +1,13 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 modu
 ~~~PROBLEMS
 PARSER: missing_header
 ~~~TOKENS
-LowerIdent,EndOfFile
+@0-4	LowerIdent
+@4-4	EndOfFile
 ~~~PARSE
 (file (1:1-1:5) (malformed_header "missing_header"))
 ~~~FORMATTED

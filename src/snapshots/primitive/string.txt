@@ -1,5 +1,6 @@
 ~~~META
 description=A primitive
+verbose-tokens
 ~~~SOURCE
 module [foo]
 name = "luc"
@@ -7,12 +8,32 @@ foo = "hello ${name}"
 ~~~PROBLEMS
 NIL
 ~~~TOKENS
-KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,StringStart,StringPart,StringEnd,Newline,LowerIdent,OpAssign,StringStart,StringPart,OpenStringInterpolation,LowerIdent,CloseStringInterpolation,StringPart,StringEnd,EndOfFile
+@0-6	KwModule
+@7-8	OpenSquare
+@8-11	LowerIdent
+@11-12	CloseSquare
+@0-0	Newline
+@13-17	LowerIdent
+@18-19	OpAssign
+@20-21	StringStart
+@21-24	StringPart
+@24-25	StringEnd
+@0-0	Newline
+@26-29	LowerIdent
+@30-31	OpAssign
+@32-33	StringStart
+@33-39	StringPart
+@39-41	OpenStringInterpolation
+@41-45	LowerIdent
+@45-46	CloseStringInterpolation
+@46-46	StringPart
+@46-47	StringEnd
+@47-47	EndOfFile
 ~~~PARSE
 (file (1:1-3:22)
-    (module (1:1-2:5)
+    (module (1:1-1:13)
         (exposed_item (1:9-1:12) (lower_ident "foo")))
-    (decl (2:1-2:5)
+    (decl (2:1-2:13)
         (ident (2:1-2:5) "name")
         (string (2:8-2:13) (string_part (2:9-2:12) "luc")))
     (decl (3:1-3:22)

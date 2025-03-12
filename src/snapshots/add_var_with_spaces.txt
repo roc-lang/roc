@@ -6,11 +6,9 @@ module [add2]
 add2 = x +      2
 ~~~PROBLEMS
 NIL
-~~~TOKENS
-KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,OpPlus,Int,EndOfFile
 ~~~PARSE
 (file (1:1-3:18)
-    (module (1:1-3:5)
+    (module (1:1-1:14)
         (exposed_item (1:9-1:13) (lower_ident "add2")))
     (decl (3:1-3:18)
         (ident (3:1-3:5) "add2")

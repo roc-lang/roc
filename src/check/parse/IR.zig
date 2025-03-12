@@ -54,21 +54,11 @@ pub fn regionIsMultiline(self: *IR, region: Region) bool {
 pub fn regionInfo(self: *IR, region: Region, line_starts: std.ArrayList(u32)) base.DiagnosticPosition {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
+    const info = base.DiagnosticPosition.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
+        std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
+    };
 
-    if (end.isEmpty()) {
-        // use the range from start only
-        const info = base.DiagnosticPosition.position(self.source, line_starts, start.start.offset, start.end.offset) catch {
-            std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
-        };
-
-        return info;
-    } else {
-        const info = base.DiagnosticPosition.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
-            std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
-        };
-
-        return info;
-    }
+    return info;
 }
 
 pub fn deinit(self: *IR) void {

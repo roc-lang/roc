@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 mo|%
 ~~~PROBLEMS
@@ -7,7 +8,10 @@ PARSER: missing_header
 PARSER: pattern_unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-LowerIdent,OpBar,OpPercent,EndOfFile
+@0-2	LowerIdent
+@2-3	OpBar
+@3-4	OpPercent
+@4-4	EndOfFile
 ~~~PARSE
 (file (1:1-1:5)
     (malformed_header "missing_header")

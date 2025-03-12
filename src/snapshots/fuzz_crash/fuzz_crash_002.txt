@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 modu:;::::::::::::::le[%
 ~~~PROBLEMS
@@ -23,7 +24,27 @@ PARSER: unexpected_token
 PARSER: unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
+@0-4	LowerIdent
+@4-5	OpColon
+@5-6	MalformedUnknownToken
+@6-7	OpColon
+@7-8	OpColon
+@8-9	OpColon
+@9-10	OpColon
+@10-11	OpColon
+@11-12	OpColon
+@12-13	OpColon
+@13-14	OpColon
+@14-15	OpColon
+@15-16	OpColon
+@16-17	OpColon
+@17-18	OpColon
+@18-19	OpColon
+@19-20	OpColon
+@20-22	LowerIdent
+@22-23	OpenSquare
+@23-24	OpPercent
+@24-24	EndOfFile
 ~~~PARSE
 (file (1:1-1:25)
     (malformed_header "missing_header")

@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
  f{o,
      ]
@@ -16,7 +17,19 @@ TOKENIZE: (6:6-6:12) UnclosedString:
      ^^^^^^
 PARSER: missing_header
 ~~~TOKENS
-LowerIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAssign,Newline,StringStart,StringPart,EndOfFile
+@1-2	LowerIdent
+@2-3	OpenCurly
+@3-4	LowerIdent
+@4-5	Comma
+@5-5	Newline
+@11-12	CloseCurly
+@0-0	Newline
+@14-17	LowerIdent
+@18-19	OpAssign
+@4-4	Newline
+@25-26	StringStart
+@26-32	StringPart
+@32-32	EndOfFile
 ~~~PARSE
 (file (1:2-6:12)
     (malformed_header "missing_header")

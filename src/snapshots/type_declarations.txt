@@ -14,11 +14,9 @@ Maybe a : [Some(a), None]
 SomeFunc a : Maybe(a), a -> Maybe(a)
 ~~~PROBLEMS
 NIL
-~~~TOKENS
-KwModule,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,UpperIdent,LowerIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Newline,UpperIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,Newline,UpperIdent,LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Newline,UpperIdent,LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,Newline,UpperIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,EndOfFile
 ~~~PARSE
 (file (1:1-11:37)
-    (module (1:1-3:4)
+    (module (1:1-1:57)
         (exposed_item (1:9-1:12) (upper_ident "Map"))
         (exposed_item (1:14-1:17) (upper_ident "Foo"))
         (exposed_item (1:19-1:23) (upper_ident "Some"))

@@ -273,6 +273,10 @@ const Error = error{
 };
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
+
+    // Log the file path that was written to
+    log("processing snapshot file: {s}", .{snapshot_path});
+
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
         log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
@@ -347,24 +351,19 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write out any TOKENS
-    {
+    if (std.mem.indexOf(u8, content.meta, "verbose-tokens") != null) {
         try file.writer().writeAll(Section.TOKENS);
         try file.writer().writeAll("\n");
-        const tokenizedBuffer = parse_ast.tokens;
+        var tokenizedBuffer = parse_ast.tokens;
         const tokens = tokenizedBuffer.tokens.items(.tag);
-        var first = true;
-        for (tokens) |tok| {
-
-            // only write a comma if not the first token
-            if (first) {
-                first = false;
-            } else {
-                try file.writer().writeAll(",");
-            }
-
+        for (tokens, 0..) |tok, i| {
+            const region = tokenizedBuffer.resolve(@intCast(i));
+            const region_str = try std.fmt.allocPrint(gpa, "{}\t", .{region});
+            defer gpa.free(region_str);
+            try file.writer().writeAll(region_str);
             try file.writer().writeAll(@tagName(tok));
+            try file.writer().writeAll("\n");
         }
-        try file.writer().writeAll("\n");
     }
 
     // Write PARSE SECTION
@@ -431,9 +430,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
         try corpus_file.writer().writeAll(content.source);
     }
-
-    // Log the file path that was written to
-    log("{s}", .{snapshot_path});
 
     return true;
 }

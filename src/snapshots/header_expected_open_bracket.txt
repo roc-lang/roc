@@ -4,8 +4,6 @@ description=
 module
 ~~~PROBLEMS
 PARSER: header_expected_open_square
-~~~TOKENS
-KwModule,EndOfFile
 ~~~PARSE
 (file (1:1-1:7) (malformed_header "header_expected_open_square"))
 ~~~FORMATTED

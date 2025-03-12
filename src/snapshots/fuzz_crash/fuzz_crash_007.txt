@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
@@ -7,7 +8,10 @@ PARSER: missing_header
 PARSER: unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
+@0-3	LowerIdent
+@3-5	NoSpaceDotInt
+@5-7	NoSpaceDotLowerIdent
+@7-7	EndOfFile
 ~~~PARSE
 (file (1:1-1:8)
     (malformed_header "missing_header")

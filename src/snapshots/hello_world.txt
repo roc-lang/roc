@@ -8,8 +8,6 @@ import pf.Stdout
 main! = |_| Stdout.line!("Hello, world!")
 ~~~PROBLEMS
 NIL
-~~~TOKENS
-KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,StringStart,StringPart,StringEnd,CloseCurly,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,OpBar,Underscore,OpBar,UpperIdent,NoSpaceDotLowerIdent,NoSpaceOpenRound,StringStart,StringPart,StringEnd,CloseRound,EndOfFile
 ~~~PARSE
 (file (1:1-5:42)
     (app (1:1-1:4) "TODO implement toSExpr for app module header")
