@@ -1,4 +1,5 @@
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 
 start_line: u32,
 start_col: u32,
@@ -9,9 +10,7 @@ line_text: []const u8,
 const DiagnosticPositionInfo = @This();
 
 /// Finds the line number for a given position in the source
-fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
-    const pos_usize = @as(usize, @intCast(pos));
-
+fn lineNum(newlines: std.ArrayList(u32), pos: u32) u32 {
     if (newlines.items.len == 0) {
         return 0;
     }
@@ -19,7 +18,7 @@ fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
     var lineno: u32 = 0;
 
     while (lineno + 1 < newlines.items.len) {
-        if (newlines.items[lineno + 1] > pos_usize) {
+        if (newlines.items[lineno + 1] > pos) {
             return lineno;
         }
         lineno += 1;
@@ -29,13 +28,16 @@ fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
 }
 
 /// Gets the column number for a position on a given line
-fn columnNum(newlines: std.ArrayList(usize), line: u32, pos: u32) u32 {
+fn columnNum(newlines: std.ArrayList(u32), line: u32, pos: u32) !u32 {
     const line_start: u32 = @intCast(newlines.items[line]);
+    if (pos < line_start) {
+        return error.InvalidPosition;
+    }
     return pos - line_start;
 }
 
 /// Returns the source text for a given line
-fn getLineText(source: []const u8, newlines: std.ArrayList(usize), line: u32) []const u8 {
+fn getLineText(source: []const u8, newlines: std.ArrayList(u32), line: u32) []const u8 {
     const line_start = newlines.items[line];
     const line_end = if (line + 1 < newlines.items.len)
         newlines.items[line + 1]
@@ -45,12 +47,39 @@ fn getLineText(source: []const u8, newlines: std.ArrayList(usize), line: u32) []
     return source[line_start..line_end];
 }
 
+pub fn countNewlines(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
+    var newlines = std.ArrayList(u32).init(gpa);
+
+    try newlines.append(0);
+
+    // Find all newlines in the source
+    var pos: u32 = 0;
+    for (source) |c| {
+        if (c == '\n') {
+            try newlines.append(pos + 1); // Position after the newline
+        }
+        pos += 1;
+    }
+
+    return newlines;
+}
+
 /// Returns the position info for a diagnostic
-pub fn get(source: []const u8, newlines: std.ArrayList(usize), begin: u32, end: u32) DiagnosticPositionInfo {
+pub fn get(source: []const u8, newlines: std.ArrayList(u32), begin: u32, end: u32) !DiagnosticPositionInfo {
+    if (begin > end) {
+        return error.OutOfOrder;
+    }
+    if (begin > source.len) {
+        return error.BeginTooLarge;
+    }
+    if (end > source.len) {
+        return error.EndTooLarge;
+    }
+
     const start_line = lineNum(newlines, begin);
-    const start_col = columnNum(newlines, start_line, begin);
+    const start_col = try columnNum(newlines, start_line, begin);
     const end_line = lineNum(newlines, end);
-    const end_col = columnNum(newlines, end_line, end);
+    const end_col = try columnNum(newlines, end_line, end);
     const line_text = getLineText(source, newlines, start_line);
 
     return .{
@@ -64,7 +93,7 @@ pub fn get(source: []const u8, newlines: std.ArrayList(usize), begin: u32, end: 
 
 test "lineNum" {
     const gpa = std.testing.allocator;
-    var newlines = std.ArrayList(usize).init(gpa);
+    var newlines = std.ArrayList(u32).init(gpa);
     defer newlines.deinit();
 
     // Simple test case with lines at positions 0, 10, 20
@@ -88,7 +117,7 @@ test "lineNum" {
 
 test "columnNum" {
     const gpa = std.testing.allocator;
-    var newlines = std.ArrayList(usize).init(gpa);
+    var newlines = std.ArrayList(u32).init(gpa);
     defer newlines.deinit();
 
     try newlines.append(0);
@@ -105,7 +134,7 @@ test "columnNum" {
 
 test "getLineText" {
     const gpa = std.testing.allocator;
-    var newlines = std.ArrayList(usize).init(gpa);
+    var newlines = std.ArrayList(u32).init(gpa);
     defer newlines.deinit();
 
     const source = "line0\nline1\nline2";
@@ -121,7 +150,7 @@ test "getLineText" {
 
 test "get" {
     const gpa = std.testing.allocator;
-    var newlines = std.ArrayList(usize).init(gpa);
+    var newlines = std.ArrayList(u32).init(gpa);
     defer newlines.deinit();
 
     const source = "line0\nline1\nline2";

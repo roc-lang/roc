@@ -331,22 +331,11 @@ pub const Diagnostic = struct {
     };
 
     pub fn toStr(self: Diagnostic, gpa: Allocator, source: []const u8, writer: anytype) !void {
-        var newlines = std.ArrayList(usize).init(gpa);
+        var newlines = try base.DiagnosticPositionInfo.countNewlines(gpa, source);
         defer newlines.deinit();
 
-        try newlines.append(0);
-
-        // Find all newlines in the source
-        var pos: usize = 0;
-        for (source) |c| {
-            if (c == '\n') {
-                try newlines.append(pos + 1); // Position after the newline
-            }
-            pos += 1;
-        }
-
         // Get position information
-        const info = base.DiagnosticPositionInfo.get(source, newlines, self.begin, self.end);
+        const info = try base.DiagnosticPositionInfo.get(source, newlines, self.begin, self.end);
 
         // Strip trailing newline for display
         const display_text = if (info.line_text.len > 0 and
