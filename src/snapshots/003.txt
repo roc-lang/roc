@@ -28,9 +28,9 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDo
     (expect (9:1-11:7)
         (binop
             "=="
-            (int "1")
-            (int "1")))
-    (return (11:1-11:9) (int "2")))
+            (int (9:8-9:9) "1")
+            (int (9:13-9:14) "1")))
+    (return (11:1-11:9) (int (11:8-11:9) "2")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

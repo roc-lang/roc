@@ -13,7 +13,7 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,Int,EndOf
         (exposed_item (1:9-1:12) (lower_ident "foo")))
     (decl (2:1-2:9)
         (ident (2:1-2:4) "foo")
-        (int "42")))
+        (int (2:7-2:9) "42")))
 ~~~FORMATTED
 module [foo]
 

@@ -2519,14 +2519,13 @@ pub const NodeStore = struct {
             switch (self) {
                 .int => |int| {
                     var node = sexpr.Expr.init(env.gpa, "int");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(int.region, line_starts));
                     node.appendStringChild(env.gpa, ir.resolve(int.token));
                     return node;
                 },
                 .string => |str| {
                     var node = sexpr.Expr.init(env.gpa, "string");
-
                     node.appendRegionChild(env.gpa, ir.regionInfo(str.region, line_starts));
-
                     for (ir.store.exprSlice(str.parts)) |part_id| {
                         const part_expr = ir.store.getExpr(part_id);
                         var part_sexpr = part_expr.toSExpr(env, ir, line_starts);
