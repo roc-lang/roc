@@ -107,7 +107,6 @@ pub fn build(b: *std.Build) void {
     }
 
     const names: []const []const u8 = &.{
-        "cli",
         "tokenize",
         "parse",
     };
