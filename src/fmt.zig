@@ -67,11 +67,13 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(fmt.gpa, " = ") catch |err| exitOnOom(err);
-            fmt.formatExpr(d.body);
+            const expr_region = fmt.formatExpr(d.body);
+            fmt.flushCommentsAfter(expr_region);
             return .extra_newline_needed;
         },
         .expr => |e| {
-            fmt.formatExpr(e.expr);
+            const expr_region = fmt.formatExpr(e.expr);
+            fmt.flushCommentsAfter(expr_region);
             return .extra_newline_needed;
         },
         .import => |i| {
@@ -109,17 +111,17 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         },
         .expect => |e| {
             fmt.pushAll("expect ");
-            fmt.formatExpr(e.body);
+            _ = fmt.formatExpr(e.body);
             return .extra_newline_needed;
         },
         .crash => |c| {
             fmt.pushAll("crash ");
-            fmt.formatExpr(c.expr);
+            _ = fmt.formatExpr(c.expr);
             return .extra_newline_needed;
         },
         .@"return" => |r| {
             fmt.pushAll("return ");
-            fmt.formatExpr(r.expr);
+            _ = fmt.formatExpr(r.expr);
             return .extra_newline_needed;
         },
     }
@@ -133,27 +135,76 @@ fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) void {
     fmt.pushTokenText(ident);
 }
 
-fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
+const Braces = enum {
+    round,
+    square,
+    curly,
+    bar,
+
+    fn start(b: Braces) u8 {
+        return switch (b) {
+            .round => '(',
+            .square => '[',
+            .curly => '{',
+            .bar => '|',
+        };
+    }
+
+    fn end(b: Braces) u8 {
+        return switch (b) {
+            .round => ')',
+            .square => ']',
+            .curly => '}',
+            .bar => '|',
+        };
+    }
+};
+
+fn formatCollection(fmt: *Formatter, region: IR.Region, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) IR.Region) void {
+    const multiline = fmt.ast.regionIsMultiline(region);
+    fmt.push(braces.start());
+    if (multiline) {
+        fmt.curr_indent += 1;
+    }
+    var i: usize = 0;
+    for (items) |item| {
+        if (multiline) {
+            fmt.newline();
+            fmt.pushIndent();
+        }
+        const arg_region = formatter(fmt, item);
+        if (!multiline and i < (items.len - 1)) {
+            fmt.pushAll(", ");
+        }
+        if (multiline) {
+            fmt.push(',');
+            fmt.flushCommentsAfter(arg_region);
+        }
+        i += 1;
+    }
+    if (multiline) {
+        fmt.curr_indent -= 1;
+        fmt.newline();
+        fmt.pushIndent();
+    }
+    fmt.push(braces.end());
+}
+
+fn formatExpr(fmt: *Formatter, ei: ExprIdx) IR.Region {
     const expr = fmt.ast.store.getExpr(ei);
+    var region = IR.Region{ .start = 0, .end = 0 };
     switch (expr) {
         .apply => |a| {
-            fmt.formatExpr(a.@"fn");
-            fmt.push('(');
-            const args_len = a.args.span.len;
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(a.args)) |arg| {
-                fmt.formatExpr(arg);
-                i += 1;
-                if (i < args_len) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.push(')');
+            region = a.region;
+            _ = fmt.formatExpr(a.@"fn");
+            fmt.formatCollection(region, .round, IR.NodeStore.ExprIdx, fmt.ast.store.exprSlice(a.args), Formatter.formatExpr);
         },
         .string_part => |s| {
+            region = s.region;
             fmt.pushTokenText(s.token);
         },
         .string => |s| {
+            region = s.region;
             fmt.push('"');
             var i: usize = 0;
             for (fmt.ast.store.exprSlice(s.parts)) |idx| {
@@ -164,7 +215,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                     },
                     else => {
                         fmt.pushAll("${");
-                        fmt.formatExpr(idx);
+                        _ = fmt.formatExpr(idx);
                         fmt.push('}');
                     },
                 }
@@ -173,57 +224,29 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.push('"');
         },
         .ident => |i| {
+            region = i.region;
             fmt.formatIdent(i.token, i.qualifier);
         },
         .field_access => |fa| {
-            fmt.formatExpr(fa.left);
+            region = fa.region;
+            _ = fmt.formatExpr(fa.left);
             fmt.push('.');
-            fmt.formatExpr(fa.right);
+            _ = fmt.formatExpr(fa.right);
         },
         .int => |i| {
+            region = i.region;
             fmt.pushTokenText(i.token);
         },
         .list => |l| {
-            const multiline = fmt.ast.regionIsMultiline(l.region);
-            fmt.push('[');
-            if (multiline) {
-                fmt.curr_indent += 1;
-            }
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(l.items)) |item| {
-                if (multiline) {
-                    fmt.newline();
-                    fmt.pushIndent();
-                }
-                fmt.formatExpr(item);
-                if (!multiline and i < (l.items.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                if (multiline) {
-                    fmt.push(',');
-                }
-                i += 1;
-            }
-            if (multiline) {
-                fmt.curr_indent -= 1;
-                fmt.newline();
-                fmt.pushIndent();
-            }
-            fmt.push(']');
+            region = l.region;
+            fmt.formatCollection(region, .square, IR.NodeStore.ExprIdx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
         },
         .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(t.items)) |item| {
-                fmt.formatExpr(item);
-                if (i < (t.items.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(')');
+            region = t.region;
+            fmt.formatCollection(region, .round, IR.NodeStore.ExprIdx, fmt.ast.store.exprSlice(t.items), Formatter.formatExpr);
         },
         .record => |r| {
+            region = r.region;
             fmt.pushAll("{ ");
             var i: usize = 0;
             for (fmt.ast.store.recordFieldSlice(r.fields)) |fieldIdx| {
@@ -231,7 +254,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 fmt.pushTokenText(field.name);
                 if (field.value) |v| {
                     fmt.pushAll(if (field.optional) "? " else ": ");
-                    fmt.formatExpr(v);
+                    _ = fmt.formatExpr(v);
                 }
                 if (i < (r.fields.span.len - 1)) {
                     fmt.pushAll(", ");
@@ -241,6 +264,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.pushAll(" }");
         },
         .lambda => |l| {
+            region = l.region;
             fmt.push('|');
             var i: usize = 0;
             for (fmt.ast.store.patternSlice(l.args)) |arg| {
@@ -251,43 +275,49 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 i += 1;
             }
             fmt.pushAll("| ");
-            fmt.formatExpr(l.body);
+            _ = fmt.formatExpr(l.body);
         },
         .unary_op => |op| {
+            region = op.region;
             fmt.pushTokenText(op.operator);
-            fmt.formatExpr(op.expr);
+            _ = fmt.formatExpr(op.expr);
         },
         .bin_op => |op| {
+            region = op.region;
             if (fmt.flags == .debug_binop) {
                 fmt.push('(');
             }
-            fmt.formatExpr(op.left);
+            _ = fmt.formatExpr(op.left);
             fmt.push(' ');
             fmt.pushTokenText(op.operator);
             fmt.push(' ');
-            fmt.formatExpr(op.right);
+            _ = fmt.formatExpr(op.right);
             if (fmt.flags == .debug_binop) {
                 fmt.push(')');
             }
         },
         .suffix_single_question => |s| {
-            fmt.formatExpr(s.expr);
+            region = s.region;
+            _ = fmt.formatExpr(s.expr);
             fmt.push('?');
         },
         .tag => |t| {
+            region = t.region;
             fmt.pushTokenText(t.token);
         },
         .if_then_else => |i| {
+            region = i.region;
             fmt.pushAll("if ");
-            fmt.formatExpr(i.condition);
+            _ = fmt.formatExpr(i.condition);
             fmt.push(' ');
-            fmt.formatExpr(i.then);
+            _ = fmt.formatExpr(i.then);
             fmt.pushAll(" else ");
-            fmt.formatExpr(i.@"else");
+            _ = fmt.formatExpr(i.@"else");
         },
         .match => |m| {
+            region = m.region;
             fmt.pushAll("match ");
-            fmt.formatExpr(m.expr);
+            _ = fmt.formatExpr(m.expr);
             fmt.pushAll(" {");
             fmt.curr_indent += 1;
             for (fmt.ast.store.whenBranchSlice(m.branches)) |b| {
@@ -296,7 +326,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
                 fmt.pushIndent();
                 fmt.formatPattern(branch.pattern);
                 fmt.pushAll(" -> ");
-                fmt.formatExpr(branch.body);
+                _ = fmt.formatExpr(branch.body);
             }
             fmt.curr_indent -= 1;
             fmt.newline();
@@ -304,19 +334,23 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
             fmt.push('}');
         },
         .dbg => |d| {
+            region = d.region;
             fmt.pushAll("dbg ");
-            fmt.formatExpr(d.expr);
+            _ = fmt.formatExpr(d.expr);
         },
         .block => |b| {
+            region = b.region;
             fmt.formatBody(b);
         },
-        .ellipsis => |_| {
+        .ellipsis => |e| {
+            region = e.region;
             fmt.pushAll("...");
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
         },
     }
+    return region;
 }
 
 fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
@@ -341,7 +375,7 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
             }
         },
         .string => |s| {
-            fmt.formatExpr(s.expr);
+            _ = fmt.formatExpr(s.expr);
         },
         .number => |n| {
             fmt.formatIdent(n.number_tok, null);
@@ -457,7 +491,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.pushAll("] { ");
             fmt.pushTokenText(a.platform_name);
             fmt.pushAll(": platform ");
-            fmt.formatExpr(a.platform);
+            _ = fmt.formatExpr(a.platform);
             if (a.packages.span.len > 0) {
                 fmt.push(',');
             }
@@ -467,7 +501,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
                 fmt.pushTokenText(field.name);
                 if (field.value) |v| {
                     fmt.pushAll(": ");
-                    fmt.formatExpr(v);
+                    _ = fmt.formatExpr(v);
                 }
                 if (i < a.packages.span.len) {
                     fmt.pushAll(", ");
@@ -633,6 +667,30 @@ fn newline(fmt: *Formatter) void {
     fmt.buffer.append(fmt.gpa, '\n') catch |err| exitOnOom(err);
 }
 
+fn flushCommentsAfter(fmt: *Formatter, region: IR.Region) void {
+    var nextNewline = region.end + 1;
+    const tags = fmt.ast.tokens.tokens.items(.tag);
+    if (nextNewline >= tags.len) {
+        return;
+    }
+    if (tags[nextNewline] == .Comma) {
+        nextNewline += 1;
+    }
+    if (nextNewline >= tags.len) {
+        return;
+    }
+    if (tags[nextNewline] != .Newline) {
+        return;
+    }
+    const newline_tok = fmt.ast.tokens.tokens.get(nextNewline);
+    const start = newline_tok.offset;
+    const end = start + newline_tok.extra.length;
+    if (end > start) {
+        fmt.pushAll(" #");
+        fmt.pushAll(fmt.ast.source[start..end]);
+    }
+}
+
 fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
     for (fmt.ast.tokens.tokens.items[region.start..region.end]) |t| {
         switch (t.tag) {
@@ -751,7 +809,7 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
     formatter.flags = flags;
     defer formatter.deinit();
 
-    formatter.formatExpr(expr);
+    _ = formatter.formatExpr(expr);
 
     const fmt_result = formatter.buffer.toOwnedSlice(gpa) catch |err| exitOnOom(err);
     defer gpa.free(fmt_result);
@@ -956,9 +1014,21 @@ test "Syntax grab bag" {
         \\    crash "Unreachable!"
         \\    tag_with_payload = Ok(number)
         \\    interpolated = "Hello, ${world}"
-        \\    list = [add_one(number), 456, 789]
+        \\    list = [
+        \\        add_one(number), # Comment one
+        \\        456, # Comment two
+        \\        789, # Comment three
+        \\    ]
         \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
         \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
+        \\    multiline_tuple = (
+        \\        123,
+        \\        "World",
+        \\        tag1,
+        \\        Ok(world), # This one has a comment
+        \\        (nested, tuple),
+        \\        [1, 2, 3],
+        \\    )
         \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
         \\    static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
         \\    Stdout.line!(interpolated)?
@@ -966,7 +1036,7 @@ test "Syntax grab bag" {
         \\}
         \\
         \\expect {
-        \\    foo = 1
+        \\    foo = 1 # This should work too
         \\    blah = 1
         \\    blah == foo
         \\}
@@ -987,10 +1057,6 @@ test "BinOp with higher BP right" {
 
 test "Multiline list formatting" {
     const expr = "[1,2,3,]";
-    const expr2 =
-        \\[1, 2,
-        \\  3]
-    ;
     const expected =
         \\[
         \\    1,
@@ -999,7 +1065,20 @@ test "Multiline list formatting" {
         \\]
     ;
     try exprFmtsTo(expr, expected, .no_debug);
-    try exprFmtsTo(expr2, expected, .no_debug);
+    const expr2 =
+        \\[1, 2, # Foo
+        \\  3]
+    ;
+    const expected2 =
+        \\[
+        \\    1,
+        \\    2, # Foo
+        \\    3,
+        \\]
+    ;
+    try exprFmtsTo(expr2, expected2, .no_debug);
+    try exprFmtsSame(expected, .no_debug);
+    try exprFmtsSame(expected2, .no_debug);
 }
 
 test "BinOp omnibus" {

@@ -273,12 +273,17 @@ pub const TokenizedBuffer = struct {
         }) catch |err| exitOnOom(err);
     }
 
-    pub fn pushNewline(self: *TokenizedBuffer, indent: u32) void {
-        self.tokens.append(self.env.gpa, .{
+    pub fn pushNewline(self: *TokenizedBuffer, comment: ?Comment) void {
+        var token = Token{
             .tag = .Newline,
-            .offset = indent, // store the indent in the offset field
+            .offset = 0, // store the Comment start - if it is exists here
             .extra = .{ .length = 0 },
-        }) catch |err| exitOnOom(err);
+        };
+        if (comment) |c| {
+            token.offset = c.begin;
+            token.extra = .{ .length = if (c.end > c.begin) c.end - c.begin else 0 };
+        }
+        self.tokens.append(self.env.gpa, token) catch |err| exitOnOom(err);
     }
 
     /// Returns the offset of the token at index `idx`.
@@ -342,6 +347,7 @@ pub const Cursor = struct {
     messages: []Diagnostic,
     message_count: u32,
     tab_width: u8 = 4, // TODO: make this configurable
+    comment: ?Comment = null,
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
     pub fn init(buf: []const u8, messages: []Diagnostic) Cursor {
@@ -402,6 +408,14 @@ pub const Cursor = struct {
         }
     }
 
+    pub fn popComment(self: *Cursor) ?Comment {
+        if (self.comment) |c| {
+            self.comment = null;
+            return c;
+        }
+        return null;
+    }
+
     /// Chomps “trivia” (whitespace, comments, etc.) and returns an optional indent.
     /// If the chomped trivia includes a newline, returns the indent of the next (real) line.
     /// Otherwise, returns null.
@@ -435,9 +449,15 @@ pub const Cursor = struct {
                 }
             } else if (b == '#') {
                 self.pos += 1;
+                const comment_start = self.pos;
+                // TODO: Add an interned comment here.  Should this only be if we are trying to format???
+                // I think I'll put the comment in a []u8 buffer and when I hit a newline during tokenization
+                // I'll look for it and if it is there we'll intern it and store it in the extra of the newline token?
+                // Or do I only handle this in formatting?
                 while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
+                self.comment = Comment{ .begin = comment_start, .end = self.pos };
             } else if (b >= 0 and b <= 31) {
                 self.pushMessageHere(.AsciiControl);
                 self.pos += 1;
@@ -855,8 +875,8 @@ pub const Tokenizer = struct {
             switch (b) {
                 // Whitespace & control characters
                 0...32, '#' => {
-                    if (self.cursor.chompTrivia()) |indent| {
-                        self.output.pushNewline(indent);
+                    if (self.cursor.chompTrivia()) |_| {
+                        self.output.pushNewline(self.cursor.popComment());
                     }
                     sawWhitespace = true;
                 },

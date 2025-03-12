@@ -721,7 +721,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
             .OpenRound, .NoSpaceOpenRound => {
                 self.advance();
                 const scratch_top = self.store.scratchPatternTop();
-                _ = self.parseCollectionSpan(IR.NodeStore.PatternIdx, .CloseRound, IR.NodeStore.addScratchPattern, parsePatternWithAlts) catch {
+                const end = self.parseCollectionSpan(IR.NodeStore.PatternIdx, .CloseRound, IR.NodeStore.addScratchPattern, parsePatternWithAlts) catch {
                     while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                         self.advance();
                     }
@@ -732,7 +732,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
 
                 pattern = self.store.addPattern(.{ .tuple = .{
                     .patterns = patterns,
-                    .region = .{ .start = start, .end = self.pos },
+                    .region = .{ .start = start, .end = end },
                 } });
             },
             else => std.debug.panic("TODO: Handle parsing pattern starting with: {s}", .{@tagName(self.peek())}),
@@ -890,7 +890,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             self.advance();
             // TODO: Parenthesized expressions
             const scratch_top = self.store.scratchExprTop();
-            _ = self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
+            const end = self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
                 while (self.peek() != .CloseRound) {
                     self.advance();
                 }
@@ -900,7 +900,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             const items = self.store.exprSpanFrom(scratch_top);
             expr = self.store.addExpr(.{ .tuple = .{
                 .items = items,
-                .region = .{ .start = start, .end = self.pos },
+                .region = .{ .start = start, .end = end },
             } });
         },
         .OpenCurly => {
@@ -1065,7 +1065,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeSt
     if (self.peek() == .NoSpaceOpenRound) {
         self.advance();
         const scratch_top = self.store.scratchExprTop();
-        _ = self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
+        const end = self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
             self.store.clearScratchExprsFrom(scratch_top);
             return self.pushMalformed(IR.NodeStore.ExprIdx, .unexpected_token, start);
         };
@@ -1074,7 +1074,7 @@ fn parseExprSuffix(self: *Parser, start: u32, e: IR.NodeStore.ExprIdx) IR.NodeSt
         expression = self.store.addExpr(.{ .apply = .{
             .args = args,
             .@"fn" = e,
-            .region = .{ .start = start, .end = self.pos },
+            .region = .{ .start = start, .end = end },
         } });
     }
     if (self.peek() == .NoSpaceOpQuestion) {
