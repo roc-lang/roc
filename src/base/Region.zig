@@ -26,6 +26,7 @@ pub fn zero() Region {
     };
 }
 
+/// Returns true if the region is empty i.e. all values are zero.
 pub fn isEmpty(self: Region) bool {
     return self.start.offset == 0 and self.end.offset == 0;
 }

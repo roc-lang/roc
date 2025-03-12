@@ -50,6 +50,7 @@ pub fn regionIsMultiline(self: *IR, region: Region) bool {
     return false;
 }
 
+/// Returns diagnostic position information for the given region.
 pub fn regionInfo(self: *IR, region: Region, line_starts: std.ArrayList(u32)) base.DiagnosticPosition {
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
