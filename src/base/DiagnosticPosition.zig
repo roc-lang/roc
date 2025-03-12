@@ -22,7 +22,7 @@ fn lineIdx(line_starts: std.ArrayList(u32), pos: u32) u32 {
     return @intCast(line_starts.items.len - 1);
 }
 
-/// Gets the column number for a position on a given line
+/// Gets the column index for a position on a given line
 fn columnIdx(line_starts: std.ArrayList(u32), line: u32, pos: u32) !u32 {
     const line_start: u32 = @intCast(line_starts.items[line]);
     if (pos < line_start) {
@@ -31,7 +31,7 @@ fn columnIdx(line_starts: std.ArrayList(u32), line: u32, pos: u32) !u32 {
     return pos - line_start;
 }
 
-/// Returns the source text for a given line
+/// Returns the source text for a given line index
 fn getLineText(source: []const u8, line_starts: std.ArrayList(u32), line_idx: u32) []const u8 {
     const line_start_offset = line_starts.items[line_idx];
     const line_end_offset = if (line_idx + 1 < line_starts.items.len)
@@ -42,7 +42,7 @@ fn getLineText(source: []const u8, line_starts: std.ArrayList(u32), line_idx: u3
     return source[line_start_offset..line_end_offset];
 }
 
-/// Record the offsets for each newline in the source
+/// Record the offsets for the start of each line in the source code
 pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
     var line_starts = std.ArrayList(u32).init(gpa);
 
@@ -67,7 +67,7 @@ pub fn findLineStarts(gpa: Allocator, source: []const u8) !std.ArrayList(u32) {
     return line_starts;
 }
 
-/// Returns the position info for a diagnostic
+/// Returns position info for a given start and end index offset
 pub fn position(source: []const u8, line_starts: std.ArrayList(u32), begin: u32, end: u32) !DiagnosticPosition {
     if (begin > end) {
         return error.OutOfOrder;
@@ -105,17 +105,17 @@ test "lineIdx" {
     try line_starts.append(20);
     try line_starts.append(30);
 
-    try std.testing.expectEqual(@as(u32, 0), lineIdx(line_starts, 0));
-    try std.testing.expectEqual(@as(u32, 0), lineIdx(line_starts, 5));
-    try std.testing.expectEqual(@as(u32, 0), lineIdx(line_starts, 9));
-    try std.testing.expectEqual(@as(u32, 1), lineIdx(line_starts, 10));
-    try std.testing.expectEqual(@as(u32, 1), lineIdx(line_starts, 15));
-    try std.testing.expectEqual(@as(u32, 1), lineIdx(line_starts, 19));
-    try std.testing.expectEqual(@as(u32, 2), lineIdx(line_starts, 20));
-    try std.testing.expectEqual(@as(u32, 2), lineIdx(line_starts, 25));
-    try std.testing.expectEqual(@as(u32, 2), lineIdx(line_starts, 29));
-    try std.testing.expectEqual(@as(u32, 3), lineIdx(line_starts, 30));
-    try std.testing.expectEqual(@as(u32, 3), lineIdx(line_starts, 35));
+    try std.testing.expectEqual(0, lineIdx(line_starts, 0));
+    try std.testing.expectEqual(0, lineIdx(line_starts, 5));
+    try std.testing.expectEqual(0, lineIdx(line_starts, 9));
+    try std.testing.expectEqual(1, lineIdx(line_starts, 10));
+    try std.testing.expectEqual(1, lineIdx(line_starts, 15));
+    try std.testing.expectEqual(1, lineIdx(line_starts, 19));
+    try std.testing.expectEqual(2, lineIdx(line_starts, 20));
+    try std.testing.expectEqual(2, lineIdx(line_starts, 25));
+    try std.testing.expectEqual(2, lineIdx(line_starts, 29));
+    try std.testing.expectEqual(3, lineIdx(line_starts, 30));
+    try std.testing.expectEqual(3, lineIdx(line_starts, 35));
 }
 
 test "columnIdx" {
@@ -127,12 +127,12 @@ test "columnIdx" {
     try line_starts.append(10);
     try line_starts.append(20);
 
-    try std.testing.expectEqual(@as(u32, 0), columnIdx(line_starts, 0, 0));
-    try std.testing.expectEqual(@as(u32, 5), columnIdx(line_starts, 0, 5));
-    try std.testing.expectEqual(@as(u32, 9), columnIdx(line_starts, 0, 9));
+    try std.testing.expectEqual(0, columnIdx(line_starts, 0, 0));
+    try std.testing.expectEqual(5, columnIdx(line_starts, 0, 5));
+    try std.testing.expectEqual(9, columnIdx(line_starts, 0, 9));
 
-    try std.testing.expectEqual(@as(u32, 0), columnIdx(line_starts, 1, 10));
-    try std.testing.expectEqual(@as(u32, 5), columnIdx(line_starts, 1, 15));
+    try std.testing.expectEqual(0, columnIdx(line_starts, 1, 10));
+    try std.testing.expectEqual(5, columnIdx(line_starts, 1, 15));
 }
 
 test "getLineText" {
@@ -143,8 +143,8 @@ test "getLineText" {
     const source = "line0\nline1\nline2";
 
     try line_starts.append(0);
-    try line_starts.append(6); // After "line0\n"
-    try line_starts.append(12); // After "line1\n"
+    try line_starts.append(6);
+    try line_starts.append(12);
 
     try std.testing.expectEqualStrings("line0\n", getLineText(source, line_starts, 0));
     try std.testing.expectEqualStrings("line1\n", getLineText(source, line_starts, 1));
@@ -159,20 +159,20 @@ test "get" {
     const source = "line0\nline1\nline2";
 
     try line_starts.append(0);
-    try line_starts.append(6); // After "line0\n"
-    try line_starts.append(12); // After "line1\n"
+    try line_starts.append(6);
+    try line_starts.append(12);
 
-    const info1 = try position(source, line_starts, 2, 4); // "ne" in line0
-    try std.testing.expectEqual(@as(u32, 0), info1.start_line_idx);
-    try std.testing.expectEqual(@as(u32, 2), info1.start_col_idx);
-    try std.testing.expectEqual(@as(u32, 0), info1.end_line_idx);
-    try std.testing.expectEqual(@as(u32, 4), info1.end_col_idx);
+    const info1 = try position(source, line_starts, 2, 4);
+    try std.testing.expectEqual(0, info1.start_line_idx);
+    try std.testing.expectEqual(2, info1.start_col_idx);
+    try std.testing.expectEqual(0, info1.end_line_idx);
+    try std.testing.expectEqual(4, info1.end_col_idx);
     try std.testing.expectEqualStrings("line0\n", info1.line_text);
 
-    const info2 = try position(source, line_starts, 8, 10); // "ne" in line1
-    try std.testing.expectEqual(@as(u32, 1), info2.start_line_idx);
-    try std.testing.expectEqual(@as(u32, 2), info2.start_col_idx);
-    try std.testing.expectEqual(@as(u32, 1), info2.end_line_idx);
-    try std.testing.expectEqual(@as(u32, 4), info2.end_col_idx);
+    const info2 = try position(source, line_starts, 8, 10);
+    try std.testing.expectEqual(1, info2.start_line_idx);
+    try std.testing.expectEqual(2, info2.start_col_idx);
+    try std.testing.expectEqual(1, info2.end_line_idx);
+    try std.testing.expectEqual(4, info2.end_col_idx);
     try std.testing.expectEqualStrings("line1\n", info2.line_text);
 }
