@@ -43,9 +43,7 @@ LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token")
-    (ident (0:20-0:22)
-        ""
-        "le")
+    (ident (0:20-0:22) "" "le")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED
 

@@ -15,17 +15,13 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,LowerIdent,OpAssign,KwIf,Lowe
 ~~~PARSE
 (file (0:0-6:5)
     (module (0:0-2:3)
-        (exposed_item (0:8-0:11)
-            (lower_ident "foo")))
+        (exposed_item (0:8-0:11) (lower_ident "foo")))
     (decl (2:0-6:5)
         (ident (2:0-2:3) "foo")
         (if_then_else (2:6-6:5)
-            (ident (2:9-2:13)
-                ""
-                "true")
+            (ident (2:9-2:13) "" "true")
             (tag (2:14-2:15) "A")
-            (block (4:9-6:5)
-                (tag (5:4-5:5) "B")))))
+            (block (4:9-6:5) (tag (5:4-5:5) "B")))))
 ~~~FORMATTED
 module [foo]
 

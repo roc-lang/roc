@@ -22,8 +22,7 @@ UpperIdent,OpenCurly,LowerIdent,Comma,Newline,CloseCurly,Newline,LowerIdent,OpAs
 ~~~PARSE
 (file (0:0-4:34)
     (malformed_header "missing_header")
-    (record (0:1-2:3)
-        (field "o"))
+    (record (0:1-2:3) (field "o"))
     (decl (2:0-4:34)
         (ident (2:0-2:3) "foo")
         (string (4:4-4:34) "on        (string 'onmo %')))")))

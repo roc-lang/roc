@@ -13,18 +13,13 @@ KwApp,OpenSquare,LowerIdent,CloseSquare,OpenCurly,LowerIdent,OpColon,KwPlatform,
 ~~~PARSE
 (file (0:0-4:41)
     (app (0:0-0:3) "TODO implement toSExpr for app module header")
-    (import (2:0-4:5)
-        "pf"
-        ".Stdout"
-        "")
+    (import (2:0-4:5) "pf" ".Stdout" "")
     (decl (4:0-4:41)
         (ident (4:0-4:5) "main!")
         (lambda (4:8-4:41)
             (args (underscore))
             (apply (4:12-4:41)
-                (ident (4:12-4:24)
-                    "Stdout"
-                    ".line!")
+                (ident (4:12-4:24) "Stdout" ".line!")
                 (string (4:25-4:41) "Hello, world!")))))
 ~~~FORMATTED
 NO CHANGE

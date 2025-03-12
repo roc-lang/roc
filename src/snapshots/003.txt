@@ -19,26 +19,18 @@ KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDo
 ~~~PARSE
 (file (0:0-10:8)
     (module (0:0-2:6)
-        (exposed_item (0:8-0:15)
-            (lower_ident "decoder")))
-    (import (2:0-4:7)
-        "json"
-        ".Json"
-        "")
+        (exposed_item (0:8-0:15) (lower_ident "decoder")))
+    (import (2:0-4:7) "json" ".Json" "")
     (decl (4:0-6:5)
         (ident (4:0-4:7) "decoder")
-        (ident (4:10-4:21)
-            "Utf8"
-            ".decode"))
-    (crash (6:0-6:5)
-        (string (6:6-6:7) "something"))
+        (ident (4:10-4:21) "Utf8" ".decode"))
+    (crash (6:0-6:5) (string (6:6-6:7) "something"))
     (expect (8:0-10:6)
         (binop
             "=="
             (int "1")
             (int "1")))
-    (return (10:0-10:8)
-        (int "2")))
+    (return (10:0-10:8) (int "2")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

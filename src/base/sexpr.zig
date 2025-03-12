@@ -5,6 +5,9 @@ const Allocator = std.mem.Allocator;
 const testing = std.testing;
 const DiagnosticPositionInfo = @import("DiagnosticPositionInfo.zig");
 
+/// How many child nodes before breaking to a newline
+const CHILD_COUNT_BREAKPOINT = 5;
+
 /// Represents a node in an S-expression tree.
 pub const Expr = union(enum) {
     node: struct {
@@ -132,7 +135,7 @@ pub const Expr = union(enum) {
     }
 
     fn isSimple(node: *const Expr) bool {
-        return countItems(node) <= 3;
+        return countItems(node) <= CHILD_COUNT_BREAKPOINT;
     }
 
     /// Write the node as an S-expression formatted string to the given writer.

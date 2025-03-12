@@ -13,10 +13,8 @@ KwModule,OpenSquare,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,LowerIdent,O
 ~~~PARSE
 (file (0:0-4:11)
     (module (0:0-2:3)
-        (exposed_item (0:8-0:11)
-            (lower_ident "foo"))
-        (exposed_item (0:13-0:16)
-            (lower_ident "bar")))
+        (exposed_item (0:8-0:11) (lower_ident "foo"))
+        (exposed_item (0:13-0:16) (lower_ident "bar")))
     (decl (2:0-2:3)
         (ident (2:0-2:3) "foo")
         (string (2:6-2:7) "one"))
