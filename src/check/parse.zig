@@ -42,6 +42,5 @@ pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
         .tokens = result.tokens,
         .store = parser.store,
         .errors = errors,
-        .newlines = null,
     };
 }
