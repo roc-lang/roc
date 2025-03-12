@@ -11,6 +11,7 @@ pub const Package = @import("base/Package.zig");
 pub const ModuleEnv = @import("base/ModuleEnv.zig");
 pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
+pub const DiagnosticPosition = @import("base/DiagnosticPosition.zig");
 
 /// re-export ModuleWork
 pub const ModuleWork = module_work.ModuleWork;

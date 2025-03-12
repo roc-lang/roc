@@ -13,40 +13,40 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpColon,UpperIdent,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,Comma,LowerIdent,Comma,Underscore,CloseRound,Newline,LowerIdent,OpColon,OpenRound,LowerIdent,Comma,LowerIdent,Comma,LowerIdent,CloseRound,Newline,LowerIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,OpArrow,UpperIdent,CloseRound,Newline,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,UpperIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,OpenCurly,CloseCurly,Comma,Underscore,CloseRound,EndOfFile
 ~~~PARSE
-(file
-    (module)
-    (type_anno
+(file (1:1-7:38)
+    (module (1:1-3:4))
+    (type_anno (3:1-4:4)
         "foo"
-        (tag "U64"))
-    (type_anno
+        (tag (3:7-3:10) "U64"))
+    (type_anno (4:1-5:4)
         "bar"
-        (tag
+        (tag (4:7-5:4)
             "Thing"
-            (ty_var "a")
-            (ty_var "b")
+            (ty_var (4:13-4:14) "a")
+            (ty_var (4:16-4:17) "b")
             (_)))
-    (type_anno
+    (type_anno (5:1-6:8)
         "baz"
-        (tuple
-            (ty_var "a")
-            (ty_var "b")
-            (ty_var "c")))
-    (type_anno
+        (tuple (5:7-6:8)
+            (ty_var (5:8-5:9) "a")
+            (ty_var (5:11-5:12) "b")
+            (ty_var (5:14-5:15) "c")))
+    (type_anno (6:1-7:6)
         "add_one"
-        (fn
-            (tag "U32")
-            (tag "U8")
-            (tag "U16")))
-    (type_anno
+        (fn (6:12-6:27)
+            (tag (6:23-6:26) "U32")
+            (tag (6:12-6:14) "U8")
+            (tag (6:16-6:19) "U16")))
+    (type_anno (7:1-7:38)
         "main!"
-        (fn
-            (tag
+        (fn (7:9-7:38)
+            (tag (7:25-7:38)
                 "Result"
-                (record)
+                (record (7:32-7:35))
                 (_))
-            (tag
+            (tag (7:9-7:24)
                 "List"
-                (tag "String")))))
+                (tag (7:14-7:20) "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

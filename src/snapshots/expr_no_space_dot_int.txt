@@ -9,10 +9,10 @@ PARSER: expr_no_space_dot_int
 ~~~TOKENS
 KwModule,OpenSquare,CloseSquare,Newline,LowerIdent,OpAssign,LowerIdent,NoSpaceDotInt,EndOfFile
 ~~~PARSE
-(file
-    (module)
-    (decl
-        (ident "foo")
+(file (1:1-3:12)
+    (module (1:1-3:4))
+    (decl (3:1-3:12)
+        (ident (3:1-3:4) "foo")
         (malformed_expr "expr_no_space_dot_int")))
 ~~~FORMATTED
 module []

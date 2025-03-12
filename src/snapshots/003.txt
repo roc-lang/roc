@@ -17,23 +17,20 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,LowerIdent,CloseSquare,Newline,KwImport,LowerIdent,NoSpaceDotUpperIdent,Newline,LowerIdent,OpAssign,UpperIdent,NoSpaceDotLowerIdent,Newline,KwCrash,StringStart,StringPart,StringEnd,Newline,KwExpect,Int,OpEquals,Int,Newline,KwReturn,Int,EndOfFile
 ~~~PARSE
-(file
-    (module
-        (exposed_item (lower_ident "decoder")))
-    (import
-        "json"
-        ".Json"
-        "")
-    (decl
-        (ident "decoder")
-        (ident "Utf8" ".decode"))
-    (crash (string "something"))
-    (expect
+(file (1:1-11:9)
+    (module (1:1-3:7)
+        (exposed_item (1:9-1:16) (lower_ident "decoder")))
+    (import (3:1-5:8) "json" ".Json" "")
+    (decl (5:1-7:6)
+        (ident (5:1-5:8) "decoder")
+        (ident (5:11-5:22) "Utf8" ".decode"))
+    (crash (7:1-7:6) (string (7:7-7:8) "something"))
+    (expect (9:1-11:7)
         (binop
             "=="
-            (int "1")
-            (int "1")))
-    (return (int "2")))
+            (int (9:8-9:9) "1")
+            (int (9:13-9:14) "1")))
+    (return (11:1-11:9) (int (11:8-11:9) "2")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

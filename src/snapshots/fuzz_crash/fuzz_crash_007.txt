@@ -9,7 +9,7 @@ PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,NoSpaceDotInt,NoSpaceDotLowerIdent,EndOfFile
 ~~~PARSE
-(file
+(file (1:1-1:8)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token"))

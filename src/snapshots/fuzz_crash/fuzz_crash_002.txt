@@ -25,7 +25,7 @@ PARSER: unexpected_token
 ~~~TOKENS
 LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,OpColon,LowerIdent,OpenSquare,OpPercent,EndOfFile
 ~~~PARSE
-(file
+(file (1:1-1:25)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token")
@@ -43,7 +43,7 @@ LowerIdent,OpColon,MalformedUnknownToken,OpColon,OpColon,OpColon,OpColon,OpColon
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token")
     (malformed_expr "unexpected_token")
-    (ident "" "le")
+    (ident (1:21-1:23) "" "le")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED
 

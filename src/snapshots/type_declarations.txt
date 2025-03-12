@@ -17,51 +17,48 @@ NIL
 ~~~TOKENS
 KwModule,OpenSquare,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,UpperIdent,Comma,LowerIdent,Comma,LowerIdent,CloseSquare,Newline,UpperIdent,LowerIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,OpenRound,LowerIdent,OpArrow,LowerIdent,CloseRound,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Newline,UpperIdent,OpColon,OpenRound,UpperIdent,Comma,UpperIdent,CloseRound,Newline,UpperIdent,LowerIdent,OpColon,OpenCurly,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpColon,UpperIdent,CloseCurly,Newline,UpperIdent,LowerIdent,OpColon,OpenSquare,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,UpperIdent,CloseSquare,Newline,UpperIdent,LowerIdent,OpColon,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,Comma,LowerIdent,OpArrow,UpperIdent,NoSpaceOpenRound,LowerIdent,CloseRound,EndOfFile
 ~~~PARSE
-(file
-    (module
-        (exposed_item (upper_ident "Map"))
-        (exposed_item (upper_ident "Foo"))
-        (exposed_item (upper_ident "Some"))
-        (exposed_item (upper_ident "Maybe"))
-        (exposed_item (upper_ident "SomeFunc"))
-        (exposed_item (lower_ident "add_one"))
-        (exposed_item (lower_ident "main!")))
-    (type_decl
-        (header
-            "Map"
-            "a"
-            "b")
-        (fn
-            (tag
+(file (1:1-11:37)
+    (module (1:1-3:4)
+        (exposed_item (1:9-1:12) (upper_ident "Map"))
+        (exposed_item (1:14-1:17) (upper_ident "Foo"))
+        (exposed_item (1:19-1:23) (upper_ident "Some"))
+        (exposed_item (1:25-1:30) (upper_ident "Maybe"))
+        (exposed_item (1:32-1:40) (upper_ident "SomeFunc"))
+        (exposed_item (1:42-1:49) (lower_ident "add_one"))
+        (exposed_item (1:51-1:56) (lower_ident "main!")))
+    (type_decl (3:1-5:4)
+        (header "Map" "a" "b")
+        (fn (3:11-5:4)
+            (tag (3:32-5:4)
                 "List"
-                (ty_var "b"))
-            (tag
+                (ty_var (3:37-3:38) "b"))
+            (tag (3:11-3:19)
                 "List"
-                (ty_var "a"))
-            (fn
-                (ty_var "b")
-                (ty_var "a"))))
-    (type_decl
+                (ty_var (3:16-3:17) "a"))
+            (fn (3:21-3:28)
+                (ty_var (3:26-3:27) "b")
+                (ty_var (3:21-3:22) "a"))))
+    (type_decl (5:1-7:5)
         (header "Foo")
-        (tuple
-            (tag "Bar")
-            (tag "Baz")))
-    (type_decl
+        (tuple (5:7-7:5)
+            (tag (5:8-5:11) "Bar")
+            (tag (5:13-5:16) "Baz")))
+    (type_decl (7:1-9:6)
         (header "Some" "a")
-        (record "<field>" "<field>"))
-    (type_decl
+        (record (7:10-9:6) "<field>" "<field>"))
+    (type_decl (9:1-11:9)
         (header "Maybe" "a")
-        (tag_union "TODO tags" "TODO open_anno"))
-    (type_decl
+        (tag_union (9:11-11:9) "TODO tags" "TODO open_anno"))
+    (type_decl (11:1-11:37)
         (header "SomeFunc" "a")
-        (fn
-            (tag
+        (fn (11:14-11:37)
+            (tag (11:29-11:37)
                 "Maybe"
-                (ty_var "a"))
-            (tag
+                (ty_var (11:35-11:36) "a"))
+            (tag (11:14-11:23)
                 "Maybe"
-                (ty_var "a"))
-            (ty_var "a"))))
+                (ty_var (11:20-11:21) "a"))
+            (ty_var (11:24-11:25) "a"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

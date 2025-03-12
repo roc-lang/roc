@@ -11,7 +11,7 @@ PARSER: unexpected_token
 ~~~TOKENS
 OpBar,OpBar,Int,EndOfFile
 ~~~PARSE
-(file
+(file (1:1-1:5)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED

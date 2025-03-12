@@ -1,15 +1,16 @@
 ~~~META
 description=fuzz crash
 ~~~SOURCE
-mo|%
+ ||(|(l888888888|
 ~~~PROBLEMS
 PARSER: missing_header
 PARSER: pattern_unexpected_token
+PARSER: pattern_unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-LowerIdent,OpBar,OpPercent,EndOfFile
+OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,EndOfFile
 ~~~PARSE
-(file
+(file (1:2-1:18)
     (malformed_header "missing_header")
     (malformed_expr "unexpected_token"))
 ~~~FORMATTED
