@@ -2055,25 +2055,26 @@ pub const NodeStore = struct {
 
                     node.appendRegionChild(env.gpa, ir.regionInfo(import.region, line_starts));
 
-                    // Module Qualifier e.g. `pf` in `import pf.Stdout`
-                    node.appendStringChild(
-                        env.gpa,
-                        if (import.qualifier_tok) |tok| ir.resolve(tok) else "",
-                    );
+                    // name e.g. `Stdout` in `import pf.Stdout`
+                    node.appendStringChild(env.gpa, ir.resolve(import.module_name_tok));
 
-                    // Module Name e.g. `Stdout` in `import pf.Stdout`
-                    node.appendStringChild(
-                        env.gpa,
-                        ir.resolve(import.module_name_tok),
-                    );
+                    // qualifier e.g. `pf` in `import pf.Stdout`
+                    if (import.qualifier_tok) |tok| {
+                        const qualifier_str = ir.resolve(tok);
+                        var child = sexpr.Expr.init(env.gpa, "qualifier");
+                        child.appendStringChild(env.gpa, qualifier_str);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
 
-                    // Module Alias e.g. `OUT` in `import pf.Stdout as OUT`
-                    node.appendStringChild(
-                        env.gpa,
-                        if (import.alias_tok) |tok| ir.resolve(tok) else "",
-                    );
+                    // alias e.g. `OUT` in `import pf.Stdout as OUT`
+                    if (import.alias_tok) |tok| {
+                        const qualifier_str = ir.resolve(tok);
+                        var child = sexpr.Expr.init(env.gpa, "alias");
+                        child.appendStringChild(env.gpa, qualifier_str);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
 
-                    // Each exposed identifier e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
+                    // exposed identifiers e.g. [foo, bar] in `import pf.Stdout exposing [foo, bar]`
                     const exposed_slice = ir.store.exposedItemSlice(import.exposes);
                     if (exposed_slice.len > 0) {
                         var exposed = sexpr.Expr.init(env.gpa, "exposing");

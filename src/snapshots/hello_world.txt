@@ -11,7 +11,7 @@ NIL
 ~~~PARSE
 (file (1:1-5:42)
     (app (1:1-1:4) "TODO implement toSExpr for app module header")
-    (import (3:1-5:6) "pf" ".Stdout" "")
+    (import (3:1-5:6) ".Stdout" (qualifier "pf"))
     (decl (5:1-5:42)
         (ident (5:1-5:6) "main!")
         (lambda (5:9-5:42)
