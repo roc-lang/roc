@@ -11,7 +11,7 @@ PARSER: no_else
     (module (1:1-1:10))
     (decl (3:1-3:20)
         (ident (3:1-3:4) "foo")
-        (malformed_expr "no_else")))
+        (malformed_expr (3:7-3:20) "no_else")))
 ~~~FORMATTED
 module []
 

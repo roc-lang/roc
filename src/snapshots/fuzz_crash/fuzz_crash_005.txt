@@ -9,7 +9,7 @@ PARSER: missing_header
 @0-4	LowerIdent
 @4-4	EndOfFile
 ~~~PARSE
-(file (1:1-1:5) (malformed_header "missing_header"))
+(file (1:1-1:5) (malformed_header (1:1-1:5) "missing_header"))
 ~~~FORMATTED
 
 ~~~END

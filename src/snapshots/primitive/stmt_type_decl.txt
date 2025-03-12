@@ -1,0 +1,30 @@
+~~~META
+description=A primitive
+~~~SOURCE
+module [Foo]
+
+Foo(a,b) : (a,b,Str,U64)
+~~~PROBLEMS
+PARSER: unexpected_token
+~~~PARSE
+(file (1:1-3:25)
+    (module (1:1-1:13)
+        (exposed_item (1:9-1:12) (upper_ident "Foo")))
+    (apply (3:1-3:11)
+        (tag (3:1-3:4) "Foo")
+        (ident (3:5-3:6) "" "a")
+        (ident (3:7-3:8) "" "b"))
+    (malformed_expr (3:10-3:11) "unexpected_token")
+    (tuple (3:12-3:25)
+        (ident (3:13-3:14) "" "a")
+        (ident (3:15-3:16) "" "b")
+        (tag (3:17-3:20) "Str")
+        (tag (3:21-3:24) "U64")))
+~~~FORMATTED
+module [Foo]
+
+Foo(a, b)
+
+
+(a, b, Str, U64)
+~~~END
