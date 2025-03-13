@@ -923,7 +923,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             } else {
                 const scratch_top = self.store.scratchStatementTop();
 
-                while (true) {
+                while (self.peek() != .EndOfFile) {
                     const statement = self.parseStmt() orelse break;
                     self.store.addScratchStatement(statement);
                     if (self.peek() == .CloseCurly) {
