@@ -1,0 +1,30 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+0o0.0
+0_0
+0u8.0
+0_
+~~~PROBLEMS
+TOKENIZE: (2:3-2:3) LeadingZero:
+0_0
+  ^
+PARSER: missing_header
+PARSER: unexpected_token
+PARSER: expr_no_space_dot_int
+~~~TOKENS
+Int,NoSpaceDotInt,Newline,Int,Newline,Int,NoSpaceDotInt,Newline,Int,EndOfFile
+~~~PARSE
+(file (1:1-4:3)
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token")
+    (int (2:1-2:4) "0_0")
+    (malformed_expr "expr_no_space_dot_int")
+    (int (4:1-4:3) "0_"))
+~~~FORMATTED
+
+0_0
+
+
+0_
+~~~END
