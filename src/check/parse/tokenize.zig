@@ -38,6 +38,8 @@ pub const Token = struct {
         Int,
         MalformedNumberBadSuffix, // malformed, but should be treated similar to an int in the parser
         MalformedNumberUnicodeSuffix, // malformed, but should be treated similar to an int in the parser
+        MalformedNumberNoDigits, // malformed, but should be treated similar to an int in the parser
+        MalformedNumberNoExponentDigits, // malformed, but should be treated similar to an int in the parser
 
         // Should be treated as StringPart in the parser, but we forward the error to the ast
         MalformedInvalidUnicodeEscapeSequence,
@@ -142,6 +144,167 @@ pub const Token = struct {
         KwWith,
 
         MalformedUnknownToken,
+
+        /// Returns true if the node is a keyword.
+        pub fn isKeyword(tok: Tag) bool {
+            return switch (tok) {
+                .KwApp,
+                .KwAs,
+                .KwCrash,
+                .KwDbg,
+                .KwElse,
+                .KwExpect,
+                .KwExposes,
+                .KwExposing,
+                .KwGenerates,
+                .KwHas,
+                .KwHosted,
+                .KwIf,
+                .KwImplements,
+                .KwImport,
+                .KwImports,
+                .KwInterface,
+                .KwMatch,
+                .KwModule,
+                .KwPackage,
+                .KwPackages,
+                .KwPlatform,
+                .KwProvides,
+                .KwRequires,
+                .KwReturn,
+                .KwTo,
+                .KwWhere,
+                .KwWith,
+                => true,
+                else => false,
+            };
+        }
+
+        /// Returns true if the node is malformed.
+        pub fn isMalformed(tok: Tag) bool {
+            // This function explicitly lists all variants to ensure new malformed nodes aren't missed.
+            return switch (tok) {
+                .EndOfFile,
+                .Newline,
+                .Float,
+                .StringStart,
+                .StringEnd,
+                .MultilineStringStart,
+                .MultilineStringEnd,
+                .StringPart,
+                .SingleQuote,
+                .Int,
+                .UpperIdent,
+                .LowerIdent,
+                .Underscore,
+                .DotLowerIdent,
+                .DotInt,
+                .DotUpperIdent,
+                .NoSpaceDotInt,
+                .NoSpaceDotLowerIdent,
+                .NoSpaceDotUpperIdent,
+                .NamedUnderscore,
+                .OpaqueName,
+                .OpenRound,
+                .CloseRound,
+                .OpenSquare,
+                .CloseSquare,
+                .OpenCurly,
+                .CloseCurly,
+                .OpenStringInterpolation,
+                .CloseStringInterpolation,
+                .NoSpaceOpenRound,
+                .OpPlus,
+                .OpStar,
+                .OpPizza,
+                .OpAssign,
+                .OpBinaryMinus,
+                .OpUnaryMinus,
+                .OpNotEquals,
+                .OpBang,
+                .OpAnd,
+                .OpAmpersand,
+                .OpQuestion,
+                .OpDoubleQuestion,
+                .OpOr,
+                .OpBar,
+                .OpDoubleSlash,
+                .OpSlash,
+                .OpPercent,
+                .OpCaret,
+                .OpGreaterThanOrEq,
+                .OpGreaterThan,
+                .OpLessThanOrEq,
+                .OpBackArrow,
+                .OpLessThan,
+                .OpEquals,
+                .OpColonEqual,
+                .NoSpaceOpQuestion,
+                .Comma,
+                .Dot,
+                .DoubleDot,
+                .TripleDot,
+                .DotStar,
+                .OpColon,
+                .OpArrow,
+                .OpFatArrow,
+                .OpBackslash,
+                .KwApp,
+                .KwAs,
+                .KwCrash,
+                .KwDbg,
+                .KwDebug,
+                .KwElse,
+                .KwExpect,
+                .KwExposes,
+                .KwExposing,
+                .KwGenerates,
+                .KwHas,
+                .KwHosted,
+                .KwIf,
+                .KwImplements,
+                .KwImport,
+                .KwImports,
+                .KwInterface,
+                .KwMatch,
+                .KwModule,
+                .KwPackage,
+                .KwPackages,
+                .KwPlatform,
+                .KwProvides,
+                .KwRequires,
+                .KwReturn,
+                .KwTo,
+                .KwWhere,
+                .KwWith,
+                => false,
+
+                .MalformedDotUnicodeIdent,
+                .MalformedInvalidEscapeSequence,
+                .MalformedInvalidUnicodeEscapeSequence,
+                .MalformedNamedUnderscoreUnicode,
+                .MalformedNoSpaceDotUnicodeIdent,
+                .MalformedNumberBadSuffix,
+                .MalformedNumberNoDigits,
+                .MalformedNumberNoExponentDigits,
+                .MalformedNumberUnicodeSuffix,
+                .MalformedOpaqueNameUnicode,
+                .MalformedOpaqueNameWithoutName,
+                .MalformedUnicodeIdent,
+                .MalformedUnknownToken,
+                => true,
+            };
+        }
+
+        /// This function is used to keep around the first malformed node.
+        /// For example, if an integer has no digits and a bad suffix `0bu22`,
+        /// we keep the first malformed node that the integer has no digits instead of pointing out the bad suffix.
+        fn updateIfNotMalformed(tok: Tag, next: Tag) Tag {
+            if (tok.isMalformed()) {
+                return tok;
+            }
+            return next;
+        }
     };
 
     pub const keywords = std.StaticStringMap(Tag).initComptime(.{
@@ -190,40 +353,6 @@ pub const Token = struct {
         .{ "u64", .{} },
         .{ "u8", .{} },
     });
-
-    pub fn isKeyword(tok: Tag) bool {
-        return switch (tok) {
-            .KwApp,
-            .KwAs,
-            .KwCrash,
-            .KwDbg,
-            .KwElse,
-            .KwExpect,
-            .KwExposes,
-            .KwExposing,
-            .KwGenerates,
-            .KwHas,
-            .KwHosted,
-            .KwIf,
-            .KwImplements,
-            .KwImport,
-            .KwImports,
-            .KwInterface,
-            .KwMatch,
-            .KwModule,
-            .KwPackage,
-            .KwPackages,
-            .KwPlatform,
-            .KwProvides,
-            .KwRequires,
-            .KwReturn,
-            .KwTo,
-            .KwWhere,
-            .KwWith,
-            => true,
-            else => false,
-        };
-    }
 };
 
 /// The buffer that accumulates tokens.
@@ -520,27 +649,33 @@ pub const Cursor = struct {
                     'x', 'X' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
-                        self.chompIntegerBase16();
+                        self.chompIntegerBase16() catch {
+                            tok = .MalformedNumberNoDigits;
+                        };
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     'o', 'O' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
-                        self.chompIntegerBase8();
+                        self.chompIntegerBase8() catch {
+                            tok = .MalformedNumberNoDigits;
+                        };
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     'b', 'B' => {
                         maybeMessageForUppercaseBase(self, c);
                         self.pos += 1;
-                        self.chompIntegerBase2();
+                        self.chompIntegerBase2() catch {
+                            tok = .MalformedNumberNoDigits;
+                        };
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
                     '0'...'9' => {
                         self.pushMessageHere(.LeadingZero);
-                        _ = self.chompNumberBase10();
+                        tok = self.chompNumberBase10();
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -550,9 +685,11 @@ pub const Cursor = struct {
                     },
                     '.' => {
                         self.pos += 1;
-                        self.chompIntegerBase10();
+                        self.chompIntegerBase10() catch {}; // This is not an issue, have leading `0.`.
                         tok = .Float;
-                        _ = self.chompExponent();
+                        _ = self.chompExponent() catch {
+                            tok = .MalformedNumberNoExponentDigits;
+                        };
                         tok = self.chompNumberSuffix(tok);
                         break;
                     },
@@ -569,14 +706,16 @@ pub const Cursor = struct {
         return tok;
     }
 
-    pub fn chompExponent(self: *Cursor) bool {
+    pub fn chompExponent(self: *Cursor) !bool {
         if (self.peek() orelse 0 == 'e' or self.peek() orelse 0 == 'E') {
             self.pos += 1;
             // Optional sign
             if (self.peek() orelse 0 == '+' or self.peek() orelse 0 == '-') {
                 self.pos += 1;
             }
-            self.chompIntegerBase10();
+            self.chompIntegerBase10() catch {
+                return error.EmptyExponent;
+            };
             return true;
         }
         return false;
@@ -595,33 +734,41 @@ pub const Cursor = struct {
         }
         const start = self.pos;
         if (!self.chompIdentGeneral()) {
-            return .MalformedNumberUnicodeSuffix;
+            return hypothesis.updateIfNotMalformed(.MalformedNumberUnicodeSuffix);
         }
         const suffix = self.buf[start..self.pos];
         if (Token.valid_number_suffixes.get(suffix) == null) {
-            return .MalformedNumberBadSuffix;
+            return hypothesis.updateIfNotMalformed(.MalformedNumberBadSuffix);
         } else {
             return hypothesis;
         }
     }
 
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
-        self.chompIntegerBase10();
+        // The only way to reach `chompNumberBase10` is if there is a leading digit of some sort.
+        std.debug.assert(self.buf[self.pos - 1] >= '0' and self.buf[self.pos - 1] <= '9');
+
         var token_type: Token.Tag = .Int;
+        self.chompIntegerBase10() catch {}; // This is not an issue, have leading digit.
         if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or self.peekAt(1) == 'e' or self.peekAt(1) == 'E')) {
             self.pos += 1;
-            self.chompIntegerBase10();
+            self.chompIntegerBase10() catch {}; // This is not an issue, guaranteed to have digits before the decimal point.
             token_type = .Float;
         }
-        if (self.chompExponent()) {
+        const has_exponent = self.chompExponent() catch {
+            return .MalformedNumberNoExponentDigits;
+        };
+        if (has_exponent) {
             token_type = .Float;
         }
         return token_type;
     }
 
-    pub fn chompIntegerBase10(self: *Cursor) void {
+    pub fn chompIntegerBase10(self: *Cursor) !void {
+        var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '9') {
+                contains_digits = true;
                 self.pos += 1;
             } else if (c == '_') {
                 self.pos += 1;
@@ -629,11 +776,16 @@ pub const Cursor = struct {
                 break;
             }
         }
+        if (!contains_digits) {
+            return error.EmptyInteger;
+        }
     }
 
-    pub fn chompIntegerBase16(self: *Cursor) void {
+    pub fn chompIntegerBase16(self: *Cursor) !void {
+        var contains_digits = false;
         while (self.peek()) |c| {
             if ((c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')) {
+                contains_digits = true;
                 self.pos += 1;
             } else if (c == '_') {
                 self.pos += 1;
@@ -641,11 +793,16 @@ pub const Cursor = struct {
                 break;
             }
         }
+        if (!contains_digits) {
+            return error.EmptyInteger;
+        }
     }
 
-    pub fn chompIntegerBase8(self: *Cursor) void {
+    pub fn chompIntegerBase8(self: *Cursor) !void {
+        var contains_digits = false;
         while (self.peek()) |c| {
             if (c >= '0' and c <= '7') {
+                contains_digits = true;
                 self.pos += 1;
             } else if (c == '_') {
                 self.pos += 1;
@@ -653,17 +810,25 @@ pub const Cursor = struct {
                 break;
             }
         }
+        if (!contains_digits) {
+            return error.EmptyInteger;
+        }
     }
 
-    pub fn chompIntegerBase2(self: *Cursor) void {
+    pub fn chompIntegerBase2(self: *Cursor) !void {
+        var contains_digits = false;
         while (self.peek()) |c| {
             if (c == '0' or c == '1') {
+                contains_digits = true;
                 self.pos += 1;
             } else if (c == '_') {
                 self.pos += 1;
             } else {
                 break;
             }
+        }
+        if (!contains_digits) {
+            return error.EmptyInteger;
         }
     }
 
@@ -1870,13 +2035,15 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
 
             // If the input has malformed tokens, we don't want to assert anything about it (yet)
             .MalformedNumberBadSuffix,
+            .MalformedNumberUnicodeSuffix,
+            .MalformedNumberNoDigits,
+            .MalformedNumberNoExponentDigits,
             .MalformedInvalidUnicodeEscapeSequence,
             .MalformedInvalidEscapeSequence,
             .MalformedUnicodeIdent,
             .MalformedDotUnicodeIdent,
             .MalformedNoSpaceDotUnicodeIdent,
             .MalformedUnknownToken,
-            .MalformedNumberUnicodeSuffix,
             .MalformedNamedUnderscoreUnicode,
             .MalformedOpaqueNameUnicode,
             .MalformedOpaqueNameWithoutName,

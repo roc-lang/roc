@@ -1,0 +1,24 @@
+~~~META
+description=fuzz crash
+~~~SOURCE
+0b.0
+0bu22
+0u22
+~~~PROBLEMS
+PARSER: missing_header
+PARSER: unexpected_token
+PARSER: unexpected_token
+PARSER: unexpected_token
+~~~TOKENS
+MalformedNumberNoDigits,NoSpaceDotInt,Newline,MalformedNumberNoDigits,Newline,MalformedNumberBadSuffix,EndOfFile
+~~~PARSE
+(file (1:1-3:5)
+    (malformed_header "missing_header")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token")
+    (malformed_expr "unexpected_token"))
+~~~FORMATTED
+
+
+
+~~~END
