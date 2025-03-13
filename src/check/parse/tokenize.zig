@@ -706,6 +706,9 @@ pub const Cursor = struct {
         return tok;
     }
 
+    /// Chomps an exponent including sign and digits, if one if found.
+    /// Returns true if an exponent was chomped.
+    /// Will error if the exponent has no digits.
     pub fn chompExponent(self: *Cursor) !bool {
         if (self.peek() orelse 0 == 'e' or self.peek() orelse 0 == 'E') {
             self.pos += 1;
@@ -744,10 +747,11 @@ pub const Cursor = struct {
         }
     }
 
+    /// Chomp a number in base 10. The number can be an int or float.
+    /// Returns the tag of the number type.
+    /// Will return a malformed node if the exponent is malformed.
+    /// Before calling this method, a valid leading digit must have been parsed.
     pub fn chompNumberBase10(self: *Cursor) Token.Tag {
-        // The only way to reach `chompNumberBase10` is if there is a leading digit of some sort.
-        std.debug.assert(self.buf[self.pos - 1] >= '0' and self.buf[self.pos - 1] <= '9');
-
         var token_type: Token.Tag = .Int;
         self.chompIntegerBase10() catch {}; // This is not an issue, have leading digit.
         if (self.peek() orelse 0 == '.' and (self.isPeekedCharInRange(1, '0', '9') or self.peekAt(1) == 'e' or self.peekAt(1) == 'E')) {
@@ -764,6 +768,8 @@ pub const Cursor = struct {
         return token_type;
     }
 
+    /// Chomp the digits of an integer in base 10.
+    /// Will error if the integer has no digits.
     pub fn chompIntegerBase10(self: *Cursor) !void {
         var contains_digits = false;
         while (self.peek()) |c| {
@@ -781,6 +787,8 @@ pub const Cursor = struct {
         }
     }
 
+    /// Chomp the digits of an integer in base 16.
+    /// Will error if the integer has no digits.
     pub fn chompIntegerBase16(self: *Cursor) !void {
         var contains_digits = false;
         while (self.peek()) |c| {
@@ -798,6 +806,8 @@ pub const Cursor = struct {
         }
     }
 
+    /// Chomp the digits of an integer in base 8.
+    /// Will error if the integer has no digits.
     pub fn chompIntegerBase8(self: *Cursor) !void {
         var contains_digits = false;
         while (self.peek()) |c| {
@@ -815,6 +825,8 @@ pub const Cursor = struct {
         }
     }
 
+    /// Chomp the digits of an integer in base 2.
+    /// Will error if the integer has no digits.
     pub fn chompIntegerBase2(self: *Cursor) !void {
         var contains_digits = false;
         while (self.peek()) |c| {
@@ -1762,8 +1774,17 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 }
             },
             .Int => {
-                for (0..length) |_| {
-                    try buf2.append(alloc, '1');
+                // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more charcters.
+                if (length >= 3) {
+                    try buf2.append(alloc, '0');
+                    try buf2.append(alloc, 'x');
+                    for (2..length) |_| {
+                        try buf2.append(alloc, '1');
+                    }
+                } else {
+                    for (0..length) |_| {
+                        try buf2.append(alloc, '1');
+                    }
                 }
             },
 
