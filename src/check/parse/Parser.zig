@@ -179,7 +179,7 @@ fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratc
 ///
 /// Returns the ending position of the collection
 fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, scratch_fn: fn (*IR.NodeStore, T) void, parser: fn (*Parser) T) ExpectError!u32 {
-    while (self.peek() != end_token) {
+    while (self.peek() != end_token and self.peek() != .EndOfFile) {
         scratch_fn(&self.store, parser(self));
         self.expect(.Comma) catch {
             break;
