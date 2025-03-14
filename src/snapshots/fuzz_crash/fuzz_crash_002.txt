@@ -24,27 +24,7 @@ PARSER: unexpected_token
 PARSER: unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-@0-4	LowerIdent
-@4-5	OpColon
-@5-6	MalformedUnknownToken
-@6-7	OpColon
-@7-8	OpColon
-@8-9	OpColon
-@9-10	OpColon
-@10-11	OpColon
-@11-12	OpColon
-@12-13	OpColon
-@13-14	OpColon
-@14-15	OpColon
-@15-16	OpColon
-@16-17	OpColon
-@17-18	OpColon
-@18-19	OpColon
-@19-20	OpColon
-@20-22	LowerIdent
-@22-23	OpenSquare
-@23-24	OpPercent
-@24-24	EndOfFile
+LowerIdent(1:1-1:5),OpColon(1:5-1:6),MalformedUnknownToken(1:6-1:7),OpColon(1:7-1:8),OpColon(1:8-1:9),OpColon(1:9-1:10),OpColon(1:10-1:11),OpColon(1:11-1:12),OpColon(1:12-1:13),OpColon(1:13-1:14),OpColon(1:14-1:15),OpColon(1:15-1:16),OpColon(1:16-1:17),OpColon(1:17-1:18),OpColon(1:18-1:19),OpColon(1:19-1:20),OpColon(1:20-1:21),LowerIdent(1:21-1:23),OpenSquare(1:23-1:24),OpPercent(1:24-1:25),EndOfFile(1:25-1:25),
 ~~~PARSE
 (file (1:1-1:25)
     (malformed_header (1:1-1:5) "missing_header")

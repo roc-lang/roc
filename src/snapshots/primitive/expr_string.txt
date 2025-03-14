@@ -8,27 +8,9 @@ foo = "hello ${name}"
 ~~~PROBLEMS
 NIL
 ~~~TOKENS
-@0-6	KwModule
-@7-8	OpenSquare
-@8-11	LowerIdent
-@11-12	CloseSquare
-@0-0	Newline
-@13-17	LowerIdent
-@18-19	OpAssign
-@20-21	StringStart
-@21-24	StringPart
-@24-25	StringEnd
-@0-0	Newline
-@26-29	LowerIdent
-@30-31	OpAssign
-@32-33	StringStart
-@33-39	StringPart
-@39-41	OpenStringInterpolation
-@41-45	LowerIdent
-@45-46	CloseStringInterpolation
-@46-46	StringPart
-@46-47	StringEnd
-@47-47	EndOfFile
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
+LowerIdent(2:1-2:5),OpAssign(2:6-2:7),StringStart(2:8-2:9),StringPart(2:9-2:12),StringEnd(2:12-2:13),Newline(1:1-1:1),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),OpenStringInterpolation(3:14-3:16),LowerIdent(3:16-3:20),CloseStringInterpolation(3:20-3:21),StringPart(3:21-3:21),StringEnd(3:21-3:22),EndOfFile(3:22-3:22),
 ~~~PARSE
 (file (1:1-3:22)
     (module (1:1-1:13)

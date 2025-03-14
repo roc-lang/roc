@@ -8,10 +8,7 @@ PARSER: missing_header
 PARSER: unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-@0-3	LowerIdent
-@3-5	NoSpaceDotInt
-@5-7	NoSpaceDotLowerIdent
-@7-7	EndOfFile
+LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFile(1:8-1:8),
 ~~~PARSE
 (file (1:1-1:8)
     (malformed_header (1:1-1:4) "missing_header")

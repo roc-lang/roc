@@ -301,6 +301,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         }
     };
 
+    var line_starts = try base.DiagnosticPosition.findLineStarts(gpa, content.source);
+    defer line_starts.deinit();
+
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
@@ -351,19 +354,31 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write out any TOKENS
-    if (std.mem.indexOf(u8, content.meta, "verbose-tokens") != null) {
+    {
         try file.writer().writeAll(Section.TOKENS);
         try file.writer().writeAll("\n");
         var tokenizedBuffer = parse_ast.tokens;
         const tokens = tokenizedBuffer.tokens.items(.tag);
         for (tokens, 0..) |tok, i| {
             const region = tokenizedBuffer.resolve(@intCast(i));
-            const region_str = try std.fmt.allocPrint(gpa, "{}\t", .{region});
+            const info = try base.DiagnosticPosition.position(content.source, line_starts, region.start.offset, region.end.offset);
+            const region_str = try std.fmt.allocPrint(gpa, "{s}({d}:{d}-{d}:{d}),", .{
+                @tagName(tok),
+                // add one to display numbers instead of index
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
             defer gpa.free(region_str);
-            try file.writer().writeAll(region_str);
-            try file.writer().writeAll(@tagName(tok));
-            try file.writer().writeAll("\n");
+
+            try file.writeAll(region_str);
+
+            if (tok == .Newline) {
+                try file.writer().writeAll("\n");
+            }
         }
+        try file.writer().writeAll("\n");
     }
 
     // Write PARSE SECTION

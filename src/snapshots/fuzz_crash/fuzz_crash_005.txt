@@ -6,8 +6,7 @@ modu
 ~~~PROBLEMS
 PARSER: missing_header
 ~~~TOKENS
-@0-4	LowerIdent
-@4-4	EndOfFile
+LowerIdent(1:1-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE
 (file (1:1-1:5) (malformed_header (1:1-1:5) "missing_header"))
 ~~~FORMATTED

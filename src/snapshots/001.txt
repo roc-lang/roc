@@ -11,6 +11,12 @@ foo =
     "one"
 ~~~PROBLEMS
 NIL
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:12-1:13),Newline(1:2-1:2),
+LowerIdent(3:2-3:5),Comma(3:5-3:6),Newline(1:6-1:6),
+CloseSquare(4:6-4:7),Newline(1:1-1:1),
+LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Newline(1:5-1:5),
+StringStart(8:5-8:6),StringPart(8:6-8:9),StringEnd(8:9-8:10),EndOfFile(8:10-8:10),
 ~~~PARSE
 (file (1:1-8:10)
     (module (1:1-4:7)

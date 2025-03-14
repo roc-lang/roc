@@ -6,8 +6,7 @@ F
 ~~~PROBLEMS
 PARSER: missing_header
 ~~~TOKENS
-@0-1	UpperIdent
-@1-1	EndOfFile
+UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
 ~~~PARSE
 (file (1:1-1:2) (malformed_header (1:1-1:2) "missing_header"))
 ~~~FORMATTED
