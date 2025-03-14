@@ -15,7 +15,6 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
     const strip = b.option(bool, "strip", "Omit debug information");
 
-    const check_step = b.step("check", "Check roc binaries compile");
     const run_step = b.step("run", "Build and run the roc cli");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const fmt_step = b.step("fmt", "Format all zig code");
@@ -23,6 +22,7 @@ pub fn build(b: *std.Build) void {
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
 
     // llvm configuration
+    const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
@@ -34,17 +34,19 @@ pub fn build(b: *std.Build) void {
         b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
     }
 
-    const install_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
-    const check_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
-    check_step.dependOn(&check_exe.step);
+    const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
 
-    b.installArtifact(install_exe);
-    const run_cmd = b.addRunArtifact(install_exe);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+    if (no_bin) {
+        b.getInstallStep().dependOn(&roc_exe.step);
+    } else {
+        b.installArtifact(roc_exe);
+        const run_cmd = b.addRunArtifact(roc_exe);
+        run_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        run_step.dependOn(&run_cmd.step);
     }
-    run_step.dependOn(&run_cmd.step);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -54,15 +56,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    b.installArtifact(snapshot_exe);
+    if (no_bin) {
+        b.getInstallStep().dependOn(&snapshot_exe.step);
+    } else {
+        b.installArtifact(snapshot_exe);
+        const run_snapshot = b.addRunArtifact(snapshot_exe);
 
-    // Add a step to run the snapshot tool
-    const run_snapshot = b.addRunArtifact(snapshot_exe);
-    run_snapshot.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_snapshot.addArgs(args);
+        // Add a step to run the snapshot tool
+        run_snapshot.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_snapshot.addArgs(args);
+        }
+        snapshot_step.dependOn(&run_snapshot.step);
     }
-    snapshot_step.dependOn(&run_snapshot.step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -70,10 +76,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    check_step.dependOn(&all_tests.step);
 
-    const run_tests = b.addRunArtifact(all_tests);
-    test_step.dependOn(&run_tests.step);
+    if (!no_bin) {
+        const run_tests = b.addRunArtifact(all_tests);
+        test_step.dependOn(&run_tests.step);
+    }
 
     // Fmt zig code.
     const fmt_paths = .{ "src", "build.zig" };
@@ -116,7 +123,7 @@ pub fn build(b: *std.Build) void {
             fuzz,
             build_afl,
             use_system_afl,
-            check_step,
+            no_bin,
             target,
             optimize,
             name,
@@ -129,7 +136,7 @@ fn add_fuzz_target(
     fuzz: bool,
     build_afl: bool,
     use_system_afl: bool,
-    check_step: *Step,
+    no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     name: []const u8,
@@ -148,34 +155,28 @@ fn add_fuzz_target(
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
     const run_repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
-    const install_repro = b.addExecutable(.{
+    const repro_exe = b.addExecutable(.{
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
     });
-    install_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
-    b.installArtifact(install_repro);
+    repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
+    if (no_bin) {
+        b.getInstallStep().dependOn(&repro_exe.step);
+    } else {
+        b.installArtifact(repro_exe);
 
-    const run_cmd = b.addRunArtifact(install_repro);
-    run_cmd.step.dependOn(b.getInstallStep());
-    if (b.args) |args| {
-        run_cmd.addArgs(args);
+        const run_cmd = b.addRunArtifact(repro_exe);
+        run_cmd.step.dependOn(b.getInstallStep());
+        if (b.args) |args| {
+            run_cmd.addArgs(args);
+        }
+        run_repro_step.dependOn(&run_cmd.step);
     }
-    run_repro_step.dependOn(&run_cmd.step);
 
-    const check_repro = b.addExecutable(.{
-        .name = name_repro,
-        .root_source_file = b.path("src/fuzz-repro.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-    });
-    check_repro.root_module.addImport("fuzz_test", fuzz_obj.root_module);
-    check_step.dependOn(&check_repro.step);
-
-    if (fuzz and build_afl) {
+    if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
         b.default_step.dependOn(fuzz_step);
 
