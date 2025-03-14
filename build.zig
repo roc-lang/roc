@@ -141,8 +141,7 @@ fn add_fuzz_target(
         .name = b.fmt("{s}_obj", .{name}),
         .root_source_file = root_source_file,
         .target = target,
-        // Work around instrumentation bugs on mac without giving up perf on linux.
-        .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
+        .optimize = .ReleaseSafe,
     });
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
