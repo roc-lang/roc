@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
 module P]F
 ~~~PROBLEMS
@@ -8,10 +9,10 @@ module P]F
         ^
 PARSER: header_expected_open_square
 ~~~TOKENS
-KwModule,UpperIdent,UpperIdent,EndOfFile
+KwModule(1:1-1:7),UpperIdent(1:8-1:9),UpperIdent(1:10-1:11),EndOfFile(1:11-1:11),
 ~~~PARSE
 (file (1:1-1:11)
-    (malformed_header "header_expected_open_square")
+    (malformed_header (1:8-1:9) "header_expected_open_square")
     (tag (1:10-1:11) "F"))
 ~~~FORMATTED
 F

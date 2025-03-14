@@ -37,14 +37,7 @@ pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOp
         std.fmt.invalidFmtError(fmt, self);
     }
 
-    if (self.isEmpty()) {
-        // In tests, it's super common to set all Located values to 0.
-        // Also in tests, we don't want to bother printing the locations
-        // because it makes failed assertions much harder to read.
-        try writer.print("…", .{});
-    } else {
-        try writer.print("@{}-{}", .{ self.start.offset, self.end.offset });
-    }
+    try writer.print("@{}-{}", .{ self.start.offset, self.end.offset });
 }
 
 /// One side of a [Region].

@@ -273,6 +273,10 @@ const Error = error{
 };
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
+
+    // Log the file path that was written to
+    log("processing snapshot file: {s}", .{snapshot_path});
+
     const file_content = std.fs.cwd().readFileAlloc(gpa, snapshot_path, 1024 * 1024) catch |err| {
         log("failed to read file '{s}': {s}", .{ snapshot_path, @errorName(err) });
         return false;
@@ -296,6 +300,9 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             else => return err,
         }
     };
+
+    var line_starts = try base.DiagnosticPosition.findLineStarts(gpa, content.source);
+    defer line_starts.deinit();
 
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
@@ -350,19 +357,26 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     {
         try file.writer().writeAll(Section.TOKENS);
         try file.writer().writeAll("\n");
-        const tokenizedBuffer = parse_ast.tokens;
+        var tokenizedBuffer = parse_ast.tokens;
         const tokens = tokenizedBuffer.tokens.items(.tag);
-        var first = true;
-        for (tokens) |tok| {
+        for (tokens, 0..) |tok, i| {
+            const region = tokenizedBuffer.resolve(@intCast(i));
+            const info = try base.DiagnosticPosition.position(content.source, line_starts, region.start.offset, region.end.offset);
+            const region_str = try std.fmt.allocPrint(gpa, "{s}({d}:{d}-{d}:{d}),", .{
+                @tagName(tok),
+                // add one to display numbers instead of index
+                info.start_line_idx + 1,
+                info.start_col_idx + 1,
+                info.end_line_idx + 1,
+                info.end_col_idx + 1,
+            });
+            defer gpa.free(region_str);
 
-            // only write a comma if not the first token
-            if (first) {
-                first = false;
-            } else {
-                try file.writer().writeAll(",");
+            try file.writeAll(region_str);
+
+            if (tok == .Newline) {
+                try file.writer().writeAll("\n");
             }
-
-            try file.writer().writeAll(@tagName(tok));
         }
         try file.writer().writeAll("\n");
     }
@@ -431,9 +445,6 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
         try corpus_file.writer().writeAll(content.source);
     }
-
-    // Log the file path that was written to
-    log("{s}", .{snapshot_path});
 
     return true;
 }

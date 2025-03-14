@@ -161,20 +161,6 @@ pub fn parseFile(self: *Parser) void {
     });
 }
 
-fn parseCollection(self: *Parser, comptime T: type, end_token: Token.Tag, scratch: *std.ArrayListUnmanaged(T), parser: fn (*Parser) T) ExpectError!usize {
-    const scratch_top = scratch.items.len;
-    while (self.peek() != end_token and self.peek() != .EndOfFile) {
-        scratch.append(self.gpa, parser(self)) catch |err| exitOnOom(err);
-        self.expect(.Comma) catch {
-            break;
-        };
-    }
-    self.expect(end_token) catch {
-        return ExpectError.expected_not_found;
-    };
-    return scratch_top;
-}
-
 /// Parses the items of type T until we encounter end_token, with each item separated by a Comma token
 ///
 /// Returns the ending position of the collection
@@ -225,7 +211,7 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_square, self.pos);
     };
     const scratch_top = self.store.scratchExposedItemTop();
-    _ = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    const end = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -238,7 +224,7 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     const exposes = self.store.exposedItemSpanFrom(scratch_top);
 
     return self.store.addHeader(.{ .module = .{
-        .region = .{ .start = start, .end = self.pos },
+        .region = .{ .start = start, .end = end },
         .exposes = exposes,
     } });
 }
@@ -517,11 +503,16 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                     .ident_tok = start,
                     .region = .{ .start = start, .end = start },
                 } });
-                const statement_idx = self.store.addStatement(.{ .decl = .{
-                    .pattern = patt_idx,
-                    .body = idx,
-                    .region = .{ .start = start, .end = self.pos },
-                } });
+                const statement_idx = self.store.addStatement(.{
+                    .decl = .{
+                        .pattern = patt_idx,
+                        .body = idx,
+                        .region = .{
+                            .start = start,
+                            .end = self.pos - 1, // we want the end of the previous token
+                        },
+                    },
+                });
                 if (self.peek() == .Newline) {
                     self.advance();
                 }
@@ -1165,11 +1156,16 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
         }
     }
     const parts = self.store.exprSpanFrom(scratch_top);
-    const expr = self.store.addExpr(.{ .string = .{
-        .token = start,
-        .parts = parts,
-        .region = .{ .start = start, .end = self.pos },
-    } });
+    const expr = self.store.addExpr(.{
+        .string = .{
+            .token = start,
+            .parts = parts,
+            .region = .{
+                .start = start,
+                .end = self.pos - 1, // we want the previous token's end position here
+            },
+        },
+    });
     return expr;
 }
 

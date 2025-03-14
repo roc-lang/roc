@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
  ||(|(l888888888|
 ~~~PROBLEMS
@@ -8,11 +9,11 @@ PARSER: pattern_unexpected_token
 PARSER: pattern_unexpected_token
 PARSER: unexpected_token
 ~~~TOKENS
-OpBar,OpBar,NoSpaceOpenRound,OpBar,NoSpaceOpenRound,LowerIdent,OpBar,EndOfFile
+OpBar(1:2-1:3),OpBar(1:3-1:4),NoSpaceOpenRound(1:4-1:5),OpBar(1:5-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:7-1:17),OpBar(1:17-1:18),EndOfFile(1:18-1:18),
 ~~~PARSE
 (file (1:2-1:18)
-    (malformed_header "missing_header")
-    (malformed_expr "unexpected_token"))
+    (malformed_header (1:2-1:3) "missing_header")
+    (malformed_expr (1:3-1:18) "unexpected_token"))
 ~~~FORMATTED
 
 ~~~END

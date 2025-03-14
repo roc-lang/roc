@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+verbose-tokens
 ~~~SOURCE
  = "te
 ~~~PROBLEMS
@@ -8,11 +9,11 @@ TOKENIZE: (1:5-1:7) UnclosedString:
     ^^
 PARSER: missing_header
 ~~~TOKENS
-OpAssign,StringStart,StringPart,EndOfFile
+OpAssign(1:2-1:3),StringStart(1:4-1:5),StringPart(1:5-1:7),EndOfFile(1:7-1:7),
 ~~~PARSE
 (file (1:2-1:7)
-    (malformed_header "missing_header")
-    (string (1:4-1:7) "te"))
+    (malformed_header (1:2-1:3) "missing_header")
+    (string (1:4-1:7) (string_part (1:5-1:7) "te")))
 ~~~FORMATTED
 "te"
 ~~~END
