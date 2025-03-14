@@ -42,6 +42,16 @@ jobs:
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
               - '!ci/zig_lints.sh'
+              # Files that ci manager workflows should not run on.
+              - '!.gitignore'
+              - '!.reuse'
+              - '!AUTHORS'
+              - '!LEGAL_DETAILS'
+              - '!LICENSE'
+              - '!*.md'
+              - '!src/**/*.md'
+              - '!design/**'
+              - '!examples/**'
 
   call-zig-workflow:
     needs: check-changes
