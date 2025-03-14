@@ -875,6 +875,9 @@ pub const Tokenizer = struct {
             switch (b) {
                 // Whitespace & control characters
                 0...32, '#' => {
+                    if (b == '#') {
+                        std.debug.print("Saw # @ {d}\n", .{self.cursor.pos});
+                    }
                     if (self.cursor.chompTrivia()) |_| {
                         self.output.pushNewline(self.cursor.popComment());
                     }

@@ -87,6 +87,10 @@ pub const Diagnostic = struct {
 pub const Region = struct {
     start: TokenIdx,
     end: TokenIdx,
+
+    pub fn spanAcross(self: Region, other: Region) Region {
+        return .{ .start = self.start, .end = other.end };
+    }
 };
 
 /// Unstructured information about a Node.  These

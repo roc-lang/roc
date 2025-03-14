@@ -47,6 +47,16 @@ pub fn resetWith(fmt: *Formatter, ast: IR) void {
 pub fn formatFile(fmt: *Formatter) []const u8 {
     fmt.ast.store.emptyScratch();
     const file = fmt.ast.store.getFile();
+    const newline_tok = fmt.ast.tokens.tokens.get(0);
+    if (newline_tok.tag == .Newline) {
+        const start = newline_tok.offset;
+        const end = start + newline_tok.extra.length;
+        if (end > start) {
+            fmt.pushAll("#");
+            fmt.pushAll(fmt.ast.source[start..end]);
+            fmt.ensureNewline();
+        }
+    }
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
     for (fmt.ast.store.statementSlice(file.statements)) |s| {
@@ -65,15 +75,15 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
     const statement = fmt.ast.store.getStatement(si);
     switch (statement) {
         .decl => |d| {
-            fmt.formatPattern(d.pattern);
+            _ = fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(fmt.gpa, " = ") catch |err| exitOnOom(err);
             const expr_region = fmt.formatExpr(d.body);
-            fmt.flushCommentsAfter(expr_region);
+            fmt.flushCommentsAfter(expr_region.end);
             return .extra_newline_needed;
         },
         .expr => |e| {
             const expr_region = fmt.formatExpr(e.expr);
-            fmt.flushCommentsAfter(expr_region);
+            fmt.flushCommentsAfter(expr_region.end);
             return .extra_newline_needed;
         },
         .import => |i| {
@@ -84,29 +94,60 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
                 fmt.pushTokenText(a);
             }
             if (i.exposes.span.len > 0) {
-                fmt.pushAll(" exposing [");
-                var n: usize = 0;
-                for (fmt.ast.store.exposedItemSlice(i.exposes)) |tok| {
-                    fmt.formatExposedItem(tok);
-                    if (n < i.exposes.span.len - 1) {
-                        fmt.pushAll(", ");
+                fmt.pushAll(" exposing ");
+                const items = fmt.ast.store.exposedItemSlice(i.exposes);
+                const items_region = fmt.regionInSlice(IR.NodeStore.ExposedItemIdx, items);
+                // This is a near copy of formatCollection because to make that function
+                // work correctly, the exposed items have to be in a new Node type that
+                // will have its own region
+                const multiline = fmt.ast.regionIsMultiline(items_region);
+                const braces = Braces.square;
+                fmt.push(braces.start());
+                if (items.len == 0) {
+                    fmt.push(braces.end());
+                } else {
+                    if (multiline) {
+                        fmt.curr_indent += 1;
                     }
-                    n += 1;
+                    var x: usize = 0;
+                    for (items) |item| {
+                        if (multiline) {
+                            fmt.newline();
+                            fmt.pushIndent();
+                        }
+                        const arg_region = fmt.formatExposedItem(item);
+                        if (!multiline and x < (items.len - 1)) {
+                            fmt.pushAll(", ");
+                        }
+                        if (multiline) {
+                            fmt.push(',');
+                            fmt.flushCommentsAfter(arg_region.end);
+                        }
+                        x += 1;
+                    }
+                    if (multiline) {
+                        fmt.curr_indent -= 1;
+                        fmt.newline();
+                        fmt.pushIndent();
+                    }
+                    fmt.push(braces.end());
                 }
-                fmt.push(']');
             }
+            fmt.flushCommentsAfter(i.region.end);
             return .extra_newline_needed;
         },
         .type_decl => |d| {
             fmt.formatTypeHeader(d.header);
             fmt.pushAll(" : ");
-            fmt.formatTypeAnno(d.anno);
+            const anno_region = fmt.formatTypeAnno(d.anno);
+            fmt.flushCommentsAfter(anno_region.end);
             return .extra_newline_needed;
         },
         .type_anno => |t| {
             fmt.pushTokenText(t.name);
             fmt.pushAll(" : ");
-            fmt.formatTypeAnno(t.anno);
+            const anno_region = fmt.formatTypeAnno(t.anno);
+            fmt.flushCommentsAfter(anno_region.end);
             return .no_extra_newline;
         },
         .expect => |e| {
@@ -163,8 +204,15 @@ const Braces = enum {
 fn formatCollection(fmt: *Formatter, region: IR.Region, braces: Braces, comptime T: type, items: []T, formatter: fn (*Formatter, T) IR.Region) void {
     const multiline = fmt.ast.regionIsMultiline(region);
     fmt.push(braces.start());
+    if (items.len == 0) {
+        fmt.push(braces.end());
+        return;
+    }
     if (multiline) {
+        fmt.flushCommentsAfter(region.start);
         fmt.curr_indent += 1;
+    } else if (braces == .curly) {
+        fmt.push(' ');
     }
     var i: usize = 0;
     for (items) |item| {
@@ -178,7 +226,7 @@ fn formatCollection(fmt: *Formatter, region: IR.Region, braces: Braces, comptime
         }
         if (multiline) {
             fmt.push(',');
-            fmt.flushCommentsAfter(arg_region);
+            fmt.flushCommentsAfter(arg_region.end);
         }
         i += 1;
     }
@@ -186,8 +234,21 @@ fn formatCollection(fmt: *Formatter, region: IR.Region, braces: Braces, comptime
         fmt.curr_indent -= 1;
         fmt.newline();
         fmt.pushIndent();
+    } else if (braces == .curly) {
+        fmt.push(' ');
     }
     fmt.push(braces.end());
+}
+
+fn formatRecordField(fmt: *Formatter, idx: IR.NodeStore.RecordFieldIdx) IR.Region {
+    const field = fmt.ast.store.getRecordField(idx);
+    fmt.pushTokenText(field.name);
+    if (field.value) |v| {
+        fmt.pushAll(if (field.optional) "? " else ": ");
+        _ = fmt.formatExpr(v);
+    }
+
+    return field.region;
 }
 
 fn formatExpr(fmt: *Formatter, ei: ExprIdx) IR.Region {
@@ -247,34 +308,14 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) IR.Region {
         },
         .record => |r| {
             region = r.region;
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.recordFieldSlice(r.fields)) |fieldIdx| {
-                const field = fmt.ast.store.getRecordField(fieldIdx);
-                fmt.pushTokenText(field.name);
-                if (field.value) |v| {
-                    fmt.pushAll(if (field.optional) "? " else ": ");
-                    _ = fmt.formatExpr(v);
-                }
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
+            fmt.formatCollection(region, .curly, IR.NodeStore.RecordFieldIdx, fmt.ast.store.recordFieldSlice(r.fields), Formatter.formatRecordField);
         },
         .lambda => |l| {
             region = l.region;
-            fmt.push('|');
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(l.args)) |arg| {
-                fmt.formatPattern(arg);
-                if (i < (l.args.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll("| ");
+            const args = fmt.ast.store.patternSlice(l.args);
+            const args_region = fmt.regionInSlice(IR.NodeStore.PatternIdx, args);
+            fmt.formatCollection(args_region, .bar, IR.NodeStore.PatternIdx, args, Formatter.formatPattern);
+            fmt.push(' ');
             _ = fmt.formatExpr(l.body);
         },
         .unary_op => |op| {
@@ -324,7 +365,7 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) IR.Region {
                 const branch = fmt.ast.store.getBranch(b);
                 fmt.newline();
                 fmt.pushIndent();
-                fmt.formatPattern(branch.pattern);
+                _ = fmt.formatPattern(branch.pattern);
                 fmt.pushAll(" -> ");
                 _ = fmt.formatExpr(branch.body);
             }
@@ -353,95 +394,75 @@ fn formatExpr(fmt: *Formatter, ei: ExprIdx) IR.Region {
     return region;
 }
 
-fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
+fn formatPatternRecordField(fmt: *Formatter, idx: IR.NodeStore.PatternRecordFieldIdx) IR.Region {
+    const field = fmt.ast.store.getPatternRecordField(idx);
+    if (field.rest) {
+        fmt.pushAll("..");
+        if (field.name != 0) {
+            fmt.pushTokenText(field.name);
+        }
+    } else {
+        fmt.pushTokenText(field.name);
+        if (field.value) |v| {
+            fmt.pushAll(": ");
+            _ = fmt.formatPattern(v);
+        }
+    }
+    return field.region;
+}
+
+fn formatPattern(fmt: *Formatter, pi: PatternIdx) IR.Region {
     const pattern = fmt.ast.store.getPattern(pi);
+    var region = IR.Region{ .start = 0, .end = 0 };
     switch (pattern) {
         .ident => |i| {
+            region = i.region;
             fmt.formatIdent(i.ident_tok, null);
         },
         .tag => |t| {
+            region = t.region;
             fmt.formatIdent(t.tag_tok, null);
             if (t.args.span.len > 0) {
-                fmt.push('(');
-                var i: usize = 0;
-                for (fmt.ast.store.patternSlice(t.args)) |arg| {
-                    fmt.formatPattern(arg);
-                    if (i < (t.args.span.len - 1)) {
-                        fmt.pushAll(", ");
-                    }
-                    i += 1;
-                }
-                fmt.push(')');
+                fmt.formatCollection(region, .round, IR.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.args), Formatter.formatPattern);
             }
         },
         .string => |s| {
+            region = s.region;
             _ = fmt.formatExpr(s.expr);
         },
         .number => |n| {
+            region = n.region;
             fmt.formatIdent(n.number_tok, null);
         },
         .record => |r| {
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.patternRecordFieldSlice(r.fields)) |field_idx| {
-                const field = fmt.ast.store.getPatternRecordField(field_idx);
-                if (field.rest) {
-                    fmt.pushAll("..");
-                    if (field.name != 0) {
-                        fmt.pushTokenText(field.name);
-                    }
-                    continue;
-                }
-                fmt.pushTokenText(field.name);
-                if (field.value) |v| {
-                    fmt.pushAll(": ");
-                    fmt.formatPattern(v);
-                }
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
+            region = r.region;
+            fmt.formatCollection(region, .curly, IR.NodeStore.PatternRecordFieldIdx, fmt.ast.store.patternRecordFieldSlice(r.fields), Formatter.formatPatternRecordField);
         },
         .list => |l| {
-            fmt.push('[');
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(l.patterns)) |p| {
-                fmt.formatPattern(p);
-                if (i < (l.patterns.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(']');
+            region = l.region;
+            fmt.formatCollection(region, .square, IR.NodeStore.PatternIdx, fmt.ast.store.patternSlice(l.patterns), Formatter.formatPattern);
         },
         .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(t.patterns)) |p| {
-                fmt.formatPattern(p);
-                if (i < (t.patterns.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(')');
+            region = t.region;
+            fmt.formatCollection(region, .round, IR.NodeStore.PatternIdx, fmt.ast.store.patternSlice(t.patterns), Formatter.formatPattern);
         },
         .list_rest => |r| {
+            region = r.region;
             fmt.pushAll("..");
             if (r.name) |n| {
                 fmt.pushAll(" as ");
                 fmt.pushTokenText(n);
             }
         },
-        .underscore => |_| {
+        .underscore => |u| {
+            region = u.region;
             fmt.push('_');
         },
         .alternatives => |a| {
+            region = a.region;
             var i: usize = 0;
             for (fmt.ast.store.patternSlice(a.patterns)) |p| {
-                fmt.formatPattern(p);
+                _ = fmt.formatPattern(p);
                 if (i < (a.patterns.span.len - 1)) {
                     fmt.pushAll(" | ");
                 }
@@ -449,12 +470,15 @@ fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
             }
         },
     }
+    return region;
 }
 
-fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) void {
+fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) IR.Region {
     const item = fmt.ast.store.getExposedItem(idx);
+    var region = IR.Region{ .start = 0, .end = 0 };
     switch (item) {
         .lower_ident => |i| {
+            region = i.region;
             fmt.pushTokenText(i.ident);
             if (i.as) |a| {
                 fmt.pushAll(" as ");
@@ -462,6 +486,7 @@ fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) void {
             }
         },
         .upper_ident => |i| {
+            region = i.region;
             fmt.pushTokenText(i.ident);
             if (i.as) |a| {
                 fmt.pushAll(" as ");
@@ -469,33 +494,31 @@ fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) void {
             }
         },
         .upper_ident_star => |i| {
+            region = i.region;
             fmt.pushTokenText(i.ident);
             fmt.pushAll(".*");
         },
     }
+
+    return region;
 }
 
 fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
     const header = fmt.ast.store.getHeader(hi);
     switch (header) {
         .app => |a| {
-            fmt.pushAll("app [");
-            // Format provides
-            var i: usize = 0;
-            for (fmt.ast.store.exposedItemSlice(a.provides)) |p| {
-                fmt.formatExposedItem(p);
-                if (i < a.provides.span.len - 1) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.pushAll("] { ");
+            fmt.pushAll("app ");
+            const provides = fmt.ast.store.exposedItemSlice(a.provides);
+            const provides_region = fmt.regionInSlice(IR.NodeStore.ExposedItemIdx, provides);
+            fmt.formatCollection(provides_region, .square, IR.NodeStore.ExposedItemIdx, provides, Formatter.formatExposedItem);
+            fmt.pushAll(" { ");
             fmt.pushTokenText(a.platform_name);
             fmt.pushAll(": platform ");
             _ = fmt.formatExpr(a.platform);
             if (a.packages.span.len > 0) {
                 fmt.push(',');
             }
-            i = 0;
+            var i: usize = 0;
             for (fmt.ast.store.recordFieldSlice(a.packages)) |package| {
                 const field = fmt.ast.store.getRecordField(package);
                 fmt.pushTokenText(field.name);
@@ -512,16 +535,8 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
             fmt.newline();
         },
         .module => |m| {
-            fmt.pushAll("module [");
-            var i: usize = 0;
-            for (fmt.ast.store.exposedItemSlice(m.exposes)) |p| {
-                fmt.formatExposedItem(p);
-                i += 1;
-                if (i < m.exposes.span.len) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.push(']');
+            fmt.pushAll("module ");
+            fmt.formatCollection(m.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(m.exposes), Formatter.formatExposedItem);
             fmt.newline();
         },
         else => {
@@ -531,9 +546,11 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
 }
 
 fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
-    if (body.statements.span.len > 1) {
+    const multiline = fmt.ast.regionIsMultiline(body.region);
+    if (multiline or body.statements.span.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append(fmt.gpa, '{') catch |err| exitOnOom(err);
+        fmt.flushCommentsAfter(body.region.start);
         for (fmt.ast.store.statementSlice(body.statements)) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
@@ -568,91 +585,77 @@ fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) void {
     }
 }
 
-fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
+fn formatAnnoRecordField(fmt: *Formatter, idx: IR.NodeStore.AnnoRecordFieldIdx) IR.Region {
+    const field = fmt.ast.store.getAnnoRecordField(idx);
+    fmt.pushTokenText(field.name);
+    fmt.pushAll(" : ");
+    _ = fmt.formatTypeAnno(field.ty);
+    return field.region;
+}
+
+fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) IR.Region {
     const a = fmt.ast.store.getTypeAnno(anno);
+    var region = IR.Region{ .start = 0, .end = 0 };
     switch (a) {
         .ty_var => |v| {
+            region = v.region;
             fmt.pushTokenText(v.tok);
         },
         .tag => |t| {
+            region = t.region;
             fmt.pushTokenText(t.tok);
             if (t.args.span.len > 0) {
-                fmt.push('(');
-                var i: usize = 0;
-                for (fmt.ast.store.typeAnnoSlice(t.args)) |arg| {
-                    fmt.formatTypeAnno(arg);
-                    if (i < (t.args.span.len - 1)) {
-                        fmt.pushAll(", ");
-                    }
-                    i += 1;
-                }
-                fmt.push(')');
+                fmt.formatCollection(t.region, .round, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.args), Formatter.formatTypeAnno);
             }
         },
         .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(t.annos)) |an| {
-                fmt.formatTypeAnno(an);
-                if (i < (t.annos.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(')');
+            region = t.region;
+            fmt.formatCollection(t.region, .round, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.annos), Formatter.formatTypeAnno);
         },
         .record => |r| {
-            if (r.fields.span.len == 0) {
-                fmt.pushAll("{}");
-                return;
-            }
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.annoRecordFieldSlice(r.fields)) |idx| {
-                const field = fmt.ast.store.getAnnoRecordField(idx);
-                fmt.pushTokenText(field.name);
-                fmt.pushAll(" : ");
-                fmt.formatTypeAnno(field.ty);
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
+            region = r.region;
+            fmt.formatCollection(region, .curly, IR.NodeStore.AnnoRecordFieldIdx, fmt.ast.store.annoRecordFieldSlice(r.fields), Formatter.formatAnnoRecordField);
         },
         .tag_union => |t| {
-            fmt.push('[');
-            var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(t.tags)) |tag| {
-                fmt.formatTypeAnno(tag);
-                if (i < (t.tags.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(']');
+            region = t.region;
+            fmt.formatCollection(t.region, .square, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.tags), Formatter.formatTypeAnno);
         },
         .@"fn" => |f| {
+            region = f.region;
             var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(f.args)) |idx| {
-                fmt.formatTypeAnno(idx);
+            const args = fmt.ast.store.typeAnnoSlice(f.args);
+            for (args) |idx| {
+                _ = fmt.formatTypeAnno(idx);
                 if (i < (f.args.span.len - 1)) {
                     fmt.pushAll(", ");
                 }
                 i += 1;
             }
             fmt.pushAll(" -> ");
-            fmt.formatTypeAnno(f.ret);
+            _ = fmt.formatTypeAnno(f.ret);
         },
         .parens => |p| {
+            region = p.region;
+            const multiline = fmt.isRegionMultiline(region);
             fmt.push('(');
-            fmt.formatTypeAnno(p.anno);
+            if (multiline) {
+                fmt.flushCommentsAfter(region.start);
+                fmt.curr_indent += 1;
+                fmt.newline();
+                fmt.pushIndent();
+            }
+            fmt.flushCommentsAfter(region.start);
+            const anno_region = fmt.formatTypeAnno(p.anno);
+            fmt.flushCommentsAfter(anno_region.end);
             fmt.push(')');
         },
-        .underscore => |_| {
+        .underscore => |u| {
+            region = u.region;
             fmt.push('_');
         },
     }
+
+    return region;
 }
 
 fn ensureNewline(fmt: *Formatter) void {
@@ -667,8 +670,26 @@ fn newline(fmt: *Formatter) void {
     fmt.buffer.append(fmt.gpa, '\n') catch |err| exitOnOom(err);
 }
 
-fn flushCommentsAfter(fmt: *Formatter, region: IR.Region) void {
-    var nextNewline = region.end + 1;
+fn flushCommentsBefore(fmt: *Formatter, tokenIdx: TokenIdx) void {
+    if (tokenIdx == 0) {
+        return;
+    }
+    const tags = fmt.ast.tokens.tokens.items(.tag);
+    const prevNewline = tokenIdx - 1;
+    if (tags[prevNewline] != .Newline) {
+        return;
+    }
+    const newline_tok = fmt.ast.tokens.tokens.get(prevNewline);
+    const start = newline_tok.offset;
+    const end = start + newline_tok.extra.length;
+    if (end > start) {
+        fmt.pushAll(" #");
+        fmt.pushAll(fmt.ast.source[start..end]);
+    }
+}
+
+fn flushCommentsAfter(fmt: *Formatter, tokenIdx: TokenIdx) void {
+    var nextNewline = tokenIdx + 1;
     const tags = fmt.ast.tokens.tokens.items(.tag);
     if (nextNewline >= tags.len) {
         return;
@@ -692,8 +713,8 @@ fn flushCommentsAfter(fmt: *Formatter, region: IR.Region) void {
 }
 
 fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
-    for (fmt.ast.tokens.tokens.items[region.start..region.end]) |t| {
-        switch (t.tag) {
+    for (fmt.ast.tokens.tokens.items(.tag)[region.start..region.end]) |t| {
+        switch (t) {
             .Newline => {
                 return true;
             },
@@ -735,6 +756,17 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
 
     const text = fmt.ast.source[start..region.end.offset];
     fmt.buffer.appendSlice(fmt.gpa, text) catch |err| exitOnOom(err);
+}
+
+fn regionInSlice(fmt: *Formatter, comptime T: anytype, slice: []T) IR.Region {
+    if (slice.len == 0) {
+        return IR.NodeStore.emptyRegion();
+    }
+    const first: usize = @intCast(slice[0].id);
+    const last: usize = @intCast(slice[slice.len - 1].id);
+    const first_region = fmt.ast.store.nodes.items.items(.region)[first];
+    const last_region = fmt.ast.store.nodes.items.items(.region)[last];
+    return first_region.spanAcross(last_region);
 }
 
 fn moduleFmtsSame(source: []const u8) !void {
@@ -947,9 +979,15 @@ test "Plain module" {
 
 test "Syntax grab bag" {
     try moduleFmtsSame(
+        \\# This is a module comment!
         \\app [main!] { pf: platform "../basic-cli/platform.roc" }
         \\
         \\import pf.Stdout exposing [line!, write!]
+        \\
+        \\import pf.StdoutMultiline exposing [
+        \\    line!, # Comment after exposed item
+        \\    write!, # Another after exposed item
+        \\] # Comment after exposing close
         \\
         \\import Something exposing [func as function, Type as ValueCategory, Custom.*]
         \\
@@ -959,9 +997,24 @@ test "Syntax grab bag" {
         \\
         \\Foo : (Bar, Baz)
         \\
+        \\FooMultiline : ( # Comment after pattern tuple open
+        \\    Bar, # Comment after pattern tuple item
+        \\    Baz, # Another after pattern tuple item
+        \\) # Comment after pattern tuple close
+        \\
         \\Some a : { foo : Ok(a), bar : Something }
         \\
+        \\SomeMultiline a : { # Comment after pattern record open
+        \\    foo : Ok(a), # Comment after pattern record field
+        \\    bar : Something, # Another after pattern record field
+        \\} # Comment after pattern record close
+        \\
         \\Maybe a : [Some(a), None]
+        \\
+        \\MaybeMultiline a : [ # Comment after tag union open
+        \\    Some(a), # Comment after tag union member
+        \\    None, # Another after tag union member
+        \\] # Comment after tag union close
         \\
         \\SomeFunc a : Maybe(a), a -> Maybe(a)
         \\
@@ -1003,7 +1056,7 @@ test "Syntax grab bag" {
         \\expect blah == 1
         \\
         \\main! : List(String) -> Result({}, _)
-        \\main! = |_| {
+        \\main! = |_| { # Yeah I can leave a comment here
         \\    world = "World"
         \\    number = 123
         \\    expect blah == 1
