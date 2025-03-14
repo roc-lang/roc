@@ -509,7 +509,7 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                         .body = idx,
                         .region = .{
                             .start = start,
-                            .end = self.pos -| 1, // we want the end of the previous token
+                            .end = self.pos - 1, // we want the end of the previous token
                         },
                     },
                 });
@@ -1162,7 +1162,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
             .parts = parts,
             .region = .{
                 .start = start,
-                .end = self.pos -| 1, // we want the previous token's end position here
+                .end = self.pos - 1, // we want the previous token's end position here
             },
         },
     });
