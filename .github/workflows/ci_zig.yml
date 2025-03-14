@@ -23,7 +23,7 @@ jobs:
               run: |
                 # -Dllvm incurs a costly download step, leave that for later.
                 # Just the do super fast check step for now.
-                zig build check -Dfuzz
+                zig build -Dno-bin -Dfuzz
 
     zig-tests:
         needs: check-zig

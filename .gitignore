@@ -25,9 +25,6 @@
 target
 generated-docs
 
-# todo remove after upgrade to zig 0.13.0
-zig-cache
-
 zig-out
 .zig-cache
 .direnv
