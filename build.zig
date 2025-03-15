@@ -9,20 +9,22 @@ const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{ .default_target = .{
-        .abi = if (builtin.target.os.tag == .linux) .musl else null,
-    } });
-    const optimize = b.standardOptimizeOption(.{});
-    const strip = b.option(bool, "strip", "Omit debug information");
-
+    // build steps
     const run_step = b.step("run", "Build and run the roc cli");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
 
-    // llvm configuration
+    // general configuration
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .abi = if (builtin.target.os.tag == .linux) .musl else null,
+    } });
+    const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
+
+    // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
@@ -34,8 +36,22 @@ pub fn build(b: *std.Build) void {
         b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
     }
 
-    const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
+    // tracy profiler configuration
+    const tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
+    const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
+    const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
+    const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
 
+    // Create compile time build options
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+    build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
+    build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
+
+    // add main roc exe
+    const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
+    roc_exe.root_module.addOptions("build_options", build_options);
     if (no_bin) {
         b.getInstallStep().dependOn(&roc_exe.step);
     } else {
@@ -56,6 +72,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    snapshot_exe.root_module.addOptions("build_options", build_options);
     if (no_bin) {
         b.getInstallStep().dependOn(&snapshot_exe.step);
     } else {
@@ -76,6 +93,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    all_tests.root_module.addOptions("build_options", build_options);
 
     if (!no_bin) {
         const run_tests = b.addRunArtifact(all_tests);
@@ -126,6 +144,7 @@ pub fn build(b: *std.Build) void {
             no_bin,
             target,
             optimize,
+            build_options,
             name,
         );
     }
@@ -139,6 +158,7 @@ fn add_fuzz_target(
     no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    build_options: *Step.Options,
     name: []const u8,
 ) void {
     // We always include the repro scripts (no dependencies).
@@ -151,6 +171,7 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
+    fuzz_obj.root_module.addOptions("build_options", build_options);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
@@ -194,6 +215,7 @@ fn addMainExe(
     enable_llvm: bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
+    tracy: ?[]const u8,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -214,6 +236,30 @@ fn addMainExe(
         exe.addLibraryPath(.{ .cwd_relative = llvm_paths.lib });
         exe.addIncludePath(.{ .cwd_relative = llvm_paths.include });
         try addStaticLlvmOptionsToModule(exe.root_module);
+    }
+
+    if (tracy) |tracy_path| {
+        const client_cpp = b.pathJoin(
+            &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
+        );
+
+        // On mingw, we need to opt into windows 7+ to get some features required by tracy.
+        const tracy_c_flags: []const []const u8 = if (target.result.os.tag == .windows and target.result.abi == .gnu)
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined", "-D_WIN32_WINNT=0x601" }
+        else
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
+
+        exe.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
+        exe.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        if (!enable_llvm) {
+            exe.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
+        }
+        exe.root_module.link_libc = true;
+
+        if (target.result.os.tag == .windows) {
+            exe.root_module.linkSystemLibrary("dbghelp", .{});
+            exe.root_module.linkSystemLibrary("ws2_32", .{});
+        }
     }
 
     return exe;
