@@ -5,6 +5,7 @@ const cli = @import("cli.zig");
 const collections = @import("collections.zig");
 const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
+const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
 const RocCmd = cli.RocCmd;
@@ -43,10 +44,18 @@ pub fn main() !void {
     const args = try std.process.argsAlloc(gpa);
     defer gpa.free(args);
 
+    if (tracy.enable_allocation) {
+        var gpa_tracy = tracy.tracyAllocator(gpa);
+        return mainArgs(gpa_tracy.allocator(), args);
+    }
+
     return mainArgs(gpa, args);
 }
 
 fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const stderr = std.io.getStdErr().writer();
     if (args.len <= 1) {
         try stderr.print("{s}", .{usage});
