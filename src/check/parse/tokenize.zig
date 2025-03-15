@@ -1079,9 +1079,6 @@ pub const Tokenizer = struct {
 
         var sawWhitespace: bool = true;
         while (self.cursor.pos < self.cursor.buf.len) {
-            const trace_tok = tracy.trace(@src());
-            defer trace_tok.end();
-
             const start = self.cursor.pos;
             const sp = sawWhitespace;
             sawWhitespace = false;
