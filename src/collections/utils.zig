@@ -11,10 +11,15 @@ pub fn exitOnOom(err: std.mem.Allocator.Error) noreturn {
             const oom_message =
                 \\I ran out of memory! I can't do anything to recover, so I'm exiting.
                 \\Try reducing memory usage on your machine and then running again.
+                \\
             ;
-
-            std.debug.print(oom_message, .{});
-            std.process.exit(1);
+            fatal(oom_message, .{});
         },
     }
+}
+
+/// Log a fatal error and exit the process with a non-zero code.
+pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
+    std.io.getStdErr().writer().print(format, args) catch unreachable;
+    std.process.exit(1);
 }

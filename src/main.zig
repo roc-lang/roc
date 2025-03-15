@@ -1,6 +1,5 @@
 const std = @import("std");
 const fmt = @import("fmt.zig");
-const parse = @import("check/parse.zig");
 const base = @import("base.zig");
 const cli = @import("cli.zig");
 const collections = @import("collections.zig");
@@ -13,6 +12,7 @@ const RocOpt = cli.RocOpt;
 const Problem = problem_mod.Problem;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
+const fatal = collections.utils.fatal;
 
 const usage =
     \\Usage:
@@ -35,12 +35,6 @@ const usage =
     \\
     \\ -h, --help       Print usage
 ;
-
-/// Log a fatal error and exit the process with a non-zero code.
-pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
-    std.io.getStdErr().writer().print(format, args) catch unreachable;
-    std.process.exit(1);
-}
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
@@ -125,35 +119,21 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
-/// Reads, parses, formats, and overwrites a Roc file.
+/// Reads, parses, formats, and overwrites all Roc files at the given paths.
+/// Recurses into directories to search for Roc files.
 fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
-    const roc_file_path = if (args.len > 0) args[0] else "main.roc";
-
-    const input_file = try std.fs.cwd().openFile(roc_file_path, .{ .mode = .read_only });
-    defer input_file.close();
-
-    const contents = try input_file.reader().readAllAlloc(gpa, std.math.maxInt(usize));
-    defer gpa.free(contents);
-
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var parse_ast = parse.parse(&module_env, contents);
-    defer parse_ast.deinit();
-    if (parse_ast.errors.len > 0) {
-        // TODO: pretty print the parse failures.
-        fatal("Failed to parse '{s}' for formatting.\nErrors:\n{any}\n", .{ roc_file_path, parse_ast.errors });
+    var timer = try std.time.Timer.start();
+    var count: usize = 0;
+    if (args.len > 0) {
+        for (args) |arg| {
+            count += try fmt.formatPath(gpa, std.fs.cwd(), arg);
+        }
+    } else {
+        count = try fmt.formatPath(gpa, std.fs.cwd(), "main.roc");
     }
 
-    var formatter = fmt.init(parse_ast);
-    defer formatter.deinit();
-
-    const formatted_output = formatter.formatFile();
-    defer gpa.free(formatted_output);
-
-    const output_file = try std.fs.cwd().createFile(roc_file_path, .{});
-    defer output_file.close();
-    try output_file.writeAll(formatted_output);
+    const elapsed = timer.read() / std.time.ns_per_ms;
+    try std.io.getStdOut().writer().print("Successfully formatted {} files in {} ms\n", .{ count, elapsed });
 }
 
 test "format single file" {
