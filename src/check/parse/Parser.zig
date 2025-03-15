@@ -1144,9 +1144,9 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
                 self.advanceOne();
                 const ex = self.parseExpr();
                 self.store.addScratchExpr(ex);
-                // This assert isn't really correct, but we'll have to turn this into a malformed expression
-                // TODO...
-                std.debug.assert(self.peek() == .CloseStringInterpolation);
+                if (self.peek() != .CloseStringInterpolation) {
+                    return self.pushMalformed(IR.NodeStore.ExprIdx, .string_expected_close_interpolation, self.pos);
+                }
                 self.advanceOne();
             },
             else => {
