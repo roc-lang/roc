@@ -151,7 +151,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
     switch (statement) {
         .decl => |d| {
             fmt.formatPattern(d.pattern);
-            fmt.buffer.appendSlice(fmt.gpa, " = ") catch |err| exitOnOom(err);
+            fmt.pushAll(" = ");
             fmt.formatExpr(d.body);
             return .extra_newline_needed;
         },
@@ -160,7 +160,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
             return .extra_newline_needed;
         },
         .import => |i| {
-            fmt.buffer.appendSlice(fmt.gpa, "import ") catch |err| exitOnOom(err);
+            fmt.pushAll("import ");
             fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
             if (i.alias_tok) |a| {
                 fmt.pushAll(" as ");
@@ -216,7 +216,7 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
 fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) void {
     if (qualifier) |q| {
         fmt.pushTokenText(q);
-        fmt.buffer.append(fmt.gpa, '.') catch |err| exitOnOom(err);
+        fmt.push('.');
     }
     fmt.pushTokenText(ident);
 }
@@ -616,7 +616,7 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) FormattedOutput {
 fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (body.statements.span.len > 1) {
         fmt.curr_indent += 1;
-        fmt.buffer.append(fmt.gpa, '{') catch |err| exitOnOom(err);
+        fmt.push('{');
         for (fmt.ast.store.statementSlice(body.statements)) |s| {
             fmt.ensureNewline();
             fmt.pushIndent();
@@ -625,7 +625,7 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
         fmt.ensureNewline();
         fmt.curr_indent -= 1;
         fmt.pushIndent();
-        fmt.buffer.append(fmt.gpa, '}') catch |err| exitOnOom(err);
+        fmt.push('}');
     } else if (body.statements.span.len == 1) {
         for (fmt.ast.store.statementSlice(body.statements)) |s| {
             _ = fmt.formatStatement(s);
@@ -750,7 +750,7 @@ fn ensureNewline(fmt: *Formatter) void {
 }
 
 fn newline(fmt: *Formatter) void {
-    fmt.buffer.append(fmt.gpa, '\n') catch |err| exitOnOom(err);
+    fmt.push('\n');
 }
 
 fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
@@ -780,7 +780,7 @@ fn pushIndent(fmt: *Formatter) void {
         return;
     }
     for (0..fmt.curr_indent) |_| {
-        fmt.buffer.appendSlice(fmt.gpa, indent) catch |err| exitOnOom(err);
+        fmt.pushAll(indent);
     }
 }
 
@@ -796,7 +796,7 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
     }
 
     const text = fmt.ast.source[start..region.end.offset];
-    fmt.buffer.appendSlice(fmt.gpa, text) catch |err| exitOnOom(err);
+    fmt.pushAll(text);
 }
 
 fn moduleFmtsSame(source: []const u8) !void {
