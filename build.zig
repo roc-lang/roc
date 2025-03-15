@@ -11,6 +11,7 @@ const Step = std.Build.Step;
 pub fn build(b: *std.Build) void {
     // build steps
     const run_step = b.step("run", "Build and run the roc cli");
+    const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
@@ -53,8 +54,10 @@ pub fn build(b: *std.Build) void {
     const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
     roc_exe.root_module.addOptions("build_options", build_options);
     if (no_bin) {
+        roc_step.dependOn(&roc_exe.step);
         b.getInstallStep().dependOn(&roc_exe.step);
     } else {
+        roc_step.dependOn(&b.addInstallArtifact(roc_exe, .{}).step);
         b.installArtifact(roc_exe);
         const run_cmd = b.addRunArtifact(roc_exe);
         run_cmd.step.dependOn(b.getInstallStep());
