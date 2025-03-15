@@ -1,12 +1,15 @@
 //! Formatting logic for Roc modules.
 
 const std = @import("std");
+const parse = @import("check/parse.zig").parse;
 const IR = @import("check/parse/IR.zig");
 const Node = IR.Node;
+const Filesystem = @import("coordinate/Filesystem.zig");
 const tokenizer = @import("check/parse/tokenize.zig");
 const TokenizedBuffer = tokenizer.TokenizedBuffer;
 const TokenIdx = tokenizer.Token.Idx;
 const exitOnOom = @import("./collections/utils.zig").exitOnOom;
+const fatal = @import("./collections/utils.zig").fatal;
 const base = @import("base.zig");
 
 const NodeStore = IR.NodeStore;
@@ -40,6 +43,75 @@ pub fn resetWith(fmt: *Formatter, ast: IR) void {
     fmt.curr_indent = 0;
     fmt.buffer.shrinkRetainingCapacity(0);
     fmt.ast = ast;
+}
+
+/// Formats all roc files in the specified path.
+/// Handles both single files and directories
+/// Returns the number of files formatted.
+pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !usize {
+    // TODO: update this to use the filesystem abstraction
+    // When doing so, add a mock filesystem and some tests.
+    var count: usize = 0;
+    // First try as a directory.
+    if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
+        var dir = const_dir;
+        defer dir.close();
+        // Walk is recursive.
+        var walker = try dir.walk(gpa);
+        defer walker.deinit();
+        while (try walker.next()) |entry| {
+            if (entry.kind == .file) {
+                if (try formatFilePath(gpa, entry.dir, entry.basename)) {
+                    count += 1;
+                }
+            }
+        }
+    } else |_| {
+        if (try formatFilePath(gpa, base_dir, path)) {
+            count += 1;
+        }
+    }
+
+    return count;
+}
+
+fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+    // Skip non ".roc" files.
+    if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
+        return false;
+    }
+
+    const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
+    defer input_file.close();
+
+    const contents = try input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    defer gpa.free(contents);
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var parse_ast = parse(&module_env, contents);
+    defer parse_ast.deinit();
+    if (parse_ast.errors.len > 0) {
+        // TODO: pretty print the parse failures.
+        const stderr = std.io.getStdErr().writer();
+        try stderr.print("Failed to parse '{s}' for formatting.\nErrors:\n", .{path});
+        for (parse_ast.errors) |err| {
+            try stderr.print("\t{s}\n", .{@tagName(err.tag)});
+        }
+        fatal("\n", .{});
+    }
+
+    var formatter = init(parse_ast);
+    defer formatter.deinit();
+
+    const formatted_output = formatter.formatFile();
+    defer gpa.free(formatted_output);
+
+    const output_file = try base_dir.createFile(path, .{});
+    defer output_file.close();
+    try output_file.writeAll(formatted_output);
+    return true;
 }
 
 /// Emits a string containing the well-formed source of a Roc parse IR (AST).
@@ -728,8 +800,6 @@ fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
 }
 
 fn moduleFmtsSame(source: []const u8) !void {
-    const parse = @import("check/parse.zig").parse;
-
     const gpa = std.testing.allocator;
 
     var env = base.ModuleEnv.init(gpa);
@@ -836,8 +906,6 @@ pub fn moduleFmtsStable(gpa: std.mem.Allocator, input: []const u8, debug: bool) 
 }
 
 fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const u8 {
-    const parse = @import("check/parse.zig").parse;
-
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
@@ -1063,4 +1131,33 @@ test "BinOp omnibus" {
 test "Dot access super test" {
     const expr = "some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?";
     try exprFmtsSame(expr, .no_debug);
+}
+
+// TODO: replace this test with one that doesn't interact with the real filesystem.
+test "format single file" {
+    const gpa = std.testing.allocator;
+    const roc_filename = "test.roc";
+
+    const roc_file = try std.fs.cwd().createFile(roc_filename, .{ .read = true });
+    defer roc_file.close();
+    try roc_file.writeAll(
+        \\module []
+        \\
+        \\foo =      "bar"
+    );
+    defer std.fs.cwd().deleteFile(roc_filename) catch std.debug.panic("Failed to clean up test.roc", .{});
+
+    const count = try formatPath(gpa, std.fs.cwd(), roc_filename);
+    try std.testing.expectEqual(1, count);
+
+    // Reset file position to read formatted roc code
+    try roc_file.seekTo(0);
+    const formatted_code = try roc_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    defer gpa.free(formatted_code);
+
+    try std.testing.expectEqualStrings(
+        \\module []
+        \\
+        \\foo = "bar"
+    , formatted_code);
 }

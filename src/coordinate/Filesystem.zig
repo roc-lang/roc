@@ -31,6 +31,10 @@ pub fn default() Self {
     };
 }
 
+/// The max valid file size.
+/// Anything larger will fail due to us using u32 offsets.
+pub const max_file_size = std.math.maxInt(u32);
+
 /// All errors that can occur when reading a file.
 pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.Error || error{StreamTooLong};
 
@@ -137,8 +141,7 @@ fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) Read
     const file = try std.fs.cwd().openFile(relative_path, .{});
     defer file.close();
 
-    const max_allowed_file_length = std.math.maxInt(usize);
-    const contents = try file.reader().readAllAlloc(allocator, max_allowed_file_length);
+    const contents = try file.reader().readAllAlloc(allocator, max_file_size);
 
     return contents;
 }
