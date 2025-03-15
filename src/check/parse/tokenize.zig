@@ -3,6 +3,7 @@ const Allocator = std.mem.Allocator;
 const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 const base = @import("../../base.zig");
+const tracy = @import("../../tracy.zig");
 
 /// representation of a token in the source code, like '+', 'foo', '=', '{'
 /// these are represented by an offset into the bytes of the source code
@@ -1073,8 +1074,14 @@ pub const Tokenizer = struct {
 
     /// The main tokenize loop. This loops over the whole input buffer, tokenizing as it goes.
     pub fn tokenize(self: *Tokenizer) void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         var sawWhitespace: bool = true;
         while (self.cursor.pos < self.cursor.buf.len) {
+            const trace_tok = tracy.trace(@src());
+            defer trace_tok.end();
+
             const start = self.cursor.pos;
             const sp = sawWhitespace;
             sawWhitespace = false;

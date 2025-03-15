@@ -3,6 +3,7 @@ const std = @import("std");
 const IR = @import("IR.zig");
 const NodeList = IR.NodeList;
 
+const tracy = @import("../../tracy.zig");
 const tokenize = @import("tokenize.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
@@ -130,6 +131,9 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag, st
 ///
 /// the tokens are provided at Parser initialisation
 pub fn parseFile(self: *Parser) void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     self.store.emptyScratch();
     _ = self.store.addFile(.{
         .header = IR.NodeStore.HeaderIdx{ .id = 0 },
@@ -184,6 +188,9 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
 pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwApp => {
             return self.parseAppHeader();
@@ -396,6 +403,9 @@ pub fn parseExposedItem(self: *Parser) IR.NodeStore.ExposedItemIdx {
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
 pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     switch (self.peek()) {
         .KwImport => {
             const start = self.pos;
@@ -808,6 +818,9 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
 
 /// todo
 pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     const start = self.pos;
     var expr: ?IR.NodeStore.ExprIdx = null;
     switch (self.peek()) {
