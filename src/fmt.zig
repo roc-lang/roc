@@ -556,9 +556,6 @@ const Formatter = struct {
     }
 
     fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !FormattedOutput {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
         const header = fmt.ast.store.getHeader(hi);
         switch (header) {
             .app => |a| {
