@@ -11,6 +11,7 @@ const TokenIdx = tokenizer.Token.Idx;
 const exitOnOom = @import("./collections/utils.zig").exitOnOom;
 const fatal = @import("./collections/utils.zig").fatal;
 const base = @import("base.zig");
+const tracy = @import("tracy.zig");
 
 const NodeStore = IR.NodeStore;
 const ExprIdx = NodeStore.ExprIdx;
@@ -88,6 +89,9 @@ fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 /// Formats and writes out well-formed source of a Roc parse IR (AST).
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var fmt = Formatter.init(ast, writer);
 
     var ignore_newline_for_first_statement = false;
@@ -146,6 +150,9 @@ const Formatter = struct {
     }
 
     fn formatStatement(fmt: *Formatter, si: StatementIdx) !NewlineBehavior {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const statement = fmt.ast.store.getStatement(si);
         switch (statement) {
             .decl => |d| {
@@ -221,6 +228,9 @@ const Formatter = struct {
     }
 
     fn formatExpr(fmt: *Formatter, ei: ExprIdx) anyerror!void {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const expr = fmt.ast.store.getExpr(ei);
         switch (expr) {
             .apply => |a| {
@@ -549,6 +559,9 @@ const Formatter = struct {
     }
 
     fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !FormattedOutput {
+        const trace = tracy.trace(@src());
+        defer trace.end();
+
         const header = fmt.ast.store.getHeader(hi);
         switch (header) {
             .app => |a| {
