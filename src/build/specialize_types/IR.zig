@@ -13,9 +13,9 @@
 //!
 //! The values in this module represent all data for a single type-specialized module, except for
 //! interned data which resides in the `ModuleEnv`. This IR has a very similar structure to the next
-//! stage's IR (`lift_functions`), but not quite the same. For now, we have designed our compiler 
+//! stage's IR (`lift_functions`), but not quite the same. For now, we have designed our compiler
 //! stages to be simple and correct at the cost of not deduplicating similar code. In the future,
-//! we may decide to combine the IRs of some build stages to avoid needing to convert lots of 
+//! we may decide to combine the IRs of some build stages to avoid needing to convert lots of
 //! equivalent data.
 
 const std = @import("std");
