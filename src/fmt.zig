@@ -25,6 +25,8 @@ gpa: std.mem.Allocator,
 buffer: std.ArrayListUnmanaged(u8) = .{},
 curr_indent: u32 = 0,
 flags: FormatFlags = .no_debug,
+// This starts true since beginning of file is considered a newline.
+has_newline: bool = true,
 
 const Formatter = @This();
 
@@ -742,8 +744,7 @@ fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
 }
 
 fn ensureNewline(fmt: *Formatter) void {
-    const last = fmt.buffer.getLastOrNull() orelse ' ';
-    if (fmt.buffer.items.len == 0 or last == '\n') {
+    if (fmt.has_newline) {
         return;
     }
     fmt.newline();
@@ -768,10 +769,15 @@ fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
 const indent = "    ";
 
 fn push(fmt: *Formatter, c: u8) void {
+    fmt.has_newline = c == '\n';
     fmt.buffer.append(fmt.gpa, c) catch |err| exitOnOom(err);
 }
 
 fn pushAll(fmt: *Formatter, str: []const u8) void {
+    if (str.len == 0) {
+        return;
+    }
+    fmt.has_newline = str[str.len - 1] == '\n';
     fmt.buffer.appendSlice(fmt.gpa, str) catch |err| exitOnOom(err);
 }
 
