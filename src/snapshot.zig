@@ -394,16 +394,15 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Write FORMAT SECTION
     {
-        var formatter = fmt.init(parse_ast);
-        defer formatter.deinit();
-        const formatted = formatter.formatFile();
-        defer gpa.free(formatted);
+        var formatted = std.ArrayList(u8).init(gpa);
+        defer formatted.deinit();
+        try fmt.formatAst(parse_ast, formatted.writer().any());
 
         try file.writer().writeAll(Section.FORMATTED);
         try file.writer().writeAll("\n");
 
-        if (!std.mem.eql(u8, formatted, content.source)) {
-            try file.writer().writeAll(formatted);
+        if (!std.mem.eql(u8, formatted.items, content.source)) {
+            try file.writer().writeAll(formatted.items);
             try file.writer().writeAll("\n");
         } else {
             try file.writer().writeAll("NO CHANGE");

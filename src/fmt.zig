@@ -20,33 +20,6 @@ const StatementIdx = NodeStore.StatementIdx;
 
 const FormatFlags = enum { debug_binop, no_debug };
 
-ast: IR,
-gpa: std.mem.Allocator,
-buffer: std.ArrayListUnmanaged(u8) = .{},
-curr_indent: u32 = 0,
-flags: FormatFlags = .no_debug,
-// This starts true since beginning of file is considered a newline.
-has_newline: bool = true,
-
-const Formatter = @This();
-
-/// Creates a new Formatter for the given parse IR.
-pub fn init(ast: IR) Formatter {
-    return .{ .ast = ast, .gpa = ast.store.gpa };
-}
-
-/// Deinits all data owned by the formatter object.
-pub fn deinit(fmt: *Formatter) void {
-    fmt.buffer.deinit(fmt.gpa);
-}
-
-/// Sets the Formatter up fresh to work on a new parse IR.
-pub fn resetWith(fmt: *Formatter, ast: IR) void {
-    fmt.curr_indent = 0;
-    fmt.buffer.shrinkRetainingCapacity(0);
-    fmt.ast = ast;
-}
-
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files formatted.
@@ -104,26 +77,24 @@ fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
         fatal("\n", .{});
     }
 
-    var formatter = init(parse_ast);
-    defer formatter.deinit();
-
-    const formatted_output = formatter.formatFile();
-    defer gpa.free(formatted_output);
-
     const output_file = try base_dir.createFile(path, .{});
     defer output_file.close();
-    try output_file.writeAll(formatted_output);
+
+    try formatAst(parse_ast, output_file.writer().any());
+
     return true;
 }
 
-/// Emits a string containing the well-formed source of a Roc parse IR (AST).
-/// The resulting string is owned by the caller.
-pub fn formatFile(fmt: *Formatter) []const u8 {
+/// Formats and writes out well-formed source of a Roc parse IR (AST).
+/// Only returns an error if the underlying writer returns an error.
+pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
+    var fmt = Formatter.init(ast, writer);
+
     var ignore_newline_for_first_statement = false;
 
     fmt.ast.store.emptyScratch();
     const file = fmt.ast.store.getFile();
-    const maybe_output = fmt.formatHeader(file.header);
+    const maybe_output = try fmt.formatHeader(file.header);
     if (maybe_output == FormattedOutput.nothing_formatted) {
         ignore_newline_for_first_statement = true;
     }
@@ -135,675 +106,699 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
         if (ignore_newline_for_first_statement) {
             ignore_newline_for_first_statement = false;
         } else {
-            fmt.ensureNewline();
+            try fmt.ensureNewline();
             if (newline_behavior == .extra_newline_needed) {
-                fmt.newline();
+                try fmt.newline();
             }
         }
 
-        newline_behavior = fmt.formatStatement(s);
+        newline_behavior = try fmt.formatStatement(s);
     }
-    return fmt.buffer.toOwnedSlice(fmt.gpa) catch |err| exitOnOom(err);
-}
 
-const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
-
-fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
-    const statement = fmt.ast.store.getStatement(si);
-    switch (statement) {
-        .decl => |d| {
-            fmt.formatPattern(d.pattern);
-            fmt.pushAll(" = ");
-            fmt.formatExpr(d.body);
-            return .extra_newline_needed;
-        },
-        .expr => |e| {
-            fmt.formatExpr(e.expr);
-            return .extra_newline_needed;
-        },
-        .import => |i| {
-            fmt.pushAll("import ");
-            fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
-            if (i.alias_tok) |a| {
-                fmt.pushAll(" as ");
-                fmt.pushTokenText(a);
-            }
-            if (i.exposes.span.len > 0) {
-                fmt.pushAll(" exposing [");
-                var n: usize = 0;
-                for (fmt.ast.store.exposedItemSlice(i.exposes)) |tok| {
-                    fmt.formatExposedItem(tok);
-                    if (n < i.exposes.span.len - 1) {
-                        fmt.pushAll(", ");
-                    }
-                    n += 1;
-                }
-                fmt.push(']');
-            }
-            return .extra_newline_needed;
-        },
-        .type_decl => |d| {
-            fmt.formatTypeHeader(d.header);
-            fmt.pushAll(" : ");
-            fmt.formatTypeAnno(d.anno);
-            return .extra_newline_needed;
-        },
-        .type_anno => |t| {
-            fmt.pushTokenText(t.name);
-            fmt.pushAll(" : ");
-            fmt.formatTypeAnno(t.anno);
-            return .no_extra_newline;
-        },
-        .expect => |e| {
-            fmt.pushAll("expect ");
-            fmt.formatExpr(e.body);
-            return .extra_newline_needed;
-        },
-        .crash => |c| {
-            fmt.pushAll("crash ");
-            fmt.formatExpr(c.expr);
-            return .extra_newline_needed;
-        },
-        .@"return" => |r| {
-            fmt.pushAll("return ");
-            fmt.formatExpr(r.expr);
-            return .extra_newline_needed;
-        },
-        .malformed => {
-            return .no_extra_newline;
-        },
-    }
-}
-
-fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) void {
-    if (qualifier) |q| {
-        fmt.pushTokenText(q);
-        fmt.push('.');
-    }
-    fmt.pushTokenText(ident);
-}
-
-fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
-    const expr = fmt.ast.store.getExpr(ei);
-    switch (expr) {
-        .apply => |a| {
-            fmt.formatExpr(a.@"fn");
-            fmt.push('(');
-            const args_len = a.args.span.len;
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(a.args)) |arg| {
-                fmt.formatExpr(arg);
-                i += 1;
-                if (i < args_len) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.push(')');
-        },
-        .string_part => |s| {
-            fmt.pushTokenText(s.token);
-        },
-        .string => |s| {
-            fmt.push('"');
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(s.parts)) |idx| {
-                const e = fmt.ast.store.getExpr(idx);
-                switch (e) {
-                    .string_part => |str| {
-                        fmt.pushTokenText(str.token);
-                    },
-                    else => {
-                        fmt.pushAll("${");
-                        fmt.formatExpr(idx);
-                        fmt.push('}');
-                    },
-                }
-                i += 1;
-            }
-            fmt.push('"');
-        },
-        .ident => |i| {
-            fmt.formatIdent(i.token, i.qualifier);
-        },
-        .field_access => |fa| {
-            fmt.formatExpr(fa.left);
-            fmt.push('.');
-            fmt.formatExpr(fa.right);
-        },
-        .int => |i| {
-            fmt.pushTokenText(i.token);
-        },
-        .float => |f| {
-            fmt.pushTokenText(f.token);
-        },
-        .list => |l| {
-            const multiline = fmt.ast.regionIsMultiline(l.region);
-            fmt.push('[');
-            if (multiline) {
-                fmt.curr_indent += 1;
-            }
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(l.items)) |item| {
-                if (multiline) {
-                    fmt.newline();
-                    fmt.pushIndent();
-                }
-                fmt.formatExpr(item);
-                if (!multiline and i < (l.items.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                if (multiline) {
-                    fmt.push(',');
-                }
-                i += 1;
-            }
-            if (multiline) {
-                fmt.curr_indent -= 1;
-                fmt.newline();
-                fmt.pushIndent();
-            }
-            fmt.push(']');
-        },
-        .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.exprSlice(t.items)) |item| {
-                fmt.formatExpr(item);
-                if (i < (t.items.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(')');
-        },
-        .record => |r| {
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.recordFieldSlice(r.fields)) |fieldIdx| {
-                const field = fmt.ast.store.getRecordField(fieldIdx);
-                fmt.pushTokenText(field.name);
-                if (field.value) |v| {
-                    fmt.pushAll(if (field.optional) "? " else ": ");
-                    fmt.formatExpr(v);
-                }
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
-        },
-        .lambda => |l| {
-            fmt.push('|');
-            var i: usize = 0;
-            const arg_slice = fmt.ast.store.patternSlice(l.args);
-
-            // TODO -- this is a hack to avoid ambiguity with no arguments,
-            // if we parse it again without the space it will be parsed as
-            // a logical OR `||` instead
-            //
-            // desired behaviour described here https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20spike/near/504453049
-            if (arg_slice.len == 0) {
-                fmt.pushAll(" ");
-            }
-
-            for (arg_slice) |arg| {
-                fmt.formatPattern(arg);
-                if (i < (l.args.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll("| ");
-            fmt.formatExpr(l.body);
-        },
-        .unary_op => |op| {
-            fmt.pushTokenText(op.operator);
-            fmt.formatExpr(op.expr);
-        },
-        .bin_op => |op| {
-            if (fmt.flags == .debug_binop) {
-                fmt.push('(');
-            }
-            fmt.formatExpr(op.left);
-            fmt.push(' ');
-            fmt.pushTokenText(op.operator);
-            fmt.push(' ');
-            fmt.formatExpr(op.right);
-            if (fmt.flags == .debug_binop) {
-                fmt.push(')');
-            }
-        },
-        .suffix_single_question => |s| {
-            fmt.formatExpr(s.expr);
-            fmt.push('?');
-        },
-        .tag => |t| {
-            fmt.pushTokenText(t.token);
-        },
-        .if_then_else => |i| {
-            fmt.pushAll("if ");
-            fmt.formatExpr(i.condition);
-            fmt.push(' ');
-            fmt.formatExpr(i.then);
-            fmt.pushAll(" else ");
-            fmt.formatExpr(i.@"else");
-        },
-        .match => |m| {
-            fmt.pushAll("match ");
-            fmt.formatExpr(m.expr);
-            fmt.pushAll(" {");
-            fmt.curr_indent += 1;
-            for (fmt.ast.store.whenBranchSlice(m.branches)) |b| {
-                const branch = fmt.ast.store.getBranch(b);
-                fmt.newline();
-                fmt.pushIndent();
-                fmt.formatPattern(branch.pattern);
-                fmt.pushAll(" -> ");
-                fmt.formatExpr(branch.body);
-            }
-            fmt.curr_indent -= 1;
-            fmt.newline();
-            fmt.pushIndent();
-            fmt.push('}');
-        },
-        .dbg => |d| {
-            fmt.pushAll("dbg ");
-            fmt.formatExpr(d.expr);
-        },
-        .block => |b| {
-            fmt.formatBody(b);
-        },
-        .ellipsis => |_| {
-            fmt.pushAll("...");
-        },
-        .malformed => {
-            // format nothing for malformed expressions
-        },
-        else => {
-            std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
-        },
-    }
-}
-
-fn formatPattern(fmt: *Formatter, pi: PatternIdx) void {
-    const pattern = fmt.ast.store.getPattern(pi);
-    switch (pattern) {
-        .ident => |i| {
-            fmt.formatIdent(i.ident_tok, null);
-        },
-        .tag => |t| {
-            fmt.formatIdent(t.tag_tok, null);
-            if (t.args.span.len > 0) {
-                fmt.push('(');
-                var i: usize = 0;
-                for (fmt.ast.store.patternSlice(t.args)) |arg| {
-                    fmt.formatPattern(arg);
-                    if (i < (t.args.span.len - 1)) {
-                        fmt.pushAll(", ");
-                    }
-                    i += 1;
-                }
-                fmt.push(')');
-            }
-        },
-        .string => |s| {
-            fmt.formatExpr(s.expr);
-        },
-        .number => |n| {
-            fmt.formatIdent(n.number_tok, null);
-        },
-        .record => |r| {
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.patternRecordFieldSlice(r.fields)) |field_idx| {
-                const field = fmt.ast.store.getPatternRecordField(field_idx);
-                if (field.rest) {
-                    fmt.pushAll("..");
-                    if (field.name != 0) {
-                        fmt.pushTokenText(field.name);
-                    }
-                    continue;
-                }
-                fmt.pushTokenText(field.name);
-                if (field.value) |v| {
-                    fmt.pushAll(": ");
-                    fmt.formatPattern(v);
-                }
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
-        },
-        .list => |l| {
-            fmt.push('[');
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(l.patterns)) |p| {
-                fmt.formatPattern(p);
-                if (i < (l.patterns.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(']');
-        },
-        .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(t.patterns)) |p| {
-                fmt.formatPattern(p);
-                if (i < (t.patterns.span.len - 1)) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.push(')');
-        },
-        .list_rest => |r| {
-            fmt.pushAll("..");
-            if (r.name) |n| {
-                fmt.pushAll(" as ");
-                fmt.pushTokenText(n);
-            }
-        },
-        .underscore => |_| {
-            fmt.push('_');
-        },
-        .alternatives => |a| {
-            var i: usize = 0;
-            for (fmt.ast.store.patternSlice(a.patterns)) |p| {
-                fmt.formatPattern(p);
-                if (i < (a.patterns.span.len - 1)) {
-                    fmt.pushAll(" | ");
-                }
-                i += 1;
-            }
-        },
-        .malformed => {
-            // format nothing for malformed patterns
-        },
-    }
-}
-
-fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) void {
-    const item = fmt.ast.store.getExposedItem(idx);
-    switch (item) {
-        .lower_ident => |i| {
-            fmt.pushTokenText(i.ident);
-            if (i.as) |a| {
-                fmt.pushAll(" as ");
-                fmt.pushTokenText(a);
-            }
-        },
-        .upper_ident => |i| {
-            fmt.pushTokenText(i.ident);
-            if (i.as) |a| {
-                fmt.pushAll(" as ");
-                fmt.pushTokenText(a);
-            }
-        },
-        .upper_ident_star => |i| {
-            fmt.pushTokenText(i.ident);
-            fmt.pushAll(".*");
-        },
-    }
+    try fmt.flush();
 }
 
 /// The caller may need to know if anything was formatted, to handle newlines correctly.
 const FormattedOutput = enum { something_formatted, nothing_formatted };
 
-fn formatHeader(fmt: *Formatter, hi: HeaderIdx) FormattedOutput {
-    const header = fmt.ast.store.getHeader(hi);
-    switch (header) {
-        .app => |a| {
-            fmt.pushAll("app [");
-            // Format provides
-            var i: usize = 0;
-            for (fmt.ast.store.exposedItemSlice(a.provides)) |p| {
-                fmt.formatExposedItem(p);
-                if (i < a.provides.span.len - 1) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.pushAll("] { ");
-            fmt.pushTokenText(a.platform_name);
-            fmt.pushAll(": platform ");
-            fmt.formatExpr(a.platform);
-            if (a.packages.span.len > 0) {
-                fmt.push(',');
-            }
-            i = 0;
-            for (fmt.ast.store.recordFieldSlice(a.packages)) |package| {
-                const field = fmt.ast.store.getRecordField(package);
-                fmt.pushTokenText(field.name);
-                if (field.value) |v| {
-                    fmt.pushAll(": ");
-                    fmt.formatExpr(v);
-                }
-                if (i < a.packages.span.len) {
-                    fmt.pushAll(", ");
-                }
-                i += 1;
-            }
-            fmt.pushAll(" }");
-            fmt.newline();
-            return FormattedOutput.something_formatted;
-        },
-        .module => |m| {
-            fmt.pushAll("module [");
-            var i: usize = 0;
-            for (fmt.ast.store.exposedItemSlice(m.exposes)) |p| {
-                fmt.formatExposedItem(p);
-                i += 1;
-                if (i < m.exposes.span.len) {
-                    fmt.pushAll(", ");
-                }
-            }
-            fmt.push(']');
-            fmt.newline();
-            return FormattedOutput.something_formatted;
-        },
-        .malformed => {
-            // we have a malformed header... don't output anything as no header was parsed
-            return FormattedOutput.nothing_formatted;
-        },
-        else => {
-            std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});
-        },
-    }
-}
+const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
 
-fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
-    if (body.statements.span.len > 1) {
-        fmt.curr_indent += 1;
-        fmt.push('{');
-        for (fmt.ast.store.statementSlice(body.statements)) |s| {
-            fmt.ensureNewline();
-            fmt.pushIndent();
-            _ = fmt.formatStatement(s);
-        }
-        fmt.ensureNewline();
-        fmt.curr_indent -= 1;
-        fmt.pushIndent();
-        fmt.push('}');
-    } else if (body.statements.span.len == 1) {
-        for (fmt.ast.store.statementSlice(body.statements)) |s| {
-            _ = fmt.formatStatement(s);
-        }
-    } else {
-        fmt.pushAll("{}");
-    }
-}
+/// Formatter for the roc parse ast.
+const Formatter = struct {
+    ast: IR,
+    buffer: std.io.BufferedWriter(4096, std.io.AnyWriter),
+    curr_indent: u32 = 0,
+    flags: FormatFlags = .no_debug,
+    // This starts true since beginning of file is considered a newline.
+    has_newline: bool = true,
 
-fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) void {
-    const h = fmt.ast.store.getTypeHeader(header);
-    fmt.pushTokenText(h.name);
-    if (h.args.span.len > 0) {
-        fmt.push(' ');
-        var i: usize = 0;
-        for (fmt.ast.store.tokenSlice(h.args)) |arg| {
-            fmt.pushTokenText(arg);
-            if (i < (h.args.span.len - 1)) {
-                fmt.push(' ');
-            }
-            i += 1;
+    /// Creates a new Formatter for the given parse IR.
+    fn init(ast: IR, writer: std.io.AnyWriter) Formatter {
+        return .{
+            .ast = ast,
+            .buffer = std.io.bufferedWriter(writer),
+        };
+    }
+
+    /// Deinits all data owned by the formatter object.
+    fn flush(fmt: *Formatter) !void {
+        try fmt.buffer.flush();
+    }
+
+    fn formatStatement(fmt: *Formatter, si: StatementIdx) !NewlineBehavior {
+        const statement = fmt.ast.store.getStatement(si);
+        switch (statement) {
+            .decl => |d| {
+                try fmt.formatPattern(d.pattern);
+                try fmt.pushAll(" = ");
+                try fmt.formatExpr(d.body);
+                return .extra_newline_needed;
+            },
+            .expr => |e| {
+                try fmt.formatExpr(e.expr);
+                return .extra_newline_needed;
+            },
+            .import => |i| {
+                try fmt.pushAll("import ");
+                try fmt.formatIdent(i.module_name_tok, i.qualifier_tok);
+                if (i.alias_tok) |a| {
+                    try fmt.pushAll(" as ");
+                    try fmt.pushTokenText(a);
+                }
+                if (i.exposes.span.len > 0) {
+                    try fmt.pushAll(" exposing [");
+                    var n: usize = 0;
+                    for (fmt.ast.store.exposedItemSlice(i.exposes)) |tok| {
+                        try fmt.formatExposedItem(tok);
+                        if (n < i.exposes.span.len - 1) {
+                            try fmt.pushAll(", ");
+                        }
+                        n += 1;
+                    }
+                    try fmt.push(']');
+                }
+                return .extra_newline_needed;
+            },
+            .type_decl => |d| {
+                try fmt.formatTypeHeader(d.header);
+                try fmt.pushAll(" : ");
+                try fmt.formatTypeAnno(d.anno);
+                return .extra_newline_needed;
+            },
+            .type_anno => |t| {
+                try fmt.pushTokenText(t.name);
+                try fmt.pushAll(" : ");
+                try fmt.formatTypeAnno(t.anno);
+                return .no_extra_newline;
+            },
+            .expect => |e| {
+                try fmt.pushAll("expect ");
+                try fmt.formatExpr(e.body);
+                return .extra_newline_needed;
+            },
+            .crash => |c| {
+                try fmt.pushAll("crash ");
+                try fmt.formatExpr(c.expr);
+                return .extra_newline_needed;
+            },
+            .@"return" => |r| {
+                try fmt.pushAll("return ");
+                try fmt.formatExpr(r.expr);
+                return .extra_newline_needed;
+            },
+            .malformed => {
+                return .no_extra_newline;
+            },
         }
     }
-}
 
-fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) void {
-    const a = fmt.ast.store.getTypeAnno(anno);
-    switch (a) {
-        .ty_var => |v| {
-            fmt.pushTokenText(v.tok);
-        },
-        .tag => |t| {
-            fmt.pushTokenText(t.tok);
-            if (t.args.span.len > 0) {
-                fmt.push('(');
+    fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) !void {
+        if (qualifier) |q| {
+            try fmt.pushTokenText(q);
+            try fmt.push('.');
+        }
+        try fmt.pushTokenText(ident);
+    }
+
+    fn formatExpr(fmt: *Formatter, ei: ExprIdx) anyerror!void {
+        const expr = fmt.ast.store.getExpr(ei);
+        switch (expr) {
+            .apply => |a| {
+                try fmt.formatExpr(a.@"fn");
+                try fmt.push('(');
+                const args_len = a.args.span.len;
                 var i: usize = 0;
-                for (fmt.ast.store.typeAnnoSlice(t.args)) |arg| {
-                    fmt.formatTypeAnno(arg);
-                    if (i < (t.args.span.len - 1)) {
-                        fmt.pushAll(", ");
+                for (fmt.ast.store.exprSlice(a.args)) |arg| {
+                    try fmt.formatExpr(arg);
+                    i += 1;
+                    if (i < args_len) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(')');
+            },
+            .string_part => |s| {
+                try fmt.pushTokenText(s.token);
+            },
+            .string => |s| {
+                try fmt.push('"');
+                var i: usize = 0;
+                for (fmt.ast.store.exprSlice(s.parts)) |idx| {
+                    const e = fmt.ast.store.getExpr(idx);
+                    switch (e) {
+                        .string_part => |str| {
+                            try fmt.pushTokenText(str.token);
+                        },
+                        else => {
+                            try fmt.pushAll("${");
+                            try fmt.formatExpr(idx);
+                            try fmt.push('}');
+                        },
                     }
                     i += 1;
                 }
-                fmt.push(')');
-            }
-        },
-        .tuple => |t| {
-            fmt.push('(');
-            var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(t.annos)) |an| {
-                fmt.formatTypeAnno(an);
-                if (i < (t.annos.span.len - 1)) {
-                    fmt.pushAll(", ");
+                try fmt.push('"');
+            },
+            .ident => |i| {
+                try fmt.formatIdent(i.token, i.qualifier);
+            },
+            .field_access => |fa| {
+                try fmt.formatExpr(fa.left);
+                try fmt.push('.');
+                try fmt.formatExpr(fa.right);
+            },
+            .int => |i| {
+                try fmt.pushTokenText(i.token);
+            },
+            .float => |f| {
+                try fmt.pushTokenText(f.token);
+            },
+            .list => |l| {
+                const multiline = fmt.ast.regionIsMultiline(l.region);
+                try fmt.push('[');
+                if (multiline) {
+                    fmt.curr_indent += 1;
                 }
-                i += 1;
-            }
-            fmt.push(')');
-        },
-        .record => |r| {
-            if (r.fields.span.len == 0) {
-                fmt.pushAll("{}");
-                return;
-            }
-            fmt.pushAll("{ ");
-            var i: usize = 0;
-            for (fmt.ast.store.annoRecordFieldSlice(r.fields)) |idx| {
-                const field = fmt.ast.store.getAnnoRecordField(idx);
-                fmt.pushTokenText(field.name);
-                fmt.pushAll(" : ");
-                fmt.formatTypeAnno(field.ty);
-                if (i < (r.fields.span.len - 1)) {
-                    fmt.pushAll(", ");
+                var i: usize = 0;
+                for (fmt.ast.store.exprSlice(l.items)) |item| {
+                    if (multiline) {
+                        try fmt.newline();
+                        try fmt.pushIndent();
+                    }
+                    try fmt.formatExpr(item);
+                    if (!multiline and i < (l.items.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    if (multiline) {
+                        try fmt.push(',');
+                    }
+                    i += 1;
                 }
-                i += 1;
-            }
-            fmt.pushAll(" }");
-        },
-        .tag_union => |t| {
-            fmt.push('[');
-            var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(t.tags)) |tag| {
-                fmt.formatTypeAnno(tag);
-                if (i < (t.tags.span.len - 1)) {
-                    fmt.pushAll(", ");
+                if (multiline) {
+                    fmt.curr_indent -= 1;
+                    try fmt.newline();
+                    try fmt.pushIndent();
                 }
-                i += 1;
-            }
-            fmt.push(']');
-        },
-        .@"fn" => |f| {
-            var i: usize = 0;
-            for (fmt.ast.store.typeAnnoSlice(f.args)) |idx| {
-                fmt.formatTypeAnno(idx);
-                if (i < (f.args.span.len - 1)) {
-                    fmt.pushAll(", ");
+                try fmt.push(']');
+            },
+            .tuple => |t| {
+                try fmt.push('(');
+                var i: usize = 0;
+                for (fmt.ast.store.exprSlice(t.items)) |item| {
+                    try fmt.formatExpr(item);
+                    if (i < (t.items.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
                 }
-                i += 1;
-            }
-            fmt.pushAll(" -> ");
-            fmt.formatTypeAnno(f.ret);
-        },
-        .parens => |p| {
-            fmt.push('(');
-            fmt.formatTypeAnno(p.anno);
-            fmt.push(')');
-        },
-        .underscore => |_| {
-            fmt.push('_');
-        },
-        .malformed => {
-            // format nothing for malformed type annotations
-        },
+                try fmt.push(')');
+            },
+            .record => |r| {
+                try fmt.pushAll("{ ");
+                var i: usize = 0;
+                for (fmt.ast.store.recordFieldSlice(r.fields)) |fieldIdx| {
+                    const field = fmt.ast.store.getRecordField(fieldIdx);
+                    try fmt.pushTokenText(field.name);
+                    if (field.value) |v| {
+                        try fmt.pushAll(if (field.optional) "? " else ": ");
+                        try fmt.formatExpr(v);
+                    }
+                    if (i < (r.fields.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll(" }");
+            },
+            .lambda => |l| {
+                try fmt.push('|');
+                var i: usize = 0;
+                const arg_slice = fmt.ast.store.patternSlice(l.args);
+
+                // TODO -- this is a hack to avoid ambiguity with no arguments,
+                // if we parse it again without the space it will be parsed as
+                // a logical OR `||` instead
+                //
+                // desired behaviour described here https://roc.zulipchat.com/#narrow/channel/395097-compiler-development/topic/zig.20compiler.20-.20spike/near/504453049
+                if (arg_slice.len == 0) {
+                    try fmt.pushAll(" ");
+                }
+
+                for (arg_slice) |arg| {
+                    try fmt.formatPattern(arg);
+                    if (i < (l.args.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll("| ");
+                try fmt.formatExpr(l.body);
+            },
+            .unary_op => |op| {
+                try fmt.pushTokenText(op.operator);
+                try fmt.formatExpr(op.expr);
+            },
+            .bin_op => |op| {
+                if (fmt.flags == .debug_binop) {
+                    try fmt.push('(');
+                }
+                try fmt.formatExpr(op.left);
+                try fmt.push(' ');
+                try fmt.pushTokenText(op.operator);
+                try fmt.push(' ');
+                try fmt.formatExpr(op.right);
+                if (fmt.flags == .debug_binop) {
+                    try fmt.push(')');
+                }
+            },
+            .suffix_single_question => |s| {
+                try fmt.formatExpr(s.expr);
+                try fmt.push('?');
+            },
+            .tag => |t| {
+                try fmt.pushTokenText(t.token);
+            },
+            .if_then_else => |i| {
+                try fmt.pushAll("if ");
+                try fmt.formatExpr(i.condition);
+                try fmt.push(' ');
+                try fmt.formatExpr(i.then);
+                try fmt.pushAll(" else ");
+                try fmt.formatExpr(i.@"else");
+            },
+            .match => |m| {
+                try fmt.pushAll("match ");
+                try fmt.formatExpr(m.expr);
+                try fmt.pushAll(" {");
+                fmt.curr_indent += 1;
+                for (fmt.ast.store.whenBranchSlice(m.branches)) |b| {
+                    const branch = fmt.ast.store.getBranch(b);
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                    try fmt.formatPattern(branch.pattern);
+                    try fmt.pushAll(" -> ");
+                    try fmt.formatExpr(branch.body);
+                }
+                fmt.curr_indent -= 1;
+                try fmt.newline();
+                try fmt.pushIndent();
+                try fmt.push('}');
+            },
+            .dbg => |d| {
+                try fmt.pushAll("dbg ");
+                try fmt.formatExpr(d.expr);
+            },
+            .block => |b| {
+                try fmt.formatBody(b);
+            },
+            .ellipsis => |_| {
+                try fmt.pushAll("...");
+            },
+            .malformed => {
+                // format nothing for malformed expressions
+            },
+            else => {
+                std.debug.panic("TODO: Handle formatting {s}", .{@tagName(expr)});
+            },
+        }
     }
-}
 
-fn ensureNewline(fmt: *Formatter) void {
-    if (fmt.has_newline) {
-        return;
+    fn formatPattern(fmt: *Formatter, pi: PatternIdx) !void {
+        const pattern = fmt.ast.store.getPattern(pi);
+        switch (pattern) {
+            .ident => |i| {
+                try fmt.formatIdent(i.ident_tok, null);
+            },
+            .tag => |t| {
+                try fmt.formatIdent(t.tag_tok, null);
+                if (t.args.span.len > 0) {
+                    try fmt.push('(');
+                    var i: usize = 0;
+                    for (fmt.ast.store.patternSlice(t.args)) |arg| {
+                        try fmt.formatPattern(arg);
+                        if (i < (t.args.span.len - 1)) {
+                            try fmt.pushAll(", ");
+                        }
+                        i += 1;
+                    }
+                    try fmt.push(')');
+                }
+            },
+            .string => |s| {
+                try fmt.formatExpr(s.expr);
+            },
+            .number => |n| {
+                try fmt.formatIdent(n.number_tok, null);
+            },
+            .record => |r| {
+                try fmt.pushAll("{ ");
+                var i: usize = 0;
+                for (fmt.ast.store.patternRecordFieldSlice(r.fields)) |field_idx| {
+                    const field = fmt.ast.store.getPatternRecordField(field_idx);
+                    if (field.rest) {
+                        try fmt.pushAll("..");
+                        if (field.name != 0) {
+                            try fmt.pushTokenText(field.name);
+                        }
+                        continue;
+                    }
+                    try fmt.pushTokenText(field.name);
+                    if (field.value) |v| {
+                        try fmt.pushAll(": ");
+                        try fmt.formatPattern(v);
+                    }
+                    if (i < (r.fields.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll(" }");
+            },
+            .list => |l| {
+                try fmt.push('[');
+                var i: usize = 0;
+                for (fmt.ast.store.patternSlice(l.patterns)) |p| {
+                    try fmt.formatPattern(p);
+                    if (i < (l.patterns.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.push(']');
+            },
+            .tuple => |t| {
+                try fmt.push('(');
+                var i: usize = 0;
+                for (fmt.ast.store.patternSlice(t.patterns)) |p| {
+                    try fmt.formatPattern(p);
+                    if (i < (t.patterns.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.push(')');
+            },
+            .list_rest => |r| {
+                try fmt.pushAll("..");
+                if (r.name) |n| {
+                    try fmt.pushAll(" as ");
+                    try fmt.pushTokenText(n);
+                }
+            },
+            .underscore => |_| {
+                try fmt.push('_');
+            },
+            .alternatives => |a| {
+                var i: usize = 0;
+                for (fmt.ast.store.patternSlice(a.patterns)) |p| {
+                    try fmt.formatPattern(p);
+                    if (i < (a.patterns.span.len - 1)) {
+                        try fmt.pushAll(" | ");
+                    }
+                    i += 1;
+                }
+            },
+            .malformed => {
+                // format nothing for malformed patterns
+            },
+        }
     }
-    fmt.newline();
-}
 
-fn newline(fmt: *Formatter) void {
-    fmt.push('\n');
-}
+    fn formatExposedItem(fmt: *Formatter, idx: IR.NodeStore.ExposedItemIdx) !void {
+        const item = fmt.ast.store.getExposedItem(idx);
+        switch (item) {
+            .lower_ident => |i| {
+                try fmt.pushTokenText(i.ident);
+                if (i.as) |a| {
+                    try fmt.pushAll(" as ");
+                    try fmt.pushTokenText(a);
+                }
+            },
+            .upper_ident => |i| {
+                try fmt.pushTokenText(i.ident);
+                if (i.as) |a| {
+                    try fmt.pushAll(" as ");
+                    try fmt.pushTokenText(a);
+                }
+            },
+            .upper_ident_star => |i| {
+                try fmt.pushTokenText(i.ident);
+                try fmt.pushAll(".*");
+            },
+        }
+    }
 
-fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
-    for (fmt.ast.tokens.tokens.items[region.start..region.end]) |t| {
-        switch (t.tag) {
-            .Newline => {
-                return true;
+    fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !FormattedOutput {
+        const header = fmt.ast.store.getHeader(hi);
+        switch (header) {
+            .app => |a| {
+                try fmt.pushAll("app [");
+                // Format provides
+                var i: usize = 0;
+                for (fmt.ast.store.exposedItemSlice(a.provides)) |p| {
+                    try fmt.formatExposedItem(p);
+                    if (i < a.provides.span.len - 1) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.pushAll("] { ");
+                try fmt.pushTokenText(a.platform_name);
+                try fmt.pushAll(": platform ");
+                try fmt.formatExpr(a.platform);
+                if (a.packages.span.len > 0) {
+                    try fmt.push(',');
+                }
+                i = 0;
+                for (fmt.ast.store.recordFieldSlice(a.packages)) |package| {
+                    const field = fmt.ast.store.getRecordField(package);
+                    try fmt.pushTokenText(field.name);
+                    if (field.value) |v| {
+                        try fmt.pushAll(": ");
+                        try fmt.formatExpr(v);
+                    }
+                    if (i < a.packages.span.len) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll(" }");
+                try fmt.newline();
+                return FormattedOutput.something_formatted;
+            },
+            .module => |m| {
+                try fmt.pushAll("module [");
+                var i: usize = 0;
+                for (fmt.ast.store.exposedItemSlice(m.exposes)) |p| {
+                    try fmt.formatExposedItem(p);
+                    i += 1;
+                    if (i < m.exposes.span.len) {
+                        try fmt.pushAll(", ");
+                    }
+                }
+                try fmt.push(']');
+                try fmt.newline();
+                return FormattedOutput.something_formatted;
+            },
+            .malformed => {
+                // we have a malformed header... don't output anything as no header was parsed
+                return FormattedOutput.nothing_formatted;
+            },
+            else => {
+                std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});
+            },
+        }
+    }
+
+    fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) !void {
+        if (body.statements.span.len > 1) {
+            fmt.curr_indent += 1;
+            try fmt.push('{');
+            for (fmt.ast.store.statementSlice(body.statements)) |s| {
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+                _ = try fmt.formatStatement(s);
+            }
+            try fmt.ensureNewline();
+            fmt.curr_indent -= 1;
+            try fmt.pushIndent();
+            try fmt.push('}');
+        } else if (body.statements.span.len == 1) {
+            for (fmt.ast.store.statementSlice(body.statements)) |s| {
+                _ = try fmt.formatStatement(s);
+            }
+        } else {
+            try fmt.pushAll("{}");
+        }
+    }
+
+    fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) !void {
+        const h = fmt.ast.store.getTypeHeader(header);
+        try fmt.pushTokenText(h.name);
+        if (h.args.span.len > 0) {
+            try fmt.push(' ');
+            var i: usize = 0;
+            for (fmt.ast.store.tokenSlice(h.args)) |arg| {
+                try fmt.pushTokenText(arg);
+                if (i < (h.args.span.len - 1)) {
+                    try fmt.push(' ');
+                }
+                i += 1;
+            }
+        }
+    }
+
+    fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) !void {
+        const a = fmt.ast.store.getTypeAnno(anno);
+        switch (a) {
+            .ty_var => |v| {
+                try fmt.pushTokenText(v.tok);
+            },
+            .tag => |t| {
+                try fmt.pushTokenText(t.tok);
+                if (t.args.span.len > 0) {
+                    try fmt.push('(');
+                    var i: usize = 0;
+                    for (fmt.ast.store.typeAnnoSlice(t.args)) |arg| {
+                        try fmt.formatTypeAnno(arg);
+                        if (i < (t.args.span.len - 1)) {
+                            try fmt.pushAll(", ");
+                        }
+                        i += 1;
+                    }
+                    try fmt.push(')');
+                }
+            },
+            .tuple => |t| {
+                try fmt.push('(');
+                var i: usize = 0;
+                for (fmt.ast.store.typeAnnoSlice(t.annos)) |an| {
+                    try fmt.formatTypeAnno(an);
+                    if (i < (t.annos.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.push(')');
+            },
+            .record => |r| {
+                if (r.fields.span.len == 0) {
+                    try fmt.pushAll("{}");
+                    return;
+                }
+                try fmt.pushAll("{ ");
+                var i: usize = 0;
+                for (fmt.ast.store.annoRecordFieldSlice(r.fields)) |idx| {
+                    const field = fmt.ast.store.getAnnoRecordField(idx);
+                    try fmt.pushTokenText(field.name);
+                    try fmt.pushAll(" : ");
+                    try fmt.formatTypeAnno(field.ty);
+                    if (i < (r.fields.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll(" }");
+            },
+            .tag_union => |t| {
+                try fmt.push('[');
+                var i: usize = 0;
+                for (fmt.ast.store.typeAnnoSlice(t.tags)) |tag| {
+                    try fmt.formatTypeAnno(tag);
+                    if (i < (t.tags.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.push(']');
+            },
+            .@"fn" => |f| {
+                var i: usize = 0;
+                for (fmt.ast.store.typeAnnoSlice(f.args)) |idx| {
+                    try fmt.formatTypeAnno(idx);
+                    if (i < (f.args.span.len - 1)) {
+                        try fmt.pushAll(", ");
+                    }
+                    i += 1;
+                }
+                try fmt.pushAll(" -> ");
+                try fmt.formatTypeAnno(f.ret);
+            },
+            .parens => |p| {
+                try fmt.push('(');
+                try fmt.formatTypeAnno(p.anno);
+                try fmt.push(')');
+            },
+            .underscore => |_| {
+                try fmt.push('_');
+            },
+            .malformed => {
+                // format nothing for malformed type annotations
+            },
+        }
+    }
+
+    fn ensureNewline(fmt: *Formatter) !void {
+        if (fmt.has_newline) {
+            return;
+        }
+        try fmt.newline();
+    }
+
+    fn newline(fmt: *Formatter) !void {
+        try fmt.push('\n');
+    }
+
+    fn isRegionMultiline(fmt: *Formatter, region: IR.Region) bool {
+        for (fmt.ast.tokens.tokens.items[region.start..region.end]) |t| {
+            switch (t.tag) {
+                .Newline => {
+                    return true;
+                },
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    const indent = "    ";
+
+    fn push(fmt: *Formatter, c: u8) !void {
+        fmt.has_newline = c == '\n';
+        try fmt.buffer.writer().writeByte(c);
+    }
+
+    fn pushAll(fmt: *Formatter, str: []const u8) !void {
+        if (str.len == 0) {
+            return;
+        }
+        fmt.has_newline = str[str.len - 1] == '\n';
+        try fmt.buffer.writer().writeAll(str);
+    }
+
+    fn pushIndent(fmt: *Formatter) !void {
+        if (fmt.curr_indent == 0) {
+            return;
+        }
+        for (0..fmt.curr_indent) |_| {
+            try fmt.pushAll(indent);
+        }
+    }
+
+    fn pushTokenText(fmt: *Formatter, ti: TokenIdx) !void {
+        const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
+        const region = fmt.ast.tokens.resolve(ti);
+        var start = region.start.offset;
+        switch (tag) {
+            .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
+                start += 1;
             },
             else => {},
         }
+
+        const text = fmt.ast.source[start..region.end.offset];
+        try fmt.pushAll(text);
     }
-    return false;
-}
-
-const indent = "    ";
-
-fn push(fmt: *Formatter, c: u8) void {
-    fmt.has_newline = c == '\n';
-    fmt.buffer.append(fmt.gpa, c) catch |err| exitOnOom(err);
-}
-
-fn pushAll(fmt: *Formatter, str: []const u8) void {
-    if (str.len == 0) {
-        return;
-    }
-    fmt.has_newline = str[str.len - 1] == '\n';
-    fmt.buffer.appendSlice(fmt.gpa, str) catch |err| exitOnOom(err);
-}
-
-fn pushIndent(fmt: *Formatter) void {
-    if (fmt.curr_indent == 0) {
-        return;
-    }
-    for (0..fmt.curr_indent) |_| {
-        fmt.pushAll(indent);
-    }
-}
-
-fn pushTokenText(fmt: *Formatter, ti: TokenIdx) void {
-    const tag = fmt.ast.tokens.tokens.items(.tag)[ti];
-    const region = fmt.ast.tokens.resolve(ti);
-    var start = region.start.offset;
-    switch (tag) {
-        .NoSpaceDotLowerIdent, .NoSpaceDotUpperIdent => {
-            start += 1;
-        },
-        else => {},
-    }
-
-    const text = fmt.ast.source[start..region.end.offset];
-    fmt.pushAll(text);
-}
+};
 
 fn moduleFmtsSame(source: []const u8) !void {
     const gpa = std.testing.allocator;
@@ -821,13 +816,11 @@ fn moduleFmtsSame(source: []const u8) !void {
 
     try std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors);
 
-    var formatter = Formatter.init(parse_ast);
-    defer formatter.deinit();
+    var result = std.ArrayList(u8).init(gpa);
+    defer result.deinit();
+    try formatAst(parse_ast, result.writer().any());
 
-    const result = formatter.formatFile();
-    defer gpa.free(result);
-
-    try std.testing.expectEqualStrings(source, result);
+    try std.testing.expectEqualStrings(source, result.items);
 }
 
 const tokenize = @import("check/parse/tokenize.zig");
@@ -871,16 +864,14 @@ fn exprFmtsTo(source: []const u8, expected: []const u8, flags: FormatFlags) !voi
         std.debug.panic("Test failed with parse errors", .{});
     };
 
-    var formatter = Formatter.init(parse_ast);
+    var fmt_result = std.ArrayList(u8).init(gpa);
+    defer fmt_result.deinit();
+    var formatter = Formatter.init(parse_ast, fmt_result.writer().any());
     formatter.flags = flags;
-    defer formatter.deinit();
+    try formatter.formatExpr(expr);
+    try formatter.flush();
 
-    formatter.formatExpr(expr);
-
-    const fmt_result = formatter.buffer.toOwnedSlice(gpa) catch |err| exitOnOom(err);
-    defer gpa.free(fmt_result);
-
-    try std.testing.expectEqualStrings(expected, fmt_result);
+    try std.testing.expectEqualStrings(expected, fmt_result.items);
 }
 
 fn moduleFmtsTo(source: []const u8, to: []const u8) !void {
@@ -932,15 +923,13 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         return error.ParseFailed;
     };
 
-    var formatter = init(parse_ast);
-    defer formatter.deinit();
-
-    const formatted = formatter.formatFile();
+    var result = std.ArrayList(u8).init(gpa);
+    try formatAst(parse_ast, result.writer().any());
 
     if (debug) {
-        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{formatted});
+        std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
     }
-    return formatted;
+    return result.toOwnedSlice() catch |err| exitOnOom(err);
 }
 
 test "Hello world" {
