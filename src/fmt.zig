@@ -126,7 +126,7 @@ const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
 /// Formatter for the roc parse ast.
 const Formatter = struct {
     ast: IR,
-    buffer: std.io.BufferedWriter(4096, std.io.AnyWriter),
+    buffer: std.io.BufferedWriter(16 * 1024, std.io.AnyWriter),
     curr_indent: u32 = 0,
     flags: FormatFlags = .no_debug,
     // This starts true since beginning of file is considered a newline.
@@ -136,7 +136,7 @@ const Formatter = struct {
     fn init(ast: IR, writer: std.io.AnyWriter) Formatter {
         return .{
             .ast = ast,
-            .buffer = std.io.bufferedWriter(writer),
+            .buffer = .{ .unbuffered_writer = writer },
         };
     }
 
