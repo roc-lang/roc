@@ -188,9 +188,6 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
 /// package_entry :: LowerIdent Comma "platform"? String Comma
 /// app_header :: KwApp Newline* OpenSquare provides_entry* CloseSquare OpenCurly package_entry CloseCurly
 pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     switch (self.peek()) {
         .KwApp => {
             return self.parseAppHeader();
