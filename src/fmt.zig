@@ -27,7 +27,11 @@ const Formatter = @This();
 
 /// Creates a new Formatter for the given parse IR.
 pub fn init(ast: IR) Formatter {
-    return .{ .ast = ast, .gpa = ast.store.gpa };
+    return .{
+        .ast = ast,
+        .gpa = ast.store.gpa,
+        .buffer = std.ArrayListUnmanaged(u8).initCapacity(ast.store.gpa, ast.tokens.tokens.len * 15) catch |err| exitOnOom(err),
+    };
 }
 
 /// Deinits all data owned by the formatter object.
@@ -47,23 +51,13 @@ pub fn resetWith(fmt: *Formatter, ast: IR) void {
 pub fn formatFile(fmt: *Formatter) []const u8 {
     fmt.ast.store.emptyScratch();
     const file = fmt.ast.store.getFile();
-    const newline_tok = fmt.ast.tokens.tokens.get(0);
-    if (newline_tok.tag == .Newline) {
-        const start = newline_tok.offset;
-        const end = start + newline_tok.extra.length;
-        if (end > start) {
-            fmt.pushAll("#");
-            fmt.pushAll(fmt.ast.source[start..end]);
-            fmt.ensureNewline();
-        }
-    }
+    const header_region = fmt.ast.store.nodes.items.items(.region)[file.header.id];
+    fmt.flushCommentsBefore(header_region.start);
     fmt.formatHeader(file.header);
     var newline_behavior: NewlineBehavior = .extra_newline_needed;
     for (fmt.ast.store.statementSlice(file.statements)) |s| {
-        fmt.ensureNewline();
-        if (newline_behavior == .extra_newline_needed) {
-            fmt.newline();
-        }
+        const region = fmt.ast.store.nodes.items.items(.region)[s.id];
+        fmt.flushCommentsBefore(region.start);
         newline_behavior = fmt.formatStatement(s);
     }
     return fmt.buffer.toOwnedSlice(fmt.gpa) catch |err| exitOnOom(err);
@@ -77,13 +71,11 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
         .decl => |d| {
             _ = fmt.formatPattern(d.pattern);
             fmt.buffer.appendSlice(fmt.gpa, " = ") catch |err| exitOnOom(err);
-            const expr_region = fmt.formatExpr(d.body);
-            fmt.flushCommentsAfter(expr_region.end);
+            _ = fmt.formatExpr(d.body);
             return .extra_newline_needed;
         },
         .expr => |e| {
-            const expr_region = fmt.formatExpr(e.expr);
-            fmt.flushCommentsAfter(expr_region.end);
+            _ = fmt.formatExpr(e.expr);
             return .extra_newline_needed;
         },
         .import => |i| {
@@ -133,21 +125,18 @@ fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
                     fmt.push(braces.end());
                 }
             }
-            fmt.flushCommentsAfter(i.region.end);
             return .extra_newline_needed;
         },
         .type_decl => |d| {
             fmt.formatTypeHeader(d.header);
             fmt.pushAll(" : ");
-            const anno_region = fmt.formatTypeAnno(d.anno);
-            fmt.flushCommentsAfter(anno_region.end);
+            _ = fmt.formatTypeAnno(d.anno);
             return .extra_newline_needed;
         },
         .type_anno => |t| {
             fmt.pushTokenText(t.name);
             fmt.pushAll(" : ");
-            const anno_region = fmt.formatTypeAnno(t.anno);
-            fmt.flushCommentsAfter(anno_region.end);
+            _ = fmt.formatTypeAnno(t.anno);
             return .no_extra_newline;
         },
         .expect => |e| {
@@ -532,12 +521,10 @@ fn formatHeader(fmt: *Formatter, hi: HeaderIdx) void {
                 i += 1;
             }
             fmt.pushAll(" }");
-            fmt.newline();
         },
         .module => |m| {
             fmt.pushAll("module ");
             fmt.formatCollection(m.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(m.exposes), Formatter.formatExposedItem);
-            fmt.newline();
         },
         else => {
             std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});
@@ -550,8 +537,9 @@ fn formatBody(fmt: *Formatter, body: IR.NodeStore.Body) void {
     if (multiline or body.statements.span.len > 1) {
         fmt.curr_indent += 1;
         fmt.buffer.append(fmt.gpa, '{') catch |err| exitOnOom(err);
-        fmt.flushCommentsAfter(body.region.start);
         for (fmt.ast.store.statementSlice(body.statements)) |s| {
+            const region = fmt.ast.store.nodes.items.items(.region)[s.id];
+            fmt.flushCommentsBefore(region.start);
             fmt.ensureNewline();
             fmt.pushIndent();
             _ = fmt.formatStatement(s);
@@ -679,18 +667,41 @@ fn flushCommentsBefore(fmt: *Formatter, tokenIdx: TokenIdx) void {
     if (tags[prevNewline] != .Newline) {
         return;
     }
-    const newline_tok = fmt.ast.tokens.tokens.get(prevNewline);
-    const start = newline_tok.offset;
-    const end = start + newline_tok.extra.length;
-    if (end > start) {
-        fmt.pushAll(" #");
-        fmt.pushAll(fmt.ast.source[start..end]);
+    var first = prevNewline;
+    // Go back as long as we see newlines
+    while (tags[first] == .Newline) {
+        if (first == 0) {
+            break;
+        }
+        if (tags[first - 1] == .Newline) {
+            first -= 1;
+        } else {
+            break;
+        }
+    }
+    var i = first;
+    // Now print them in order
+    while (i <= prevNewline) {
+        const newline_tok = fmt.ast.tokens.tokens.get(i);
+        const start = newline_tok.offset;
+        const end = start + newline_tok.extra.length;
+        if (end > start) {
+            if (i == 0 or i > first) {
+                fmt.pushIndent();
+                fmt.push('#');
+            } else {
+                fmt.pushAll(" #");
+            }
+            fmt.pushAll(fmt.ast.source[start..end]);
+        }
+        fmt.newline();
+        i += 1;
     }
 }
 
 fn flushCommentsAfter(fmt: *Formatter, tokenIdx: TokenIdx) void {
-    var nextNewline = tokenIdx + 1;
     const tags = fmt.ast.tokens.tokens.items(.tag);
+    var nextNewline = tokenIdx + 1;
     if (nextNewline >= tags.len) {
         return;
     }
@@ -700,15 +711,15 @@ fn flushCommentsAfter(fmt: *Formatter, tokenIdx: TokenIdx) void {
     if (nextNewline >= tags.len) {
         return;
     }
-    if (tags[nextNewline] != .Newline) {
-        return;
-    }
-    const newline_tok = fmt.ast.tokens.tokens.get(nextNewline);
-    const start = newline_tok.offset;
-    const end = start + newline_tok.extra.length;
-    if (end > start) {
-        fmt.pushAll(" #");
-        fmt.pushAll(fmt.ast.source[start..end]);
+    while (nextNewline < tags.len and tags[nextNewline] == .Newline) {
+        const newline_tok = fmt.ast.tokens.tokens.get(nextNewline);
+        const start = newline_tok.offset;
+        const end = start + newline_tok.extra.length;
+        if (end > start) {
+            fmt.pushAll(" #");
+            fmt.pushAll(fmt.ast.source[start..end]);
+        }
+        nextNewline += 1;
     }
 }
 
@@ -923,29 +934,16 @@ test "Hello world" {
 
 test "Hello world with block" {
     try moduleFmtsSame(
+        \\# Hello world!
+        \\
+        \\# Multiline comments?
         \\app [main!] { pf: platform "../basic-cli/platform.roc" }
         \\
         \\import pf.Stdout
         \\
         \\main! = |_| {
         \\    world = "World"
-        \\    Stdout.line!("Hello, world!")
-        \\}
-    );
-}
-
-test "Hello world no newlines block" {
-    try moduleFmtsTo(
-        \\app [main!] { pf: platform "../basic-cli/platform.roc" }
-        \\import pf.Stdout
-        \\main! = |_| {world = "World" Stdout.line!("Hello, world!")}
-    ,
-        \\app [main!] { pf: platform "../basic-cli/platform.roc" }
-        \\
-        \\import pf.Stdout
-        \\
-        \\main! = |_| {
-        \\    world = "World"
+        \\    # Hello
         \\    Stdout.line!("Hello, world!")
         \\}
     );
@@ -961,22 +959,14 @@ test "Plain module" {
         \\
         \\world = "World"
     );
-    try moduleFmtsTo(
+    try moduleFmtsSame(
         \\module [hello!, world]
         \\import pf.Stdout
         \\hello! = Stdout.line!("Hello")
-        \\world = "World"
-    ,
-        \\module [hello!, world]
-        \\
-        \\import pf.Stdout
-        \\
-        \\hello! = Stdout.line!("Hello")
-        \\
         \\world = "World"
     );
 }
-
+//
 test "Syntax grab bag" {
     try moduleFmtsSame(
         \\# This is a module comment!
@@ -1095,7 +1085,7 @@ test "Syntax grab bag" {
         \\}
     );
 }
-
+//
 test "First BinOp" {
     const expr = "1 + 2";
     try exprFmtsSame(expr, .no_debug);

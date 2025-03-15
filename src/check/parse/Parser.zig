@@ -326,6 +326,8 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_close_curly, start);
     }
+    self.advanceOne(); // Advance past CloseCurly
+    const end = self.pos;
     const packages = self.store.recordFieldSpanFrom(fields_scratch_top);
     self.advance();
 
@@ -337,7 +339,7 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
                     .platform_name = pn,
                     .provides = provides,
                     .packages = packages,
-                    .region = .{ .start = 0, .end = 0 },
+                    .region = .{ .start = start, .end = end },
                 },
             };
             const idx = self.store.addHeader(header);

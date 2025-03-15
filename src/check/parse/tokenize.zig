@@ -438,22 +438,20 @@ pub const Cursor = struct {
                 self.pos += 1;
                 sawNewline = true;
                 indent = 0;
+                return indent;
             } else if (b == '\r') {
                 self.pos += 1;
                 sawNewline = true;
                 indent = 0;
                 if (self.pos < self.buf.len and self.buf[self.pos] == '\n') {
                     self.pos += 1;
+                    return indent;
                 } else {
                     self.pushMessageHere(.MisplacedCarriageReturn);
                 }
             } else if (b == '#') {
                 self.pos += 1;
                 const comment_start = self.pos;
-                // TODO: Add an interned comment here.  Should this only be if we are trying to format???
-                // I think I'll put the comment in a []u8 buffer and when I hit a newline during tokenization
-                // I'll look for it and if it is there we'll intern it and store it in the extra of the newline token?
-                // Or do I only handle this in formatting?
                 while (self.pos < self.buf.len and self.buf[self.pos] != '\n' and self.buf[self.pos] != '\r') {
                     self.pos += 1;
                 }
@@ -464,9 +462,6 @@ pub const Cursor = struct {
             } else {
                 break;
             }
-        }
-        if (sawNewline) {
-            return indent;
         }
         return null;
     }
@@ -875,9 +870,6 @@ pub const Tokenizer = struct {
             switch (b) {
                 // Whitespace & control characters
                 0...32, '#' => {
-                    if (b == '#') {
-                        std.debug.print("Saw # @ {d}\n", .{self.cursor.pos});
-                    }
                     if (self.cursor.chompTrivia()) |_| {
                         self.output.pushNewline(self.cursor.popComment());
                     }
