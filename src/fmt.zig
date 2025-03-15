@@ -52,6 +52,9 @@ pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 }
 
 fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+    const format_file_frame = tracy.namedFrame("format_file");
+    defer format_file_frame.end();
+
     // Skip non ".roc" files.
     if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
         return false;
