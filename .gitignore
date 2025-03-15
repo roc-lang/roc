@@ -128,3 +128,8 @@ crates/cli/tests/test-projects/test-platform-effects-zig/glue
 crates/cli/tests/test-projects/test-platform-simple-zig/glue
 
 src/fuzz-corpus/
+
+# Profiling data
+perf.data
+perf.data.old
+profile.json
