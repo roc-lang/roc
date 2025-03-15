@@ -403,9 +403,6 @@ pub fn parseExposedItem(self: *Parser) IR.NodeStore.ExposedItemIdx {
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
 pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     switch (self.peek()) {
         .KwImport => {
             const start = self.pos;
@@ -818,9 +815,6 @@ pub fn parseExpr(self: *Parser) IR.NodeStore.ExprIdx {
 
 /// todo
 pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     const start = self.pos;
     var expr: ?IR.NodeStore.ExprIdx = null;
     switch (self.peek()) {

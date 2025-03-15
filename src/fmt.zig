@@ -148,9 +148,6 @@ pub fn formatFile(fmt: *Formatter) []const u8 {
 const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
 
 fn formatStatement(fmt: *Formatter, si: StatementIdx) NewlineBehavior {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     const statement = fmt.ast.store.getStatement(si);
     switch (statement) {
         .decl => |d| {
@@ -226,9 +223,6 @@ fn formatIdent(fmt: *Formatter, ident: TokenIdx, qualifier: ?TokenIdx) void {
 }
 
 fn formatExpr(fmt: *Formatter, ei: ExprIdx) void {
-    const trace = tracy.trace(@src());
-    defer trace.end();
-
     const expr = fmt.ast.store.getExpr(ei);
     switch (expr) {
         .apply => |a| {
