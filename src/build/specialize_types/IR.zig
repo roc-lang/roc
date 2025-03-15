@@ -1,4 +1,22 @@
-//! TODO top comment that explains purpose of file
+//! The intermediate representation (IR) for a Roc module that has been monomorphized.
+//!
+//! Monomorphization, also known as type specialization, is the process of creating a distinct copy
+//! of each instance of a generic function or value based on all specific usages in a program.
+//! For example; a function with the type `Num a -> Num a` may only be called in the program with a
+//! `U64` and a `I64`. Specialization will then create two functions with the types `U64 -> U64` and
+//! `I64 -> I64`.
+//! This trades off some compile time for a much better runtime performance, since we don't need to
+//! look up which implementation to call at runtime (AKA dynamic dispatch).
+//!
+//! Doing type specialization as the first build stage helps simplify compilation of lambda sets, or
+//! values captured by closures.
+//!
+//! The values in this module represent all data for a single type-specialized module, except for
+//! interned data which resides in the `ModuleEnv`. This IR has a very similar structure to the next
+//! stage's IR (`lift_functions`), but not quite the same. For now, we have designed our compiler 
+//! stages to be simple and correct at the cost of not deduplicating similar code. In the future,
+//! we may decide to combine the IRs of some build stages to avoid needing to convert lots of 
+//! equivalent data.
 
 const std = @import("std");
 const base = @import("../../base.zig");
@@ -57,7 +75,7 @@ pub fn deinit(self: *Self) void {
     self.match_branches.deinit(self.env.gpa);
 }
 
-/// Represents a concrete (no type variables,...) Roc type e.g. `U64`, `Str`, `List(U64)`
+/// Represents a concrete (no type variables,...) Roc type e.g. `U64`, `Str`, `List(U64)`.
 pub const Type = union(enum) {
     /// e.g. Int, Bool, Str
     primitive: types_module.Primitive,
@@ -224,7 +242,7 @@ pub const StructDestruct = struct {
     pub const Slice = List.Slice;
 };
 
-/// Represents a pattern used in pattern matching e.g. `Ok x` as part of a match branch.
+/// Represents a pattern used in pattern matching e.g. `Ok x` as part of a match branch
 pub const Pattern = union(enum) {
     /// e.g. `x`
     identifier: Ident.Idx,
@@ -248,7 +266,7 @@ pub const Pattern = union(enum) {
     /// e.g. `{x, y}` in `{x, y} -> Point(x, y)`
     struct_destructure: struct {
         struct_type: Type.Idx,
-        /// e.g. for `{ x, y: 123 } -> ...` there are two StructDestruct; one for x and one for y.
+        /// e.g. for `{ x, y: 123 } -> ...` there are two StructDestruct; one for x and one for y
         destructs: StructDestruct.Slice,
         /// e.g. `..` in `{x, y, ..}`
         opt_spread: ?Pattern.Typed,
