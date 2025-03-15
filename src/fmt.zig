@@ -150,9 +150,6 @@ const Formatter = struct {
     }
 
     fn formatStatement(fmt: *Formatter, si: StatementIdx) !NewlineBehavior {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
         const statement = fmt.ast.store.getStatement(si);
         switch (statement) {
             .decl => |d| {
@@ -228,9 +225,6 @@ const Formatter = struct {
     }
 
     fn formatExpr(fmt: *Formatter, ei: ExprIdx) anyerror!void {
-        const trace = tracy.trace(@src());
-        defer trace.end();
-
         const expr = fmt.ast.store.getExpr(ei);
         switch (expr) {
             .apply => |a| {
