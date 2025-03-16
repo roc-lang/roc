@@ -122,7 +122,7 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
 fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
-    // var timer = try std.time.Timer.start();
+    var timer = try std.time.Timer.start();
     var count: usize = 0;
     if (args.len > 0) {
         for (args) |arg| {
@@ -132,8 +132,8 @@ fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
         count = try fmt.formatPath(gpa, std.fs.cwd(), "main.roc");
     }
 
-    // const elapsed = timer.read() / std.time.ns_per_ms;
-    // try std.io.getStdOut().writer().print("Successfully formatted {} files in {} ms.\n", .{ count, elapsed });
+    const elapsed = timer.read() / std.time.ns_per_ms;
+    try std.io.getStdOut().writer().print("Successfully formatted {} files in {} ms.\n", .{ count, elapsed });
 }
 
 fn rocVersion(gpa: Allocator, args: []const []const u8) !void {
