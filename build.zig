@@ -54,20 +54,7 @@ pub fn build(b: *std.Build) void {
     // add main roc exe
     const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
     roc_exe.root_module.addOptions("build_options", build_options);
-    if (no_bin) {
-        roc_step.dependOn(&roc_exe.step);
-        b.getInstallStep().dependOn(&roc_exe.step);
-    } else {
-        const install_roc = b.addInstallArtifact(roc_exe, .{});
-        b.getInstallStep().dependOn(&install_roc.step);
-        roc_step.dependOn(&install_roc.step);
-        const run_roc = b.addRunArtifact(roc_exe);
-        run_roc.step.dependOn(&install_roc.step);
-        if (b.args) |args| {
-            run_roc.addArgs(args);
-        }
-        run_step.dependOn(&run_roc.step);
-    }
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -79,20 +66,7 @@ pub fn build(b: *std.Build) void {
     });
     snapshot_exe.root_module.addOptions("build_options", build_options);
     add_tracy(b, snapshot_exe, target, false, tracy);
-    if (no_bin) {
-        snapshot_step.dependOn(&snapshot_exe.step);
-        b.getInstallStep().dependOn(&snapshot_exe.step);
-    } else {
-        const install_snapshot = b.addInstallArtifact(snapshot_exe, .{});
-        b.getInstallStep().dependOn(&install_snapshot.step);
-        snapshot_step.dependOn(&install_snapshot.step);
-        const run_snapshot = b.addRunArtifact(snapshot_exe);
-        run_snapshot.step.dependOn(&install_snapshot.step);
-        if (b.args) |args| {
-            run_snapshot.addArgs(args);
-        }
-        snapshot_step.dependOn(&run_snapshot.step);
-    }
+    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -194,27 +168,7 @@ fn add_fuzz_target(
         .link_libc = true,
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
-    if (no_bin) {
-        repro_step.dependOn(&repro_exe.step);
-        b.getInstallStep().dependOn(&repro_exe.step);
-    } else {
-        const install_repro = b.addInstallArtifact(repro_exe, .{});
-        b.getInstallStep().dependOn(&install_repro.step);
-        const run_repro = b.addRunArtifact(repro_exe);
-        run_repro.step.dependOn(&install_repro.step);
-        if (b.args) |args| {
-            run_repro.addArgs(args);
-        }
-        repro_step.dependOn(&run_repro.step);
-        b.installArtifact(repro_exe);
-
-        const run_cmd = b.addRunArtifact(repro_exe);
-        run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-        repro_step.dependOn(&run_cmd.step);
-    }
+    install_and_run(b, no_bin, repro_exe, repro_step, repro_step);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
@@ -261,6 +215,34 @@ fn addMainExe(
 
     add_tracy(b, exe, target, enable_llvm, tracy);
     return exe;
+}
+
+fn install_and_run(
+    b: *std.Build,
+    no_bin: bool,
+    exe: *Step.Compile,
+    build_step: *Step,
+    run_step: *Step,
+) void {
+    if (run_step != build_step) {
+        run_step.dependOn(build_step);
+    }
+    if (no_bin) {
+        // No build, just build, don't actually install or run.
+        build_step.dependOn(&exe.step);
+        b.getInstallStep().dependOn(&exe.step);
+    } else {
+        const install = b.addInstallArtifact(exe, .{});
+        build_step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&install.step);
+
+        const run = b.addRunArtifact(exe);
+        run.step.dependOn(&install.step);
+        if (b.args) |args| {
+            run.addArgs(args);
+        }
+        run_step.dependOn(&run.step);
+    }
 }
 
 fn add_tracy(
