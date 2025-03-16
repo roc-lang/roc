@@ -52,8 +52,7 @@ pub fn build(b: *std.Build) void {
     build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
 
     // add main roc exe
-    const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
-    roc_exe.root_module.addOptions("build_options", build_options);
+    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
     install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
@@ -64,8 +63,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    snapshot_exe.root_module.addOptions("build_options", build_options);
-    add_tracy(b, snapshot_exe, target, false, tracy);
+    add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     const all_tests = b.addTest(.{
@@ -154,8 +152,7 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
-    fuzz_obj.root_module.addOptions("build_options", build_options);
-    add_tracy(b, fuzz_obj, target, false, tracy);
+    add_tracy(b, build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
@@ -184,6 +181,7 @@ fn add_fuzz_target(
 
 fn addMainExe(
     b: *std.Build,
+    build_options: *Step.Options,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     strip: ?bool,
@@ -213,7 +211,7 @@ fn addMainExe(
         try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
-    add_tracy(b, exe, target, enable_llvm, tracy);
+    add_tracy(b, build_options, exe, target, enable_llvm, tracy);
     return exe;
 }
 
@@ -247,11 +245,13 @@ fn install_and_run(
 
 fn add_tracy(
     b: *std.Build,
+    build_options: *Step.Options,
     base: *Step.Compile,
     target: ResolvedTarget,
     links_llvm: bool,
     tracy: ?[]const u8,
 ) void {
+    base.root_module.addOptions("build_options", build_options);
     if (tracy) |tracy_path| {
         const client_cpp = b.pathJoin(
             &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
