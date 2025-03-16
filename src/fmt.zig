@@ -63,7 +63,11 @@ fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
     const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
     defer input_file.close();
 
-    const contents = try input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    const contents = try blk: {
+        const trace = tracy.traceNamed(@src(), "readAllAlloc");
+        defer trace.end();
+        break :blk input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    };
     defer gpa.free(contents);
 
     var module_env = base.ModuleEnv.init(gpa);
