@@ -52,20 +52,23 @@ pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 }
 
 fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
-    const format_file_frame = tracy.namedFrame("format_file");
-    defer format_file_frame.end();
+    const trace = tracy.trace(@src());
+    defer trace.end();
 
     // Skip non ".roc" files.
     if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
         return false;
     }
 
+    const format_file_frame = tracy.namedFrame("format_file");
+    defer format_file_frame.end();
+
     const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
     defer input_file.close();
 
     const contents = try blk: {
-        const trace = tracy.traceNamed(@src(), "readAllAlloc");
-        defer trace.end();
+        const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
+        defer blk_trace.end();
         break :blk input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
     };
     defer gpa.free(contents);
