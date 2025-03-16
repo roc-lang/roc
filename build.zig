@@ -57,14 +57,15 @@ pub fn build(b: *std.Build) void {
         roc_step.dependOn(&roc_exe.step);
         b.getInstallStep().dependOn(&roc_exe.step);
     } else {
-        roc_step.dependOn(&b.addInstallArtifact(roc_exe, .{}).step);
-        b.installArtifact(roc_exe);
-        const run_cmd = b.addRunArtifact(roc_exe);
-        run_cmd.step.dependOn(b.getInstallStep());
+        const install_roc = b.addInstallArtifact(roc_exe, .{});
+        b.getInstallStep().dependOn(&install_roc.step);
+        roc_step.dependOn(&install_roc.step);
+        const run_roc = b.addRunArtifact(roc_exe);
+        run_roc.step.dependOn(&install_roc.step);
         if (b.args) |args| {
-            run_cmd.addArgs(args);
+            run_roc.addArgs(args);
         }
-        run_step.dependOn(&run_cmd.step);
+        run_step.dependOn(&run_roc.step);
     }
 
     // Add snapshot tool
@@ -77,13 +78,14 @@ pub fn build(b: *std.Build) void {
     });
     snapshot_exe.root_module.addOptions("build_options", build_options);
     if (no_bin) {
+        snapshot_step.dependOn(&snapshot_exe.step);
         b.getInstallStep().dependOn(&snapshot_exe.step);
     } else {
-        b.installArtifact(snapshot_exe);
+        const install_snapshot = b.addInstallArtifact(snapshot_exe, .{});
+        b.getInstallStep().dependOn(&install_snapshot.step);
+        snapshot_step.dependOn(&install_snapshot.step);
         const run_snapshot = b.addRunArtifact(snapshot_exe);
-
-        // Add a step to run the snapshot tool
-        run_snapshot.step.dependOn(b.getInstallStep());
+        run_snapshot.step.dependOn(&install_snapshot.step);
         if (b.args) |args| {
             run_snapshot.addArgs(args);
         }
@@ -178,7 +180,7 @@ fn add_fuzz_target(
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
-    const run_repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
+    const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
@@ -188,8 +190,17 @@ fn add_fuzz_target(
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
     if (no_bin) {
+        repro_step.dependOn(&repro_exe.step);
         b.getInstallStep().dependOn(&repro_exe.step);
     } else {
+        const install_repro = b.addInstallArtifact(repro_exe, .{});
+        b.getInstallStep().dependOn(&install_repro.step);
+        const run_repro = b.addRunArtifact(repro_exe);
+        run_repro.step.dependOn(&install_repro.step);
+        if (b.args) |args| {
+            run_repro.addArgs(args);
+        }
+        repro_step.dependOn(&run_repro.step);
         b.installArtifact(repro_exe);
 
         const run_cmd = b.addRunArtifact(repro_exe);
@@ -197,7 +208,7 @@ fn add_fuzz_target(
         if (b.args) |args| {
             run_cmd.addArgs(args);
         }
-        run_repro_step.dependOn(&run_cmd.step);
+        repro_step.dependOn(&run_cmd.step);
     }
 
     if (fuzz and build_afl and !no_bin) {
@@ -206,7 +217,9 @@ fn add_fuzz_target(
 
         const afl = b.lazyImport(@This(), "afl_kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
-        fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
+        const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
+        fuzz_step.dependOn(&install_fuzz.step);
+        b.getInstallStep().dependOn(&install_fuzz.step);
     }
 }
 
