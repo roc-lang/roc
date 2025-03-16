@@ -78,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     snapshot_exe.root_module.addOptions("build_options", build_options);
+    add_tracy(b, snapshot_exe, target, false, tracy);
     if (no_bin) {
         snapshot_step.dependOn(&snapshot_exe.step);
         b.getInstallStep().dependOn(&snapshot_exe.step);
@@ -151,6 +152,7 @@ pub fn build(b: *std.Build) void {
             target,
             optimize,
             build_options,
+            tracy,
             name,
         );
     }
@@ -165,6 +167,7 @@ fn add_fuzz_target(
     target: ResolvedTarget,
     optimize: OptimizeMode,
     build_options: *Step.Options,
+    tracy: ?[]const u8,
     name: []const u8,
 ) void {
     // We always include the repro scripts (no dependencies).
@@ -178,6 +181,7 @@ fn add_fuzz_target(
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
     fuzz_obj.root_module.addOptions("build_options", build_options);
+    add_tracy(b, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
@@ -255,6 +259,17 @@ fn addMainExe(
         try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
+    add_tracy(b, exe, target, enable_llvm, tracy);
+    return exe;
+}
+
+fn add_tracy(
+    b: *std.Build,
+    base: *Step.Compile,
+    target: ResolvedTarget,
+    links_llvm: bool,
+    tracy: ?[]const u8,
+) void {
     if (tracy) |tracy_path| {
         const client_cpp = b.pathJoin(
             &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
@@ -266,20 +281,18 @@ fn addMainExe(
         else
             &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
 
-        exe.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
-        exe.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
-        if (!enable_llvm) {
-            exe.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
+        base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
+        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        if (!links_llvm) {
+            base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
         }
-        exe.root_module.link_libc = true;
+        base.root_module.link_libc = true;
 
         if (target.result.os.tag == .windows) {
-            exe.root_module.linkSystemLibrary("dbghelp", .{});
-            exe.root_module.linkSystemLibrary("ws2_32", .{});
+            base.root_module.linkSystemLibrary("dbghelp", .{});
+            base.root_module.linkSystemLibrary("ws2_32", .{});
         }
     }
-
-    return exe;
 }
 
 const LlvmPaths = struct {
