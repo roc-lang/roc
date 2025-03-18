@@ -10,9 +10,13 @@ const std = @import("std");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 
+/// Whether or not tracy profiling is enabled.
 pub const enable = if (builtin.is_test) false else build_options.enable_tracy;
+/// Whether recording allocations and frees with tracy is enabled.
 pub const enable_allocation = enable and build_options.enable_tracy_allocation;
+/// Whether sampling callstacks at each zone and allocatino is enabled (expensive).
 pub const enable_callstack = enable and build_options.enable_tracy_callstack;
+/// How deep of a callstack to record.
 pub const callstack_depth = if (enable_callstack and build_options.tracy_callstack_depth > 0) build_options.tracy_callstack_depth else 10;
 
 const ___tracy_c_zone_context = extern struct {
@@ -40,6 +44,8 @@ const ___tracy_c_zone_context = extern struct {
     }
 };
 
+/// The tracy context object for tracking zones.
+/// Make sure to defer calling end.
 pub const Ctx = if (enable) ___tracy_c_zone_context else struct {
     pub inline fn end(self: @This()) void {
         _ = self;
@@ -66,6 +72,8 @@ pub const Ctx = if (enable) ___tracy_c_zone_context else struct {
     }
 };
 
+/// Creates a source location based tracing zone.
+/// Make sure to defer calling end.
 pub inline fn trace(comptime src: std.builtin.SourceLocation) Ctx {
     if (!enable) return .{};
 
@@ -86,6 +94,8 @@ pub inline fn trace(comptime src: std.builtin.SourceLocation) Ctx {
     }
 }
 
+/// Creates a named tracing zone.
+/// Make sure to defer calling end.
 pub inline fn traceNamed(comptime src: std.builtin.SourceLocation, comptime name: [:0]const u8) Ctx {
     if (!enable) return .{};
 
@@ -106,10 +116,12 @@ pub inline fn traceNamed(comptime src: std.builtin.SourceLocation, comptime name
     }
 }
 
+/// A function to creat a TracyAllocator by wrapping another allocator.
 pub fn tracyAllocator(allocator: std.mem.Allocator) TracyAllocator(null) {
     return TracyAllocator(null).init(allocator);
 }
 
+/// An allocator wrapper to track allocations and free with tracy.
 pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
     return struct {
         parent_allocator: std.mem.Allocator,
@@ -205,43 +217,52 @@ pub fn TracyAllocator(comptime name: ?[:0]const u8) type {
     };
 }
 
-// This function only accepts comptime-known strings, see `messageCopy` for runtime strings
+/// Logs a message in tracy.
+/// This function only accepts comptime-known strings, see `messageCopy` for runtime strings
 pub inline fn message(comptime msg: [:0]const u8) void {
     if (!enable) return;
     ___tracy_emit_messageL(msg.ptr, if (enable_callstack) callstack_depth else 0);
 }
 
-// This function only accepts comptime-known strings, see `messageColorCopy` for runtime strings
+/// Logs a message in tracy with a color.
+/// This function only accepts comptime-known strings, see `messageColorCopy` for runtime strings
 pub inline fn messageColor(comptime msg: [:0]const u8, color: u32) void {
     if (!enable) return;
     ___tracy_emit_messageLC(msg.ptr, color, if (enable_callstack) callstack_depth else 0);
 }
 
+/// Logs a message in tracy. Will clone the input.
 pub inline fn messageCopy(msg: []const u8) void {
     if (!enable) return;
     ___tracy_emit_message(msg.ptr, msg.len, if (enable_callstack) callstack_depth else 0);
 }
 
+/// Logs a message in tracy with a color. Will clone the input.
 pub inline fn messageColorCopy(msg: [:0]const u8, color: u32) void {
     if (!enable) return;
     ___tracy_emit_messageC(msg.ptr, msg.len, color, if (enable_callstack) callstack_depth else 0);
 }
 
+/// Marks a single point for tracking the root frame.
 pub inline fn frameMark() void {
     if (!enable) return;
     ___tracy_emit_frame_mark(null);
 }
 
+/// Marks a single point for tracking a named frame.
 pub inline fn frameMarkNamed(comptime name: [:0]const u8) void {
     if (!enable) return;
     ___tracy_emit_frame_mark(name.ptr);
 }
 
+/// A named tracy frame with an explicit start and end.
+/// Make sure to defer calling end.
 pub inline fn namedFrame(comptime name: [:0]const u8) Frame(name) {
     frameMarkStart(name);
     return .{};
 }
 
+/// The tracy frame type for tracking start and end.
 pub fn Frame(comptime name: [:0]const u8) type {
     return struct {
         pub fn end(_: @This()) void {
