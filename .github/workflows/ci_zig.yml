@@ -19,11 +19,20 @@ jobs:
 
                 zig build check-fmt
 
+              # We run zig check with tracy enabled.
+              # This ensure it compiles and doesn't go stale.
+            - name: Checkout Tracy
+              uses: actions/checkout@v4
+              with:
+                path: tracy
+                repository: wolfpld/tracy
+                ref: v0.11.0
+
             - name: zig check
               run: |
                 # -Dllvm incurs a costly download step, leave that for later.
                 # Just the do super fast check step for now.
-                zig build -Dno-bin -Dfuzz
+                zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
     zig-tests:
         needs: check-zig
