@@ -50,7 +50,7 @@ jobs:
 
             - name: build roc
               run: |
-                zig build -Dllvm -Dfuzz
+                zig build -Dllvm -Dfuzz -Dsystem-afl=false
 
             - name: roc executable minimal check (Unix)
               if: runner.os != 'Windows'
@@ -64,7 +64,7 @@ jobs:
 
             - name: zig tests
               run: |
-                zig build test -Dllvm -Dfuzz
+                zig build test -Dllvm -Dfuzz -Dsystem-afl=false
 
             - name: zig snapshot tests
               run: zig build snapshot
