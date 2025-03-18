@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 
 const base = @import("../base.zig");
+const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
@@ -16,6 +17,9 @@ pub const IR = @import("parse/IR.zig");
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
 pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
     var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice);

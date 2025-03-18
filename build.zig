@@ -9,24 +9,28 @@ const ResolvedTarget = std.Build.ResolvedTarget;
 const Step = std.Build.Step;
 
 pub fn build(b: *std.Build) void {
-    const target = b.standardTargetOptions(.{ .default_target = .{
-        .abi = if (builtin.target.os.tag == .linux) .musl else null,
-    } });
-    const optimize = b.standardOptimizeOption(.{});
-    const strip = b.option(bool, "strip", "Omit debug information");
-
+    // build steps
     const run_step = b.step("run", "Build and run the roc cli");
+    const roc_step = b.step("roc", "Build the roc compiler without running it");
     const test_step = b.step("test", "Run all tests included in src/tests.zig");
     const fmt_step = b.step("fmt", "Format all zig code");
     const check_fmt_step = b.step("check-fmt", "Check formatting of all zig code");
     const snapshot_step = b.step("snapshot", "Run the snapshot tool to update snapshot files");
 
-    // llvm configuration
+    // general configuration
+    const target = b.standardTargetOptions(.{ .default_target = .{
+        .abi = if (builtin.target.os.tag == .linux) .musl else null,
+    } });
+    const optimize = b.standardOptimizeOption(.{});
+    const strip = b.option(bool, "strip", "Omit debug information");
     const no_bin = b.option(bool, "no-bin", "Skip emitting binaries (important for fast incremental compilation)") orelse false;
+
+    // llvm configuration
     const use_system_llvm = b.option(bool, "system-llvm", "Attempt to automatically detect and use system installed llvm") orelse false;
     const enable_llvm = b.option(bool, "llvm", "Build roc with the llvm backend") orelse use_system_llvm;
     const user_llvm_path = b.option([]const u8, "llvm-path", "Path to llvm. This path must contain the bin, lib, and include directory.");
-    const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse false;
+    // Since zig afl is broken currently, default to system afl.
+    const use_system_afl = b.option(bool, "system-afl", "Attempt to automatically detect and use system installed afl++") orelse true;
 
     if (user_llvm_path) |path| {
         // Even if the llvm backend is not enabled, still add the llvm path.
@@ -34,19 +38,28 @@ pub fn build(b: *std.Build) void {
         b.addSearchPrefix(b.pathJoin(&.{ path, "bin" }));
     }
 
-    const roc_exe = addMainExe(b, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path) orelse return;
-
-    if (no_bin) {
-        b.getInstallStep().dependOn(&roc_exe.step);
-    } else {
-        b.installArtifact(roc_exe);
-        const run_cmd = b.addRunArtifact(roc_exe);
-        run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-        run_step.dependOn(&run_cmd.step);
+    // tracy profiler configuration
+    const tracy = b.option([]const u8, "tracy", "Enable Tracy integration. Supply path to Tracy source");
+    const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
+    const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
+    const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+    if (tracy != null and target.result.os.tag == .macos) {
+        std.log.warn("Tracy has significantly more overhead on MacOS. Be cautious when generating timing and analyzing results.", .{});
     }
+    if (tracy_callstack) {
+        std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
+    }
+
+    // Create compile time build options
+    const build_options = b.addOptions();
+    build_options.addOption(bool, "enable_tracy", tracy != null);
+    build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+    build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
+    build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
+
+    // add main roc exe
+    const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
+    install_and_run(b, no_bin, roc_exe, roc_step, run_step);
 
     // Add snapshot tool
     const snapshot_exe = b.addExecutable(.{
@@ -56,19 +69,8 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
-    if (no_bin) {
-        b.getInstallStep().dependOn(&snapshot_exe.step);
-    } else {
-        b.installArtifact(snapshot_exe);
-        const run_snapshot = b.addRunArtifact(snapshot_exe);
-
-        // Add a step to run the snapshot tool
-        run_snapshot.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_snapshot.addArgs(args);
-        }
-        snapshot_step.dependOn(&run_snapshot.step);
-    }
+    add_tracy(b, build_options, snapshot_exe, target, false, tracy);
+    install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
@@ -76,6 +78,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .link_libc = true,
     });
+    all_tests.root_module.addOptions("build_options", build_options);
 
     if (!no_bin) {
         const run_tests = b.addRunArtifact(all_tests);
@@ -126,6 +129,8 @@ pub fn build(b: *std.Build) void {
             no_bin,
             target,
             optimize,
+            build_options,
+            tracy,
             name,
         );
     }
@@ -139,6 +144,8 @@ fn add_fuzz_target(
     no_bin: bool,
     target: ResolvedTarget,
     optimize: OptimizeMode,
+    build_options: *Step.Options,
+    tracy: ?[]const u8,
     name: []const u8,
 ) void {
     // We always include the repro scripts (no dependencies).
@@ -151,10 +158,11 @@ fn add_fuzz_target(
         // Work around instrumentation bugs on mac without giving up perf on linux.
         .optimize = if (target.result.os.tag == .macos) .Debug else .ReleaseSafe,
     });
+    add_tracy(b, build_options, fuzz_obj, target, false, tracy);
 
     const name_exe = b.fmt("fuzz-{s}", .{name});
     const name_repro = b.fmt("repro-{s}", .{name});
-    const run_repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
+    const repro_step = b.step(name_repro, b.fmt("run fuzz reproduction for {s}", .{name}));
     const repro_exe = b.addExecutable(.{
         .name = name_repro,
         .root_source_file = b.path("src/fuzz-repro.zig"),
@@ -163,18 +171,7 @@ fn add_fuzz_target(
         .link_libc = true,
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
-    if (no_bin) {
-        b.getInstallStep().dependOn(&repro_exe.step);
-    } else {
-        b.installArtifact(repro_exe);
-
-        const run_cmd = b.addRunArtifact(repro_exe);
-        run_cmd.step.dependOn(b.getInstallStep());
-        if (b.args) |args| {
-            run_cmd.addArgs(args);
-        }
-        run_repro_step.dependOn(&run_cmd.step);
-    }
+    install_and_run(b, no_bin, repro_exe, repro_step, repro_step);
 
     if (fuzz and build_afl and !no_bin) {
         const fuzz_step = b.step(name_exe, b.fmt("Generate fuzz executable for {s}", .{name}));
@@ -182,18 +179,22 @@ fn add_fuzz_target(
 
         const afl = b.lazyImport(@This(), "afl_kit") orelse return;
         const fuzz_exe = afl.addInstrumentedExe(b, target, .ReleaseSafe, &.{}, use_system_afl, fuzz_obj) orelse return;
-        fuzz_step.dependOn(&b.addInstallBinFile(fuzz_exe, name_exe).step);
+        const install_fuzz = b.addInstallBinFile(fuzz_exe, name_exe);
+        fuzz_step.dependOn(&install_fuzz.step);
+        b.getInstallStep().dependOn(&install_fuzz.step);
     }
 }
 
 fn addMainExe(
     b: *std.Build,
+    build_options: *Step.Options,
     target: ResolvedTarget,
     optimize: OptimizeMode,
     strip: ?bool,
     enable_llvm: bool,
     use_system_llvm: bool,
     user_llvm_path: ?[]const u8,
+    tracy: ?[]const u8,
 ) ?*Step.Compile {
     const exe = b.addExecutable(.{
         .name = "roc",
@@ -216,7 +217,70 @@ fn addMainExe(
         try addStaticLlvmOptionsToModule(exe.root_module);
     }
 
+    add_tracy(b, build_options, exe, target, enable_llvm, tracy);
     return exe;
+}
+
+fn install_and_run(
+    b: *std.Build,
+    no_bin: bool,
+    exe: *Step.Compile,
+    build_step: *Step,
+    run_step: *Step,
+) void {
+    if (run_step != build_step) {
+        run_step.dependOn(build_step);
+    }
+    if (no_bin) {
+        // No build, just build, don't actually install or run.
+        build_step.dependOn(&exe.step);
+        b.getInstallStep().dependOn(&exe.step);
+    } else {
+        const install = b.addInstallArtifact(exe, .{});
+        build_step.dependOn(&install.step);
+        b.getInstallStep().dependOn(&install.step);
+
+        const run = b.addRunArtifact(exe);
+        run.step.dependOn(&install.step);
+        if (b.args) |args| {
+            run.addArgs(args);
+        }
+        run_step.dependOn(&run.step);
+    }
+}
+
+fn add_tracy(
+    b: *std.Build,
+    build_options: *Step.Options,
+    base: *Step.Compile,
+    target: ResolvedTarget,
+    links_llvm: bool,
+    tracy: ?[]const u8,
+) void {
+    base.root_module.addOptions("build_options", build_options);
+    if (tracy) |tracy_path| {
+        const client_cpp = b.pathJoin(
+            &[_][]const u8{ tracy_path, "public", "TracyClient.cpp" },
+        );
+
+        // On mingw, we need to opt into windows 7+ to get some features required by tracy.
+        const tracy_c_flags: []const []const u8 = if (target.result.os.tag == .windows and target.result.abi == .gnu)
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined", "-D_WIN32_WINNT=0x601" }
+        else
+            &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
+
+        base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
+        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        if (!links_llvm) {
+            base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
+        }
+        base.root_module.link_libc = true;
+
+        if (target.result.os.tag == .windows) {
+            base.root_module.linkSystemLibrary("dbghelp", .{});
+            base.root_module.linkSystemLibrary("ws2_32", .{});
+        }
+    }
 }
 
 const LlvmPaths = struct {
@@ -305,16 +369,20 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         .flags = &cpp_cflags,
     });
 
+    const link_static = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .static,
+        .search_strategy = .mode_first,
+    };
     for (lld_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, .{});
+        mod.linkSystemLibrary(lib_name, link_static);
     }
 
     for (llvm_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, .{});
+        mod.linkSystemLibrary(lib_name, link_static);
     }
 
-    mod.linkSystemLibrary("z", .{});
-    mod.linkSystemLibrary("zstd", .{});
+    mod.linkSystemLibrary("z", link_static);
+    mod.linkSystemLibrary("zstd", link_static);
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
         // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?

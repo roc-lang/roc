@@ -11,6 +11,7 @@ const TokenIdx = tokenizer.Token.Idx;
 const exitOnOom = @import("./collections/utils.zig").exitOnOom;
 const fatal = @import("./collections/utils.zig").fatal;
 const base = @import("base.zig");
+const tracy = @import("tracy.zig");
 
 const NodeStore = IR.NodeStore;
 const ExprIdx = NodeStore.ExprIdx;
@@ -51,15 +52,25 @@ pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 }
 
 fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     // Skip non ".roc" files.
     if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
         return false;
     }
 
+    const format_file_frame = tracy.namedFrame("format_file");
+    defer format_file_frame.end();
+
     const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
     defer input_file.close();
 
-    const contents = try input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    const contents = try blk: {
+        const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
+        defer blk_trace.end();
+        break :blk input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+    };
     defer gpa.free(contents);
 
     var module_env = base.ModuleEnv.init(gpa);
@@ -88,6 +99,9 @@ fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
 /// Formats and writes out well-formed source of a Roc parse IR (AST).
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var fmt = Formatter.init(ast, writer);
 
     var ignore_newline_for_first_statement = false;
