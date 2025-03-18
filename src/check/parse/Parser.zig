@@ -3,6 +3,7 @@ const std = @import("std");
 const IR = @import("IR.zig");
 const NodeList = IR.NodeList;
 
+const tracy = @import("../../tracy.zig");
 const tokenize = @import("tokenize.zig");
 const TokenizedBuffer = tokenize.TokenizedBuffer;
 const Token = tokenize.Token;
@@ -130,6 +131,9 @@ pub fn pushMalformed(self: *Parser, comptime t: type, tag: IR.Diagnostic.Tag, st
 ///
 /// the tokens are provided at Parser initialisation
 pub fn parseFile(self: *Parser) void {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     self.store.emptyScratch();
     _ = self.store.addFile(.{
         .header = IR.NodeStore.HeaderIdx{ .id = 0 },

@@ -19,11 +19,20 @@ jobs:
 
                 zig build check-fmt
 
+              # We run zig check with tracy enabled.
+              # This ensure it compiles and doesn't go stale.
+            - name: Checkout Tracy
+              uses: actions/checkout@v4
+              with:
+                path: tracy
+                repository: wolfpld/tracy
+                ref: v0.11.0
+
             - name: zig check
               run: |
                 # -Dllvm incurs a costly download step, leave that for later.
                 # Just the do super fast check step for now.
-                zig build -Dno-bin -Dfuzz
+                zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
     zig-tests:
         needs: check-zig
@@ -41,7 +50,7 @@ jobs:
 
             - name: build roc
               run: |
-                zig build -Dllvm -Dfuzz
+                zig build -Dllvm -Dfuzz -Dsystem-afl=false
 
             - name: roc executable minimal check (Unix)
               if: runner.os != 'Windows'
@@ -55,7 +64,7 @@ jobs:
 
             - name: zig tests
               run: |
-                zig build test -Dllvm -Dfuzz
+                zig build test -Dllvm -Dfuzz -Dsystem-afl=false
 
             - name: zig snapshot tests
               run: zig build snapshot
