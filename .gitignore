@@ -133,3 +133,4 @@ src/fuzz-corpus/
 perf.data
 perf.data.old
 profile.json
+flamegraph.svg
