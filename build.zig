@@ -369,16 +369,20 @@ fn addStaticLlvmOptionsToModule(mod: *std.Build.Module) !void {
         .flags = &cpp_cflags,
     });
 
+    const link_static = std.Build.Module.LinkSystemLibraryOptions{
+        .preferred_link_mode = .static,
+        .search_strategy = .mode_first,
+    };
     for (lld_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, .{});
+        mod.linkSystemLibrary(lib_name, link_static);
     }
 
     for (llvm_libs) |lib_name| {
-        mod.linkSystemLibrary(lib_name, .{});
+        mod.linkSystemLibrary(lib_name, link_static);
     }
 
-    mod.linkSystemLibrary("z", .{});
-    mod.linkSystemLibrary("zstd", .{});
+    mod.linkSystemLibrary("z", link_static);
+    mod.linkSystemLibrary("zstd", link_static);
 
     if (mod.resolved_target.?.result.os.tag != .windows or mod.resolved_target.?.result.abi != .msvc) {
         // TODO: Can this just be `mod.link_libcpp = true`? Does that make a difference?
