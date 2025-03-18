@@ -43,6 +43,12 @@ pub fn build(b: *std.Build) void {
     const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+    if (tracy != null and target.result.os.tag == .macos) {
+        std.log.warn("Tracy has significantly more overhead on MacOS. Be cautious when generating timing and analyzing results.", .{});
+    }
+    if (tracy_callstack) {
+        std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
+    }
 
     // Create compile time build options
     const build_options = b.addOptions();
