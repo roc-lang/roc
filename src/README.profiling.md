@@ -25,7 +25,7 @@ These are tools I recommend for profiling that help get a solid picture.
 
 Flamegraphs are the core of basic profiling.
 They enable quickly finding hotspots in execution.
-My regularly sampling callstacks, flamegraphs are able to identify where time is being spent.
+By regularly sampling callstacks, flamegraphs are able to identify where time is being spent.
 This tool simply generates an `svg` to view.
 
 This is a great place to start if new to profiling, but has a number of limitations.
