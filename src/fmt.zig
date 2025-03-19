@@ -21,13 +21,19 @@ const StatementIdx = NodeStore.StatementIdx;
 
 const FormatFlags = enum { debug_binop, no_debug };
 
+/// Count of successfully formated files along with files that failed to format.
+pub const SuccessFailCount = struct { success: usize, failure: usize };
+
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
-/// Returns the number of files formatted.
-pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !usize {
+/// Returns the number of files successfully formatted and that failed to format.
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !SuccessFailCount {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
-    var count: usize = 0;
+    const stderr = std.io.getStdErr().writer();
+
+    var success_count: usize = 0;
+    var failed_count: usize = 0;
     // First try as a directory.
     if (base_dir.openDir(path, .{ .iterate = true })) |const_dir| {
         var dir = const_dir;
@@ -37,30 +43,39 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
         defer walker.deinit();
         while (try walker.next()) |entry| {
             if (entry.kind == .file) {
-                if (try formatFilePath(gpa, entry.dir, entry.basename)) {
-                    count += 1;
+                if (formatFilePath(gpa, entry.dir, entry.basename)) |_| {
+                    success_count += 1;
+                } else |err| {
+                    if (err != error.NotRocFile) {
+                        try stderr.print("Failed to format {s}: {any}\n", .{ entry.path, err });
+                        failed_count += 1;
+                    }
                 }
             }
         }
     } else |_| {
-        if (try formatFilePath(gpa, base_dir, path)) {
-            count += 1;
+        if (formatFilePath(gpa, base_dir, path)) |_| {
+            success_count += 1;
+        } else |err| {
+            if (err != error.NotRocFile) {
+                try stderr.print("Failed to format {s}: {any}\n", .{ path, err });
+                failed_count += 1;
+            }
         }
     }
 
-    return count;
+    return .{ .success = success_count, .failure = failed_count };
 }
 
 /// Formats a single roc file at the specified path.
-/// Will ignore paths that don't end in `.roc`.
-/// Returns true if the file was formatted.
-pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+/// Returns errors on failure and files that don't end in `.roc`
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     // Skip non ".roc" files.
     if (!std.mem.eql(u8, std.fs.path.extension(path), ".roc")) {
-        return false;
+        return error.NotRocFile;
     }
 
     const format_file_frame = tracy.namedFrame("format_file");
@@ -69,10 +84,28 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     const input_file = try base_dir.openFile(path, .{ .mode = .read_only });
     defer input_file.close();
 
-    const contents = try blk: {
+    const contents = blk: {
         const blk_trace = tracy.traceNamed(@src(), "readAllAlloc");
         defer blk_trace.end();
-        break :blk input_file.reader().readAllAlloc(gpa, Filesystem.max_file_size);
+
+        if (input_file.stat()) |stat| {
+            // Attempt to allocate exactly the right size first.
+            // The avoids needless reallocs and saves some perf.
+            const size = stat.size;
+            const buf = try gpa.alloc(u8, @intCast(size));
+            errdefer gpa.free(buf);
+            if (try input_file.readAll(buf) != size) {
+                // This is unexpected, the file is smaller than the size from stat.
+                // It must have been modified inplace.
+                // TODO: handle this more gracefully.
+                return error.FileSizeChangedDuringRead;
+            }
+            break :blk buf;
+        } else |_| {
+            // Fallback on readToEndAlloc.
+            const buf = try input_file.readToEndAlloc(gpa, Filesystem.max_file_size);
+            break :blk buf;
+        }
     };
     defer gpa.free(contents);
 
@@ -88,15 +121,13 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
         for (parse_ast.errors) |err| {
             try stderr.print("\t{s}\n", .{@tagName(err.tag)});
         }
-        fatal("\n", .{});
+        return error.ParsingFailed;
     }
 
     const output_file = try base_dir.createFile(path, .{});
     defer output_file.close();
 
     try formatAst(parse_ast, output_file.writer().any());
-
-    return true;
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST).
@@ -1160,7 +1191,8 @@ test "format single file" {
     defer std.fs.cwd().deleteFile(roc_filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
     const count = try formatPath(gpa, gpa, std.fs.cwd(), roc_filename);
-    try std.testing.expectEqual(1, count);
+    try std.testing.expectEqual(1, count.success);
+    try std.testing.expectEqual(0, count.failure);
 
     // Reset file position to read formatted roc code
     try roc_file.seekTo(0);

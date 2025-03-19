@@ -135,19 +135,22 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 /// Recurses into directories to search for Roc files.
 fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     var timer = try std.time.Timer.start();
-    var count: usize = 0;
+    var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
     if (args.len > 0) {
         for (args) |arg| {
-            count += try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
+            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
+            count.success += inner_count.success;
+            count.failure += inner_count.failure;
         }
     } else {
-        if (try fmt.formatFilePath(gpa, std.fs.cwd(), "main.roc")) {
-            count += 1;
-        }
+        count = try fmt.formatPath(gpa, arena, std.fs.cwd(), "main.roc");
     }
-
     const elapsed = timer.read() / std.time.ns_per_ms;
-    try std.io.getStdOut().writer().print("Successfully formatted {} files in {} ms.\n", .{ count, elapsed });
+    try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
+    if (count.failure > 0) {
+        try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
+    }
+    try std.io.getStdOut().writer().print("Took {} ms.\n", .{elapsed});
 }
 
 fn rocVersion(gpa: Allocator, args: []const []const u8) !void {
