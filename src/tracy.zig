@@ -351,6 +351,15 @@ extern fn ___tracy_emit_messageL(txt: [*:0]const u8, callstack: c_int) void;
 extern fn ___tracy_emit_messageC(txt: [*]const u8, size: usize, color: u32, callstack: c_int) void;
 extern fn ___tracy_emit_messageLC(txt: [*:0]const u8, color: u32, callstack: c_int) void;
 extern fn ___tracy_emit_frame_mark(name: ?[*:0]const u8) void;
+extern fn ___tracy_wait_shutdown() void;
+
+/// Wait for the tracy profiler to fully shutdown and finish syncing data.
+pub fn waitForShutdown() !void {
+    if (!enable) return;
+
+    try std.io.getStdErr().writeAll("Program ended, waiting for tracy to finish collecting data.\n");
+    ___tracy_wait_shutdown();
+}
 
 const ___tracy_source_location_data = extern struct {
     name: ?[*:0]const u8,

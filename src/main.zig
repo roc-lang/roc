@@ -52,7 +52,12 @@ pub fn main() !void {
     const arena = arena_impl.allocator();
 
     const args = try std.process.argsAlloc(arena);
-    return mainArgs(gpa, arena, args);
+
+    const result = mainArgs(gpa, arena, args);
+    if (tracy.enable) {
+        try tracy.waitForShutdown();
+    }
+    return result;
 }
 
 fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
