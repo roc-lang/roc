@@ -353,6 +353,7 @@ extern fn ___tracy_emit_messageLC(txt: [*:0]const u8, color: u32, callstack: c_i
 extern fn ___tracy_emit_frame_mark(name: ?[*:0]const u8) void;
 extern fn ___tracy_wait_shutdown() void;
 
+/// Wait for the tracy profiler to fully shutdown and finish syncing data.
 pub fn waitForShutdown() !void {
     if (!enable) return;
 
