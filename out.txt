@@ -1,0 +1,391 @@
+   Compiling roc_docs v0.0.1 (/Users/rtfeldman/code/roc/crates/docs)
+warning: unused variable: `todo`
+   --> crates/docs/src/generate.rs:158:25
+    |
+158 |                     let todo = (); // TODO: thread through whatever doc comment might be above this.
+    |                         ^^^^ help: if this is intentional, prefix it with an underscore: `_todo`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: unused variable: `arena`
+   --> crates/docs/src/generate.rs:609:30
+    |
+609 |     fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+    |                              ^^^^^ help: if this is intentional, prefix it with an underscore: `_arena`
+
+warning: unused variable: `typ`
+   --> crates/docs/src/generate.rs:609:47
+    |
+609 |     fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+    |                                               ^^^ help: if this is intentional, prefix it with an underscore: `_typ`
+
+warning: unused variable: `buf`
+   --> crates/docs/src/generate.rs:609:69
+    |
+609 |     fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+    |                                                                     ^^^ help: if this is intentional, prefix it with an underscore: `_buf`
+
+warning: unused variable: `ident_id`
+   --> crates/docs/src/generate.rs:613:38
+    |
+613 |     fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+    |                                      ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_ident_id`
+
+warning: unused variable: `module_id`
+   --> crates/docs/src/generate.rs:613:57
+    |
+613 |     fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+    |                                                         ^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_module_id`
+
+warning: unused variable: `buf`
+   --> crates/docs/src/generate.rs:613:78
+    |
+613 |     fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+    |                                                                              ^^^ help: if this is intentional, prefix it with an underscore: `_buf`
+
+warning: unused variable: `closure_var`
+    --> crates/docs/src/generate.rs:1107:34
+     |
+1107 |             FlatType::Func(args, closure_var, ret, fx) => TypeAnnotation::Function {
+     |                                  ^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_closure_var`
+
+warning: unused variable: `rec_var`
+    --> crates/docs/src/generate.rs:1233:41
+     |
+1233 |             FlatType::RecursiveTagUnion(rec_var, tags, ext) => TypeAnnotation::TagUnion {
+     |                                         ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rec_var`
+
+warning: unused variable: `kind`
+    --> crates/docs/src/generate.rs:1270:46
+     |
+1270 |         Content::Alias(symbol, args, actual, kind) => {
+     |                                              ^^^^ help: if this is intentional, prefix it with an underscore: `_kind`
+
+warning: unused variable: `actual_ann`
+    --> crates/docs/src/generate.rs:1271:17
+     |
+1271 |             let actual_ann = content_to_ann(
+     |                 ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_actual_ann`
+
+warning: unused variable: `tags_len`
+    --> crates/docs/src/generate.rs:1662:21
+     |
+1662 |                 let tags_len = tags.len();
+     |                     ^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_tags_len`
+
+warning: unused variable: `index`
+    --> crates/docs/src/generate.rs:1672:22
+     |
+1672 |                 for (index, tag) in tags.iter().chain(extra_tags.iter()).enumerate() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_index`
+
+warning: unused variable: `fields_len`
+    --> crates/docs/src/generate.rs:1746:21
+     |
+1746 |                 let fields_len = fields.len();
+     |                     ^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_fields_len`
+
+warning: unused variable: `index`
+    --> crates/docs/src/generate.rs:1756:22
+     |
+1756 |                 for (index, field) in fields.iter().chain(extra_fields.iter()).enumerate() {
+     |                      ^^^^^ help: if this is intentional, prefix it with an underscore: `_index`
+
+warning: unused variable: `scope`
+  --> crates/docs/src/render_markdown.rs:28:5
+   |
+28 |     scope: &Scope,
+   |     ^^^^^ help: if this is intentional, prefix it with an underscore: `_scope`
+
+warning: unused variable: `interns`
+  --> crates/docs/src/render_markdown.rs:29:5
+   |
+29 |     interns: &Interns,
+   |     ^^^^^^^ help: if this is intentional, prefix it with an underscore: `_interns`
+
+warning: unused variable: `lookup_or_tag`
+  --> crates/docs/src/render_markdown.rs:42:26
+   |
+42 |                     Some(lookup_or_tag) => {
+   |                          ^^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_lookup_or_tag`
+
+warning: unused variable: `todo`
+  --> crates/docs/src/render_markdown.rs:43:29
+   |
+43 |                         let todo = (); // TODO use doc_url
+   |                             ^^^^ help: if this is intentional, prefix it with an underscore: `_todo`
+
+warning: struct `Ability` is never constructed
+  --> crates/docs/src/generate.rs:93:8
+   |
+93 | struct Ability<'a> {
+   |        ^^^^^^^
+   |
+   = note: `#[warn(dead_code)]` on by default
+
+warning: field `type_vars_names` is never read
+   --> crates/docs/src/generate.rs:100:9
+    |
+98  | struct BodyEntry<'a> {
+    |        --------- field in this struct
+99  |     pub name: &'a str,
+100 |     pub type_vars_names: &'a [&'a str],
+    |         ^^^^^^^^^^^^^^^
+
+warning: methods `render_type` and `render_absolute_url` are never used
+   --> crates/docs/src/generate.rs:609:8
+    |
+118 | impl<'a> Docs<'a> {
+    | ----------------- methods in this implementation
+...
+609 |     fn render_type(&'a self, arena: &'a Bump, typ: &TypeAnnotation, buf: &mut String<'a>) {
+    |        ^^^^^^^^^^^
+...
+613 |     fn render_absolute_url(&'a self, ident_id: IdentId, module_id: ModuleId, buf: &mut String<'_>) {
+    |        ^^^^^^^^^^^^^^^^^^^
+
+warning: variants `MalformedAutoLink`, `AutoLinkIdentNotInScope`, `AutoLinkNotExposed`, and `AutoLinkModuleNotImported` are never constructed
+   --> crates/docs/src/render_markdown.rs:224:5
+    |
+223 | pub enum LinkProblem {
+    |          ----------- variants in this enum
+224 |     MalformedAutoLink,
+    |     ^^^^^^^^^^^^^^^^^
+225 |     AutoLinkIdentNotInScope,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^
+226 |     AutoLinkNotExposed,
+    |     ^^^^^^^^^^^^^^^^^^
+227 |     AutoLinkModuleNotImported,
+    |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `LinkProblem` has a derived impl for the trait `Debug`, but this is intentionally ignored during dead code analysis
+
+warning: struct `RecordField` is never constructed
+ --> crates/docs/src/render_package.rs:4:12
+  |
+4 | pub struct RecordField<'a, Type> {
+  |            ^^^^^^^^^^^
+
+warning: function `render_package_name_link` is never used
+  --> crates/docs/src/render_package.rs:47:8
+   |
+47 | pub fn render_package_name_link(name: &str, buf: &mut String<'_>) {
+   |        ^^^^^^^^^^^^^^^^^^^^^^^^
+
+warning: function `advance_past` is never used
+  --> crates/docs/src/render_package.rs:57:4
+   |
+57 | fn advance_past<'a>(needle: &'static str, src: &'a str, buf: &mut String<'_>) -> &'a str {
+   |    ^^^^^^^^^^^^
+
+warning: function `write_base_url` is never used
+  --> crates/docs/src/render_package.rs:72:4
+   |
+72 | fn write_base_url(user_specified_base_url: Option<impl AsRef<str>>, buf: &mut String) {
+   |    ^^^^^^^^^^^^^^
+
+warning: fields `indent` and `wrap_in_parens` are never read
+ --> crates/docs/src/render_type.rs:4:5
+  |
+3 | pub struct TypeRenderer {
+  |            ------------ fields in this struct
+4 |     indent: Indentation,
+  |     ^^^^^^
+...
+8 |     wrap_in_parens: WrapInParens,
+  |     ^^^^^^^^^^^^^^
+
+warning: variant `NeededIfWhitespace` is never constructed
+   --> crates/docs/src/render_type.rs:274:5
+    |
+272 | pub enum WrapInParens {
+    |          ------------ variant in this enum
+273 |     Unnecessary,
+274 |     NeededIfWhitespace,
+    |     ^^^^^^^^^^^^^^^^^^
+    |
+    = note: `WrapInParens` has a derived impl for the trait `Clone`, but this is intentionally ignored during dead code analysis
+
+warning: methods `increment` and `decrement` are never used
+   --> crates/docs/src/render_type.rs:280:12
+    |
+277 | impl Indentation {
+    | ---------------- methods in this implementation
+...
+280 |     pub fn increment(self) -> Self {
+    |            ^^^^^^^^^
+...
+286 |     pub fn decrement(self) -> Self {
+    |            ^^^^^^^^^
+
+   Compiling roc_cli v0.0.1 (/Users/rtfeldman/code/roc/crates/cli)
+warning: `roc_docs` (lib) generated 30 warnings (run `cargo fix --lib -p roc_docs` to apply 19 suggestions)
+warning: unused variable: `todo`
+   --> crates/cli/src/main.rs:309:17
+    |
+309 |             let todo = (); // TODO make this a CLI flag to the `docs` subcommand instead of an env var
+    |                 ^^^^ help: if this is intentional, prefix it with an underscore: `_todo`
+    |
+    = note: `#[warn(unused_variables)]` on by default
+
+warning: `roc_cli` (bin "roc") generated 1 warning (run `cargo fix --bin "roc"` to apply 1 suggestion)
+    Finished dev [unoptimized + debuginfo] target(s) in 1.80s
+     Running `target/debug/roc docs -- ../basic-cli/platform/main.roc`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.MetadataErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.Path`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.DirEntry`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.ReadErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.WriteErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.DirErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.write`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.writeBytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.writeUtf8`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.fromStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.fromBytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.display`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.isDir`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.isFile`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.isSymLink`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.type`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.withExtension`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.delete`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.readUtf8`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.readBytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.listDir`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.deleteEmpty`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.deleteAll`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.createDir`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.createAll`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Path.handleErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Arg.list`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Arg.parse`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.DirEntry`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.list`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.deleteEmpty`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.deleteAll`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.create`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Dir.createAll`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.cwd`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.setCwd`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.exePath`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.var`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.decode`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.dict`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.ARCH`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.OS`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.platform`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Env.tempDir`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.ReadErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.WriteErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.write`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.writeBytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.writeUtf8`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.delete`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.readBytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.readUtf8`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.isDir`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.isFile`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.isSymLink`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.type`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.Reader`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.openReader`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.openReaderWithCapacity`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `File.readLine`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `FileMetadata.FileMetadata`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `FileMetadata.bytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `FileMetadata.isReadonly`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `FileMetadata.type`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `FileMetadata.mode`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.Request`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.Method`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.Header`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.TimeoutConfig`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.Response`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.errorBodyToBytes`
+[crates/compiler/can/src/expr.rs:3270:41] self.variables.get(index) = Some(
+    74,
+)
+[crates/docs/src/generate.rs:198:53] subs.get_content_without_compacting(var) = Structure(
+    Func(
+        Slice<roc_types::subs::Variable> { start: 2124, length: 1 },
+        3927,
+        3926,
+        738,
+    ),
+)
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.defaultRequest`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.header`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.handleStringResponse`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.errorToString`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.send`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Http.get`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stderr.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stderr.handleErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stderr.line`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stderr.write`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdin.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdin.handleErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdin.line`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdin.bytes`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdin.readToEnd`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdout.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdout.handleErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdout.line`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Stdout.write`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.unexpectedEofErrorMessage`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.Stream`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.ConnectErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.parseConnectErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.StreamErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.parseStreamErr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.connect`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.readUpTo`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.readExactly`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.readUntil`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.readLine`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.write`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.writeUtf8`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.connectErrToStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tcp.streamErrToStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.Url`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.reserve`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.fromStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.toStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.append`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.appendHelp`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.percentEncode`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.appendParam`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.withQuery`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.query`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.hasQuery`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.fragment`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.withFragment`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.hasFragment`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Url.percentEncoded`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.Utc`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.now`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.nanosPerMilli`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.toMillisSinceEpoch`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.fromMillisSinceEpoch`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.toNanosSinceEpoch`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.fromNanosSinceEpoch`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.deltaAsMillis`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Utc.deltaAsNanos`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Sleep.millis`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.Cmd`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.Err`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.outputErrToStr`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.Output`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.new`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.arg`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.args`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.env`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.envs`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.clearEnvs`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.output`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.status`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Cmd.exec`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tty.enableRawMode`
+[crates/docs/src/generate.rs:170:54] &def.symbol = `Tty.disableRawMode`

@@ -10,14 +10,14 @@ import "content/tutorial.md" as tutorial_markdown : Str
 
 import InteractiveExample
 
-main! = \{ input_dir, output_dir } ->
+main! = |{ input_dir, output_dir }|
 
     try(SSG.write_file!({ output_dir, relpath: Types.to_rel_path("llms.txt"), content: tutorial_markdown }))
 
     # get the path and url of markdown files in content directory
     files = try(SSG.files!(input_dir))
 
-    process_file! = \{ path, relpath, url } ->
+    process_file! = |{ path, relpath, url }|
 
         in_html = try(SSG.parse_markdown!(path))
 
@@ -57,48 +57,49 @@ page_data =
     |> Dict.insert("/install/getting_started.html", { title: "Getting started | Roc", description: "How to get started with Roc" })
 
 get_page_info : Str -> { title : Str, description : Str }
-get_page_info = \page_path_str ->
-    when Dict.get(page_data, page_path_str) is
+get_page_info = |page_path_str|
+    return when Dict.get(page_data, page_path_str) is
         Ok(page_info) -> page_info
         Err(KeyNotFound) ->
             if Str.contains(page_path_str, "/examples/") then
                 Str.split_on(page_path_str, "/")
                 |> List.take_last(2)
                 |> List.first # we use the folder for name for the page title, e.g. Json from examples/Json/README.html
-                |> unwrap_or_crash("This List.first should never fail. page_path_str ($(page_path_str)) did not contain any `/`.")
-                |> (\page_title ->
-                    { title: "$(page_title) | Roc", description: "$(page_title) example in the Roc programming language." })
+                |> unwrap_or_crash("This List.first should never fail. page_path_str (${page_path_str}) did not contain any `/`.")
+                |> (|page_title|
+                    { title: "${page_title} | Roc", description: "${page_title} example in the Roc programming language." })
             else
-                crash("Web page $(page_path_str) did not have a title and description specified in the page_data Dict. Please add one.")
+                crash("Web page ${page_path_str} did not have a title and description specified in the page_data Dict. Please add one.")
 
 unwrap_or_crash : Result a b, Str -> a where b implements Inspect
-unwrap_or_crash = \result, error_msg ->
-    when result is
+unwrap_or_crash = |result, error_msg|
+    return when result is
         Ok(val) ->
             val
 
         Err(err) ->
-            crash("$(Inspect.to_str(err)): $(error_msg)")
+            crash("${Inspect.to_str(err)}: ${error_msg}")
 
 transform : Str, Str -> Str
-transform = \page_path_str, html_content ->
-    Html.render(view(page_path_str, html_content))
+transform = |page_path_str, html_content|
+    return Html.render(view(page_path_str, html_content))
 
 preload_woff2 : Str -> Html.Node
-preload_woff2 = \url ->
-
-    link([
-        rel("preload"),
-        attribute("as")("font"),
-        type("font/woff2"),
-        href(url),
-        # Necessary for preloading fonts, even if the request won't be cross-origin
-        # https://stackoverflow.com/a/70878420
-        attribute("crossorigin")("anonymous"),
-    ])
+preload_woff2 = |url|
+    return link(
+        [
+            rel("preload"),
+            attribute("as")("font"),
+            type("font/woff2"),
+            href(url),
+            # Necessary for preloading fonts, even if the request won't be cross-origin
+            # https://stackoverflow.com/a/70878420
+            attribute("crossorigin")("anonymous"),
+        ],
+    )
 
 view : Str, Str -> Html.Node
-view = \page_path_str, html_content ->
+view = |page_path_str, html_content|
     main_body =
         if page_path_str == "/index.html" then
             when Str.split_first(html_content, "<!-- THIS COMMENT WILL BE REPLACED BY THE LARGER EXAMPLE -->") is
@@ -106,13 +107,14 @@ view = \page_path_str, html_content ->
                 Err(NotFound) -> crash("Could not find the comment where the larger example on the homepage should have been inserted. Was it removed or edited?")
         else
             [text(html_content)]
+        end
 
     body_attrs =
         when page_path_str is
             "/index.html" -> [id("homepage-main")]
             "/tutorial.html" -> [id("tutorial-main"), class("article-layout")]
             _ ->
-                if Str.starts_with(page_path_str, "/examples/") && page_path_str != "/examples/index.html" then
+                if Str.starts_with(page_path_str, "/examples/") and page_path_str != "/examples/index.html" then
                     # Individual examples should render wider than articles.
                     # Otherwise the width is unreasonably low for the code blocks,
                     # and those pages don't tend to have big paragraphs anyway.
@@ -122,74 +124,107 @@ view = \page_path_str, html_content ->
                     [id("example-main")]
                 else
                     [class("article-layout")]
+                end
+        end
 
     page_info = get_page_info(page_path_str)
 
-    html([lang("en"), class("no-js")], [
-        head([], [
-            meta([charset("utf-8")]),
-            Html.title([], [text(page_info.title)]),
-            meta([name("description"), content(page_info.description)]),
-            meta([name("viewport"), content("width=device-width")]),
-            link([rel("icon"), href("/favicon.svg")]),
-            # Preload the latin-regular (but not latin-ext) unicode ranges of our fonts.
-            # The homepage doesn't actually use latin-ext
-            preload_woff2("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2"),
-            preload_woff2("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2"),
-            preload_woff2("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2"),
-            link([rel("prefetch"), href("/repl/roc_repl_wasm.js")]),
-            link([rel("stylesheet"), href("/site.css")]),
-            # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
-            # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
-            link([rel("mask-icon"), href("/favicon.svg"), color("#7d59dd")]),
-            # Remove the .no-js class from <html> before the body renders, so anything
-            # hidden via CSS using a .no-js selector will apply to the initial layout
-            # of the body instead of having a flash of content that immediately gets hidden.
-            #
-            # WARNING: Updating this requires updating its sha256 in netlify.toml under Content-Security-Policy.
-            #          Otherwise, this will work locally and then fail in production!
-            script([], [text("document.documentElement.className = document.documentElement.className.replace('no-js', '');")]),
-        ]),
-        body(body_attrs, [
-            view_navbar(page_path_str),
-            Html.main([], main_body),
-            footer([], [
-                div([id("footer")], [
-                    div([id("gh-link")], [
-                        a([id("gh-centered-link"), href("https://github.com/roc-lang/roc")], [
-                            gh_logo,
-                            span([id("gh-link-text")], [text("roc-lang/roc")]),
-                        ]),
-                    ]),
-                    br([], []),
-                    text(" powered by "),
-                    a([href("https://www.netlify.com")], [text("Netlify")]),
-                ]),
-            ]),
-        ]),
-    ])
+    return html(
+        [lang("en"), class("no-js")],
+        [
+            head(
+                [],
+                [
+                    meta([charset("utf-8")]),
+                    Html.title([], [text(page_info.title)]),
+                    meta([name("description"), content(page_info.description)]),
+                    meta([name("viewport"), content("width=device-width")]),
+                    link([rel("icon"), href("/favicon.svg")]),
+                    # Preload the latin-regular (but not latin-ext) unicode ranges of our fonts.
+                    # The homepage doesn't actually use latin-ext
+                    preload_woff2("/fonts/lato-v23-latin/lato-v23-latin-regular.woff2"),
+                    preload_woff2("/fonts/source-code-pro-v22-latin/source-code-pro-v22-latin-regular.woff2"),
+                    preload_woff2("/fonts/permanent-marker-v16-latin/permanent-marker-v16-latin-regular.woff2"),
+                    link([rel("prefetch"), href("/repl/roc_repl_wasm.js")]),
+                    link([rel("stylesheet"), href("/site.css")]),
+                    # Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
+                    # fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
+                    link([rel("mask-icon"), href("/favicon.svg"), color("#7d59dd")]),
+                    # Remove the .no-js class from <html> before the body renders, so anything
+                    # hidden via CSS using a .no-js selector will apply to the initial layout
+                    # of the body instead of having a flash of content that immediately gets hidden.
+                    #
+                    # WARNING: Updating this requires updating its sha256 in netlify.toml under Content-Security-Policy.
+                    #          Otherwise, this will work locally and then fail in production!
+                    script([], [text("document.documentElement.className = document.documentElement.className.replace('no-js', '');")]),
+                ],
+            ),
+            body(
+                body_attrs,
+                [
+                    view_navbar(page_path_str),
+                    Html.main([], main_body),
+                    footer(
+                        [],
+                        [
+                            div(
+                                [id("footer")],
+                                [
+                                    div(
+                                        [id("gh-link")],
+                                        [
+                                            a(
+                                                [id("gh-centered-link"), href("https://github.com/roc-lang/roc")],
+                                                [
+                                                    gh_logo,
+                                                    span([id("gh-link-text")], [text("roc-lang/roc")]),
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                    br([], []),
+                                    text(" powered by "),
+                                    a([href("https://www.netlify.com")], [text("Netlify")]),
+                                ],
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
 
 view_navbar : Str -> Html.Node
-view_navbar = \page_path_str ->
+view_navbar = |page_path_str|
     is_homepage = page_path_str == "/index.html"
 
     home_link_attrs =
         [id("nav-home-link"), href("/"), title("The Roc Programming Language Homepage")]
         |> List.concat((if is_homepage then [aria_hidden("true")] else []))
 
-    header([id("top-bar")], [
-        nav([aria_label("primary")], [
-            a(home_link_attrs, [roc_logo, span([class("home-link-text")], [text("Roc")])]),
-            div([id("top-bar-links")], [
-                a([href("/tutorial")], [text("tutorial")]),
-                a([href("/install")], [text("install")]),
-                a([href("/examples")], [text("examples")]),
-                a([href("/community")], [text("community")]),
-                a([href("/docs")], [text("docs")]),
-                a([href("/donate")], [text("donate")]),
-            ]),
-        ]),
-    ])
+    return header(
+        [id("top-bar")],
+        [
+            nav(
+                [aria_label("primary")],
+                [
+                    a(home_link_attrs, [roc_logo, span([class("home-link-text")], [text("Roc")])]),
+                    div(
+                        [id("top-bar-links")],
+                        [
+                            a([href("/tutorial")], [text("tutorial")]),
+                            a([href("/install")], [text("install")]),
+                            a([href("/examples")], [text("examples")]),
+                            a([href("/community")], [text("community")]),
+                            a([href("/docs")], [text("docs")]),
+                            a([href("/donate")], [text("donate")]),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    )
+end
 
 roc_logo : Html.Node
 roc_logo =

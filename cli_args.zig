@@ -2,88 +2,94 @@ const std = @import("std");
 const testing = std.testing;
 
 /// A struct to represent a CLI argument along with its i64 representation
-const ArgInfo = struct {
+const FlagOrCmd = struct {
     /// The arg converted to an i64 value
     as_i64: i64,
     /// An optional pointer to the next arg (relevant with `=`, e.g. `roc --foo=bar`)
     equals_val: ?[*:0]const u8,
-};
 
-/// Convert a null-terminated UTF-8 string into a i64
-/// If the string is longer than 8 bytes, sets long_arg to true
-fn arg_info(arg: []const u8) ArgInfo {
-    var answer: i64 = 0;
-    var bytes_written: usize = 0;
-    var is_flag: bool = false;
+    /// Convert a null-terminated UTF-8 string into a i64
+    /// If the string is longer than 8 bytes, sets long_arg to true
+    fn parse(arg: []const [*:0]u8) FlagOrCmd {
+        // If the length here is 0 or 1, this isn't a flag or subcommand.
+        // Both of these scenarios should be extremely rare, so doing a branch for them.
+        if (arg[0] == 0 or arg[1] == 0) {
+            return FlagOrCmd{
+                .as_i64 = 0,
+                .equals_val = null,
+            };
+        }
 
-    // If it starts with a dash, it's a flag.
-    if (arg.len >= 2 and arg[0] == '-') {
-        is_flag = true;
+        // Branchlessly skip over a leading "-" (and also a leading "--"),
+        // while recording that this is a flag if it started with "-" or "--".
+        // At this point we know length >= 2, so we can index into [0] and [1].
+        const is_flag = arg[0] == '-'; // If it starts with a dash, it's a flag.
+        const second_byte_is_dash = arg[1] == '-';
 
-        // Skip the dash we just parsed, plus skip over a second dash if it's there.
-        // (For convenience, we treat `-foo` and `--foo` as equivalent.)
-        arg = arg[1 + arg[1] == '-' ..];
-    }
+        // Skip the dash(es) we just saw.
+        // (We treat `-foo` and `--foo` as equivalent, and intentionally don't offer
+        // shorthands like `-f` being shorthand for `--foo`.)
+        arg = arg[is_flag + (is_flag and second_byte_is_dash) ..];
 
-    for (arg) |byte| {
-        switch (byte) {
-            '=' => {
-                // Found an '=' in the argument; return what we've parsed so far,
-                // and make next_arg point to what comes after the '='
-                const remainder = arg[bytes_written + 1 ..];
+        var answer: i64 = 0;
+        var index: usize = 0;
+        var char = arg[index];
 
-                // TODO ask Andrew about having ArgIter work with `=` natively (perhaps optionally?)
-                // so it can just present them as always "the next one"
-                return ArgInfo{
-                    .arg_as_u64 = if (is_flag) -answer else answer,
-                    .equals_val = @ptrCast(remainder.ptr),
-                };
-            },
-            0 => {
-                // We've hit the end of the string; we're done!
-                break;
-            },
-            else => {
-                if (bytes_written < 8) {
-                    // Write the byte to the appropriate position in the i64
-                    const shift_amount = bytes_written * 8;
-                    const byte_value: i64 = @as(i64, byte) << shift_amount;
-                    answer |= byte_value;
-                    bytes_written += 1;
-                } else {
-                    // No Roc CLI args are longer than 8 bytes, so this must be something else.
-                    // Return 0 so that it doesn't match any subcommands, flags, etc.
-                    return 0;
-                }
-            },
+        while (char != 0) : (index += 1) {
+            char = arg[index];
+
+            switch (char) {
+                '=' => {
+                    // Found an '=' in the argument; return what we've parsed so far,
+                    // and make equals_val point to what comes after the '='
+                    return FlagOrCmd{
+                        .arg_as_u64 = if (is_flag) -answer else answer,
+                        .equals_val = @ptrCast(arg[index + 1 ..].ptr),
+                    };
+                },
+                0 => {
+                    // We've hit the end of the string; we're done!
+                    return FlagOrCmd{
+                        .arg_as_u64 = if (is_flag) -answer else answer,
+                        .equals_val = null,
+                    };
+                },
+                else => {
+                    if (index < @sizeOf(i64)) {
+                        // Write the byte to the appropriate position in the i64 answer
+                        answer |= @as(i64, char) << (index * @sizeOf(i64));
+                    } else {
+                        // `roc` subcommands and flags all have length <= 8, so
+                        // if we're about to look at the 9th char, we're done.
+                        return FlagOrCmd{
+                            .as_i64 = 0,
+                            .equals_val = null,
+                        };
+                    }
+                },
+            }
         }
     }
-
-    if (is_flag) {
-        return -answer;
-    } else {
-        return answer;
-    }
-}
+};
 
 // Subcommands
-const CMD_VERSION = arg_info("version").as_i64;
-const CMD_CHECK = arg_info("test").as_i64;
-const CMD_BUILD = arg_info("build").as_i64;
-const CMD_HELP = arg_info("help").as_i64;
+const CMD_VERSION = parse_flag_or_cmd("version").as_i64;
+const CMD_CHECK = parse_flag_or_cmd("test").as_i64;
+const CMD_BUILD = parse_flag_or_cmd("build").as_i64;
+const CMD_HELP = parse_flag_or_cmd("help").as_i64;
 
 // Flags (these can start with 1 or 2 dashes; we accept either as equivalent, for convenience)
-const FLAG_VERSION = arg_info("-version").as_i64;
-const FLAG_OPTIMIZE = arg_info("-optimize").as_i64;
-const FLAG_HELP = arg_info("-help").as_i64;
-const FLAG_MAIN = arg_info("-main").as_i64;
-const FLAG_TIME = arg_info("-time").as_i64;
+const FLAG_VERSION = parse_flag_or_cmd("-version").as_i64;
+const FLAG_OPTIMIZE = parse_flag_or_cmd("-optimize").as_i64;
+const FLAG_HELP = parse_flag_or_cmd("-help").as_i64;
+const FLAG_MAIN = parse_flag_or_cmd("-main").as_i64;
+const FLAG_TIME = parse_flag_or_cmd("-time").as_i64;
 
 // For convenience, we accept `-v` and `-h` as shorthands for --version and --help,
 // just because you might assume they're there and try to run them. We don't do this for
 // anything else though.
-const FLAG_V = arg_info("-v");
-const FLAG_H = arg_info("-h");
+const FLAG_V = parse_flag_or_cmd("-v");
+const FLAG_H = parse_flag_or_cmd("-h");
 
 fn process_args(args: std.process.ArgIterator) void {
     // Skip the first arg (path to the executable)
@@ -91,7 +97,7 @@ fn process_args(args: std.process.ArgIterator) void {
 
     // The next arg is the subcommand
     if (args.next()) |second_arg| {
-        const info = arg_info(second_arg);
+        const info = parse_flag_or_cmd(second_arg);
 
         if (info.equals_val != null) {
             // We found an `=` in the subcommand.
@@ -139,11 +145,11 @@ fn process_args(args: std.process.ArgIterator) void {
 
 /// Optimization level for code generation
 const Optimize = enum {
-    /// Optimize for execution speed
+    /// Optimize for runtime performance
     Perf,
-    /// Optimize for binary size
+    /// Optimize for compiled binary size
     Size,
-    /// Development mode with minimal optimization
+    /// Optimize for development speed (completing the build as fast as possible)
     Dev,
 };
 
@@ -154,7 +160,7 @@ fn run(first_arg: []const u8, other_args: std.process.argiterator) void {
     var time: bool = false;
 
     while (true) {
-        const info = arg_info(arg);
+        const info = parse_flag_or_cmd(arg);
 
         switch (info.as_i64) {
             FLAG_OPTIMIZE => {
@@ -235,7 +241,7 @@ fn check(args: std.process.argiterator) void {
     var main: ?[]const u8 = null;
 
     while (args.next()) |arg| {
-        const arg_u64 = arg_info(arg);
+        const arg_u64 = parse_flag_or_cmd(arg);
 
         switch (arg_u64) {
             FLAG_OPTIMIZE => {
@@ -272,7 +278,7 @@ fn check(args: std.process.argiterator) void {
     }
 }
 
-fn build(args: std.process.argiterator) void {
+fn build(args: std.process.ArgIterator) void {
     // todo: implementation goes here - accept dash-dash args before the filename
 }
 
@@ -284,19 +290,19 @@ test "arg_info" {
     var long_arg = false;
 
     // Test with short string
-    try testing.expectEqual(@as(i64, 0x6f6c6c6568), arg_info("hello", &long_arg));
+    try testing.expectEqual(@as(i64, 0x6f6c6c6568), parse_flag_or_cmd("hello", &long_arg));
     try testing.expect(!long_arg);
 
     // Test with 8-byte string
-    try testing.expectEqual(@as(i64, 0x74736574676e6f6c), arg_info("longtest", &long_arg));
+    try testing.expectEqual(@as(i64, 0x74736574676e6f6c), parse_flag_or_cmd("longtest", &long_arg));
     try testing.expect(!long_arg);
 
     // Test with longer string
-    _ = arg_info("this_is_longer_than_8_bytes", &long_arg);
+    _ = parse_flag_or_cmd("this_is_longer_than_8_bytes", &long_arg);
     try testing.expect(long_arg);
 
     // Test with empty string
-    try testing.expectEqual(@as(i64, 0), arg_info("", &long_arg));
+    try testing.expectEqual(@as(i64, 0), parse_flag_or_cmd("", &long_arg));
     try testing.expect(!long_arg);
 }
 

@@ -1,0 +1,2843 @@
+# LLM Prompt for Documentation
+
+## Documentation
+
+### Path
+
+#### MetadataErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    PathDoesNotExist<span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+    Unrecognized <a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+An error when reading a path's file metadata from disk.
+
+#### Path
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    ArbitraryBytes <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+    FromOperatingSystem <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+    FromStr <a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents a path to a file or directory on the filesystem.
+
+#### DirEntry
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    path<span class='punct'> : </span><span class='punct'>[</span>
+        ArbitraryBytes <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+        FromOperatingSystem <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+        FromStr <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    type<span class='punct'> : </span><span class='punct'>[</span>
+        Dir<span class='punct'>,</span>
+        File<span class='punct'>,</span>
+        Symlink<span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    metadata<span class='punct'> : </span><span class='punct'>{</span>
+        type<span class='punct'> : </span><span class='punct'>[</span>
+            Dir<span class='punct'>,</span>
+            File<span class='punct'>,</span>
+            Symlink<span class='punct'>,</span>
+        <span class='punct'>]</span><span class='punct'>,</span>
+        bytes<span class='punct'> : </span><span class='punct'>[]</span><span class='punct'>,</span>
+        mode<span class='punct'> : </span><span class='punct'>[</span>
+            NonUnix<span class='punct'>,</span>
+            Unix <span class='punct'>[]</span><span class='punct'>,</span>
+        <span class='punct'>]</span><span class='punct'>,</span>
+        isReadonly<span class='punct'> : </span><span class='punct'>[</span>
+            False<span class='punct'>,</span>
+            True<span class='punct'>,</span>
+        <span class='punct'>]</span><span class='punct'>,</span>
+    <span class='punct'>}</span><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Record which represents a directory
+
+> This is the same as [`Dir.DirEntry`](Dir#DirEntry).
+
+#### ReadErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    Interrupted<span class='punct'>,</span>
+    NotFound<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+    TimedOut<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Tag union of possible errors when reading a file or directory.
+
+> This is the same as [`File.ReadErr`](File#ReadErr).
+
+#### WriteErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    AlreadyExists<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    NotFound<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+    TimedOut<span class='punct'>,</span>
+    WriteZero<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Tag union of possible errors when writing a file or directory.
+
+> This is the same as [`File.WriteErr`](File#WriteErr).
+
+#### DirErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    AlreadyExists<span class='punct'>,</span>
+    NotADirectory<span class='punct'>,</span>
+    NotFound<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+**NotFound** - This error is raised when the specified directory does not exist, typically during attempts to access or manipulate it.
+
+**PermissionDenied** - Occurs when the user lacks the necessary permissions to perform an action on a directory, such as reading, writing, or executing.
+
+**AlreadyExists** - This error is thrown when trying to create a directory that already exists.
+
+**NotADirectory** - Raised when an operation that requires a directory (e.g., listing contents) is attempted on a file instead.
+
+**Other** - A catch-all for any other types of errors not explicitly listed above.
+
+> This is the same as [`Dir.Err`](Dir#Err).
+
+#### write
+
+**Type Annotation**
+
+```roc
+
+    val<span class='punct'>, </span>
+    Path<span class='punct'>, </span>
+    fmt
+    <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+    <a href='https://www.roc-lang.org/abilities'>where</a> val <a href='https://www.roc-lang.org/abilities'>implements</a> Encoding<span class='punct'>,</span> fmt <a href='https://www.roc-lang.org/abilities'>implements</a> EncoderFormatting
+```
+
+**Description**
+
+Write data to a file.
+
+First encode a `val` using a given `fmt` which implements the ability [Encode.EncoderFormatting](https://www.roc-lang.org/builtins/Encode#EncoderFormatting).
+
+For example, suppose you have a `Json.toCompactUtf8` which implements
+[Encode.EncoderFormatting](https://www.roc-lang.org/builtins/Encode#EncoderFormatting).
+You can use this to write [JSON](https://en.wikipedia.org/wiki/JSON)
+data to a file like this:
+
+```
+# Writes `{"some":"json stuff"}` to the file `output.json`:
+Path.write
+    { some: "json stuff" }
+    (Path.fromStr "output.json")
+    Json.toCompactUtf8
+```
+
+This opens the file first and closes it after writing to it.
+If writing to the file fails, for example because of a file permissions issue, the task fails with [WriteErr].
+
+> To write unformatted bytes to a file, you can use [Path.writeBytes] instead.
+
+#### writeBytes
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>List</a> U8<span class='punct'>, </span>Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes bytes to a file.
+
+```
+# Writes the bytes 1, 2, 3 to the file `myfile.dat`.
+Path.writeBytes [1, 2, 3] (Path.fromStr "myfile.dat")
+```
+
+This opens the file first and closes it after writing to it.
+
+> To format data before writing it to a file, you can use [Path.write] instead.
+
+#### writeUtf8
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span>Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes a [Str] to a file, encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8).
+
+```
+# Writes "Hello!" encoded as UTF-8 to the file `myfile.txt`.
+Path.writeUtf8 "Hello!" (Path.fromStr "myfile.txt")
+```
+
+This opens the file first and closes it after writing to it.
+
+> To write unformatted bytes to a file, you can use [Path.writeBytes] instead.
+
+#### fromStr
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Path
+```
+
+**Description**
+
+Note that the path may not be valid depending on the filesystem where it is used.
+For example, paths containing `:` are valid on ext4 and NTFS filesystems, but not
+on FAT ones. So if you have multiple disks on the same machine, but they have
+different filesystems, then this path could be valid on one but invalid on another!
+
+It's safest to assume paths are invalid (even syntactically) until given to an operation
+which uses them to open a file. If that operation succeeds, then the path was valid
+(at the time). Otherwise, error handling can happen for that operation rather than validating
+up front for a false sense of security (given symlinks, parts of a path being renamed, etc.).
+
+#### fromBytes
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>List</a> U8 <span class='punct'>-></span> Path
+```
+
+**Description**
+
+Not all filesystems use Unicode paths. This function can be used to create a path which
+is not valid Unicode (like a [Str] is), but which is valid for a particular filesystem.
+
+Note that if the list contains any `0` bytes, sending this path to any file operations
+(e.g. `Path.readBytes` or `WriteStream.openPath`) will fail.
+
+#### display
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Unfortunately, operating system paths do not include information about which charset
+they were originally encoded with. It's most common (but not guaranteed) that they will
+have been encoded with the same charset as the operating system's curent locale (which
+typically does not change after it is set during installation of the OS), so
+this should convert a [Path] to a valid string as long as the path was created
+with the given `Charset`. (Use `Env.charset` to get the current system charset.)
+
+For a conversion to [Str] that is lossy but does not return a [Result], see
+[display].
+toInner : Path -> [Str Str, Bytes (List U8)]
+Assumes a path is encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8),
+and converts it to a string using `Str.display`.
+
+This conversion is lossy because the path may contain invalid UTF-8 bytes. If that happens,
+any invalid bytes will be replaced with the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+instead of returning an error. As such, it's rarely a good idea to use the [Str] returned
+by this function for any purpose other than displaying it to a user.
+
+When you don't know for sure what a path's encoding is, UTF-8 is a popular guess because
+it's the default on UNIX and also is the encoding used in Roc strings. This platform also
+automatically runs applications under the [UTF-8 code page](https://docs.microsoft.com/en-us/windows/apps/design/globalizing/use-utf8-code-page)
+on Windows.
+
+Converting paths to strings can be an unreliable operation, because operating systems
+don't record the paths' encodings. This means it's possible for the path to have been
+encoded with a different character set than UTF-8 even if UTF-8 is the system default,
+which means when [display] converts them to a string, the string may include gibberish.
+[Here is an example.](https://unix.stackexchange.com/questions/667652/can-a-file-path-be-invalid-utf-8/667863#667863)
+
+If you happen to know the `Charset` that was used to encode the path, you can use
+`toStrUsingCharset` instead of [display].
+
+#### isDir
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a directory.
+Returns `Task.ok false` if the path exists and it is not a directory. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_dir](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_dir).
+
+> [`File.isDir`](File#isDir) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### isFile
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a regular file.
+Returns `Task.ok false` if the path exists and it is not a file. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_file](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_file).
+
+> [`File.isFile`](File#isFile) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### isSymLink
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a symbolic link.
+Returns `Task.ok false` if the path exists and it is not a symbolic link. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_symlink](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_symlink).
+
+> [`File.isSymLink`](File#isSymLink) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### type
+
+**Type Annotation**
+
+```roc
+
+    Path
+    <span class='punct'>-></span> Task <span class='punct'>[</span>
+        IsFile<span class='punct'>,</span>
+        IsDir<span class='punct'>,</span>
+        IsSymLink<span class='punct'>,</span>
+    <span class='punct'>]</span> <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Return the type of the path if the path exists on disk.
+
+> [`File.type`](File#type) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### withExtension
+
+**Type Annotation**
+
+```roc
+Path<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Path
+```
+
+**Description**
+
+If the last component of this path has no `.`, appends `.` followed by the given string.
+Otherwise, replaces everything after the last `.` with the given string.
+
+```
+# Each of these gives "foo/bar/baz.txt"
+Path.fromStr "foo/bar/baz" |> Path.withExtension "txt"
+Path.fromStr "foo/bar/baz." |> Path.withExtension "txt"
+Path.fromStr "foo/bar/baz.xz" |> Path.withExtension "txt"
+```
+
+#### delete
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Deletes a file from the filesystem.
+
+Performs a [`DeleteFile`](https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-deletefile)
+on Windows and [`unlink`](https://en.wikipedia.org/wiki/Unlink_(Unix)) on
+UNIX systems. On Windows, this will fail when attempting to delete a readonly
+file; the file's readonly permission must be disabled before it can be
+successfully deleted.
+
+```
+# Deletes the file named `myfile.dat`
+Path.delete (Path.fromStr "myfile.dat") [1, 2, 3]
+```
+
+> This does not securely erase the file's contents from disk; instead, the operating
+system marks the space it was occupying as safe to write over in the future. Also, the operating
+system may not immediately mark the space as free; for example, on Windows it will wait until
+the last file handle to it is closed, and on UNIX, it will not remove it until the last
+[hard link](https://en.wikipedia.org/wiki/Hard_link) to it has been deleted.
+
+> [`File.delete`](File#delete) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### readUtf8
+
+**Type Annotation**
+
+```roc
+
+    Path
+    <span class='punct'>-></span> Task <a href='https://example.com'>Str</a> <span class='punct'>[</span>
+        FileReadErr Path ReadErr<span class='punct'>,</span>
+        FileReadUtf8Err Path <span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Reads a [Str] from a file containing [UTF-8](https://en.wikipedia.org/wiki/UTF-8)-encoded text.
+
+```
+# Reads UTF-8 encoded text into a Str from the file "myfile.txt"
+Path.readUtf8 (Path.fromStr "myfile.txt")
+```
+
+This opens the file first and closes it after writing to it.
+The task will fail with `FileReadUtf8Err` if the given file contains invalid UTF-8.
+
+> To read unformatted bytes from a file, you can use [Path.readBytes] instead.
+>
+> [`File.readUtf8`](File#readUtf8) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### readBytes
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>FileReadErr Path ReadErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Reads all the bytes in a file.
+
+```
+# Read all the bytes in `myfile.txt`.
+Path.readBytes (Path.fromStr "myfile.txt")
+```
+
+This opens the file first and closes it after reading its contents.
+
+> To read and decode data from a file, you can use `Path.read` instead.
+>
+> [`File.readBytes`](File#readBytes) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### listDir
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> Path<span class='punct'>)</span> <span class='punct'>[</span>DirErr DirErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Lists the files and directories inside the directory.
+
+> [`Dir.list`](Dir#list) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### deleteEmpty
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr DirErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Deletes a directory if it's empty
+
+This may fail if:
+  - the path doesn't exist
+  - the path is not a directory
+  - the directory is not empty
+  - the user lacks permission to remove the directory.
+
+> [`Dir.deleteEmpty`](Dir#deleteEmpty) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### deleteAll
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr DirErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Recursively deletes a directory as well as all files and directories
+inside it.
+
+This may fail if:
+  - the path doesn't exist
+  - the path is not a directory
+  - the directory is not empty
+  - the user lacks permission to remove the directory.
+
+> [`Dir.deleteAll`](Dir#deleteAll) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### createDir
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr DirErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Creates a directory
+
+This may fail if:
+  - a parent directory does not exist
+  - the user lacks permission to create a directory there
+  - the path already exists.
+
+> [`Dir.create`](Dir#create) does the same thing, except it takes a [Str] instead of a [Path].
+
+#### createAll
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr DirErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Creates a directory recursively adding any missing parent directories.
+
+This may fail if:
+  - the user lacks permission to create a directory there
+  - the path already exists
+
+> [`Dir.createAll`](Dir#createAll) does the same thing, except it takes a [Str] instead of a [Path].
+
+### Arg
+
+#### list
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> <a href='https://example.com'>Str</a><span class='punct'>)</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Gives a list of the program's command-line arguments.
+
+#### parse
+
+**Type Annotation**
+
+```roc
+
+    CliParser state
+    <span class='punct'>-></span> Task state <span class='punct'>[</span>
+        Exit I32 <a href='https://example.com'>Str</a><span class='punct'>,</span>
+        StdoutErr Stdout.Err<span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Parse arguments using a CLI parser or show a useful message on failure.
+
+We have the following priorities in returning messages to the user:
+1) If the `-h/--help` flag is passed, the help page for the command/subcommand
+   called will be displayed no matter if your arguments were correctly parsed.
+2) If the `-V/--version` flag is passed, the version for the app will
+   be displayed no matter if your arguments were correctly parsed.
+3) If the provided arguments were parsed and neither of the above two
+   built-in flags were passed, we return to you your data.
+4) If the provided arguments were not correct, we return a short message
+   with which argument was not provided correctly, followed by the
+   usage section of the relevant command/subcommand's help text.
+
+```roc
+exampleCli =
+    { Cli.combine <-
+        verbosity: Opt.count { short: "v", help: "How verbose our logs should be." },
+        alpha: Opt.maybeU64 { short: "a", help: "Set the alpha level." },
+    }
+    |> Cli.finish {
+        name: "example",
+        version: "v0.1.0",
+        description: "An example CLI.",
+    }
+    |> Cli.assertValid
+
+expect
+    exampleCli
+    |> Cli.parseOrDisplayMessage ["example", "-h"]
+    == Err
+        """
+        example v0.1.0
+
+        An example CLI.
+
+        Usage:
+          example [OPTIONS]
+
+        Options:
+          -v             How verbose our logs should be.
+          -a             Set the alpha level.
+          -h, --help     Show this help page.
+          -V, --version  Show the version.
+        """
+
+expect
+    exampleCli
+    |> Cli.parseOrDisplayMessage ["example", "-V"]
+    == Err "v0.1.0"
+
+expect
+    exampleCli
+    |> Cli.parseOrDisplayMessage ["example", "-v"]
+    == Ok { verbosity: 1 }
+
+expect
+    exampleCli
+    |> Cli.parseOrDisplayMessage ["example", "-x"]
+    == Err
+        """
+        Error: The argument -x was not recognized.
+
+        Usage:
+          example [OPTIONS]
+        """
+```
+
+### Dir
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    AlreadyExists<span class='punct'>,</span>
+    NotADirectory<span class='punct'>,</span>
+    NotFound<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+**NotFound** - This error is raised when the specified path does not exist, typically during attempts to access or manipulate it, but also potentially when trying to create a directory and a parent directory does not exist.
+
+**PermissionDenied** - Occurs when the user lacks the necessary permissions to perform an action on a directory, such as reading, writing, or executing.
+
+**Other** - A catch-all for any other types of errors not explicitly listed above.
+
+> This is the same as [`Path.DirErr`](Path#DirErr).
+
+#### DirEntry
+
+**Type Annotation**
+
+```roc
+Path.DirEntry
+```
+
+**Description**
+
+Record which represents a directory
+
+> This is the same as [`Path.DirEntry`](Path#DirEntry).
+
+#### list
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> Path<span class='punct'>)</span> <span class='punct'>[</span>DirErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Lists the files and directories inside the directory.
+
+> [Path.listDir] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### deleteEmpty
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Deletes a directory if it's empty
+
+This may fail if:
+  - the path doesn't exist
+  - the path is not a directory
+  - the directory is not empty
+  - the user lacks permission to remove the directory.
+
+> [Path.deleteEmpty] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### deleteAll
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Recursively deletes the directory as well as all files and directories
+inside it.
+
+This may fail if:
+  - the path doesn't exist
+  - the path is not a directory
+  - the directory is not empty
+  - the user lacks permission to remove the directory.
+
+> [Path.deleteAll] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### create
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Creates a directory
+
+This may fail if:
+  - a parent directory does not exist
+  - the user lacks permission to create a directory there
+  - the path already exists.
+
+> [Path.createDir] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### createAll
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>DirErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Creates a directory recursively adding any missing parent directories.
+
+This may fail if:
+  - the user lacks permission to create a directory there
+  - the path already exists
+
+> [Path.createAll] does the same thing, except it takes a [Path] instead of a [Str].
+
+### Env
+
+#### cwd
+
+**Type Annotation**
+
+```roc
+Task Path <span class='punct'>[</span>CwdUnavailable<span class='punct'>]</span>
+```
+
+**Description**
+
+Reads the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
+from the environment. File operations on relative [Path]s are relative to this directory.
+
+#### setCwd
+
+**Type Annotation**
+
+```roc
+Path <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>InvalidCwd<span class='punct'>]</span>
+```
+
+**Description**
+
+Sets the [current working directory](https://en.wikipedia.org/wiki/Working_directory)
+in the environment. After changing it, file operations on relative [Path]s will be relative
+to this directory.
+
+#### exePath
+
+**Type Annotation**
+
+```roc
+Task Path <span class='punct'>[</span>ExePathUnavailable<span class='punct'>]</span>
+```
+
+**Description**
+
+Gets the path to the currently-running executable.
+
+#### var
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <a href='https://example.com'>Str</a> <span class='punct'>[</span>VarNotFound<span class='punct'>]</span>
+```
+
+**Description**
+
+Reads the given environment variable.
+
+If the value is invalid Unicode, the invalid parts will be replaced with the
+[Unicode replacement character](https://unicode.org/glossary/#replacement_character) ('�').
+
+#### decode
+
+**Type Annotation**
+
+```roc
+
+    <a href='https://example.com'>Str</a>
+    <span class='punct'>-></span> Task val <span class='punct'>[</span>
+        VarNotFound<span class='punct'>,</span>
+        DecodeErr DecodeError<span class='punct'>,</span>
+    <span class='punct'>]</span>
+    <a href='https://www.roc-lang.org/abilities'>where</a> val <a href='https://www.roc-lang.org/abilities'>implements</a> Decoding
+```
+
+**Description**
+
+Reads the given environment variable and attempts to decode it.
+
+The type being decoded into will be determined by type inference. For example,
+if this ends up being used like a `Task U16 _` then the environment variable
+will be decoded as a string representation of a `U16`. Trying to decode into
+any other type will fail with a `DecodeErr`.
+
+Supported types include;
+- Strings,
+- Numbers, as long as they contain only numeric digits, up to one `.`, and an optional `-` at the front for negative numbers, and
+- Comma-separated lists (of either strings or numbers), as long as there are no spaces after the commas.
+
+For example, consider we want to decode the environment variable `NUM_THINGS`;
+
+```
+# Reads "NUM_THINGS" and decodes into a U16
+getU16Var : Str -> Task U16 [VarNotFound, DecodeErr DecodeError] [Read [Env]]
+getU16Var = \var -> Env.decode var
+```
+
+If `NUM_THINGS=123` then `getU16Var` succeeds with the value of `123u16`.
+However if `NUM_THINGS=123456789`, then `getU16Var` will
+fail with [DecodeErr](https://www.roc-lang.org/builtins/Decode#DecodeError)
+because `123456789` is too large to fit in a [U16](https://www.roc-lang.org/builtins/Num#U16).
+
+
+#### dict
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>(</span>Dict <a href='https://example.com'>Str</a> <a href='https://example.com'>Str</a><span class='punct'>)</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Reads all the process's environment variables into a [Dict].
+
+If any key or value contains invalid Unicode, the [Unicode replacement character](https://unicode.org/glossary/#replacement_character)
+will be used in place of any parts of keys or values that are invalid Unicode.
+
+#### platform
+
+**Type Annotation**
+
+```roc
+Task <span class='punct'>{</span>
+    arch<span class='punct'> : </span>ARCH<span class='punct'>,</span>
+    os<span class='punct'> : </span>OS<span class='punct'>,</span>
+<span class='punct'>}</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Returns the current Achitecture and Operating System.
+
+`ARCH : [X86, X64, ARM, AARCH64, OTHER Str]`
+`OS : [LINUX, MACOS, WINDOWS, OTHER Str]`
+
+Note these values are constants from when the platform is built.
+
+
+#### tempDir
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task Path <span class='punct'>*</span>
+```
+
+**Description**
+
+This uses rust's [`std::env::temp_dir()`](https://doc.rust-lang.org/std/env/fn.temp_dir.html)
+
+!! From the Rust documentation:
+
+The temporary directory may be shared among users, or between processes with different privileges;
+thus, the creation of any files or directories in the temporary directory must use a secure method
+to create a uniquely named file. Creating a file or directory with a fixed or predictable name may
+result in “insecure temporary file” security vulnerabilities.
+
+
+### File
+
+#### ReadErr
+
+**Type Annotation**
+
+```roc
+Path.ReadErr
+```
+
+**Description**
+
+Tag union of possible errors when reading a file or directory.
+
+> This is the same as [`Path.ReadErr`](Path#ReadErr).
+
+#### WriteErr
+
+**Type Annotation**
+
+```roc
+Path.WriteErr
+```
+
+**Description**
+
+Tag union of possible errors when writing a file or directory.
+
+> This is the same as [`Path.WriteErr`](Path#WriteErr).
+
+#### write
+
+**Type Annotation**
+
+```roc
+
+    val<span class='punct'>, </span>
+    <a href='https://example.com'>Str</a><span class='punct'>, </span>
+    fmt
+    <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+    <a href='https://www.roc-lang.org/abilities'>where</a> val <a href='https://www.roc-lang.org/abilities'>implements</a> Encoding<span class='punct'>,</span> fmt <a href='https://www.roc-lang.org/abilities'>implements</a> EncoderFormatting
+```
+
+**Description**
+
+Write data to a file.
+
+First encode a `val` using a given `fmt` which implements the ability [Encode.EncoderFormatting](https://www.roc-lang.org/builtins/Encode#EncoderFormatting).
+
+For example, suppose you have a `Json.toCompactUtf8` which implements
+[Encode.EncoderFormatting](https://www.roc-lang.org/builtins/Encode#EncoderFormatting).
+You can use this to write [JSON](https://en.wikipedia.org/wiki/JSON)
+data to a file like this:
+
+```
+# Writes `{"some":"json stuff"}` to the file `output.json`:
+File.write
+    { some: "json stuff" }
+    (Path.fromStr "output.json")
+    Json.toCompactUtf8
+```
+
+This opens the file first and closes it after writing to it.
+If writing to the file fails, for example because of a file permissions issue, the task fails with [WriteErr].
+
+> To write unformatted bytes to a file, you can use [File.writeBytes] instead.
+>
+> [Path.write] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### writeBytes
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>List</a> U8<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes bytes to a file.
+
+```
+# Writes the bytes 1, 2, 3 to the file `myfile.dat`.
+File.writeBytes [1, 2, 3] (Path.fromStr "myfile.dat")
+```
+
+This opens the file first and closes it after writing to it.
+
+> To format data before writing it to a file, you can use [File.write] instead.
+>
+> [Path.writeBytes] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### writeUtf8
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes a [Str] to a file, encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8).
+
+```
+# Writes "Hello!" encoded as UTF-8 to the file `myfile.txt`.
+File.writeUtf8 "Hello!" "myfile.txt"
+```
+
+This opens the file first and closes it after writing to it.
+
+> To write unformatted bytes to a file, you can use [File.writeBytes] instead.
+>
+> [Path.writeUtf8] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### delete
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>FileWriteErr Path WriteErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Deletes a file from the filesystem.
+
+Performs a [`DeleteFile`](https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-deletefile)
+on Windows and [`unlink`](https://en.wikipedia.org/wiki/Unlink_(Unix)) on
+UNIX systems. On Windows, this will fail when attempting to delete a readonly
+file; the file's readonly permission must be disabled before it can be
+successfully deleted.
+
+```
+# Deletes the file named `myfile.dat`
+File.delete (Path.fromStr "myfile.dat") [1, 2, 3]
+```
+
+> This does not securely erase the file's contents from disk; instead, the operating
+system marks the space it was occupying as safe to write over in the future. Also, the operating
+system may not immediately mark the space as free; for example, on Windows it will wait until
+the last file handle to it is closed, and on UNIX, it will not remove it until the last
+[hard link](https://en.wikipedia.org/wiki/Hard_link) to it has been deleted.
+>
+> [Path.delete] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### readBytes
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>FileReadErr Path ReadErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Reads all the bytes in a file.
+
+```
+# Read all the bytes in `myfile.txt`.
+File.readBytes "myfile.txt"
+```
+
+This opens the file first and closes it after reading its contents.
+
+> To read and decode data from a file, you can use `File.read` instead.
+>
+> [Path.readBytes] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### readUtf8
+
+**Type Annotation**
+
+```roc
+
+    <a href='https://example.com'>Str</a>
+    <span class='punct'>-></span> Task <a href='https://example.com'>Str</a> <span class='punct'>[</span>
+        FileReadErr Path ReadErr<span class='punct'>,</span>
+        FileReadUtf8Err Path <span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Reads a [Str] from a file containing [UTF-8](https://en.wikipedia.org/wiki/UTF-8)-encoded text.
+
+```
+# Reads UTF-8 encoded text into a Str from the file "myfile.txt"
+File.readUtf8 "myfile.txt"
+```
+
+This opens the file first and closes it after writing to it.
+The task will fail with `FileReadUtf8Err` if the given file contains invalid UTF-8.
+
+> To read unformatted bytes from a file, you can use [File.readBytes] instead.
+
+> [Path.readUtf8] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### isDir
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a directory.
+Returns `Task.ok false` if the path exists and it is not a directory. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_dir](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_dir).
+
+> [Path.isDir] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### isFile
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a regular file.
+Returns `Task.ok false` if the path exists and it is not a file. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_file](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_file).
+
+> [Path.isFile] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### isSymLink
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task Bool <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Returns true if the path exists on disk and is pointing at a symbolic link.
+Returns `Task.ok false` if the path exists and it is not a symbolic link. If the path does not exist,
+this function will return `Task.err PathErr PathDoesNotExist`.
+
+This uses [rust's std::path::is_symlink](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_symlink).
+
+> [Path.isSymLink] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### type
+
+**Type Annotation**
+
+```roc
+
+    <a href='https://example.com'>Str</a>
+    <span class='punct'>-></span> Task <span class='punct'>[</span>
+        IsFile<span class='punct'>,</span>
+        IsDir<span class='punct'>,</span>
+        IsSymLink<span class='punct'>,</span>
+    <span class='punct'>]</span> <span class='punct'>[</span>PathErr MetadataErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Return the type of the path if the path exists on disk.
+This uses [rust's std::path::is_symlink](https://doc.rust-lang.org/std/path/struct.Path.html#method.is_symlink).
+
+> [Path.type] does the same thing, except it takes a [Path] instead of a [Str].
+
+#### Reader
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    path<span class='punct'> : </span><span class='punct'>[</span>
+        ArbitraryBytes <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+        FromOperatingSystem <span class='punct'>(</span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>)</span><span class='punct'>,</span>
+        FromStr <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    reader<span class='punct'> : </span>Box <span class='punct'>{}</span><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+#### openReader
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task Reader <span class='punct'>[</span>GetFileReadErr Path ReadErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Try to open a `File.Reader` for buffered (= part by part) reading given a path string.
+See [examples/file-read-buffered.roc](https://github.com/roc-lang/basic-cli/blob/main/examples/file-read-buffered.roc) for example usage.
+
+This uses [rust's std::io::BufReader](https://doc.rust-lang.org/std/io/struct.BufReader.html).
+
+Use [readUtf8] if you want to get the entire file contents at once.
+
+#### openReaderWithCapacity
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span>U64 <span class='punct'>-></span> Task Reader <span class='punct'>[</span>GetFileReadErr Path ReadErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Try to open a `File.Reader` for buffered (= part by part) reading given a path string.
+The buffer will be created with the specified capacity.
+See [examples/file-read-buffered.roc](https://github.com/roc-lang/basic-cli/blob/main/examples/file-read-buffered.roc) for example usage.
+
+This uses [rust's std::io::BufReader](https://doc.rust-lang.org/std/io/struct.BufReader.html).
+
+Use [readUtf8] if you want to get the entire file contents at once.
+
+#### readLine
+
+**Type Annotation**
+
+```roc
+Reader <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>FileReadErr Path <a href='https://example.com'>Str</a><span class='punct'>]</span>
+```
+
+**Description**
+
+Try to read a line from a file given a Reader.
+The line will be provided as the list of bytes (`List U8`) until a newline (`0xA` byte).
+This list will be empty when we reached the end of the file.
+See [examples/file-read-buffered.roc](https://github.com/roc-lang/basic-cli/blob/main/examples/file-read-buffered.roc) for example usage.
+
+This uses [rust's `BufRead::read_line`](https://doc.rust-lang.org/std/io/trait.BufRead.html#method.read_line).
+
+Use [readUtf8] if you want to get the entire file contents at once.
+
+### FileMetadata
+
+#### FileMetadata
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    type<span class='punct'> : </span><span class='punct'>[</span>
+        Dir<span class='punct'>,</span>
+        File<span class='punct'>,</span>
+        Symlink<span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    bytes<span class='punct'> : </span><span class='punct'>[]</span><span class='punct'>,</span>
+    mode<span class='punct'> : </span><span class='punct'>[</span>
+        NonUnix<span class='punct'>,</span>
+        Unix <span class='punct'>[]</span><span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    isReadonly<span class='punct'> : </span><span class='punct'>[</span>
+        False<span class='punct'>,</span>
+        True<span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+An opaque type that represents metadata about a file.
+
+#### bytes
+
+**Type Annotation**
+
+```roc
+FileMetadata <span class='punct'>-></span> U64
+```
+
+**Description**
+
+Returns the number of bytes in the associated file.
+
+#### isReadonly
+
+**Type Annotation**
+
+```roc
+FileMetadata <span class='punct'>-></span> Bool
+```
+
+**Description**
+
+Returns [Bool.true] if the associated file is read-only.
+
+#### type
+
+**Type Annotation**
+
+```roc
+
+    FileMetadata
+    <span class='punct'>-></span> <span class='punct'>[</span>
+        File<span class='punct'>,</span>
+        Dir<span class='punct'>,</span>
+        Symlink<span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Returns the type of the associated file.
+
+#### mode
+
+**Type Annotation**
+
+```roc
+
+    FileMetadata
+    <span class='punct'>-></span> <span class='punct'>[</span>
+        Unix U32<span class='punct'>,</span>
+        NonUnix<span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Returns the mode of the associated file.
+
+### Http
+
+#### Request
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    body<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>,</span>
+    method<span class='punct'> : </span><span class='punct'>[</span>
+        Connect<span class='punct'>,</span>
+        Delete<span class='punct'>,</span>
+        Get<span class='punct'>,</span>
+        Head<span class='punct'>,</span>
+        Options<span class='punct'>,</span>
+        Patch<span class='punct'>,</span>
+        Post<span class='punct'>,</span>
+        Put<span class='punct'>,</span>
+        Trace<span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    headers<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>{</span>
+        value<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+        key<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    <span class='punct'>}</span><span class='punct'>,</span>
+    timeout<span class='punct'> : </span><span class='punct'>[</span>
+        NoTimeout<span class='punct'>,</span>
+        TimeoutMilliseconds <span class='punct'>[]</span><span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    mimeType<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    url<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Represents an HTTP request.
+
+#### Method
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    Connect<span class='punct'>,</span>
+    Delete<span class='punct'>,</span>
+    Get<span class='punct'>,</span>
+    Head<span class='punct'>,</span>
+    Options<span class='punct'>,</span>
+    Patch<span class='punct'>,</span>
+    Post<span class='punct'>,</span>
+    Put<span class='punct'>,</span>
+    Trace<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents an HTTP method.
+
+#### Header
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    value<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    key<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Represents an HTTP header e.g. `Content-Type: application/json`
+
+#### TimeoutConfig
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    NoTimeout<span class='punct'>,</span>
+    TimeoutMilliseconds <span class='punct'>[]</span><span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents a timeout configuration for an HTTP request.
+
+#### Response
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    body<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>,</span>
+    statusText<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    headers<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>{</span>
+        value<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+        key<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    <span class='punct'>}</span><span class='punct'>,</span>
+    url<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+    statusCode<span class='punct'> : </span><span class='punct'>[]</span><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Represents an HTTP response.
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    BadBody <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    BadRequest <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    BadStatus <span class='punct'>{</span>
+        code<span class='punct'> : </span><span class='punct'>[]</span><span class='punct'>,</span>
+        body<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>,</span>
+    <span class='punct'>}</span><span class='punct'>,</span>
+    NetworkError<span class='punct'>,</span>
+    Timeout <span class='punct'>[]</span><span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents an HTTP error.
+
+#### errorBodyToBytes
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>List</a> <span class='punct'>[]</span> <span class='punct'>-></span> <a href='https://example.com'>List</a> <span class='punct'>[]</span>
+```
+
+**Description**
+
+Convert the ErrorBody of a BadStatus error to List U8.
+
+#### defaultRequest
+
+**Type Annotation**
+
+```roc
+Request
+```
+
+**Description**
+
+A default [Request] value.
+
+```
+# GET "roc-lang.org"
+{ Http.defaultRequest &
+    url: "https://www.roc-lang.org",
+}
+```
+
+
+#### header
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Header
+```
+
+**Description**
+
+An HTTP header for configuring requests.
+
+See common headers [here](https://en.wikipedia.org/wiki/List_of_HTTP_header_fields).
+
+
+#### handleStringResponse
+
+**Type Annotation**
+
+```roc
+Response <span class='punct'>-></span> Result <a href='https://example.com'>Str</a> Err
+```
+
+**Description**
+
+Map a [Response] body to a [Str] or return an [Err].
+
+#### errorToString
+
+**Type Annotation**
+
+```roc
+Err <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Convert an [Err] to a [Str].
+
+#### send
+
+**Type Annotation**
+
+```roc
+Request <span class='punct'>-></span> Task Response <span class='punct'>[</span>HttpErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Task to send an HTTP request, succeeds with a value of [Str] or fails with an
+[Err].
+
+```
+# Prints out the HTML of the Roc-lang website.
+response =
+    { Http.defaultRequest & url: "https://www.roc-lang.org" }
+    |> Http.send!
+
+response.body
+|> Str.fromUtf8
+|> Result.withDefault "Invalid UTF-8"
+|> Stdout.line
+```
+
+#### get
+
+**Type Annotation**
+
+```roc
+
+    <a href='https://example.com'>Str</a><span class='punct'>, </span>
+    fmt
+    <span class='punct'>-></span> Task body <span class='punct'>[</span>
+        HttpErr Http.Err<span class='punct'>,</span>
+        HttpDecodingFailed<span class='punct'>,</span>
+    <span class='punct'>]</span>
+    <a href='https://www.roc-lang.org/abilities'>where</a> body <a href='https://www.roc-lang.org/abilities'>implements</a> Decoding<span class='punct'>,</span> fmt <a href='https://www.roc-lang.org/abilities'>implements</a> DecoderFormatting
+```
+
+**Description**
+
+Try to perform an HTTP get request and convert (decode) the received bytes into a Roc type.
+Very useful for working with Json.
+
+```
+import json.Json
+
+# On the server side we send `Encode.toBytes {foo: "Hello Json!"} Json.utf8`
+{ foo } = Http.get! "http://localhost:8000" Json.utf8
+```
+
+### Stderr
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    BrokenPipe<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    Unsupported<span class='punct'>,</span>
+    WouldBlock<span class='punct'>,</span>
+    WriteZero<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+**BrokenPipe** - This error can occur when writing to a stdout that is no longer connected
+to a valid input. For example, if the process on the receiving end of a pipe closes its
+end, any write to that pipe could lead to a BrokenPipe error.
+
+**WouldBlock** - This error might occur if stdout is set to non-blocking mode and the write
+operation would block because the output buffer is full.
+
+**WriteZero** - This indicates an attempt to write "zero" bytes which is technically a no-operation
+(no-op), but if detected, it could be raised as an error.
+
+**Unsupported** - If the stdout operation involves writing data in a manner or format that is not
+supported, this error could be raised.
+
+**Interrupted** - This can happen if a signal interrupts the writing process before it completes.
+
+**OutOfMemory** - This could occur if there is not enough memory available to buffer the data being
+written to stdout.
+
+**Other** - This is a catch-all for any error not specifically categorized by the other ErrorKind
+variants.
+
+#### line
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>StderrErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Write the given string to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)),
+followed by a newline.
+
+> To write to `stderr` without the newline, see [Stderr.write].
+
+#### write
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>StderrErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Write the given string to [standard error](https://en.wikipedia.org/wiki/Standard_streams#Standard_error_(stderr)).
+
+Most terminals will not actually display strings that are written to them until they receive a newline,
+so this may appear to do nothing until you write a newline!
+
+> To write to `stderr` with a newline at the end, see [Stderr.line].
+
+### Stdin
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    BrokenPipe<span class='punct'>,</span>
+    EndOfFile<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    InvalidInput<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    UnexpectedEof<span class='punct'>,</span>
+    Unsupported<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+**EndOfFile** - This error occurs when an end-of-file (EOF) condition is met unexpectedly
+during input operations. Typically indicates that no more data is available for reading.
+
+**BrokenPipe** - This error happens when an attempt to write to a pipe cannot proceed because
+the other end of the pipe has been closed. Common in IPC (Inter-Process Communication) scenarios.
+
+**UnexpectedEof** - Similar to EndOfFile but specifically refers to cases where the EOF occurs
+unexpectedly, possibly indicating truncated or corrupted data streams.
+
+**InvalidInput** - This error is raised when an input operation receives data that is not in a
+valid format, suggesting possible data corruption or a mismatch in expected data format.
+
+**OutOfMemory** - Occurs when an operation fails due to insufficient memory available to
+complete the operation. This can affect data reading, buffering, or processing.
+
+**Interrupted** - This error can happen if an input operation is interrupted by a system
+signal before it could complete, often needing a retry or causing the operation to fail.
+
+**Unsupported** - Raised when an operation involves a feature or operation mode that is not
+supported. This might involve character encodings, data compression formats, etc.
+
+**Other** - A catch-all category for errors that do not fall into the specified categories.
+Allows for flexible error handling of uncommon or unexpected conditions.
+
+#### line
+
+**Type Annotation**
+
+```roc
+Task <a href='https://example.com'>Str</a> <span class='punct'>[</span>StdinErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Read a line from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)).
+
+> This task will block the program from continuing until `stdin` receives a newline character
+(e.g. because the user pressed Enter in the terminal), so using it can result in the appearance of the
+programming having gotten stuck. It's often helpful to print a prompt first, so
+the user knows it's necessary to enter something before the program will continue.
+
+#### bytes
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Read bytes from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)).
+‼️ This function can read no more than 16,384 bytes at a time. Use [readToEnd] if you need more.
+
+> This is typically used in combintation with [Tty.enableRawMode],
+which disables defaults terminal bevahiour and allows reading input
+without buffering until Enter key is pressed.
+
+#### readToEnd
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>StdinErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Read all bytes from [standard input](https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)) until EOF in this source.
+
+### Stdout
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    BrokenPipe<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    Other <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    Unsupported<span class='punct'>,</span>
+    WouldBlock<span class='punct'>,</span>
+    WriteZero<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+**BrokenPipe** - This error can occur when writing to a stdout that is no longer connected
+to a valid input. For example, if the process on the receiving end of a pipe closes its
+end, any write to that pipe could lead to a BrokenPipe error.
+
+**WouldBlock** - This error might occur if stdout is set to non-blocking mode and the write
+operation would block because the output buffer is full.
+
+**WriteZero** - This indicates an attempt to write "zero" bytes which is technically a no-operation
+(no-op), but if detected, it could be raised as an error.
+
+**Unsupported** - If the stdout operation involves writing data in a manner or format that is not
+supported, this error could be raised.
+
+**Interrupted** - This can happen if a signal interrupts the writing process before it completes.
+
+**OutOfMemory** - This could occur if there is not enough memory available to buffer the data being
+written to stdout.
+
+**Other** - This is a catch-all for any error not specifically categorized by the other ErrorKind
+variants.
+
+#### line
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>StdoutErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Write the given string to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)),
+followed by a newline.
+
+> To write to `stdout` without the newline, see [Stdout.write].
+
+
+#### write
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>StdoutErr Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Write the given string to [standard output](https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)).
+
+Note that many terminals will not actually display strings that are written to them until they receive a newline,
+so this may appear to do nothing until you write a newline!
+
+> To write to `stdout` with a newline at the end, see [Stdout.line].
+
+### Tcp
+
+#### Stream
+
+**Type Annotation**
+
+```roc
+Box <span class='punct'>{}</span>
+```
+
+**Description**
+
+Represents a TCP stream.
+
+#### ConnectErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    AddrInUse<span class='punct'>,</span>
+    AddrNotAvailable<span class='punct'>,</span>
+    ConnectionRefused<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+    TimedOut<span class='punct'>,</span>
+    Unrecognized <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    Unsupported<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents errors that can occur when connecting to a remote host.
+
+#### StreamErr
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    BrokenPipe<span class='punct'>,</span>
+    ConnectionRefused<span class='punct'>,</span>
+    ConnectionReset<span class='punct'>,</span>
+    Interrupted<span class='punct'>,</span>
+    OutOfMemory<span class='punct'>,</span>
+    PermissionDenied<span class='punct'>,</span>
+    StreamNotFound<span class='punct'>,</span>
+    Unrecognized <a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Represents errors that can occur when performing a [Task] with a [Stream].
+
+#### connect
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span>U16 <span class='punct'>-></span> Task Stream ConnectErr
+```
+
+**Description**
+
+Opens a TCP connection to a remote host.
+
+```
+# Connect to localhost:8080
+stream = Tcp.connect! "localhost" 8080
+```
+
+The connection is automatically closed when the last reference to the stream is dropped.
+Examples of
+valid hostnames:
+ - `127.0.0.1`
+ - `::1`
+ - `localhost`
+ - `roc-lang.org`
+
+
+#### readUpTo
+
+**Type Annotation**
+
+```roc
+Stream<span class='punct'>, </span>U64 <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>TcpReadErr StreamErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Read up to a number of bytes from the TCP stream.
+
+```
+# Read up to 64 bytes from the stream and convert to a Str
+received = File.readUpTo! stream 64
+Str.fromUtf8 received
+```
+
+> To read an exact number of bytes or fail, you can use [Tcp.readExactly] instead.
+
+#### readExactly
+
+**Type Annotation**
+
+```roc
+
+    Stream<span class='punct'>, </span>
+    U64
+    <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>
+        TcpReadErr StreamErr<span class='punct'>,</span>
+        TcpUnexpectedEOF<span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Read an exact number of bytes or fail.
+
+```
+File.readExactly stream 64
+```
+
+`TcpUnexpectedEOF` is returned if the stream ends before the specfied number of bytes is reached.
+
+
+#### readUntil
+
+**Type Annotation**
+
+```roc
+Stream<span class='punct'>, </span>U8 <span class='punct'>-></span> Task <span class='punct'>(</span><a href='https://example.com'>List</a> U8<span class='punct'>)</span> <span class='punct'>[</span>TcpReadErr StreamErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Read until a delimiter or EOF is reached.
+
+```
+# Read until null terminator
+File.readUntil stream 0
+```
+
+If found, the delimiter is included as the last byte.
+
+> To read until a newline is found, you can use [Tcp.readLine] which
+conveniently decodes to a [Str].
+
+#### readLine
+
+**Type Annotation**
+
+```roc
+
+    Stream
+    <span class='punct'>-></span> Task <a href='https://example.com'>Str</a> <span class='punct'>[</span>
+        TcpReadErr StreamErr<span class='punct'>,</span>
+        TcpReadBadUtf8 <span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Read until a newline or EOF is reached.
+
+```
+# Read a line and then print it to `stdout`
+lineStr = File.readLine! stream
+Stdout.line lineStr
+```
+
+If found, the newline is included as the last character in the [Str].
+
+
+#### write
+
+**Type Annotation**
+
+```roc
+Stream<span class='punct'>, </span><a href='https://example.com'>List</a> U8 <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>TcpWriteErr StreamErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes bytes to a TCP stream.
+
+```
+# Writes the bytes 1, 2, 3
+Tcp.writeBytes stream [1, 2, 3]
+```
+
+> To write a [Str], you can use [Tcp.writeUtf8] instead.
+
+#### writeUtf8
+
+**Type Annotation**
+
+```roc
+Stream<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>TcpWriteErr StreamErr<span class='punct'>]</span>
+```
+
+**Description**
+
+Writes a [Str] to a TCP stream, encoded as [UTF-8](https://en.wikipedia.org/wiki/UTF-8).
+
+```
+# Write "Hi from Roc!" encoded as UTF-8
+Tcp.writeUtf8 stream "Hi from Roc!"
+```
+
+> To write unformatted bytes, you can use [Tcp.write] instead.
+
+#### connectErrToStr
+
+**Type Annotation**
+
+```roc
+ConnectErr <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Convert a [ConnectErr] to a [Str] you can print.
+
+```
+when err is
+    TcpPerfomErr (TcpConnectErr connectErr) ->
+        Stderr.line (Tcp.connectErrToStr connectErr)
+```
+
+
+#### streamErrToStr
+
+**Type Annotation**
+
+```roc
+StreamErr <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Convert a [StreamErr] to a [Str] you can print.
+
+```
+when err is
+    TcpPerformErr (TcpReadErr err) ->
+        errStr = Tcp.streamErrToStr err
+        Stderr.line "Error while reading: $(errStr)"
+
+    TcpPerformErr (TcpWriteErr err) ->
+        errStr = Tcp.streamErrToStr err
+        Stderr.line "Error while writing: $(errStr)"
+```
+
+
+### Url
+
+#### Url
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+A [Uniform Resource Locator](https://en.wikipedia.org/wiki/URL).
+
+It could be an absolute address, such as `https://roc-lang.org/authors` or
+a relative address, such as `/authors`. You can create one using [Url.fromStr].
+
+#### reserve
+
+**Type Annotation**
+
+```roc
+Url<span class='punct'>, </span>U64 <span class='punct'>-></span> Url
+```
+
+**Description**
+
+Reserve the given number of bytes as extra capacity. This can avoid reallocation
+when calling multiple functions that increase the length of the URL.
+
+The following example reserves 50 bytes, then builds the url `https://example.com/stuff?caf%C3%A9=du%20Monde&email=hi%40example.com`;
+```
+Url.fromStr "https://example.com"
+|> Url.reserve 50
+|> Url.append "stuff"
+|> Url.appendParam "café" "du Monde"
+|> Url.appendParam "email" "hi@example.com"
+```
+The [Str.countUtf8Bytes](https://www.roc-lang.org/builtins/Str#countUtf8Bytes) function can be helpful in finding out how many bytes to reserve.
+
+There is no `Url.withCapacity` because it's better to reserve extra capacity
+on a [Str] first, and then pass that string to [Url.fromStr]. This function will make use
+of the extra capacity.
+
+#### fromStr
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Url
+```
+
+**Description**
+
+Create a [Url] without validating or [percent-encoding](https://en.wikipedia.org/wiki/Percent-encoding)
+anything.
+
+```
+Url.fromStr "https://example.com#stuff"
+```
+
+URLs can be absolute, like `https://example.com`, or they can be relative, like `/blah`.
+
+```
+Url.fromStr "/this/is#relative"
+```
+
+Since nothing is validated, this can return invalid URLs.
+
+```
+Url.fromStr "https://this is not a valid URL, not at all!"
+```
+
+Naturally, passing invalid URLs to functions that need valid ones will tend to result in errors.
+
+
+#### toStr
+
+**Type Annotation**
+
+```roc
+Url <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Return a [Str] representation of this URL.
+```
+# Gives "https://example.com/two%20words"
+Url.fromStr "https://example.com"
+|> Url.append "two words"
+|> Url.toStr
+```
+
+#### append
+
+**Type Annotation**
+
+```roc
+Url<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Url
+```
+
+**Description**
+
+[Percent-encodes](https://en.wikipedia.org/wiki/Percent-encoding) a
+[path component](https://en.wikipedia.org/wiki/Uniform_Resource_Identifier#Syntax)
+and appends to the end of the URL's path.
+
+This will be appended before any queries and fragments. If the given path string begins with `/` and the URL already ends with `/`, one
+will be ignored. This avoids turning a single slash into a double slash. If either the given URL or the given string is empty, no `/` will be added.
+
+```
+# Gives https://example.com/some%20stuff
+Url.fromStr "https://example.com"
+|> Url.append "some stuff"
+
+# Gives https://example.com/stuff?search=blah#fragment
+Url.fromStr "https://example.com?search=blah#fragment"
+|> Url.append "stuff"
+
+# Gives https://example.com/things/stuff/more/etc/"
+Url.fromStr "https://example.com/things/"
+|> Url.append "/stuff/"
+|> Url.append "/more/etc/"
+
+# Gives https://example.com/things
+Url.fromStr "https://example.com/things"
+|> Url.append ""
+```
+
+#### appendParam
+
+**Type Annotation**
+
+```roc
+
+    Url<span class='punct'>, </span>
+    <a href='https://example.com'>Str</a><span class='punct'>, </span>
+    <a href='https://example.com'>Str</a>
+    <span class='punct'>-></span> Url
+```
+
+**Description**
+
+Adds a [Str] query parameter to the end of the [Url].
+
+The key and value both get [percent-encoded](https://en.wikipedia.org/wiki/Percent-encoding).
+
+```
+# Gives https://example.com?email=someone%40example.com
+Url.fromStr "https://example.com"
+|> Url.appendParam "email" "someone@example.com"
+```
+
+This can be called multiple times on the same URL.
+
+```
+# Gives https://example.com?caf%C3%A9=du%20Monde&email=hi%40example.com
+Url.fromStr "https://example.com"
+|> Url.appendParam "café" "du Monde"
+|> Url.appendParam "email" "hi@example.com"
+```
+
+
+#### withQuery
+
+**Type Annotation**
+
+```roc
+Url<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Url
+```
+
+**Description**
+
+Replaces the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part
+after the `?`, if it has one, but before any `#` it might have.
+
+Passing `""` removes the `?` (if there was one).
+
+```
+# Gives https://example.com?newQuery=thisRightHere#stuff
+Url.fromStr "https://example.com?key1=val1&key2=val2#stuff"
+|> Url.withQuery "newQuery=thisRightHere"
+
+# Gives https://example.com#stuff
+Url.fromStr "https://example.com?key1=val1&key2=val2#stuff"
+|> Url.withQuery ""
+```
+
+#### query
+
+**Type Annotation**
+
+```roc
+Url <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Returns the URL's [query](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
+the `?`, if it has one, but before any `#` it might have.
+
+Returns `""` if the URL has no query.
+
+```
+# Gives "key1=val1&key2=val2&key3=val3"
+Url.fromStr "https://example.com?key1=val1&key2=val2&key3=val3#stuff"
+|> Url.query
+
+# Gives ""
+Url.fromStr "https://example.com#stuff"
+|> Url.query
+```
+
+
+#### hasQuery
+
+**Type Annotation**
+
+```roc
+Url <span class='punct'>-></span> Bool
+```
+
+**Description**
+
+Returns [Bool.true] if the URL has a `?` in it.
+
+```
+# Gives Bool.true
+Url.fromStr "https://example.com?key=value#stuff"
+|> Url.hasQuery
+
+# Gives Bool.false
+Url.fromStr "https://example.com#stuff"
+|> Url.hasQuery
+```
+
+
+#### fragment
+
+**Type Annotation**
+
+```roc
+Url <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+**Description**
+
+Returns the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax)—the part after
+the `#`, if it has one.
+
+Returns `""` if the URL has no fragment.
+
+```
+# Gives "stuff"
+Url.fromStr "https://example.com#stuff"
+|> Url.fragment
+
+# Gives ""
+Url.fromStr "https://example.com"
+|> Url.fragment
+```
+
+
+#### withFragment
+
+**Type Annotation**
+
+```roc
+Url<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Url
+```
+
+**Description**
+
+Replaces the URL's [fragment](https://en.wikipedia.org/wiki/URL#Syntax).
+
+If the URL didn't have a fragment, adds one. Passing `""` removes the fragment.
+
+```
+# Gives https://example.com#things
+Url.fromStr "https://example.com#stuff"
+|> Url.withFragment "things"
+
+# Gives https://example.com#things
+Url.fromStr "https://example.com"
+|> Url.withFragment "things"
+
+# Gives https://example.com
+Url.fromStr "https://example.com#stuff"
+|> Url.withFragment ""
+```
+
+
+#### hasFragment
+
+**Type Annotation**
+
+```roc
+Url <span class='punct'>-></span> Bool
+```
+
+**Description**
+
+Returns [Bool.true] if the URL has a `#` in it.
+
+```
+# Gives Bool.true
+Url.fromStr "https://example.com?key=value#stuff"
+|> Url.hasFragment
+
+# Gives Bool.false
+Url.fromStr "https://example.com?key=value"
+|> Url.hasFragment
+```
+
+
+### Utc
+
+#### Utc
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[]</span>
+```
+
+**Description**
+
+Stores a timestamp as nanoseconds since UNIX EPOCH
+
+#### now
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task Utc <span class='punct'>*</span>
+```
+
+**Description**
+
+Duration since UNIX EPOCH
+
+#### toMillisSinceEpoch
+
+**Type Annotation**
+
+```roc
+Utc <span class='punct'>-></span> I128
+```
+
+**Description**
+
+Convert Utc timestamp to milliseconds
+
+#### fromMillisSinceEpoch
+
+**Type Annotation**
+
+```roc
+I128 <span class='punct'>-></span> Utc
+```
+
+**Description**
+
+Convert milliseconds to Utc timestamp
+
+#### toNanosSinceEpoch
+
+**Type Annotation**
+
+```roc
+Utc <span class='punct'>-></span> I128
+```
+
+**Description**
+
+Convert Utc timestamp to nanoseconds
+
+#### fromNanosSinceEpoch
+
+**Type Annotation**
+
+```roc
+I128 <span class='punct'>-></span> Utc
+```
+
+**Description**
+
+Convert nanoseconds to Utc timestamp
+
+#### deltaAsMillis
+
+**Type Annotation**
+
+```roc
+Utc<span class='punct'>, </span>Utc <span class='punct'>-></span> U128
+```
+
+**Description**
+
+Calculate milliseconds between two Utc timestamps
+
+#### deltaAsNanos
+
+**Type Annotation**
+
+```roc
+Utc<span class='punct'>, </span>Utc <span class='punct'>-></span> U128
+```
+
+**Description**
+
+Calculate nanoseconds between two Utc timestamps
+
+### Sleep
+
+#### millis
+
+**Type Annotation**
+
+```roc
+U64 <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Sleep for at least the given number of milliseconds.
+This uses [rust's std::thread::sleep](https://doc.rust-lang.org/std/thread/fn.sleep.html).
+
+
+### Cmd
+
+#### Cmd
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    clearEnvs<span class='punct'> : </span><span class='punct'>[</span>
+        False<span class='punct'>,</span>
+        True<span class='punct'>,</span>
+    <span class='punct'>]</span><span class='punct'>,</span>
+    args<span class='punct'> : </span><a href='https://example.com'>List</a> <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    envs<span class='punct'> : </span><a href='https://example.com'>List</a> <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    program<span class='punct'> : </span><a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Represents a command to be executed in a child process.
+
+#### Err
+
+**Type Annotation**
+
+```roc
+<span class='punct'>[</span>
+    ExitCode <span class='punct'>[]</span><span class='punct'>,</span>
+    IOError <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    KilledBySignal<span class='punct'>,</span>
+<span class='punct'>]</span>
+```
+
+**Description**
+
+Errors from executing a command.
+
+#### outputErrToStr
+
+**Type Annotation**
+
+```roc
+    <span class='punct'>(</span>
+    Output<span class='punct'>,</span>
+    Err<span class='punct'>,</span>
+<span class='punct'>)</span>
+    <span class='punct'>-></span> <a href='https://example.com'>Str</a>
+```
+
+#### Output
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{</span>
+    stderr<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>,</span>
+    stdout<span class='punct'> : </span><a href='https://example.com'>List</a> <span class='punct'>[]</span><span class='punct'>,</span>
+<span class='punct'>}</span>
+```
+
+**Description**
+
+Represents the output of a command.
+
+#### new
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a> <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Create a new command to execute the given program in a child process.
+
+#### arg
+
+**Type Annotation**
+
+```roc
+Cmd<span class='punct'>, </span><a href='https://example.com'>Str</a> <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Add a single argument to the command.
+! Shell features like variable subsitition (e.g. `$FOO`), glob patterns (e.g. `*.txt`), ... are not available.
+
+```
+# Represent the command "ls -l"
+Cmd.new "ls"
+|> Cmd.arg "-l"
+```
+
+
+#### args
+
+**Type Annotation**
+
+```roc
+Cmd<span class='punct'>, </span><a href='https://example.com'>List</a> <a href='https://example.com'>Str</a> <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Add multiple arguments to the command.
+! Shell features like variable subsitition (e.g. `$FOO`), glob patterns (e.g. `*.txt`), ... are not available.
+
+```
+# Represent the command "ls -l -a"
+Cmd.new "ls"
+|> Cmd.args ["-l", "-a"]
+```
+
+
+#### env
+
+**Type Annotation**
+
+```roc
+
+    Cmd<span class='punct'>, </span>
+    <a href='https://example.com'>Str</a><span class='punct'>, </span>
+    <a href='https://example.com'>Str</a>
+    <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Add a single environment variable to the command.
+
+```
+# Run "env" and add the environment variable "FOO" with value "BAR"
+Cmd.new "env"
+|> Cmd.env "FOO" "BAR"
+```
+
+
+#### envs
+
+**Type Annotation**
+
+```roc
+
+    Cmd<span class='punct'>, </span>    <a href='https://example.com'>List</a> <span class='punct'>(</span>
+    <a href='https://example.com'>Str</a><span class='punct'>,</span>
+    <a href='https://example.com'>Str</a><span class='punct'>,</span>
+<span class='punct'>)</span>
+    <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Add multiple environment variables to the command.
+
+```
+# Run "env" and add the variables "FOO" and "BAZ"
+Cmd.new "env"
+|> Cmd.envs [("FOO", "BAR"), ("BAZ", "DUCK")]
+```
+
+
+#### clearEnvs
+
+**Type Annotation**
+
+```roc
+Cmd <span class='punct'>-></span> Cmd
+```
+
+**Description**
+
+Clear all environment variables, and prevent inheriting from parent, only
+the environment variables provided to command are available to the child.
+
+```
+# Represents "env" with only "FOO" environment variable set
+Cmd.new "env"
+|> Cmd.clearEnvs
+|> Cmd.env "FOO" "BAR"
+```
+
+
+#### output
+
+**Type Annotation**
+
+```roc
+
+    Cmd
+    <span class='punct'>-></span> Task Output <span class='punct'>[</span>
+        CmdOutputError <span class='punct'>(</span>
+            Output<span class='punct'>,</span>
+            Err<span class='punct'>,</span>
+        <span class='punct'>)</span><span class='punct'>,</span>
+    <span class='punct'>]</span>
+```
+
+**Description**
+
+Execute command and capture stdout and stderr
+
+> Stdin is not inherited from the parent and any attempt by the child process
+> to read from the stdin stream will result in the stream immediately closing.
+
+
+#### status
+
+**Type Annotation**
+
+```roc
+Cmd <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>CmdError Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Execute command and inherit stdin, stdout and stderr from parent
+
+
+#### exec
+
+**Type Annotation**
+
+```roc
+<a href='https://example.com'>Str</a><span class='punct'>, </span><a href='https://example.com'>List</a> <a href='https://example.com'>Str</a> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>[</span>CmdError Err<span class='punct'>]</span>
+```
+
+**Description**
+
+Execute command and inherit stdin, stdout and stderr from parent
+
+```
+# Call echo to print "hello world"
+Cmd.exec! "echo" ["hello world"]
+```
+
+### Tty
+
+#### enableRawMode
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Enable terminal raw mode which disables some default terminal bevahiour.
+
+The following modes are disabled:
+- Input will not be echo to the terminal screen
+- Input will not be buffered until Enter key is pressed
+- Input will not be line buffered (input sent byte-by-byte to input buffer)
+- Special keys like Backspace and CTRL+C will not be processed by terminal driver
+
+Note: we plan on moving this function away from basic-cli in the future, see github.com/roc-lang/basic-cli/issues/73
+
+
+#### disableRawMode
+
+**Type Annotation**
+
+```roc
+<span class='punct'>{}</span> <span class='punct'>-></span> Task <span class='punct'>{}</span> <span class='punct'>*</span>
+```
+
+**Description**
+
+Revert terminal to default behaviour
+
+Note: we plan on moving this function away from basic-cli in the future, see github.com/roc-lang/basic-cli/issues/73
+
+
