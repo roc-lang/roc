@@ -34,6 +34,8 @@ pub const Store = struct {
     buffer: std.ArrayListUnmanaged(u8) = .{},
 
     /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
+    /// Note this specifically is the number of bytes for storing strings.
+    /// The string `hello, world!` will use 14 bytes including the null terminator.
     pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) Store {
         return .{
             .buffer = std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes) catch |err| exitOnOom(err),
