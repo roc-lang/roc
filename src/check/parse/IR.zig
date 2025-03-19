@@ -499,42 +499,29 @@ pub const NodeStore = struct {
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
-    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         var store: NodeStore = .{
             .gpa = gpa,
-            .nodes = .{},
-            .extra_data = .{},
-            .scratch_statements = .{},
-            .scratch_tokens = .{},
-            .scratch_exprs = .{},
-            .scratch_patterns = .{},
-            .scratch_record_fields = .{},
-            .scratch_pattern_record_fields = .{},
-            .scratch_when_branches = .{},
-            .scratch_type_annos = .{},
-            .scratch_anno_record_fields = .{},
-            .scratch_exposed_items = .{},
+            .nodes = Node.List.initCapacity(gpa, capacity),
+            .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
+            .scratch_statements = std.ArrayListUnmanaged(StatementIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_tokens = std.ArrayListUnmanaged(TokenIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_exprs = std.ArrayListUnmanaged(ExprIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_patterns = std.ArrayListUnmanaged(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_record_fields = std.ArrayListUnmanaged(RecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_pattern_record_fields = std.ArrayListUnmanaged(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_when_branches = std.ArrayListUnmanaged(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_type_annos = std.ArrayListUnmanaged(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_anno_record_fields = std.ArrayListUnmanaged(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_exposed_items = std.ArrayListUnmanaged(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
         };
 
-        store.nodes.ensureTotalCapacity(gpa, capacity);
         _ = store.nodes.append(gpa, .{
             .tag = .root,
             .main_token = 0,
             .data = .{ .lhs = 0, .rhs = 0 },
             .region = .{ .start = 0, .end = 0 },
         });
-        store.extra_data.ensureTotalCapacity(gpa, capacity / 2) catch |err| exitOnOom(err);
-        store.scratch_statements.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_tokens.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_exprs.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_patterns.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_pattern_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_when_branches.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_type_annos.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_anno_record_fields.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-        store.scratch_exposed_items.ensureTotalCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err);
-
         return store;
     }
 
@@ -543,7 +530,7 @@ pub const NodeStore = struct {
     // will only have to be resized in >90th percentile case.
     // It is not scientific, and should be tuned when we have enough
     // Roc code to instrument this and determine a real 90th percentile.
-    const scratch_90th_percentile_capacity = 10;
+    const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 10);
 
     /// Deinitializes all data owned by the store.
     /// A caller should ensure that they have taken

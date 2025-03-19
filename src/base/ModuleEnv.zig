@@ -25,12 +25,13 @@ problems: Problem.List,
 
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator) Self {
+    // TODO: maybe wire in smarter default based on the initial input text size.
     return Self{
         .gpa = gpa,
-        .idents = .{},
-        .ident_ids_for_slicing = .{},
-        .strings = .{},
-        .problems = .{},
+        .idents = Ident.Store.initCapacity(gpa, 256),
+        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 64),
+        .strings = StringLiteral.Store.initCapacityBytes(gpa, 256),
+        .problems = Problem.List.initCapacity(gpa, 16),
     };
 }
 

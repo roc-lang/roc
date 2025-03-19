@@ -24,7 +24,7 @@ diagnostics: std.ArrayListUnmanaged(IR.Diagnostic),
 /// init the parser from a buffer of tokens
 pub fn init(tokens: TokenizedBuffer) Parser {
     const estimated_node_count = (tokens.tokens.len + 2) / 2;
-    const store = IR.NodeStore.initWithCapacity(tokens.env.gpa, estimated_node_count);
+    const store = IR.NodeStore.initCapacity(tokens.env.gpa, estimated_node_count);
 
     return Parser{
         .gpa = tokens.env.gpa,
