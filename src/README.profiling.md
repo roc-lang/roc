@@ -80,11 +80,9 @@ Often times, it is worth profiling once with `-Dtracy-callstack=false` to have m
 Now that I have the compiler built with tracy, I can launch the tracy server on my mac machine to record the result (you can also run it on the same machine if wanted).
 Run `tracy-profiler`, input the correct ip address, and press connect.
 Then run the instrumented version of zig: `./zig-out/bin/roc format /tmp/new.roc`.
-For best results `export TRACY_NO_EXIT=1` before running. This ensures that all tracing data is uploaded before roc exits.
 Also, run with the root user to capture more information.
 In this case, I ran:
 ```
-export TRACY_NO_EXIT=1
 sudo ./zig-out/bin/roc format /tmp/new.roc
 ```
 

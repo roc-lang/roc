@@ -1,4 +1,5 @@
 const std = @import("std");
+const tracy = @import("../tracy.zig");
 
 /// Exit the current process when we hit an out-of-memory error.
 ///
@@ -21,5 +22,8 @@ pub fn exitOnOom(err: std.mem.Allocator.Error) noreturn {
 /// Log a fatal error and exit the process with a non-zero code.
 pub fn fatal(comptime format: []const u8, args: anytype) noreturn {
     std.io.getStdErr().writer().print(format, args) catch unreachable;
+    if (tracy.enable) {
+        tracy.waitForShutdown() catch unreachable;
+    }
     std.process.exit(1);
 }
