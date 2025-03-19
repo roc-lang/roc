@@ -92,7 +92,7 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
             // Attempt to allocate exactly the right size first.
             // The avoids needless reallocs and saves some perf.
             const size = stat.size;
-            const buf = try gpa.alloc(u8, size);
+            const buf = try gpa.alloc(u8, @intCast(size));
             errdefer gpa.free(buf);
             if (try input_file.readAll(buf) != size) {
                 // This is unexpected, the file is smaller than the size from stat.
