@@ -29,6 +29,21 @@ regions: std.ArrayListUnmanaged(Region) = .{},
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
 
+/// Intiailize a `SmallStringInterner` with the specified capacity.
+pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Self {
+    // TODO: tune this. Rough assumption that average small string is 4 bytes.
+    const bytes_per_string = 4;
+
+    var self = Self{
+        .bytes = std.ArrayListUnmanaged(u8).initCapacity(gpa, capacity * bytes_per_string) catch |err| exitOnOom(err),
+        .strings = .{},
+        .outer_indices = std.ArrayListUnmanaged(StringIdx).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+        .regions = std.ArrayListUnmanaged(Region).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+    };
+    self.strings.ensureTotalCapacityContext(gpa, @intCast(capacity), StringIdx.TableContext{ .bytes = &self.bytes }) catch |err| exitOnOom(err);
+    return self;
+}
+
 /// Free all memory consumed by this interner.
 /// Will invalidate all slices referencing the interner.
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {

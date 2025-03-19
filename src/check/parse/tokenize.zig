@@ -361,9 +361,11 @@ pub const TokenizedBuffer = struct {
     tokens: Token.List,
     env: *base.ModuleEnv,
 
-    pub fn init(env: *base.ModuleEnv) TokenizedBuffer {
+    pub fn initCapacity(env: *base.ModuleEnv, capacity: usize) TokenizedBuffer {
+        var tokens = Token.List{};
+        tokens.ensureTotalCapacity(env.gpa, capacity) catch |err| exitOnOom(err);
         return TokenizedBuffer{
-            .tokens = Token.List{},
+            .tokens = tokens,
             .env = env,
         };
     }
@@ -988,7 +990,9 @@ pub const Tokenizer = struct {
     /// Note that the caller must also provide a pre-allocated messages buffer.
     pub fn init(env: *base.ModuleEnv, text: []const u8, messages: []Diagnostic) Tokenizer {
         const cursor = Cursor.init(text, messages);
-        const output = TokenizedBuffer.init(env);
+        // TODO: tune this more. Syntax grab bag is 3:1.
+        // Generally, roc code will be less dense than that.
+        const output = TokenizedBuffer.initCapacity(env, @max(text.len / 8, 64));
         return Tokenizer{
             .cursor = cursor,
             .output = output,

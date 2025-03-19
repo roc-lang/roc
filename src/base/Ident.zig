@@ -62,6 +62,15 @@ pub const Store = struct {
     attributes: std.ArrayListUnmanaged(Attributes) = .{},
     next_unique_name: u32 = 0,
 
+    /// Initialize the memory for an `Ident.Store` with a specific capaicty.
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Store {
+        return .{
+            .interner = SmallStringInterner.initCapacity(gpa, capacity),
+            .exposing_modules = std.ArrayListUnmanaged(ModuleImport.Idx).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+            .attributes = std.ArrayListUnmanaged(Attributes).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+        };
+    }
+
     /// Deinitialize the memory for an `Ident.Store`.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.interner.deinit(gpa);

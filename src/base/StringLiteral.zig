@@ -33,6 +33,13 @@ pub const Store = struct {
     /// continues to the previous byte
     buffer: std.ArrayListUnmanaged(u8) = .{},
 
+    /// Intiizalizes a `StringLiteral.Store` with capacity `bytes` of space.
+    pub fn initCapacityBytes(gpa: std.mem.Allocator, bytes: usize) Store {
+        return .{
+            .buffer = std.ArrayListUnmanaged(u8).initCapacity(gpa, bytes) catch |err| exitOnOom(err),
+        };
+    }
+
     /// Deinitialize a `StringLiteral.Store`'s memory.
     pub fn deinit(self: *Store, gpa: std.mem.Allocator) void {
         self.buffer.deinit(gpa);
