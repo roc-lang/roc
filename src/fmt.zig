@@ -51,6 +51,9 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
     return count;
 }
 
+/// Formats a single roc file at the specified path.
+/// Will ignore paths that don't end in `.roc`.
+/// Returns true if the file was formatted.
 pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
     const trace = tracy.trace(@src());
     defer trace.end();
