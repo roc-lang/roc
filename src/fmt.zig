@@ -24,7 +24,7 @@ const FormatFlags = enum { debug_binop, no_debug };
 /// Formats all roc files in the specified path.
 /// Handles both single files and directories
 /// Returns the number of files formatted.
-pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !usize {
+pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !usize {
     // TODO: update this to use the filesystem abstraction
     // When doing so, add a mock filesystem and some tests.
     var count: usize = 0;
@@ -33,7 +33,7 @@ pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
         var dir = const_dir;
         defer dir.close();
         // Walk is recursive.
-        var walker = try dir.walk(gpa);
+        var walker = try dir.walk(arena);
         defer walker.deinit();
         while (try walker.next()) |entry| {
             if (entry.kind == .file) {
@@ -51,7 +51,10 @@ pub fn formatPath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8
     return count;
 }
 
-fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
+/// Formats a single roc file at the specified path.
+/// Will ignore paths that don't end in `.roc`.
+/// Returns true if the file was formatted.
+pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !bool {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -1156,7 +1159,7 @@ test "format single file" {
     );
     defer std.fs.cwd().deleteFile(roc_filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
-    const count = try formatPath(gpa, std.fs.cwd(), roc_filename);
+    const count = try formatPath(gpa, gpa, std.fs.cwd(), roc_filename);
     try std.testing.expectEqual(1, count);
 
     // Reset file position to read formatted roc code

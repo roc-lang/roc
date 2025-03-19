@@ -39,20 +39,23 @@ const usage =
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
-    const gpa = std.heap.c_allocator;
-
-    const args = try std.process.argsAlloc(gpa);
-    defer gpa.free(args);
+    var gpa_tracy: tracy.TracyAllocator(null) = undefined;
+    var gpa = std.heap.c_allocator;
 
     if (tracy.enable_allocation) {
-        var gpa_tracy = tracy.tracyAllocator(gpa);
-        return mainArgs(gpa_tracy.allocator(), args);
+        gpa_tracy = tracy.tracyAllocator(gpa);
+        gpa = gpa_tracy.allocator();
     }
 
-    return mainArgs(gpa, args);
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const args = try std.process.argsAlloc(arena);
+    return mainArgs(gpa, arena, args);
 }
 
-fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -74,7 +77,7 @@ fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
             .roc_build => try rocBuild(gpa, opt, cmd_args),
             .roc_test => try rocTest(gpa, opt, cmd_args),
             .roc_repl => try rocRepl(gpa, opt, cmd_args),
-            .roc_format => try rocFormat(gpa, cmd_args),
+            .roc_format => try rocFormat(gpa, arena, cmd_args),
             .roc_version => try rocVersion(gpa, cmd_args),
             .roc_check => rocCheck(gpa, opt, cmd_args),
             .roc_docs => try rocDocs(gpa, opt, cmd_args),
@@ -130,15 +133,17 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
+fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     var timer = try std.time.Timer.start();
     var count: usize = 0;
     if (args.len > 0) {
         for (args) |arg| {
-            count += try fmt.formatPath(gpa, std.fs.cwd(), arg);
+            count += try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
         }
     } else {
-        count = try fmt.formatPath(gpa, std.fs.cwd(), "main.roc");
+        if (try fmt.formatFilePath(gpa, std.fs.cwd(), "main.roc")) {
+            count += 1;
+        }
     }
 
     const elapsed = timer.read() / std.time.ns_per_ms;
