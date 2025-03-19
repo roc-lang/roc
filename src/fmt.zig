@@ -1159,7 +1159,7 @@ test "format single file" {
     );
     defer std.fs.cwd().deleteFile(roc_filename) catch std.debug.panic("Failed to clean up test.roc", .{});
 
-    const count = try formatPath(gpa, std.fs.cwd(), roc_filename);
+    const count = try formatPath(gpa, gpa, std.fs.cwd(), roc_filename);
     try std.testing.expectEqual(1, count);
 
     // Reset file position to read formatted roc code
