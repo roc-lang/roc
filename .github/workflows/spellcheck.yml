@@ -7,6 +7,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
 

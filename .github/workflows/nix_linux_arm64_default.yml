@@ -6,6 +6,9 @@ name: test default.nix on linux arm64
 env:
     RUST_BACKTRACE: 1
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
     nix-linux-arm64-default:
         name: nix-linux-arm64
