@@ -1,12 +1,15 @@
-name: CI Manager
+on:
+  pull_request:
 
 # cancel current runs when a new commit is pushed
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
-    
-on:
-  pull_request:
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+name: CI Manager
 
 jobs:
   check-changes:

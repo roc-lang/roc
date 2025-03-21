@@ -6,6 +6,9 @@ on:
 
 name: Nightly Release Linux x86_64
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
   build:
     name: build and package nightly release

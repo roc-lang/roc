@@ -1,5 +1,8 @@
 name: deploy www.roc-lang.org
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
