@@ -1146,7 +1146,7 @@ fn parse_problem() {
                             ^^^
 
                 Looks like you are trying to define a function. In Roc, functions are
-                always written as a lambda, like increment = \n -> n + 1.
+                always written as a lambda, like increment = |n| n + 1.
                 "#
         ),
     );

@@ -227,7 +227,7 @@ fn to_expr_report<'a>(
                 alloc.concat([
                     alloc.reflow("Looks like you are trying to define a function. "),
                     alloc.reflow("In Roc, functions are always written as a lambda, like "),
-                    alloc.parser_suggestion("increment = \\n -> n + 1"),
+                    alloc.parser_suggestion("increment = |n| n + 1"),
                     alloc.reflow("."),
                 ]),
             ]);
