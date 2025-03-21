@@ -161,62 +161,89 @@
         function processTrace(trace, otherTrace, resultId) {
             const lines = trace.trim().split('\n');
             const otherLines = otherTrace.trim().split('\n');
-            let contentHtml = '';
-            let lineNumbersHtml = '';
-            let indentLevel = 0;
-            let blockStartLine = -1;
+            const container = document.createElement('div');
+            const lineNumbersDiv = document.createElement('div');
+            const contentAreaDiv = document.createElement('div');
             
+            lineNumbersDiv.className = 'line-numbers';
+            contentAreaDiv.className = 'content-area';
+            container.appendChild(lineNumbersDiv);
+            container.appendChild(contentAreaDiv);
+
             // Generate line numbers
             for (let i = 1; i <= lines.length; i++) {
-                lineNumbersHtml += `${i}\n`;
+                const lineNum = document.createElement('div');
+                lineNum.textContent = i;
+                lineNumbersDiv.appendChild(lineNum);
             }
-            
+
+            let indentLevel = 0;
+            let currentBlock = contentAreaDiv;
+
             for (let i = 0; i < lines.length; i++) {
                 const line = lines[i].trim();
                 const shouldHighlight = !otherLines.some(otherLine => otherLine.trim() === line);
                 const highlightClass = shouldHighlight ? 'highlight' : '';
-
                 const isBlockStart = line.endsWith('{') && i < lines.length - 1;
-                
+
                 if (isBlockStart) {
-                    blockStartLine = i;
-                    const functionName = line;
-                    contentHtml += `<div class="function-block" style="margin-left: ${indentLevel * 20}px">
-                        <div class="function-header ${highlightClass}">
-                            <span class="toggle-btn">▼</span>
-                            <span class="function-name">${functionName}</span>
-                        </div>
-                        <div class="function-content">`;
+                    const functionBlock = document.createElement('div');
+                    const header = document.createElement('div');
+                    const toggleBtn = document.createElement('span');
+                    const functionName = document.createElement('span');
+                    const content = document.createElement('div');
+
+                    functionBlock.className = 'function-block';
+                    functionBlock.style.marginLeft = `${indentLevel * 20}px`;
+                    header.className = `function-header ${highlightClass}`;
+                    toggleBtn.className = 'toggle-btn';
+                    toggleBtn.textContent = '▼';
+                    functionName.className = 'function-name';
+                    functionName.textContent = line;
+                    content.className = 'function-content';
+
+                    header.appendChild(toggleBtn);
+                    header.appendChild(functionName);
+                    functionBlock.appendChild(header);
+                    functionBlock.appendChild(content);
+                    currentBlock.appendChild(functionBlock);
+
                     indentLevel++;
+                    currentBlock = content;
                 } else if (line.includes('}')) {
                     if (indentLevel > 0) {
                         indentLevel--;
-                        contentHtml += `</div><span class="function-end ${highlightClass}">${line}</span></div>`;
+                        const endSpan = document.createElement('span');
+                        endSpan.className = `function-end ${highlightClass}`;
+                        endSpan.textContent = line;
+                        currentBlock.appendChild(endSpan);
+                        currentBlock = currentBlock.parentElement.parentElement; // Move up to parent block
                     } else {
-                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
+                        const lineDiv = document.createElement('div');
+                        lineDiv.className = `line ${highlightClass}`;
+                        lineDiv.textContent = line;
+                        currentBlock.appendChild(lineDiv);
                     }
                 } else {
-                    const isLastLineBlock = line.endsWith('{') && i === lines.length - 1;
-                    if (isLastLineBlock) {
-                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
-                    } else {
-                        contentHtml += `<div class="line ${highlightClass}">${line}</div>`;
-                    }
+                    const lineDiv = document.createElement('div');
+                    lineDiv.className = `line ${highlightClass}`;
+                    lineDiv.textContent = line;
+                    currentBlock.appendChild(lineDiv);
                 }
             }
-            
-            return `<div class="line-numbers">${lineNumbersHtml}</div><div class="content-area">${contentHtml}</div>`;
+
+            return container;
         }
 
         function initializeCollapsible(containerId) {
             const container = document.getElementById(containerId);
             const functionBlocks = container.querySelectorAll('.function-block');
-            
+
             functionBlocks.forEach(block => {
                 const header = block.querySelector('.function-header');
                 const toggleBtn = block.querySelector('.toggle-btn');
-                
-                header.addEventListener('click', (e) => {
+
+                header.addEventListener('click', () => {
                     block.classList.toggle('collapsed');
                     toggleBtn.textContent = block.classList.contains('collapsed') ? '▶' : '▼';
                 });
@@ -227,8 +254,13 @@
             const trace1 = document.getElementById('input1').value;
             const trace2 = document.getElementById('input2').value;
 
-            document.getElementById('result1').innerHTML = processTrace(trace1, trace2, 'result1');
-            document.getElementById('result2').innerHTML = processTrace(trace2, trace1, 'result2');
+            const result1 = document.getElementById('result1');
+            const result2 = document.getElementById('result2');
+            result1.innerHTML = ''; // Clear previous content
+            result2.innerHTML = ''; // Clear previous content
+
+            result1.appendChild(processTrace(trace1, trace2, 'result1'));
+            result2.appendChild(processTrace(trace2, trace1, 'result2'));
 
             initializeCollapsible('result1');
             initializeCollapsible('result2');
