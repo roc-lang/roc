@@ -80,6 +80,7 @@ pub const Diagnostic = struct {
         import_exposing_no_open,
         import_exposing_no_close,
         no_else,
+        string_iterpolation_no_close,
     };
 };
 
