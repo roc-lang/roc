@@ -1,3 +1,3 @@
-when n{
+match n {
 
-    @Add(n,m,)->n + m}
+    @Add(n,m)->n + m}

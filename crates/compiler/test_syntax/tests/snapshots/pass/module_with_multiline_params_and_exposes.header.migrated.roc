@@ -1,4 +1,4 @@
 module {echo,
         # comment before param
-        read,} -> [mainMenu,
-        credits,]
+        read} -> [mainMenu,
+        credits]

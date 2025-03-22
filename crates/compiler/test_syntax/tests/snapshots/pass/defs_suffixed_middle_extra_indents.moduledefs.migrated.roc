@@ -1,7 +1,7 @@
 main =
 {
     a = "Foo"
-    Stdout.line?(a,)
+    Stdout.line?(a)
 
     printBar?
 }
@@ -9,5 +9,5 @@ main =
 printBar =
 {
     b = "Bar"
-    Stdout.line(b,)
+    Stdout.line(b)
 }

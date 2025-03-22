@@ -140,7 +140,6 @@ pub const Token = struct {
         KwProvides,
         KwRequires,
         KwReturn,
-        KwTo,
         KwWhere,
         KwWith,
 
@@ -173,7 +172,6 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
-                .KwTo,
                 .KwWhere,
                 .KwWith,
                 => true,
@@ -275,7 +273,6 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
-                .KwTo,
                 .KwWhere,
                 .KwWith,
                 => false,
@@ -335,7 +332,6 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
-        .{ "to", .KwTo },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
     });
@@ -393,6 +389,27 @@ pub const TokenizedBuffer = struct {
             else => {
                 const end = start + extra.length;
                 return .{ .start = base.Region.Position{ .offset = start }, .end = base.Region.Position{ .offset = end } };
+            },
+        }
+    }
+
+    pub fn resolve_identifier(self: *TokenizedBuffer, token: Token.Idx) base.Ident.Idx {
+        const tag = self.tokens.items(.tag)[@intCast(token)];
+        const extra = self.tokens.items(.extra)[@intCast(token)];
+        switch (tag) {
+            .LowerIdent,
+            .DotLowerIdent,
+            .NoSpaceDotLowerIdent,
+            .MalformedUnicodeIdent,
+            .MalformedDotUnicodeIdent,
+            .DotUpperIdent,
+            .NoSpaceDotUpperIdent,
+            .UpperIdent,
+            => {
+                return extra.interned;
+            },
+            else => {
+                std.debug.panic("not an identifier", .{});
             },
         }
     }
@@ -2063,9 +2080,6 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwReturn => {
                 try buf2.appendSlice(alloc, "return");
-            },
-            .KwTo => {
-                try buf2.appendSlice(alloc, "to");
             },
             .KwMatch => {
                 try buf2.appendSlice(alloc, "match");
