@@ -1,36 +1,36 @@
 import
 # comment
-Jsonasexposing[map,]
+Jsonas exposing [map]
 
-importJsonasexposing[map,]
+import Jsonas exposing [map]
 
-importJsonas
+import Jsonas
 
-importJsonasexposing[map,]
+import Jsonas exposing [map]
 
-importJsonasexposing[map,
-    map2,]
+import Jsonas exposing [map,
+    map2]
 
-importJson
+import Json
 # comment
-exposing[map,
-    map2,]
+exposing [map,
+    map2]
 
-importJsonas
+import Jsonas
 # comment
-exposing[map,]
+exposing [map]
 
-importJsonexposing
+import Json exposing
 # comment
-[map,]
+ [map]
 
-importJsonasexposing
+import Jsonas exposing
 # comment
-[map,]
+ [map]
 
-importJsonasexposing[
+import Jsonas exposing [
     # comment
-    map,
+    map
 ]
 
 import
@@ -39,11 +39,13 @@ Jsonas
 # comment 4
 exposing
 # comment 5
-[
+ [
     # comment 6
-    map,
+    map
 ]
 
-importA
+import A
+
 # comment between imports
-importB
+import B
+

@@ -1,3 +1,3 @@
 a: F
-F() : h
+F : h
 abc

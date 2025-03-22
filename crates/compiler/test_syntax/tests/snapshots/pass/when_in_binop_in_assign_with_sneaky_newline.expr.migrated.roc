@@ -1,5 +1,5 @@
-j = m % when f
-{
+j = m % match f
+ {
     e->(i
     )}
 h

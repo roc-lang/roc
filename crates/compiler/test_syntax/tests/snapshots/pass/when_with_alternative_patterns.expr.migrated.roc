@@ -1,4 +1,4 @@
-when x{
+match x {
 
     "blah" | "blop"->1
     "foo" |

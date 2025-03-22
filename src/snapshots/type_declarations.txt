@@ -12,6 +12,10 @@ Some a : { foo : Ok(a), bar : Something }
 Maybe a : [Some(a), None]
 
 SomeFunc a : Maybe(a), a -> Maybe(a)
+
+MyType : U64
+
+MyType2 : Module.Thingy
 ~~~PROBLEMS
 NIL
 ~~~TOKENS
@@ -25,7 +29,11 @@ UpperIdent(7:1-7:5),LowerIdent(7:6-7:7),OpColon(7:8-7:9),OpenCurly(7:10-7:11),Lo
 Newline(1:1-1:1),
 UpperIdent(9:1-9:6),LowerIdent(9:7-9:8),OpColon(9:9-9:10),OpenSquare(9:11-9:12),UpperIdent(9:12-9:16),NoSpaceOpenRound(9:16-9:17),LowerIdent(9:17-9:18),CloseRound(9:18-9:19),Comma(9:19-9:20),UpperIdent(9:21-9:25),CloseSquare(9:25-9:26),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11:14-11:19),NoSpaceOpenRound(11:19-11:20),LowerIdent(11:20-11:21),CloseRound(11:21-11:22),Comma(11:22-11:23),LowerIdent(11:24-11:25),OpArrow(11:26-11:28),UpperIdent(11:29-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:36),CloseRound(11:36-11:37),EndOfFile(11:37-11:37),
+UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11:14-11:19),NoSpaceOpenRound(11:19-11:20),LowerIdent(11:20-11:21),CloseRound(11:21-11:22),Comma(11:22-11:23),LowerIdent(11:24-11:25),OpArrow(11:26-11:28),UpperIdent(11:29-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:36),CloseRound(11:36-11:37),Newline(1:1-1:1),
+Newline(1:1-1:1),
+UpperIdent(13:1-13:7),OpColon(13:8-13:9),UpperIdent(13:10-13:13),Newline(1:1-1:1),
+Newline(1:1-1:1),
+UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUpperIdent(15:17-15:24),EndOfFile(15:24-15:24),
 ~~~PARSE
 (file
     (module (1:1-1:57)
@@ -39,11 +47,11 @@ UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11
     (type_decl (3:1-5:4)
         (header "Map" "a" "b")
         (fn (3:11-3:39)
-            (tag (3:32-3:39)
-                "List"
+            (apply (3:32-3:39)
+                (ty "List")
                 (ty_var (3:37-3:38) "b"))
-            (tag (3:11-3:18)
-                "List"
+            (apply (3:11-3:18)
+                (ty "List")
                 (ty_var (3:16-3:17) "a"))
             (fn (3:21-3:27)
                 (ty_var (3:26-3:27) "b")
@@ -51,24 +59,30 @@ UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11
     (type_decl (5:1-7:5)
         (header "Foo")
         (tuple (5:7-5:17)
-            (tag (5:8-5:11) "Bar")
-            (tag (5:13-5:16) "Baz")))
+            (ty "Bar")
+            (ty "Baz")))
     (type_decl (7:1-9:6)
         (header "Some" "a")
         (record (7:10-7:42) "<field>" "<field>"))
     (type_decl (9:1-11:9)
         (header "Maybe" "a")
         (tag_union (9:11-9:26) "TODO tags" "TODO open_anno"))
-    (type_decl (11:1-11:37)
+    (type_decl (11:1-13:7)
         (header "SomeFunc" "a")
         (fn (11:14-11:37)
-            (tag (11:29-11:37)
-                "Maybe"
+            (apply (11:29-11:37)
+                (ty "Maybe")
                 (ty_var (11:35-11:36) "a"))
-            (tag (11:14-11:22)
-                "Maybe"
+            (apply (11:14-11:22)
+                (ty "Maybe")
                 (ty_var (11:20-11:21) "a"))
-            (ty_var (11:24-11:25) "a"))))
+            (ty_var (11:24-11:25) "a")))
+    (type_decl (13:1-15:8)
+        (header "MyType")
+        (ty "U64"))
+    (type_decl (15:1-15:24)
+        (header "MyType2")
+        (mod_ty "Module" ".Thingy")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

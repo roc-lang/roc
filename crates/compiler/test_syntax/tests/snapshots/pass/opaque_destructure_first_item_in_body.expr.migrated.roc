@@ -1,2 +1,2 @@
-@Thunk(it,) = id((@A({},)),)
-it({},)
+@Thunk(it) = id((@A({})))
+it({})

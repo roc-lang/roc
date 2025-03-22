@@ -1,2 +1,2 @@
-g(implements,x,) = c
+g(implements, x) = c
 c

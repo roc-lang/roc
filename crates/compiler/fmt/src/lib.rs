@@ -24,7 +24,7 @@ pub struct Buf<'a> {
     flags: MigrationFlags,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, Default)]
 pub struct MigrationFlags {
     pub snakify: bool,
     pub parens_and_commas: bool,

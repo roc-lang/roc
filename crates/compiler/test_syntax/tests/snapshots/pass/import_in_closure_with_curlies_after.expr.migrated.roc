@@ -1,5 +1,6 @@
 |L|
 {
-    importU
-    {}(e,)
+    import U
+
+    {}(e)
 }

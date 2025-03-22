@@ -1,5 +1,5 @@
 ({
     i: a #
-    wherew(implementsI,)
+    wherew(implementsI)
     e
 })

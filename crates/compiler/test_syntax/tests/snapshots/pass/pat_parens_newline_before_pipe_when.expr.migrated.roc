@@ -1,5 +1,5 @@
-when 0
-{
+match 0
+ {
     S( #
-    H,
+    H
     ) | B->e}

@@ -1,4 +1,4 @@
 identityFn = |x|
 return x
 
-identityFn(45,)
+identityFn(45)

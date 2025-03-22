@@ -1,5 +1,5 @@
-when f
-{
+match f
+ {
 
     s if |t|
     """
