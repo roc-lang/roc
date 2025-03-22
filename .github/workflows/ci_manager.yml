@@ -48,8 +48,8 @@ jobs:
               # Files that ci manager workflows should not run on.
               - '!.gitignore'
               - '!.reuse'
-              - '!AUTHORS'
-              - '!LEGAL_DETAILS'
+              - '!authors'
+              - '!legal_details'
               - '!LICENSE'
               - '!*.md'
               - '!src/**/*.md'
