@@ -186,7 +186,7 @@ jobs:
 
       - name: build basic-cli docs
         env:
-          ROC_DOCS_URL_ROOT: /packages/basic-cli/${{ env.RELEASE_TAG }}
+          ROC_DOCS_URL_ROOT: /basic-cli/${{ env.RELEASE_TAG }}
         run: |
           ./roc_nightly/roc docs ./basic-cli/platform/main.roc
           tar -czvf docs.tar.gz generated-docs/
