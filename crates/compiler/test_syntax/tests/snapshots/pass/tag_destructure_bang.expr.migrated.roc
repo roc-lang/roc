@@ -1,3 +1,3 @@
-Config(launchTheNukes!,code,) = cfg
+Config(launchTheNukes!,code) = cfg
 
-launchTheNukes!(code,)
+launchTheNukes!(code)

@@ -1,3 +1,3 @@
 e: A #
-as H()
+as H
 n

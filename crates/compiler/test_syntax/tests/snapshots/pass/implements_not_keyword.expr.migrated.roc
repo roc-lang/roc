@@ -1,3 +1,3 @@
-A = B(implements,)
-+ s
+A = B(implements)
+ + s
 1

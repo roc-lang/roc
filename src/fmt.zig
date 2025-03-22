@@ -67,6 +67,41 @@ pub fn formatPath(gpa: std.mem.Allocator, arena: std.mem.Allocator, base_dir: st
     return .{ .success = success_count, .failure = failed_count };
 }
 
+fn binarySearch(
+    items: []const u32,
+    needle: u32,
+) ?usize {
+    if (items.len == 0) return null;
+
+    var low: usize = 0;
+    var high: usize = items.len;
+
+    // Find the insertion point (largest element <= needle)
+    while (low < high) {
+        // Avoid overflowing in the midpoint calculation
+        const mid = low + (high - low) / 2;
+        // Compare needle with items[mid]
+        if (needle == items[mid]) {
+            return mid; // Exact match
+        } else if (needle > items[mid]) {
+            low = mid + 1; // Look in upper half
+        } else {
+            high = mid; // Look in lower half
+        }
+    }
+
+    // At this point, low is the insertion point
+    // If low > 0, the largest element <= needle is at low-1
+    if (low > 0) {
+        // Check if the previous element is <= needle
+        if (needle >= items[low - 1]) {
+            return low - 1;
+        }
+    }
+
+    return null; // No element is <= needle
+}
+
 /// Formats a single roc file at the specified path.
 /// Returns errors on failure and files that don't end in `.roc`
 pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []const u8) !void {
@@ -115,12 +150,8 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     var parse_ast = parse(&module_env, contents);
     defer parse_ast.deinit();
     if (parse_ast.errors.len > 0) {
-        // TODO: pretty print the parse failures.
-        const stderr = std.io.getStdErr().writer();
-        try stderr.print("Failed to parse '{s}' for formatting.\nErrors:\n", .{path});
-        for (parse_ast.errors) |err| {
-            try stderr.print("\t{s}\n", .{@tagName(err.tag)});
-        }
+        parse_ast.toSExprStr(&module_env, std.io.getStdErr().writer().any()) catch @panic("Failed to print SExpr");
+        try printParseErrors(gpa, contents, parse_ast);
         return error.ParsingFailed;
     }
 
@@ -128,6 +159,29 @@ pub fn formatFilePath(gpa: std.mem.Allocator, base_dir: std.fs.Dir, path: []cons
     defer output_file.close();
 
     try formatAst(parse_ast, output_file.writer().any());
+}
+
+fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: IR) !void {
+    // compute offsets of each line, looping over bytes of the input
+    var line_offsets = std.ArrayList(u32).init(gpa);
+    defer line_offsets.deinit();
+    try line_offsets.append(0);
+    for (source, 0..) |c, i| {
+        if (c == '\n') {
+            try line_offsets.append(@intCast(i));
+        }
+    }
+
+    const stderr = std.io.getStdErr().writer();
+    try stderr.print("Errors:\n", .{});
+    for (parse_ast.errors) |err| {
+        const token_offset = parse_ast.tokens.tokens.items(.offset)[err.region.start];
+        const line = binarySearch(line_offsets.items, token_offset) orelse unreachable;
+        const column = token_offset - line_offsets.items[line];
+        const token = parse_ast.tokens.tokens.items(.tag)[err.region.start];
+        // TODO: pretty print the parse failures.
+        try stderr.print("\t{s}, at token {s} at {d}:{d}\n", .{ @tagName(err.tag), @tagName(token), line + 1, column });
+    }
 }
 
 /// Formats and writes out well-formed source of a Roc parse IR (AST).
@@ -1076,16 +1130,24 @@ const Formatter = struct {
         const a = fmt.ast.store.getTypeAnno(anno);
         var region = IR.Region{ .start = 0, .end = 0 };
         switch (a) {
+            .apply => |app| {
+                const slice = fmt.ast.store.typeAnnoSlice(app.args);
+                const first = slice[0];
+                _ = try fmt.formatTypeAnno(first);
+                const rest = slice[1..];
+                try fmt.formatCollection(app.region, .round, IR.NodeStore.TypeAnnoIdx, rest, Formatter.formatTypeAnno);
+            },
             .ty_var => |v| {
                 region = v.region;
                 try fmt.pushTokenText(v.tok);
             },
-            .tag => |t| {
-                region = t.region;
+            .ty => |t| {
                 try fmt.pushTokenText(t.tok);
-                if (t.args.span.len > 0) {
-                    try fmt.formatCollection(t.region, .round, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(t.args), Formatter.formatTypeAnno);
-                }
+            },
+            .mod_ty => |t| {
+                try fmt.pushTokenText(t.tok);
+                try fmt.pushAll(".");
+                try fmt.pushTokenText(t.tok + 1);
             },
             .tuple => |t| {
                 region = t.region;
@@ -1102,6 +1164,7 @@ const Formatter = struct {
             .@"fn" => |f| {
                 region = f.region;
                 const multiline = fmt.ast.regionIsMultiline(region);
+
                 var i: usize = 0;
                 const args = fmt.ast.store.typeAnnoSlice(f.args);
                 for (args) |idx| {
@@ -1308,7 +1371,10 @@ fn moduleFmtsSame(source: []const u8) !void {
     // or included in the cached build
     defer gpa.free(parse_ast.errors);
 
-    try std.testing.expectEqualSlices(IR.Diagnostic, &[_]IR.Diagnostic{}, parse_ast.errors);
+    if (parse_ast.errors.len > 0) {
+        try printParseErrors(gpa, source, parse_ast);
+        std.debug.panic("Test failed with parse errors", .{});
+    }
 
     var result = std.ArrayList(u8).init(gpa);
     defer result.deinit();
@@ -1700,7 +1766,6 @@ test "Multiline BinOp" {
 }
 
 test "Multiline list formatting" {
-    std.debug.print("\n\nMultiline list formatting\n\n", .{});
     const expr = "[1,2,3,]";
     const expected =
         \\[

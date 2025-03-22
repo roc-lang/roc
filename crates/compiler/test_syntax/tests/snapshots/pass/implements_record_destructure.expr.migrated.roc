@@ -1,2 +1,2 @@
-{implements,} = d
+{implements} = d
 I

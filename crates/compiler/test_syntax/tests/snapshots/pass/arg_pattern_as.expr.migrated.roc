@@ -1,2 +1,2 @@
-|{x,y,} as point@Location(inner,) as outer|
-crash("",)
+|{x, y} as point@Location(inner) as outer|
+crash("")

@@ -10,7 +10,7 @@ maybeEarlyReturn = |x|
         x + 2
     }
 
-    Num.to_str(y,)
+    Num.to_str(y)
 }
 
-maybeEarlyReturn(10,)
+maybeEarlyReturn(10)

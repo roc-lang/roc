@@ -1,3 +1,3 @@
-when n{
+match n {
 
     @Age->1}

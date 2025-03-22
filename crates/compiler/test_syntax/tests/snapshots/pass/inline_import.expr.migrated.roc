@@ -1,4 +1,5 @@
-importJsonexposing[int,]
-importJson.Encodeas
+import Json exposing [int]
 
-JE.encode((int(42,)),)
+import Json.Encodeas
+
+JE.encode((int(42)))

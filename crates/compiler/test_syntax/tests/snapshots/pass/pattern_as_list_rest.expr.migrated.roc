@@ -1,3 +1,3 @@
-when myList{
+match myList {
 
-    [first,.. as rest,]->0}
+    [first, .. as rest]->0}

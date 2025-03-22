@@ -1,11 +1,13 @@
-use roc_module::called_via::UnaryOp;
+use bumpalo::collections::String;
+use bumpalo::Bump;
+use roc_module::called_via::{Associativity, BinOp, UnaryOp};
 use roc_parse::{
     ast::{
-        AbilityImpls, AssignedField, Base, Collection, Defs, Expr, FunctionArrow, Header,
-        ImplementsAbilities, ImplementsAbility, ImplementsClause, ImportAlias, ImportAsKeyword,
-        ImportExposingKeyword, ImportedModuleName, IngestedFileAnnotation, IngestedFileImport,
-        ModuleImport, ModuleImportParams, Pattern, Spaced, Spaces, SpacesBefore, Tag,
-        TypeAnnotation, TypeDef, TypeHeader, TypeVar, ValueDef,
+        AbilityImpls, AssignedField, Base, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
+        FunctionArrow, Header, ImplementsAbilities, ImplementsAbility, ImplementsClause,
+        ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
+        IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
+        Spaced, Spaces, SpacesBefore, Tag, TypeAnnotation, TypeDef, TypeHeader, TypeVar, ValueDef,
     },
     header::{
         AppHeader, ExposedName, HostedHeader, Keyword, KeywordItem, ModuleHeader, ModuleName,
@@ -25,7 +27,7 @@ use crate::{
     },
     pattern::snakify_camel_ident,
     spaces::fmt_spaces,
-    Buf,
+    Buf, MigrationFlags,
 };
 
 #[derive(Copy, Clone, Debug)]
@@ -76,7 +78,7 @@ impl<F: Fmt> Fmt for AssignedField<'_, F> {
                 buf.indent(indent);
                 buf.push_str(":");
                 buf.spaces(1);
-                loc1.fmt(buf, indent, Suffix::None)?;
+                loc1.fmt(buf, indent, suffix)?;
             }
             AssignedField::OptionalValue(name, comment_or_newlines, loc1) => {
                 buf.indent(indent);
@@ -87,7 +89,7 @@ impl<F: Fmt> Fmt for AssignedField<'_, F> {
                 buf.indent(indent);
                 buf.push_str(":");
                 buf.spaces(1);
-                loc1.fmt(buf, indent, Suffix::None)?;
+                loc1.fmt(buf, indent, suffix)?;
             }
             AssignedField::IgnoredValue(name, comment_or_newlines, loc1) => {
                 buf.indent(indent);
@@ -99,7 +101,7 @@ impl<F: Fmt> Fmt for AssignedField<'_, F> {
                 buf.indent(indent);
                 buf.push_str(":");
                 buf.spaces(1);
-                loc1.fmt(buf, indent, Suffix::None)?;
+                loc1.fmt(buf, indent, suffix)?;
             }
             AssignedField::LabelOnly(name) => {
                 buf.indent(indent);
@@ -127,13 +129,13 @@ pub fn fmt_pattern(
     match pat {
         Pattern::Identifier { ident } => {
             buf.indent(indent);
-            buf.push_str(ident);
+            snakify_camel_ident(buf, ident);
         }
         Pattern::QualifiedIdentifier { module_name, ident } => {
             buf.indent(indent);
             buf.push_str(module_name);
             buf.push('.');
-            buf.push_str(ident);
+            snakify_camel_ident(buf, ident);
         }
         Pattern::Tag(tag) => {
             buf.indent(indent);
@@ -145,16 +147,31 @@ pub fn fmt_pattern(
         }
         Pattern::Apply(loc, locs) => {
             fmt_pattern(buf, indent, &loc.value, Suffix::OpenRound)?;
-            for loc in locs.iter() {
-                fmt_pattern(buf, indent, &loc.value, Suffix::Comma)?;
+            for (i, loc) in locs.iter().enumerate() {
+                let is_last = i == locs.len() - 1;
+                fmt_pattern(
+                    buf,
+                    indent,
+                    &loc.value,
+                    if is_last { Suffix::None } else { Suffix::Comma },
+                )?;
             }
             buf.indent(indent);
             buf.push(')');
         }
         Pattern::PncApply(loc, collection) => {
             fmt_pattern(buf, indent, &loc.value, Suffix::OpenRound)?;
-            for loc in collection.iter() {
-                fmt_pattern(buf, indent, &loc.value, Suffix::Comma)?;
+            for (i, loc) in collection.iter().enumerate() {
+                let is_last = i == collection.len() - 1;
+                fmt_pattern(
+                    buf,
+                    indent,
+                    &loc.value,
+                    if is_last { Suffix::None } else { Suffix::Comma },
+                )?;
+                if !is_last {
+                    buf.spaces(1);
+                }
             }
             if !collection.final_comments().is_empty() {
                 fmt_spaces(buf, collection.final_comments().iter(), indent);
@@ -325,11 +342,7 @@ pub fn fmt_expr(
                 buf.push_str(module_name);
                 buf.push('.');
             }
-            if buf.flags().snakify {
-                snakify_camel_ident(buf, ident);
-            } else {
-                buf.push_str(ident);
-            }
+            snakify_camel_ident(buf, ident);
         }
         Expr::Underscore(name) => {
             buf.indent(indent);
@@ -465,18 +478,34 @@ pub fn fmt_expr(
         Expr::LowLevelDbg(..) => todo!(),
         Expr::Apply(func, args, _) => {
             fmt_expr(buf, indent, &func.value, Suffix::OpenRound)?;
-            for arg in *args {
-                // TODO: make the suffix depend on whether we're multiline
-                fmt_expr(buf, indent, &arg.value, Suffix::Comma)?;
+            for (i, arg) in args.iter().enumerate() {
+                let is_last = i == args.len() - 1;
+                fmt_expr(
+                    buf,
+                    indent,
+                    &arg.value,
+                    if is_last { Suffix::None } else { Suffix::Comma },
+                )?;
+                if !is_last {
+                    buf.spaces(1);
+                }
             }
             buf.indent(indent);
             buf.push(')');
         }
         Expr::PncApply(func, collection) => {
             fmt_expr(buf, indent, &func.value, Suffix::OpenRound)?;
-            for arg in collection.iter() {
-                // TODO: make the suffix depend on whether we're multiline
-                fmt_expr(buf, indent, &arg.value, Suffix::Comma)?;
+            for (i, arg) in collection.iter().enumerate() {
+                let is_last = i == collection.len() - 1;
+                fmt_expr(
+                    buf,
+                    indent,
+                    &arg.value,
+                    if is_last { Suffix::None } else { Suffix::Comma },
+                )?;
+                if !is_last {
+                    buf.spaces(1);
+                }
             }
             if !collection.final_comments().is_empty() {
                 fmt_spaces(buf, collection.final_comments().iter(), indent);
@@ -485,14 +514,9 @@ pub fn fmt_expr(
             buf.push(')');
         }
         Expr::BinOps(expr_op_pairs, last_expr) => {
-            for (expr, op) in *expr_op_pairs {
-                fmt_expr(buf, indent, &expr.value, Suffix::None)?;
-                buf.spaces(1);
-                buf.indent(indent);
-                push_op(buf, op.value);
-                buf.spaces(1);
-            }
-            fmt_expr(buf, indent, &last_expr.value, Suffix::None)?;
+            let arena = buf.text.bump();
+            let converted = migrate_pizza(buf, arena, expr_op_pairs, **last_expr)?;
+            fmt_converted_ops(buf, indent, &converted, Suffix::None)?;
         }
         Expr::UnaryOp(expr, op) => {
             buf.indent(indent);
@@ -528,10 +552,11 @@ pub fn fmt_expr(
         }
         Expr::When(cond, when_branchs) => {
             buf.indent(indent);
-            buf.push_str("when");
+            buf.push_str("match");
             buf.spaces(1);
             fmt_expr(buf, indent, &cond.value, Suffix::None)?;
             buf.indent(indent);
+            buf.spaces(1);
             buf.push('{');
             buf.ensure_ends_with_newline();
             for branch in when_branchs.iter() {
@@ -596,6 +621,447 @@ pub fn fmt_expr(
         fmt_suffix(buf, indent, suffix);
     }
 
+    Ok(())
+}
+
+#[derive(Debug)]
+enum MigratedBinOp<'a> {
+    BinOp {
+        lhs: &'a MigratedBinOp<'a>,
+        op: BinOp,
+        rhs: &'a MigratedBinOp<'a>,
+    },
+    Parens(&'a MigratedBinOp<'a>),
+    StaticDispatch {
+        lhs: &'a MigratedBinOp<'a>,
+        before: &'a [CommentOrNewline<'a>],
+        func: &'a str,
+        args: &'a [Expr<'a>],
+        after: &'a [CommentOrNewline<'a>],
+    },
+    FuncStaticDispatch {
+        lhs: &'a MigratedBinOp<'a>,
+        before: &'a [CommentOrNewline<'a>],
+        func: &'a Expr<'a>,
+        args: &'a [Expr<'a>],
+        after: &'a [CommentOrNewline<'a>],
+    },
+    Expr(Expr<'a>),
+}
+
+fn apply_ops<'a>(
+    buf: &Buf<'a>,
+    arena: &'a Bump,
+    stack: &mut Vec<MigratedBinOp<'a>>,
+    ops: &mut Vec<BinOp>,
+    min_precedence: u8,
+) -> Result<(), MigrateError> {
+    while let Some(&op) = ops.last() {
+        if op.precedence() <= min_precedence
+            && (op.associativity() == Associativity::RightAssociative
+                || op.precedence() < min_precedence)
+        {
+            break;
+        }
+
+        ops.pop();
+
+        let rhs = stack.pop().unwrap();
+        let lhs = stack.pop().unwrap();
+
+        let result = match op {
+            BinOp::Pizza => {
+                // Need to migrate to StaticDispatch or FuncStaticDispatch!
+                match rhs {
+                    MigratedBinOp::Expr(expr) => {
+                        let expr = expr.extract_spaces();
+                        match expr.item {
+                            Expr::Apply(func, args, _) => {
+                                if let Some(name) = is_staticable(buf, &func.value) {
+                                    MigratedBinOp::StaticDispatch {
+                                        lhs: maybe_parens(arena, lhs),
+                                        before: expr.before,
+                                        func: arena.alloc_str(name),
+                                        args: arena.alloc_slice_fill_iter(
+                                            args.iter().map(|arg| arg.value),
+                                        ),
+                                        after: expr.after,
+                                    }
+                                } else {
+                                    MigratedBinOp::FuncStaticDispatch {
+                                        lhs: maybe_parens(arena, lhs),
+                                        before: expr.before,
+                                        func: arena.alloc(func.value),
+                                        args: arena.alloc_slice_fill_iter(
+                                            args.iter().map(|arg| arg.value),
+                                        ),
+                                        after: expr.after,
+                                    }
+                                }
+                            }
+                            Expr::Var { module_name, ident } => {
+                                let ident = if buf.flags.snakify {
+                                    snakify_camel_ident_in_bump(buf.text.bump(), ident)
+                                        .into_bump_str()
+                                } else {
+                                    ident
+                                };
+                                if is_static_method(module_name, ident) {
+                                    MigratedBinOp::StaticDispatch {
+                                        lhs: maybe_parens(arena, lhs),
+                                        before: expr.before,
+                                        func: arena.alloc_str(ident),
+                                        args: &[],
+                                        after: expr.after,
+                                    }
+                                } else {
+                                    MigratedBinOp::FuncStaticDispatch {
+                                        lhs: maybe_parens(arena, lhs),
+                                        before: expr.before,
+                                        func: arena.alloc(Expr::Var { module_name, ident }),
+                                        args: &[],
+                                        after: expr.after,
+                                    }
+                                }
+                            }
+                            _ => return Err(MigrateError::PizzaOpRhsNotSupported),
+                        }
+                    }
+                    _ => return Err(MigrateError::PizzaOpRhsNotSupported),
+                }
+            }
+            _ => MigratedBinOp::BinOp {
+                lhs: arena.alloc(lhs),
+                op,
+                rhs: arena.alloc(rhs),
+            },
+        };
+
+        stack.push(result);
+    }
+    Ok(())
+}
+
+fn maybe_parens<'a>(arena: &'a Bump, lhs: MigratedBinOp<'a>) -> &'a MigratedBinOp<'a> {
+    match lhs {
+        MigratedBinOp::Parens(_)
+        | MigratedBinOp::StaticDispatch { .. }
+        | MigratedBinOp::FuncStaticDispatch { .. }
+        | MigratedBinOp::Expr(_) => arena.alloc(lhs),
+        MigratedBinOp::BinOp { .. } => arena.alloc(MigratedBinOp::Parens(arena.alloc(lhs))),
+    }
+}
+
+fn is_staticable<'a>(buf: &Buf<'a>, value: &Expr<'a>) -> Option<&'a str> {
+    match value {
+        Expr::Var { module_name, ident } => {
+            let ident = if buf.flags.snakify {
+                snakify_camel_ident_in_bump(buf.text.bump(), ident).into_bump_str()
+            } else {
+                ident
+            };
+            if is_static_method(module_name, ident) {
+                Some(ident)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+fn is_static_method(module_name: &str, ident: &str) -> bool {
+    match module_name {
+        "Str" => matches!(
+            ident,
+            "concat"
+                | "is_empty"
+                | "join_with"
+                | "split_on"
+                | "repeat"
+                | "count_utf8_bytes"
+                | "to_utf8"
+                | "starts_with"
+                | "ends_with"
+                | "trim"
+                | "trim_start"
+                | "trim_end"
+                | "to_dec"
+                | "to_f64"
+                | "to_f32"
+                | "to_u128"
+                | "to_i128"
+                | "to_u64"
+                | "to_i64"
+                | "to_u32"
+                | "to_i32"
+                | "to_u16"
+                | "to_i16"
+                | "to_u8"
+                | "to_i8"
+                | "replace_each"
+                | "replace_first"
+                | "replace_last"
+                | "split_first"
+                | "split_last"
+                | "walk_utf8"
+                | "walk_utf8_with_index"
+                | "reserve"
+                | "release_excess_capacity"
+                | "with_prefix"
+                | "contains"
+                | "drop_prefix"
+                | "drop_suffix"
+                | "with_ascii_lowercased"
+                | "with_ascii_uppercased"
+                | "caseless_ascii_equals"
+        ),
+
+        // TODO: other modules
+        "List" => matches!(
+            ident,
+            "is_empty"
+                | "get"
+                | "set"
+                | "replace"
+                | "update"
+                | "append"
+                | "append_if_ok"
+                | "prepend"
+                | "prepend_if_ok"
+                | "map"
+                | "len"
+                | "walk_backwards"
+                | "concat"
+                | "first"
+                | "single"
+                | "repeat"
+                | "reverse"
+                | "join"
+                | "keep_if"
+                | "contains"
+                | "sum"
+                | "walk"
+                | "last"
+                | "keep_oks"
+                | "keep_errs"
+                | "map_with_index"
+                | "map2"
+                | "map3"
+                | "product"
+                | "walk_with_index"
+                | "walk_until"
+                | "walk_with_index_until"
+                | "walk_from"
+                | "walk_from_until"
+                | "range"
+                | "sort_with"
+                | "swap"
+                | "drop_at"
+                | "min"
+                | "max"
+                | "map4"
+                | "map_try"
+                | "walk_try"
+                | "join_map"
+                | "any"
+                | "take_first"
+                | "take_last"
+                | "drop_first"
+                | "drop_last"
+                | "find_first"
+                | "find_last"
+                | "find_first_index"
+                | "find_last_index"
+                | "sublist"
+                | "intersperse"
+                | "split_at"
+                | "split_on"
+                | "split_on_list"
+                | "split_first"
+                | "split_last"
+                | "starts_with"
+                | "ends_with"
+                | "all"
+                | "drop_if"
+                | "sort_asc"
+                | "sort_desc"
+                | "reserve"
+                | "release_excess_capacity"
+                | "walk_backwards_until"
+                | "count_if"
+                | "chunks_of"
+                | "concat_utf8"
+                | "for_each!"
+                | "for_each_try!"
+                | "walk!"
+                | "walk_try!"
+        ),
+        "Dict" => {
+            matches!(
+                ident,
+                "clear"
+                    | "capacity"
+                    | "reserve"
+                    | "release_excess_capacity"
+                    | "len"
+                    | "is_empty"
+                    | "get"
+                    | "contains"
+                    | "insert"
+                    | "remove"
+                    | "update"
+                    | "walk"
+                    | "walk_until"
+                    | "keep_if"
+                    | "drop_if"
+                    | "to_list"
+                    | "keys"
+                    | "values"
+                    | "insert_all"
+                    | "keep_shared"
+                    | "remove_all"
+                    | "map"
+                    | "join_map"
+            )
+        }
+        _ => false,
+    }
+}
+
+fn migrate_pizza<'a>(
+    buf: &Buf<'a>,
+    arena: &'a Bump,
+    expr_op_pairs: &[(Loc<Expr<'a>>, Loc<BinOp>)],
+    last_expr: Loc<Expr<'a>>,
+) -> Result<MigratedBinOp<'a>, MigrateError> {
+    println!(
+        "Starting migrate_pizza with {} expr_op_pairs",
+        expr_op_pairs.len()
+    );
+
+    let mut stack: Vec<MigratedBinOp<'a>> = Vec::new();
+    let mut ops: Vec<BinOp> = Vec::new();
+
+    for (expr, op) in expr_op_pairs {
+        println!("Processing expression: {:?}", expr.value);
+        stack.push(MigratedBinOp::Expr(expr.value));
+        apply_ops(buf, arena, &mut stack, &mut ops, op.value.precedence())?;
+
+        println!("Pushing operator onto stack: {:?}", op.value);
+        ops.push(op.value);
+    }
+
+    // Push the last expression onto the stack
+    println!("Pushing last expression onto stack: {:?}", last_expr.value);
+    stack.push(MigratedBinOp::Expr(last_expr.value));
+
+    // Apply all remaining operators
+    println!("Applying all remaining operators (min_precedence: 0)");
+    apply_ops(buf, arena, &mut stack, &mut ops, 0)?;
+    println!("Final stack size: {}", stack.len());
+
+    // The final result should be at the top of the stack
+    let result = stack.pop().unwrap();
+    println!("Returning final result: {:?}", result);
+    Ok(result)
+}
+
+fn fmt_converted_ops(
+    buf: &mut Buf,
+    indent: u16,
+    converted: &MigratedBinOp,
+    suffix: Suffix,
+) -> Result<(), MigrateError> {
+    match converted {
+        MigratedBinOp::BinOp { lhs, op, rhs } => {
+            // Format left-hand side
+            fmt_converted_ops(buf, indent, lhs, Suffix::None)?;
+
+            // Format operator
+            buf.indent(indent);
+            buf.spaces(1);
+            push_op(buf, *op);
+            buf.spaces(1);
+
+            // Format right-hand side
+            fmt_converted_ops(buf, indent, rhs, suffix)?;
+        }
+        MigratedBinOp::Expr(expr) => {
+            fmt_expr(buf, indent, expr, suffix)?;
+        }
+        MigratedBinOp::Parens(inner) => {
+            buf.push('(');
+            fmt_converted_ops(buf, indent, inner, Suffix::None)?;
+            buf.indent(indent);
+            buf.push(')');
+            fmt_suffix(buf, indent, suffix);
+        }
+        MigratedBinOp::StaticDispatch {
+            lhs,
+            before,
+            func,
+            args,
+            after,
+        } => {
+            // lhs.func(args)
+            fmt_converted_ops(buf, indent, lhs, Suffix::None)?;
+            if !before.is_empty() {
+                fmt_spaces(buf, before.iter(), indent);
+            }
+            buf.indent(indent);
+            buf.push('.');
+            buf.push_str(func);
+            buf.push('(');
+            for (i, arg) in args.iter().enumerate() {
+                fmt_expr(buf, indent, arg, Suffix::None)?;
+                if i != args.len() - 1 {
+                    buf.indent(indent);
+                    buf.push(',');
+                    buf.spaces(1);
+                }
+            }
+            buf.indent(indent);
+            buf.push(')');
+            fmt_suffix(buf, indent, suffix);
+            if !after.is_empty() {
+                fmt_spaces(buf, after.iter(), indent);
+            }
+        }
+        MigratedBinOp::FuncStaticDispatch {
+            lhs,
+            before,
+            func,
+            args,
+            after,
+        } => {
+            // lhs.(func)(args)
+            fmt_converted_ops(buf, indent, lhs, Suffix::None)?;
+            if !before.is_empty() {
+                fmt_spaces(buf, before.iter(), indent);
+            }
+            buf.indent(indent);
+            buf.push('.');
+            buf.push('(');
+            fmt_expr(buf, indent, func, Suffix::None)?;
+            buf.push(')');
+            buf.push('(');
+            for (i, arg) in args.iter().enumerate() {
+                fmt_expr(buf, indent, arg, Suffix::None)?;
+                if i != args.len() - 1 {
+                    buf.indent(indent);
+                    buf.push(',');
+                    buf.spaces(1);
+                }
+            }
+            buf.indent(indent);
+            buf.push(')');
+            fmt_suffix(buf, indent, suffix);
+            if !after.is_empty() {
+                fmt_spaces(buf, after.iter(), indent);
+            }
+        }
+    }
     Ok(())
 }
 
@@ -691,8 +1157,16 @@ fn fmt_collection<F: Fmt>(
         }
     }
 
-    for item in collection.iter() {
-        item.fmt(buf, indent + 4, Suffix::Comma)?;
+    for (i, item) in collection.iter().enumerate() {
+        let is_last = i == collection.len() - 1 && tail.is_none();
+        item.fmt(
+            buf,
+            indent + 4,
+            if is_last { Suffix::None } else { Suffix::Comma },
+        )?;
+        if !is_last {
+            buf.spaces(1);
+        }
     }
 
     if let Some(tail) = tail {
@@ -743,12 +1217,22 @@ impl Fmt for TypeHeader<'_> {
     fn fmt(&self, buf: &mut Buf, indent: u16, suffix: Suffix) -> Result<(), MigrateError> {
         buf.indent(indent);
         buf.push_str(self.name.value);
-        buf.push('(');
-        for arg in self.vars {
-            arg.fmt(buf, indent, Suffix::Comma)?;
+        if !self.vars.is_empty() {
+            buf.push('(');
+            for (i, arg) in self.vars.iter().enumerate() {
+                let is_last = i == self.vars.len() - 1;
+                arg.fmt(
+                    buf,
+                    indent,
+                    if is_last { Suffix::None } else { Suffix::Comma },
+                )?;
+                if !is_last {
+                    buf.spaces(1);
+                }
+            }
+            buf.indent(indent);
+            buf.push(')');
         }
-        buf.indent(indent);
-        buf.push(')');
         fmt_suffix(buf, indent, suffix);
         Ok(())
     }
@@ -762,8 +1246,16 @@ impl Fmt for Tag<'_> {
                 buf.push_str(name.value);
                 if !args.is_empty() {
                     buf.push('(');
-                    for arg in args.iter() {
-                        arg.fmt(buf, indent, Suffix::Comma)?;
+                    for (i, arg) in args.iter().enumerate() {
+                        let is_last = i == args.len() - 1;
+                        arg.fmt(
+                            buf,
+                            indent,
+                            if is_last { Suffix::None } else { Suffix::Comma },
+                        )?;
+                        if !is_last {
+                            buf.spaces(1);
+                        }
                     }
                     buf.indent(indent);
                     buf.push(')');
@@ -788,8 +1280,16 @@ impl Fmt for TypeAnnotation<'_> {
     fn fmt(&self, buf: &mut Buf, indent: u16, suffix: Suffix) -> Result<(), MigrateError> {
         match self {
             TypeAnnotation::Function(args, function_arrow, res) => {
-                for arg in args.iter() {
-                    arg.fmt(buf, indent, Suffix::Comma)?;
+                for (i, arg) in args.iter().enumerate() {
+                    let is_last = i == args.len() - 1;
+                    arg.fmt(
+                        buf,
+                        indent,
+                        if is_last { Suffix::None } else { Suffix::Comma },
+                    )?;
+                    if !is_last {
+                        buf.spaces(1);
+                    }
                 }
                 match function_arrow {
                     FunctionArrow::Pure => {
@@ -811,8 +1311,16 @@ impl Fmt for TypeAnnotation<'_> {
                 buf.push_str(func);
                 if !locs.is_empty() {
                     buf.push('(');
-                    for loc in locs.iter() {
-                        loc.fmt(buf, indent, Suffix::Comma)?;
+                    for (i, loc) in locs.iter().enumerate() {
+                        let is_last = i == locs.len() - 1;
+                        loc.fmt(
+                            buf,
+                            indent,
+                            if is_last { Suffix::None } else { Suffix::Comma },
+                        )?;
+                        if !is_last {
+                            buf.spaces(1);
+                        }
                     }
                     buf.indent(indent);
                     buf.push(')');
@@ -865,8 +1373,7 @@ impl Fmt for TypeAnnotation<'_> {
                 buf.push_str("_");
             }
             TypeAnnotation::Wildcard => {
-                buf.indent(indent);
-                buf.push_str("*");
+                return Err(MigrateError::WildcardTypeNotSupported);
             }
             TypeAnnotation::Where(left, clauses) => {
                 left.fmt(buf, indent, Suffix::None)?;
@@ -1022,6 +1529,11 @@ impl Fmt for TypeDef<'_> {
                 typ,
                 derived,
             } => {
+                if true {
+                    // current new compiler doesn't support opaque types
+                    // TODO: fix this!
+                    return Err(MigrateError::OpaqueNotSupported);
+                }
                 header.fmt(buf, indent, Suffix::None)?;
                 buf.push_str(" :=");
                 buf.spaces(1);
@@ -1046,11 +1558,14 @@ impl Fmt for TypeDef<'_> {
 #[derive(Debug)]
 pub enum MigrateError {
     AbilitiesNotSupported,
+    WildcardTypeNotSupported,
     MalformedIdentNotSupported,
     MalformedPatternNotSupported,
     MalformedPatternIdentNotSupported,
     MalformedPatternAsExprNotSupported,
     PrecedenceConflictNotSupported,
+    OpaqueNotSupported,
+    PizzaOpRhsNotSupported,
 }
 
 impl Fmt for ValueDef<'_> {
@@ -1133,6 +1648,7 @@ impl Fmt for IngestedFileImport<'_> {
 
         buf.indent(indent);
         buf.push_str("import");
+        buf.spaces(1);
 
         let indent = indent + 4;
 
@@ -1236,6 +1752,7 @@ impl Fmt for ModuleImport<'_> {
 
         buf.indent(indent);
         buf.push_str("import");
+        buf.spaces(1);
 
         if !before_name.is_empty() {
             fmt_spaces(buf, before_name.iter(), indent);
@@ -1250,10 +1767,13 @@ impl Fmt for ModuleImport<'_> {
         }
 
         if let Some(exposed) = exposed {
+            buf.spaces(1);
             exposed.keyword.fmt(buf, indent, Suffix::None)?;
+            buf.spaces(1);
             fmt_collection(buf, indent, Braces::Square, None, exposed.item, None)?;
         }
         fmt_suffix(buf, indent, suffix);
+        buf.ensure_ends_with_newline();
         Ok(())
     }
 }
@@ -1398,4 +1918,10 @@ pub fn fmt_defs(buf: &mut Buf<'_>, defs: &Defs<'_>) -> Result<(), MigrateError> 
         }
     }
     Ok(())
+}
+
+fn snakify_camel_ident_in_bump<'a>(arena: &'a Bump, string: &str) -> String<'a> {
+    let mut buf = Buf::new_in(arena, MigrationFlags::default());
+    snakify_camel_ident(&mut buf, string);
+    buf.text
 }

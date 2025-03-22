@@ -1,1 +1,1 @@
-fxFn!(arg,)
+fxFn!(arg)
