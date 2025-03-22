@@ -11,7 +11,7 @@ and a few times when Roc community members have met up in person.
 
 ### [Code of Conduct](#code-of-conduct) {#code-of-conduct}
 
-The Roc project enforces [a code of conduct](https://github.com/roc-lang/roc/blob/main/CODE_OF_CONDUCT.md). Please read and follow it!
+The Roc project enforces [a code of conduct](https://github.com/roc-lang/roc/blob/main/code_of_conduct.md). Please read and follow it!
 
 ### [Contributing](#contributing) {#contributing}
 

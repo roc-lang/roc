@@ -2,7 +2,7 @@
 
 ## Code of Conduct
 
-We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](code_of_conduct.md) for details.
 
 ## How to contribute
 

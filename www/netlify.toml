@@ -56,12 +56,12 @@
     # Preloading fonts requires CORS headers for some reason
     Access-Control-Allow-Origin = "*"
 
-# Redirect roc-lang.org/authors to the AUTHORS file in this repo
+# Redirect roc-lang.org/authors to the authors file in this repo
 #
 # This is referenced in the LICENSE file, which says to see roc-lang.org/authors
 # for a list of authors!
 [[redirects]]
   from = "/authors"
-  to = "https://raw.githubusercontent.com/roc-lang/roc/main/AUTHORS"
+  to = "https://raw.githubusercontent.com/roc-lang/roc/main/authors"
   force = true
   status = 200
