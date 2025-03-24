@@ -35,7 +35,7 @@ jobs:
 
       # for skipped tests: see issue 6274
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
+        run: nix develop -c cargo test -j 2 --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
