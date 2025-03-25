@@ -1,55 +1,60 @@
-@0-33 Defs(
-    Defs {
-        tags: [
-            EitherIndex(2147483648),
-        ],
-        regions: [
-            @0-30,
-        ],
-        space_before: [
-            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        ],
-        space_after: [
-            Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
-        ],
-        spaces: [],
-        type_defs: [],
-        value_defs: [
-            Annotation(
-                @0-7 Identifier {
-                    ident: "doStuff",
-                },
-                @10-30 Function(
-                    [
-                        @10-16 Apply(
-                            "",
-                            "UserId",
-                            [],
-                        ),
-                    ],
-                    Pure,
-                    @20-30 Apply(
-                        "",
-                        "Task",
+@0-33 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-30,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-7 Identifier {
+                        ident: "doStuff",
+                    },
+                    @10-30 Function(
                         [
-                            @25-28 Apply(
+                            @10-16 Apply(
                                 "",
-                                "Str",
+                                "UserId",
                                 [],
                             ),
-                            @29-30 Inferred,
                         ],
+                        Pure,
+                        @20-30 Apply(
+                            "",
+                            "Dict",
+                            [
+                                @25-28 Apply(
+                                    "",
+                                    "Str",
+                                    [],
+                                ),
+                                @29-30 Inferred,
+                            ],
+                        ),
                     ),
                 ),
+            ],
+        },
+        @31-33 SpaceBefore(
+            Num(
+                "42",
             ),
-        ],
-    },
-    @31-33 SpaceBefore(
-        Num(
-            "42",
+            [
+                Newline,
+            ],
         ),
-        [
-            Newline,
-        ],
     ),
+    [
+        Newline,
+    ],
 )

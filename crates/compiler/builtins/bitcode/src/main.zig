@@ -16,7 +16,7 @@ const dec = @import("dec.zig");
 var FLTUSED: i32 = 0;
 comptime {
     if (builtin.os.tag == .windows) {
-        @export(FLTUSED, .{ .name = "_fltused", .linkage = .Weak });
+        @export(FLTUSED, .{ .name = "_fltused", .linkage = .weak });
     }
 }
 
@@ -50,9 +50,9 @@ comptime {
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
     exportDecFn(dec.fromI128, "from_i128");
-    exportDecFn(dec.toStr, "to_str");
+    exportDecFn(dec.to_str, "to_str");
 
-    inline for (INTEGERS) |T| {
+    for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
 
         dec.exportRound(T, ROC_BUILTINS ++ ".dec.round.");
@@ -115,7 +115,7 @@ comptime {
     exportNumFn(num.f32FromParts, "f32_from_parts");
     exportNumFn(num.f64FromParts, "f64_from_parts");
 
-    inline for (INTEGERS, 0..) |T, i| {
+    for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");
         num.exportDivCeil(T, ROC_BUILTINS ++ "." ++ NUM ++ ".div_ceil.");
 
@@ -151,15 +151,15 @@ comptime {
         num.exportCountOneBits(T, ROC_BUILTINS ++ "." ++ NUM ++ ".count_one_bits.");
     }
 
-    inline for (INTEGERS) |FROM| {
-        inline for (INTEGERS) |TO| {
+    for (INTEGERS) |FROM| {
+        for (INTEGERS) |TO| {
             // We're exporting more than we need here, but that's okay.
             num.exportToIntCheckingMax(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max.");
             num.exportToIntCheckingMaxAndMin(FROM, TO, ROC_BUILTINS ++ "." ++ NUM ++ ".int_to_" ++ @typeName(TO) ++ "_checking_max_and_min.");
         }
     }
 
-    inline for (FLOATS) |T| {
+    for (FLOATS) |T| {
         num.exportAsin(T, ROC_BUILTINS ++ "." ++ NUM ++ ".asin.");
         num.exportAcos(T, ROC_BUILTINS ++ "." ++ NUM ++ ".acos.");
         num.exportAtan(T, ROC_BUILTINS ++ "." ++ NUM ++ ".atan.");
@@ -203,6 +203,7 @@ comptime {
     exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
+    exportStrFn(str.fromUtf8Lossy, "from_utf8_lossy");
     exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");
@@ -211,13 +212,16 @@ comptime {
     exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
+    exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
+    exportStrFn(str.strWithAsciiUppercased, "with_ascii_uppercased");
+    exportStrFn(str.strCaselessAsciiEquals, "caseless_ascii_equals");
 
-    inline for (INTEGERS) |T| {
+    for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");
         num.exportParseInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".to_int.");
     }
 
-    inline for (FLOATS) |T| {
+    for (FLOATS) |T| {
         str.exportFromFloat(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_float.");
         num.exportParseFloat(T, ROC_BUILTINS ++ "." ++ STR ++ ".to_float.");
     }
@@ -238,8 +242,8 @@ comptime {
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
-    @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .Weak });
-    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .Weak });
+    @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .weak });
+    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
@@ -247,17 +251,17 @@ comptime {
         exportUtilsFn(expect.notifyParentExpect, "notify_parent_expect");
 
         // sets the buffer used for expect failures
-        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .Weak });
+        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .weak });
 
         exportUtilsFn(expect.readSharedBufferEnv, "read_env_shared_buffer");
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
-        @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
-        @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+        @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .weak });
+        @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .weak });
     } else if (builtin.os.tag == .windows) {
-        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .Weak });
-        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .Weak });
+        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .weak });
+        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .weak });
     }
 }
 
@@ -372,7 +376,7 @@ comptime {
 
 // Export helpers - Must be run inside a comptime
 fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
-    @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .Strong });
+    @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .strong });
 }
 fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "num." ++ func_name);

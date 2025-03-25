@@ -17,26 +17,30 @@
             type_defs: [],
             value_defs: [
                 Annotation(
-                    @0-1 Apply(
-                        @0-1 NumLiteral(
-                            "1",
+                    @0-10 Apply(
+                        @0-10 PncApply(
+                            @0-1 NumLiteral(
+                                "1",
+                            ),
+                            [
+                                @2-9 PncApply(
+                                    @3-4 NumLiteral(
+                                        "0",
+                                    ),
+                                    [
+                                        @5-6 SpaceAfter(
+                                            NumLiteral(
+                                                "0",
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                ),
+                            ],
                         ),
                         [
-                            @2-9 Apply(
-                                @3-4 NumLiteral(
-                                    "0",
-                                ),
-                                [
-                                    @5-6 SpaceAfter(
-                                        NumLiteral(
-                                            "0",
-                                        ),
-                                        [
-                                            Newline,
-                                        ],
-                                    ),
-                                ],
-                            ),
                             @10-11 Identifier {
                                 ident: "f",
                             },

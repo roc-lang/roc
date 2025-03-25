@@ -98,7 +98,7 @@ fn partial_record_definition() {
     // Partially define a record incompletely
     {
         let mut state = ReplState::new();
-        let mut input = "failedRecord = {".to_string();
+        let mut input = "failed_record = {".to_string();
         incomplete(&mut input);
 
         input.push_str("field: \"field\",");
@@ -111,11 +111,11 @@ fn partial_record_definition() {
 
             I am partway through parsing a record, but I got stuck here:
 
-            1│  app "app" provides [replOutput] to "./platform"
+            1│  app "app" provides [repl_output] to "./platform"
             2│
-            3│  replOutput =
-            4│      failedRecord = {
-                                   ^
+            3│  repl_output =
+            4│      failed_record = {
+                                    ^
 
             TODO provide more context."#
         );

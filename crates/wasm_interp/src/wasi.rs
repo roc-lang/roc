@@ -122,8 +122,8 @@ impl<'a> WasiDispatcher<'a> {
                 let stat_mut_ptr = arguments[1].expect_i32().unwrap() as usize;
 
                 match fd {
-                    1 => {
-                        // Tell WASI that stdout is a tty (no seek or tell)
+                    1 | 2 => {
+                        // Tell WASI that stdout and stderr are a tty (no seek or tell)
                         // https://github.com/WebAssembly/wasi-libc/blob/659ff414560721b1660a19685110e484a081c3d4/libc-bottom-half/sources/isatty.c
                         // *Not* a tty if:
                         //     (statbuf.fs_filetype != __WASI_FILETYPE_CHARACTER_DEVICE ||

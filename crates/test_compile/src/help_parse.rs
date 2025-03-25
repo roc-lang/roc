@@ -38,7 +38,7 @@ impl ParseExpr {
 
         let parser = skip_second(
             space0_before_optional_after(
-                loc_expr_block(true),
+                loc_expr_block(false),
                 EExpr::IndentStart,
                 EExpr::IndentEnd,
             ),

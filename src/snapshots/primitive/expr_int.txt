@@ -1,0 +1,23 @@
+~~~META
+description=A primitive
+verbose-tokens
+~~~SOURCE
+module [foo]
+foo = 42
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
+LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),EndOfFile(2:9-2:9),
+~~~PARSE
+(file (1:1-2:9)
+    (module (1:1-1:13)
+        (exposed_item (1:9-1:12) (lower_ident "foo")))
+    (decl (2:1-2:9)
+        (ident (2:1-2:4) "foo")
+        (int (2:7-2:9) "42")))
+~~~FORMATTED
+module [foo]
+
+foo = 42
+~~~END

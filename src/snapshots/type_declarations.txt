@@ -1,0 +1,69 @@
+~~~META
+description=Various type declarations
+~~~SOURCE
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+
+Map a b : List(a), (a -> b) -> List(b)
+
+Foo : (Bar, Baz)
+
+Some a : { foo : Ok(a), bar : Something }
+
+Maybe a : [Some(a), None]
+
+SomeFunc a : Maybe(a), a -> Maybe(a)
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
+UpperIdent(3:1-3:4),LowerIdent(3:5-3:6),LowerIdent(3:7-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:15),NoSpaceOpenRound(3:15-3:16),LowerIdent(3:16-3:17),CloseRound(3:17-3:18),Comma(3:18-3:19),OpenRound(3:20-3:21),LowerIdent(3:21-3:22),OpArrow(3:23-3:25),LowerIdent(3:26-3:27),CloseRound(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:36),NoSpaceOpenRound(3:36-3:37),LowerIdent(3:37-3:38),CloseRound(3:38-3:39),Newline(1:1-1:1),
+UpperIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),UpperIdent(5:8-5:11),Comma(5:11-5:12),UpperIdent(5:13-5:16),CloseRound(5:16-5:17),Newline(1:1-1:1),
+UpperIdent(7:1-7:5),LowerIdent(7:6-7:7),OpColon(7:8-7:9),OpenCurly(7:10-7:11),LowerIdent(7:12-7:15),OpColon(7:16-7:17),UpperIdent(7:18-7:20),NoSpaceOpenRound(7:20-7:21),LowerIdent(7:21-7:22),CloseRound(7:22-7:23),Comma(7:23-7:24),LowerIdent(7:25-7:28),OpColon(7:29-7:30),UpperIdent(7:31-7:40),CloseCurly(7:41-7:42),Newline(1:1-1:1),
+UpperIdent(9:1-9:6),LowerIdent(9:7-9:8),OpColon(9:9-9:10),OpenSquare(9:11-9:12),UpperIdent(9:12-9:16),NoSpaceOpenRound(9:16-9:17),LowerIdent(9:17-9:18),CloseRound(9:18-9:19),Comma(9:19-9:20),UpperIdent(9:21-9:25),CloseSquare(9:25-9:26),Newline(1:1-1:1),
+UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11:14-11:19),NoSpaceOpenRound(11:19-11:20),LowerIdent(11:20-11:21),CloseRound(11:21-11:22),Comma(11:22-11:23),LowerIdent(11:24-11:25),OpArrow(11:26-11:28),UpperIdent(11:29-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:36),CloseRound(11:36-11:37),EndOfFile(11:37-11:37),
+~~~PARSE
+(file (1:1-11:37)
+    (module (1:1-1:57)
+        (exposed_item (1:9-1:12) (upper_ident "Map"))
+        (exposed_item (1:14-1:17) (upper_ident "Foo"))
+        (exposed_item (1:19-1:23) (upper_ident "Some"))
+        (exposed_item (1:25-1:30) (upper_ident "Maybe"))
+        (exposed_item (1:32-1:40) (upper_ident "SomeFunc"))
+        (exposed_item (1:42-1:49) (lower_ident "add_one"))
+        (exposed_item (1:51-1:56) (lower_ident "main!")))
+    (type_decl (3:1-5:4)
+        (header "Map" "a" "b")
+        (fn (3:11-5:4)
+            (tag (3:32-5:4)
+                "List"
+                (ty_var (3:37-3:38) "b"))
+            (tag (3:11-3:19)
+                "List"
+                (ty_var (3:16-3:17) "a"))
+            (fn (3:21-3:28)
+                (ty_var (3:26-3:27) "b")
+                (ty_var (3:21-3:22) "a"))))
+    (type_decl (5:1-7:5)
+        (header "Foo")
+        (tuple (5:7-7:5)
+            (tag (5:8-5:11) "Bar")
+            (tag (5:13-5:16) "Baz")))
+    (type_decl (7:1-9:6)
+        (header "Some" "a")
+        (record (7:10-9:6) "<field>" "<field>"))
+    (type_decl (9:1-11:9)
+        (header "Maybe" "a")
+        (tag_union (9:11-11:9) "TODO tags" "TODO open_anno"))
+    (type_decl (11:1-11:37)
+        (header "SomeFunc" "a")
+        (fn (11:14-11:37)
+            (tag (11:29-11:37)
+                "Maybe"
+                (ty_var (11:35-11:36) "a"))
+            (tag (11:14-11:23)
+                "Maybe"
+                (ty_var (11:20-11:21) "a"))
+            (ty_var (11:24-11:25) "a"))))
+~~~FORMATTED
+NO CHANGE
+~~~END

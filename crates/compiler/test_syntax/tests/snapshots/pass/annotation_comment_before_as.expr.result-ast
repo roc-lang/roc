@@ -1,0 +1,55 @@
+@0-13 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-11,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 Identifier {
+                        ident: "e",
+                    },
+                    @2-0 As(
+                        @2-3 Apply(
+                            "",
+                            "A",
+                            [],
+                        ),
+                        [
+                            LineComment(
+                                "",
+                            ),
+                        ],
+                        TypeHeader {
+                            name: @10-11 "H",
+                            vars: [],
+                        },
+                    ),
+                ),
+            ],
+        },
+        @12-13 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "n",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

@@ -1,5 +1,3 @@
-#![cfg(not(feature = "gen-wasm"))]
-
 #[cfg(feature = "gen-llvm")]
 use crate::helpers::llvm::assert_evals_to;
 #[cfg(feature = "gen-llvm")]
@@ -9,6 +7,9 @@ use crate::helpers::llvm::assert_llvm_evals_to;
 use crate::helpers::dev::assert_evals_to;
 #[cfg(feature = "gen-dev")]
 use crate::helpers::dev::assert_evals_to as assert_llvm_evals_to;
+
+#[cfg(feature = "gen-wasm")]
+use crate::helpers::wasm::assert_evals_to;
 
 #[allow(unused_imports)]
 use indoc::indoc;
@@ -50,12 +51,12 @@ fn string_neq() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    List.len (Str.splitOn "hello" "")
+                    List.len (Str.split_on "hello" "")
                 "#
         ),
         1,
@@ -65,9 +66,9 @@ fn str_split_on_empty_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.splitOn "JJJ" "") is
+                    when List.first (Str.split_on "JJJ" "") is
                         Ok str ->
-                            Str.countUtf8Bytes str
+                            Str.count_utf8_bytes str
 
                         _ ->
                             1729
@@ -80,12 +81,12 @@ fn str_split_on_empty_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                    List.len (Str.splitOn "hello" "JJJJ there")
+                    List.len (Str.split_on "hello" "JJJJ there")
                 "#
         ),
         1,
@@ -95,9 +96,9 @@ fn str_split_on_bigger_delimiter_small_str() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.splitOn "JJJ" "JJJJ there") is
+                    when List.first (Str.split_on "JJJ" "JJJJ there") is
                         Ok str ->
-                            Str.countUtf8Bytes str
+                            Str.count_utf8_bytes str
 
                         _ ->
                             1729
@@ -110,12 +111,12 @@ fn str_split_on_bigger_delimiter_small_str() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_str_concat_repeated() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when List.first (Str.splitOn "JJJJJ" "JJJJ there") is
+                    when List.first (Str.split_on "JJJJJ" "JJJJ there") is
                         Ok str ->
                             str
                                 |> Str.concat str
@@ -134,22 +135,22 @@ fn str_split_on_str_concat_repeated() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_small_str_bigger_delimiter() {
     assert_evals_to!(
-        indoc!(r#"Str.splitOn "JJJ" "0123456789abcdefghi""#),
+        indoc!(r#"Str.split_on "JJJ" "0123456789abcdefghi""#),
         RocList::from_slice(&[RocStr::from("JJJ")]),
         RocList<RocStr>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "01234567789abcdefghi?01234567789abcdefghi" "?"
+                    Str.split_on "01234567789abcdefghi?01234567789abcdefghi" "?"
                 "#
         ),
         RocList::from_slice(&[
@@ -162,7 +163,7 @@ fn str_split_on_big_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
+                    Str.split_on "01234567789abcdefghi 3ch 01234567789abcdefghi" "3ch"
                 "#
         ),
         RocList::from_slice(&[
@@ -174,12 +175,12 @@ fn str_split_on_big_str_small_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_small_str_small_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "J!J!J" "!"
+                    Str.split_on "J!J!J" "!"
                 "#
         ),
         RocList::from_slice(&[RocStr::from("J"), RocStr::from("J"), RocStr::from("J")]),
@@ -188,12 +189,12 @@ fn str_split_on_small_str_small_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_bigger_delimiter_big_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "string to split is shorter"
                         "than the delimiter which happens to be very very long"
                 "#
@@ -204,12 +205,12 @@ fn str_split_on_bigger_delimiter_big_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_empty_strs() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "" ""
+                    Str.split_on "" ""
                 "#
         ),
         RocList::from_slice(&[RocStr::from("")]),
@@ -218,12 +219,12 @@ fn str_split_on_empty_strs() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_minimal_example() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn "a," ","
+                    Str.split_on "a," ","
                 "#
         ),
         RocList::from_slice(&[RocStr::from("a"), RocStr::from("")]),
@@ -232,12 +233,12 @@ fn str_split_on_minimal_example() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                         |> List.len
@@ -250,7 +251,7 @@ fn str_split_on_small_str_big_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "1---- ---- ---- ---- ----2---- ---- ---- ---- ----"
                         "---- ---- ---- ---- ----"
                 "#
@@ -261,12 +262,12 @@ fn str_split_on_small_str_big_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_small_str_20_char_delimiter() {
     assert_evals_to!(
         indoc!(
             r#"
-                    Str.splitOn
+                    Str.split_on
                         "3|-- -- -- -- -- -- |4|-- -- -- -- -- -- |"
                         "|-- -- -- -- -- -- |"
                 "#
@@ -277,7 +278,7 @@ fn str_split_on_small_str_20_char_delimiter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_concat_big_to_big() {
     assert_evals_to!(
             indoc!(
@@ -290,6 +291,16 @@ fn str_concat_big_to_big() {
             RocStr::from("First string that is fairly long. Longer strings make for different errors. Second string that is also fairly long. Two long strings test things that might not appear with short strings."),
             RocStr
         );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn long_str_literal() {
+    assert_evals_to!(
+        "\"0123456789 123456789 123456789\"",
+        RocStr::from("0123456789 123456789 123456789"),
+        RocStr
+    );
 }
 
 #[test]
@@ -324,6 +335,16 @@ fn small_str_literal() {
             0b1000_0000 | 23
         ],
         [u8; 24]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn small_str_literal() {
+    assert_evals_to!(
+        "\"01234567890\"",
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 
@@ -366,6 +387,59 @@ fn small_str_zeroed_literal() {
 }
 
 #[test]
+#[cfg(feature = "gen-wasm")]
+fn small_str_zeroed_literal() {
+    // Verifies that we zero out unused bytes in the string.
+    // This is important so that string equality tests don't randomly
+    // fail due to unused memory being there!
+    // Note: Ensure the memory is non-zero beforehand, or it's not a real test!
+    // (It's trickier than it sounds!)
+    assert_evals_to!(
+        indoc!(
+            r#"
+                app "test" provides [main] to "./platform"
+
+                create_str = \is_for_real_this_time ->
+                    if is_for_real_this_time then
+                        "J"
+                    else
+                        "xxxxxxx"
+
+                function_with_reused_space = \is_for_real_this_time ->
+                    # Different string value on each call, at the same memory location
+                    # (Can't inline create_str without refcounting, which isn't implemented)
+                    reused_space = create_str is_for_real_this_time
+
+                    # Unoptimised 'if' ensures that we don't just allocate in the caller's frame
+                    if Bool.true then
+                        reused_space
+                    else
+                        reused_space
+
+                main =
+                    garbage = function_with_reused_space Bool.false
+                    function_with_reused_space Bool.true
+                 "#
+        ),
+        [
+            0x4a,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0x00,
+            0b1000_0001
+        ],
+        [u8; 12]
+    );
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
 fn small_str_concat_empty_first_arg() {
     assert_llvm_evals_to!(
@@ -397,6 +471,16 @@ fn small_str_concat_empty_first_arg() {
             0b1000_0000 | 15
         ],
         [u8; 24]
+    );
+}
+
+#[test]
+#[cfg(feature = "gen-wasm")]
+fn small_str_concat_empty_first_arg() {
+    assert_evals_to!(
+        r#"Str.concat "" "01234567890""#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
     );
 }
 
@@ -436,7 +520,17 @@ fn small_str_concat_empty_second_arg() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(feature = "gen-wasm")]
+fn small_str_concat_empty_second_arg() {
+    assert_evals_to!(
+        r#"Str.concat "01234567890" """#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn small_str_concat_small_to_big() {
     assert_evals_to!(
         r#"Str.concat "abc" " this is longer than 15 chars""#,
@@ -481,7 +575,17 @@ fn small_str_concat_small_to_small_staying_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(feature = "gen-wasm")]
+fn small_str_concat_small_to_small_staying_small() {
+    assert_evals_to!(
+        r#"Str.concat "0" "1234567890""#,
+        [0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30, 0x8b],
+        [u8; 12]
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn small_str_concat_small_to_small_overflow_to_big() {
     assert_evals_to!(
         r#"Str.concat "abcdefghijklm" "nopqrstuvwxyz""#,
@@ -491,95 +595,95 @@ fn small_str_concat_small_to_small_overflow_to_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_concat_empty() {
     assert_evals_to!(r#"Str.concat "" """#, RocStr::default(), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn small_str_is_empty() {
-    assert_evals_to!(r#"Str.isEmpty "abc""#, false, bool);
+    assert_evals_to!(r#"Str.is_empty "abc""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn big_str_is_empty() {
     assert_evals_to!(
-        r#"Str.isEmpty "this is more than 23 chars long""#,
+        r#"Str.is_empty "this is more than 23 chars long""#,
         false,
         bool
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn empty_str_is_empty() {
-    assert_evals_to!(r#"Str.isEmpty """#, true, bool);
+    assert_evals_to!(r#"Str.is_empty """#, true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with() {
-    assert_evals_to!(r#"Str.startsWith "hello world" "hell""#, true, bool);
-    assert_evals_to!(r#"Str.startsWith "hello world" """#, true, bool);
-    assert_evals_to!(r#"Str.startsWith "nope" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.startsWith "hell" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.startsWith "" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "hello world" "hell""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "hello world" """#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "nope" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "hell" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "" "hello world""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_ends_with() {
-    assert_evals_to!(r#"Str.endsWith "hello world" "world""#, true, bool);
-    assert_evals_to!(r#"Str.endsWith "nope" "hello world""#, false, bool);
-    assert_evals_to!(r#"Str.endsWith "" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.ends_with "hello world" "world""#, true, bool);
+    assert_evals_to!(r#"Str.ends_with "nope" "hello world""#, false, bool);
+    assert_evals_to!(r#"Str.ends_with "" "hello world""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with_same_big_str() {
     assert_evals_to!(
-        r#"Str.startsWith "123456789123456789" "123456789123456789""#,
+        r#"Str.starts_with "123456789123456789" "123456789123456789""#,
         true,
         bool
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with_different_big_str() {
     assert_evals_to!(
-        r#"Str.startsWith "12345678912345678910" "123456789123456789""#,
+        r#"Str.starts_with "12345678912345678910" "123456789123456789""#,
         true,
         bool
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with_same_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "1234""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "1234""#, true, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with_different_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "12""#, true, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "12""#, true, bool);
 }
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_starts_with_false_small_str() {
-    assert_evals_to!(r#"Str.startsWith "1234" "23""#, false, bool);
+    assert_evals_to!(r#"Str.starts_with "1234" "23""#, false, bool);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_ascii() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97] is
+                    when Str.from_utf8 [97] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -590,12 +694,12 @@ fn str_from_utf8_pass_single_ascii() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_ascii() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0x7E] is
+                    when Str.from_utf8 [97, 98, 99, 0x7E] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -606,12 +710,12 @@ fn str_from_utf8_pass_many_ascii() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_unicode() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xE2, 0x88, 0x86] is
+                    when Str.from_utf8 [0xE2, 0x88, 0x86] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -622,12 +726,12 @@ fn str_from_utf8_pass_single_unicode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_unicode() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
+                    when Str.from_utf8 [0xE2, 0x88, 0x86, 0xC5, 0x93, 0xC2, 0xAC] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -638,12 +742,12 @@ fn str_from_utf8_pass_many_unicode() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_single_grapheme() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -654,12 +758,12 @@ fn str_from_utf8_pass_single_grapheme() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_many_grapheme() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96, 0xF0, 0x9F, 0xA4, 0xA0, 0xF0, 0x9F, 0x9A, 0x80] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -670,12 +774,12 @@ fn str_from_utf8_pass_many_grapheme() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_pass_all() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
+                    when Str.from_utf8 [0xF0, 0x9F, 0x92, 0x96, 98, 0xE2, 0x88, 0x86] is
                         Ok val -> val
                         Err _ -> ""
                 "#
@@ -686,14 +790,14 @@ fn str_from_utf8_pass_all() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_invalid_start_byte() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 0x80, 99] is
-                        Err (BadUtf8 InvalidStartByte byteIndex) ->
-                            if byteIndex == 2 then
+                    when Str.from_utf8 [97, 98, 0x80, 99] is
+                        Err (BadUtf8 {problem: InvalidStartByte, index: byte_index}) ->
+                            if byte_index == 2 then
                                 "a"
                             else
                                 "b"
@@ -706,14 +810,14 @@ fn str_from_utf8_fail_invalid_start_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_unexpected_end_of_sequence() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0xC2] is
-                        Err (BadUtf8 UnexpectedEndOfSequence byteIndex) ->
-                            if byteIndex == 3 then
+                    when Str.from_utf8 [97, 98, 99, 0xC2] is
+                        Err (BadUtf8 {problem: UnexpectedEndOfSequence, index: byte_index}) ->
+                            if byte_index == 3 then
                                 "a"
                             else
                                 "b"
@@ -726,14 +830,14 @@ fn str_from_utf8_fail_unexpected_end_of_sequence() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_expected_continuation() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 99, 0xC2, 0x00] is
-                        Err (BadUtf8 ExpectedContinuation byteIndex) ->
-                            if byteIndex == 3 then
+                    when Str.from_utf8 [97, 98, 99, 0xC2, 0x00] is
+                        Err (BadUtf8 {problem: ExpectedContinuation, index: byte_index}) ->
+                            if byte_index == 3 then
                                 "a"
                             else
                                 "b"
@@ -746,14 +850,14 @@ fn str_from_utf8_fail_expected_continuation() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_overlong_encoding() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 0xF0, 0x80, 0x80, 0x80] is
-                        Err (BadUtf8 OverlongEncoding byteIndex) ->
-                            if byteIndex == 1 then
+                    when Str.from_utf8 [97, 0xF0, 0x80, 0x80, 0x80] is
+                        Err (BadUtf8 {problem: OverlongEncoding, index: byte_index}) ->
+                            if byte_index == 1 then
                                 "a"
                             else
                                 "b"
@@ -766,14 +870,14 @@ fn str_from_utf8_fail_overlong_encoding() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_codepoint_too_large() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 0xF4, 0x90, 0x80, 0x80] is
-                        Err (BadUtf8 CodepointTooLarge byteIndex) ->
-                            if byteIndex == 1 then
+                    when Str.from_utf8 [97, 0xF4, 0x90, 0x80, 0x80] is
+                        Err (BadUtf8 {problem: CodepointTooLarge, index: byte_index}) ->
+                            if byte_index == 1 then
                                 "a"
                             else
                                 "b"
@@ -786,14 +890,14 @@ fn str_from_utf8_fail_codepoint_too_large() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_fail_surrogate_half() {
     assert_evals_to!(
         indoc!(
             r#"
-                    when Str.fromUtf8 [97, 98, 0xED, 0xA0, 0x80] is
-                        Err (BadUtf8 EncodesSurrogateHalf byteIndex) ->
-                            if byteIndex == 2 then
+                    when Str.from_utf8 [97, 98, 0xED, 0xA0, 0x80] is
+                        Err (BadUtf8 {problem: EncodesSurrogateHalf, index: byte_index}) ->
+                            if byte_index == 2 then
                                 "a"
                             else
                                 "b"
@@ -806,7 +910,184 @@ fn str_from_utf8_fail_surrogate_half() {
 }
 
 #[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf8_lossy_expected_continuation() {
+    assert_evals_to!(
+        r#"Str.from_utf8_lossy [97, 98, 0xC2, 99]"#,
+        roc_std::RocStr::from("ab�c"),
+        roc_std::RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf16() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0x6f, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("roc"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+fn str_from_utf16_emoji() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xd83d, 0xdc96, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("r💖c"),
+        roc_std::RocStr
+    )
+}
+
+// Marking this as should_panic, because it *does* panic and it is not clear why?
+// If some change magically fixes this, great, merge with above.
+#[test]
+#[cfg(feature = "gen-wasm")]
+#[should_panic(expected = r#"Roc failed with message: "Integer multiplication overflowed!"#)]
+fn str_from_utf16_emoji() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xd83d, 0xdc96, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("r💖c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf16_err_expected_second_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xd83d, 0x63] is
+                    Err (BadUtf16 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf16_err_unexpected_second_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf16 [0x72, 0xdc96, 0x63] is
+                    Err (BadUtf16 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf16_lossy() {
+    assert_evals_to!(
+        r#"Str.from_utf16_lossy [0x72, 0xdc96, 0x63]"#,
+        roc_std::RocStr::from("r�c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf32() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x6f, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("roc"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf32_emoji() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x1f496, 0x63] is
+                    Ok val -> val
+                    _ -> ""
+            "#
+        ),
+        roc_std::RocStr::from("r💖c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf32_err_codepoint_too_large() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0x123456, 0x63] is
+                    Err (BadUtf32 {problem: CodepointTooLarge, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf32_err_utf8_cannot_encode_surrogate_half() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+                when Str.from_utf32 [0x72, 0xd83d, 0x63] is
+                    Err (BadUtf32 {problem: EncodesSurrogateHalf, index: index }) -> index
+                    _ -> 42
+            "#
+        ),
+        1u64,
+        u64
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_from_utf32_lossy() {
+    assert_evals_to!(
+        r#"Str.from_utf32_lossy [0x72, 0x123456, 0x63]"#,
+        roc_std::RocStr::from("r�c"),
+        roc_std::RocStr
+    )
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_equality() {
     assert_evals_to!(r#""a" == "a""#, true, bool);
     assert_evals_to!(
@@ -841,19 +1122,19 @@ fn nested_recursive_literal() {
                 expr : Expr
                 expr = Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))
 
-                printExpr : Expr -> Str
-                printExpr = \e ->
+                print_expr : Expr -> Str
+                print_expr = \e ->
                     when e is
                         Add a b ->
                             "Add ("
-                                |> Str.concat (printExpr a)
+                                |> Str.concat (print_expr a)
                                 |> Str.concat ") ("
-                                |> Str.concat (printExpr b)
+                                |> Str.concat (print_expr b)
                                 |> Str.concat ")"
-                        Val v -> "Val " |> Str.concat (Num.toStr v)
-                        Var v -> "Var " |> Str.concat (Num.toStr v)
+                        Val v -> "Val " |> Str.concat (Num.to_str v)
+                        Var v -> "Var " |> Str.concat (Num.to_str v)
 
-                printExpr expr
+                print_expr expr
                 "#
         ),
         RocStr::from("Add (Add (Val 3) (Val 1)) (Add (Val 1) (Var 1))"),
@@ -862,41 +1143,41 @@ fn nested_recursive_literal() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_join_comma_small() {
     assert_evals_to!(
-        r#"Str.joinWith ["1", "2"] ", " "#,
+        r#"Str.join_with ["1", "2"] ", " "#,
         RocStr::from("1, 2"),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_join_comma_big() {
     assert_evals_to!(
-        r#"Str.joinWith ["10000000", "2000000", "30000000"] ", " "#,
+        r#"Str.join_with ["10000000", "2000000", "30000000"] ", " "#,
         RocStr::from("10000000, 2000000, 30000000"),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_join_comma_single() {
-    assert_evals_to!(r#"Str.joinWith ["1"] ", " "#, RocStr::from("1"), RocStr);
+    assert_evals_to!(r#"Str.join_with ["1"] ", " "#, RocStr::from("1"), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_to_utf8() {
     assert_evals_to!(
-        r#"Str.toUtf8 "hello""#,
+        r#"Str.to_utf8 "hello""#,
         RocList::from_slice(&[104, 101, 108, 108, 111]),
         RocList<u8>
     );
     assert_evals_to!(
-        r#"Str.toUtf8 "this is a long string""#,
+        r#"Str.to_utf8 "this is a long string""#,
         RocList::from_slice(&[
             116, 104, 105, 115, 32, 105, 115, 32, 97, 32, 108, 111, 110, 103, 32, 115, 116, 114,
             105, 110, 103
@@ -906,16 +1187,16 @@ fn str_to_utf8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -925,17 +1206,17 @@ fn str_from_utf8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_slice() {
     assert_evals_to!(
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 4 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -945,17 +1226,17 @@ fn str_from_utf8_slice() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_slice_not_end() {
     assert_evals_to!(
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 3 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
                    _ -> ""
             "#
         ),
@@ -965,18 +1246,18 @@ fn str_from_utf8_slice_not_end() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_from_utf8_order_does_not_matter() {
     assert_evals_to!(
         indoc!(
             r#"
             bytes =
-                Str.toUtf8 "hello"
+                Str.to_utf8 "hello"
                 |> List.sublist { start: 1, len: 3 }
 
-            when Str.fromUtf8 bytes is
-                   Ok utf8String -> utf8String
-                   Err _ -> "Str.fromUtf8 returned Err instead of Ok!"
+            when Str.from_utf8 bytes is
+                   Ok utf8_string -> utf8_string
+                   Err _ -> "Str.from_utf8 returned Err instead of Ok!"
             "#
         ),
         RocStr::from("ell"),
@@ -985,7 +1266,7 @@ fn str_from_utf8_order_does_not_matter() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_repeat_small_stays_small() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "Roc" 3"#),
@@ -995,7 +1276,7 @@ fn str_repeat_small_stays_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_repeat_small_becomes_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "less than 23 characters" 2"#),
@@ -1005,7 +1286,17 @@ fn str_repeat_small_becomes_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn str_repeat_small() {
+    assert_evals_to!(
+        indoc!(r#"Str.repeat "Roc" 2"#),
+        RocStr::from("RocRoc"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_repeat_big() {
     assert_evals_to!(
         indoc!(r#"Str.repeat "more than 23 characters now" 2"#),
@@ -1015,26 +1306,26 @@ fn str_repeat_big() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_repeat_empty_string() {
     let a = indoc!(r#"Str.repeat "" 3"#);
     assert_evals_to!(a, RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_repeat_zero_times() {
     assert_evals_to!(indoc!(r#"Str.repeat "Roc" 0"#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_empty_string() {
     assert_evals_to!(indoc!(r#"Str.trim """#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_null_byte() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.reserve "\u(0000)" 40)"#),
@@ -1044,13 +1335,13 @@ fn str_trim_null_byte() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_small_blank_string() {
     assert_evals_to!(indoc!(r#"Str.trim " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_small_to_small() {
     assert_evals_to!(
         indoc!(r#"Str.trim "  hello world  ""#),
@@ -1060,7 +1351,7 @@ fn str_trim_small_to_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_large_to_large_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.concat "  " "hello world from a large string ")"#),
@@ -1070,7 +1361,7 @@ fn str_trim_large_to_large_unique() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_large_to_small_unique() {
     assert_evals_to!(
         indoc!(r#"Str.trim (Str.concat "  " "hello world        ")"#),
@@ -1137,36 +1428,36 @@ fn str_trim_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_start_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimStart " ""#), RocStr::from(""), RocStr);
+    assert_evals_to!(indoc!(r#"Str.trim_start " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_start_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart "  hello world  ""#),
+        indoc!(r#"Str.trim_start "  hello world  ""#),
         RocStr::from("hello world  "),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_start_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart (Str.concat "    " "hello world from a large string ")"#),
+        indoc!(r#"Str.trim_start (Str.concat "    " "hello world from a large string ")"#),
         RocStr::from("hello world from a large string "),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_start_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimStart (Str.concat "  " "hello world        ")"#),
+        indoc!(r#"Str.trim_start (Str.concat "  " "hello world        ")"#),
         RocStr::from("hello world        "),
         RocStr
     );
@@ -1181,7 +1472,7 @@ fn str_trim_start_large_to_large_shared() {
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimStart original, original: original }
+               { trimmed: Str.trim_start original, original: original }
                "#
         ),
         (
@@ -1201,7 +1492,7 @@ fn str_trim_start_large_to_small_shared() {
                original : Str
                original = " hello world             "
 
-               { trimmed: Str.trimStart original, original: original }
+               { trimmed: Str.trim_start original, original: original }
                "#
         ),
         (
@@ -1221,7 +1512,7 @@ fn str_trim_start_small_to_small_shared() {
                original : Str
                original = " hello world "
 
-               { trimmed: Str.trimStart original, original: original }
+               { trimmed: Str.trim_start original, original: original }
                "#
         ),
         (RocStr::from(" hello world "), RocStr::from("hello world "),),
@@ -1230,36 +1521,36 @@ fn str_trim_start_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_end_small_blank_string() {
-    assert_evals_to!(indoc!(r#"Str.trimEnd " ""#), RocStr::from(""), RocStr);
+    assert_evals_to!(indoc!(r#"Str.trim_end " ""#), RocStr::from(""), RocStr);
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_end_small_to_small() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd "  hello world  ""#),
+        indoc!(r#"Str.trim_end "  hello world  ""#),
         RocStr::from("  hello world"),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_end_large_to_large_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd (Str.concat " hello world from a large string" "    ")"#),
+        indoc!(r#"Str.trim_end (Str.concat " hello world from a large string" "    ")"#),
         RocStr::from(" hello world from a large string"),
         RocStr
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_trim_end_large_to_small_unique() {
     assert_evals_to!(
-        indoc!(r#"Str.trimEnd (Str.concat "        hello world" "  ")"#),
+        indoc!(r#"Str.trim_end (Str.concat "        hello world" "  ")"#),
         RocStr::from("        hello world"),
         RocStr
     );
@@ -1274,7 +1565,7 @@ fn str_trim_end_large_to_large_shared() {
                original : Str
                original = " hello world world "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (
@@ -1294,7 +1585,7 @@ fn str_trim_end_large_to_small_shared() {
                original : Str
                original = "             hello world "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (
@@ -1314,7 +1605,7 @@ fn str_trim_end_small_to_small_shared() {
                original : Str
                original = " hello world "
 
-               { trimmed: Str.trimEnd original, original: original }
+               { trimmed: Str.trim_end original, original: original }
                "#
         ),
         (RocStr::from(" hello world "), RocStr::from(" hello world"),),
@@ -1323,12 +1614,12 @@ fn str_trim_end_small_to_small_shared() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_to_nat() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU64 "1"
+            Str.to_u64 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1342,7 +1633,7 @@ fn str_to_i128() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toI128 "1"
+            Str.to_i128 "1"
             "#
         ),
         RocResult::ok(I128::from(1)),
@@ -1356,7 +1647,7 @@ fn str_to_u128() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU128 "1"
+            Str.to_u128 "1"
             "#
         ),
         RocResult::ok(U128::from(1)),
@@ -1366,12 +1657,12 @@ fn str_to_u128() {
 
 // TODO add alignment check between i64 and I64 somewhere
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_to_i64() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toI64 "1"
+            Str.to_i64 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1380,12 +1671,12 @@ fn str_to_i64() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_to_u64() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU64 "1"
+            Str.to_u64 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1399,7 +1690,7 @@ fn str_to_i32() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toI32 "1"
+            Str.to_i32 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1413,7 +1704,7 @@ fn str_to_u32() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU32 "1"
+            Str.to_u32 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1427,7 +1718,7 @@ fn str_to_i16() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toI16 "1"
+            Str.to_i16 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1441,7 +1732,7 @@ fn str_to_u16() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU16 "1"
+            Str.to_u16 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1455,7 +1746,7 @@ fn str_to_i8() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toI8 "1"
+            Str.to_i8 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1469,7 +1760,7 @@ fn str_to_u8() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.toU8 "1"
+            Str.to_u8 "1"
             "#
         ),
         RocResult::ok(1),
@@ -1483,7 +1774,7 @@ fn str_to_f64() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toF64 "1.0" is
+            when Str.to_f64 "1.0" is
                 Ok n -> n
                 Err _ -> 0
 
@@ -1500,7 +1791,7 @@ fn str_to_f32() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toF32 "1.0" is
+            when Str.to_f32 "1.0" is
                 Ok n -> n
                 Err _ -> 0
 
@@ -1519,7 +1810,7 @@ fn str_to_dec() {
     assert_evals_to!(
         indoc!(
             r#"
-            when Str.toDec "1.0" is
+            when Str.to_dec "1.0" is
                 Ok n -> n
                 Err _ -> 0
 
@@ -1531,7 +1822,7 @@ fn str_to_dec() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn issue_2811() {
     assert_evals_to!(
         indoc!(
@@ -1547,12 +1838,12 @@ fn issue_2811() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_first_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitFirst "foo/bar/baz" "/"
+            Str.split_first "foo/bar/baz" "/"
             "#
         ),
         // the result is a { before, after } record, and because of
@@ -1563,12 +1854,12 @@ fn str_split_on_first_one_char() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_first_multiple_chars() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitFirst "foo//bar//baz" "//"
+            Str.split_first "foo//bar//baz" "//"
             "#
         ),
         RocResult::ok((RocStr::from("bar//baz"), RocStr::from("foo"))),
@@ -1577,12 +1868,12 @@ fn str_split_on_first_multiple_chars() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_first_entire_input() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitFirst "foo" "foo"
+            Str.split_first "foo" "foo"
             "#
         ),
         RocResult::ok((RocStr::from(""), RocStr::from(""))),
@@ -1591,12 +1882,12 @@ fn str_split_on_first_entire_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_first_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitFirst "foo" "bar"
+            Str.split_first "foo" "bar"
             "#
         ),
         RocResult::err(()),
@@ -1605,12 +1896,12 @@ fn str_split_on_first_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_last_one_char() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitLast"foo/bar/baz" "/"
+            Str.split_last "foo/bar/baz" "/"
             "#
         ),
         RocResult::ok((RocStr::from("baz"), RocStr::from("foo/bar"))),
@@ -1619,12 +1910,12 @@ fn str_split_on_last_one_char() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_last_multiple_chars() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitLast "foo//bar//baz" "//"
+            Str.split_last "foo//bar//baz" "//"
             "#
         ),
         RocResult::ok((RocStr::from("baz"), RocStr::from("foo//bar"))),
@@ -1633,12 +1924,12 @@ fn str_split_on_last_multiple_chars() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_last_entire_input() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitLast "foo" "foo"
+            Str.split_last "foo" "foo"
             "#
         ),
         RocResult::ok((RocStr::from(""), RocStr::from(""))),
@@ -1647,12 +1938,12 @@ fn str_split_on_last_entire_input() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_last_not_found() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.splitLast "foo" "bar"
+            Str.split_last "foo" "bar"
             "#
         ),
         RocResult::err(()),
@@ -1661,34 +1952,34 @@ fn str_split_on_last_not_found() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_overlapping_substring_1() {
     assert_evals_to!(
-        r#"Str.splitOn "aaa" "aa""#,
+        r#"Str.split_on "aaa" "aa""#,
         RocList::from_slice(&[RocStr::from(""), RocStr::from("a")]),
         RocList<RocStr>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_split_on_overlapping_substring_2() {
     assert_evals_to!(
-        r#"Str.splitOn "aaaa" "aa""#,
+        r#"Str.split_on "aaaa" "aa""#,
         RocList::from_slice(&[RocStr::from(""), RocStr::from(""), RocStr::from("")]),
         RocList<RocStr>
     );
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_walk_utf8() {
     #[cfg(not(feature = "gen-llvm-wasm"))]
     assert_evals_to!(
         // Reverse the bytes
         indoc!(
             r#"
-            Str.walkUtf8 "abcd" [] (\list, byte -> List.prepend list byte)
+            Str.walk_utf8 "abcd" [] (\list, byte -> List.prepend list byte)
             "#
         ),
         RocList::from_slice(&[b'd', b'c', b'b', b'a']),
@@ -1699,7 +1990,7 @@ fn str_walk_utf8() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.walkUtf8 "abcd" [] (\list, byte -> List.prepend list byte)
+            Str.walk_utf8 "abcd" [] (\list, byte -> List.prepend list byte)
             "#
         ),
         RocList::from_slice(&[b'd', b'c', b'b', b'a']),
@@ -1708,12 +1999,12 @@ fn str_walk_utf8() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_walk_utf8_with_index() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.walkUtf8WithIndex "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
+            Str.walk_utf8_with_index "abcd" [] (\list, byte, index -> List.append list (Pair index byte))
             "#
         ),
         RocList::from_slice(&[(0, b'a'), (1, b'b'), (2, b'c'), (3, b'd')]),
@@ -1754,7 +2045,7 @@ fn llvm_wasm_str_layout_small() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn when_on_strings() {
     assert_evals_to!(
         indoc!(
@@ -1792,7 +2083,7 @@ fn with_capacity() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.withCapacity 10
+            Str.with_capacity 10
             "#
         ),
         RocStr::from(""),
@@ -1806,7 +2097,7 @@ fn with_capacity_concat() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.withCapacity 10 |> Str.concat "Forty-two"
+            Str.with_capacity 10 |> Str.concat "Forty-two"
             "#
         ),
         RocStr::from("Forty-two"),
@@ -1820,7 +2111,7 @@ fn str_with_prefix() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.withPrefix "world!" "Hello "
+            Str.with_prefix "world!" "Hello "
             "#
         ),
         RocStr::from("Hello world!"),
@@ -1830,7 +2121,7 @@ fn str_with_prefix() {
     assert_evals_to!(
         indoc!(
             r#"
-            "two" |> Str.withPrefix "Forty "
+            "two" |> Str.with_prefix "Forty "
             "#
         ),
         RocStr::from("Forty two"),
@@ -1888,7 +2179,25 @@ fn release_excess_capacity() {
         indoc!(
             r#"
             Str.reserve "" 50
-            |> Str.releaseExcessCapacity
+            |> Str.release_excess_capacity
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+// if this gets implemented, then add gen-dev to positive case above
+#[test]
+#[cfg(feature = "gen-dev")]
+#[should_panic(expected = "not yet implemented: low level, StrReleaseExcessCapacity")]
+fn release_excess_capacity() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.reserve "" 50
+            |> Str.release_excess_capacity
             "#
         ),
         (RocStr::empty().capacity(), RocStr::empty()),
@@ -1905,7 +2214,26 @@ fn release_excess_capacity_with_len() {
             r#"
             "123456789012345678901234567890"
             |> Str.reserve 50
-            |> Str.releaseExcessCapacity
+            |> Str.release_excess_capacity
+            "#
+        ),
+        (30, "123456789012345678901234567890".into()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+// if this gets implemented, then add gen-dev to positive case above
+#[test]
+#[cfg(feature = "gen-dev")]
+#[should_panic(expected = "not yet implemented: low level, StrReleaseExcessCapacity")]
+fn release_excess_capacity_with_len() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            "123456789012345678901234567890"
+            |> Str.reserve 50
+            |> Str.release_excess_capacity
             "#
         ),
         (30, "123456789012345678901234567890".into()),
@@ -1920,7 +2248,24 @@ fn release_excess_capacity_empty() {
     assert_evals_to!(
         indoc!(
             r#"
-            Str.releaseExcessCapacity ""
+            Str.release_excess_capacity ""
+            "#
+        ),
+        (RocStr::empty().capacity(), RocStr::empty()),
+        RocStr,
+        |value: RocStr| (value.capacity(), value)
+    );
+}
+
+// if this gets implemented, then add gen-dev to positive case above
+#[test]
+#[cfg(feature = "gen-dev")]
+#[should_panic(expected = "not yet implemented: low level, StrReleaseExcessCapacity")]
+fn release_excess_capacity_empty() {
+    assert_evals_to!(
+        indoc!(
+            r#"
+            Str.release_excess_capacity ""
             "#
         ),
         (RocStr::empty().capacity(), RocStr::empty()),
@@ -1930,7 +2275,7 @@ fn release_excess_capacity_empty() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_contains_positive() {
     assert_evals_to!(
         r#"
@@ -1942,7 +2287,7 @@ fn str_contains_positive() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_contains_negative() {
     assert_evals_to!(
         r#"
@@ -1954,7 +2299,7 @@ fn str_contains_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_contains_empty_positive() {
     assert_evals_to!(
         r#"
@@ -1966,7 +2311,7 @@ fn str_contains_empty_positive() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_contains_empty_negative() {
     assert_evals_to!(
         r#"
@@ -1978,7 +2323,7 @@ fn str_contains_empty_negative() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_contains_self() {
     assert_evals_to!(
         r#"
@@ -1990,11 +2335,11 @@ fn str_contains_self() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_drop_prefix() {
     assert_evals_to!(
         r#"
-        Str.dropPrefix "" "foo"
+        Str.drop_prefix "" "foo"
         "#,
         RocStr::from(""),
         RocStr
@@ -2002,7 +2347,7 @@ fn str_drop_prefix() {
 
     assert_evals_to!(
         r#"
-        Str.dropPrefix "bar" "foo"
+        Str.drop_prefix "bar" "foo"
         "#,
         RocStr::from("bar"),
         RocStr
@@ -2010,7 +2355,7 @@ fn str_drop_prefix() {
 
     assert_evals_to!(
         r#"
-        Str.dropPrefix "foobar" "foo"
+        Str.drop_prefix "foobar" "foo"
         "#,
         RocStr::from("bar"),
         RocStr
@@ -2018,7 +2363,7 @@ fn str_drop_prefix() {
 
     assert_evals_to!(
         r#"
-        Str.dropPrefix "fooBarThisIsDefinitelyAReallyLongAndNotaShortString" "foo"
+        Str.drop_prefix "fooBarThisIsDefinitelyAReallyLongAndNotaShortString" "foo"
         "#,
         RocStr::from("BarThisIsDefinitelyAReallyLongAndNotaShortString"),
         RocStr
@@ -2026,11 +2371,11 @@ fn str_drop_prefix() {
 }
 
 #[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn str_drop_suffix() {
     assert_evals_to!(
         r#"
-        Str.dropSuffix "" "foo"
+        Str.drop_suffix "" "foo"
         "#,
         RocStr::from(""),
         RocStr
@@ -2038,7 +2383,7 @@ fn str_drop_suffix() {
 
     assert_evals_to!(
         r#"
-        Str.dropSuffix "bar" "foo"
+        Str.drop_suffix "bar" "foo"
         "#,
         RocStr::from("bar"),
         RocStr
@@ -2046,7 +2391,7 @@ fn str_drop_suffix() {
 
     assert_evals_to!(
         r#"
-        Str.dropSuffix "barfoo" "foo"
+        Str.drop_suffix "barfoo" "foo"
         "#,
         RocStr::from("bar"),
         RocStr
@@ -2054,9 +2399,59 @@ fn str_drop_suffix() {
 
     assert_evals_to!(
         r#"
-        Str.dropSuffix "BarThisIsDefinitelyAReallyLongAndNotaShortStringfoo" "foo"
+        Str.drop_suffix "BarThisIsDefinitelyAReallyLongAndNotaShortStringfoo" "foo"
         "#,
         RocStr::from("BarThisIsDefinitelyAReallyLongAndNotaShortString"),
         RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn with_ascii_lowercased() {
+    assert_evals_to!(
+        r#"
+        Str.with_ascii_lowercased("cOFFÉ")
+        "#,
+        RocStr::from("coffÉ"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
+fn with_ascii_lowercased_non_zero_refcount() {
+    assert_evals_to!(
+        r#"
+        original = "cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ cOFFÉ"
+        res = Str.with_ascii_lowercased(original)
+        Str.drop_prefix(res, original)
+        "#,
+        RocStr::from("coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ coffÉ"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn with_ascii_uppercased() {
+    assert_evals_to!(
+        r#"
+        Str.with_ascii_uppercased("café")
+        "#,
+        RocStr::from("CAFé"),
+        RocStr
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn caseless_ascii_equals() {
+    assert_evals_to!(
+        r#"
+        Str.caseless_ascii_equals("CAfé", "caFé")
+        "#,
+        true,
+        bool
     );
 }

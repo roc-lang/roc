@@ -211,7 +211,7 @@ fn parse_literal_suffix(num_str: &str) -> (Option<ParsedWidth>, &str) {
 ///
 /// The Rust Project is dual-licensed under either Apache 2.0 or MIT,
 /// at the user's choice. License information can be found in
-/// the LEGAL_DETAILS file in the root directory of this distribution.
+/// the legal_details file in the root directory of this distribution.
 ///
 /// Thanks to the Rust project and its contributors!
 fn from_str_radix(src: &str, radix: u32) -> Result<ParsedNumResult, IntErrorKind> {

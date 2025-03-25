@@ -1,0 +1,18 @@
+@0-6 SpaceAfter(
+    Apply(
+        @0-5 PncApply(
+            @0-3 Try,
+            [],
+        ),
+        [
+            @5-6 Var {
+                module_name: "",
+                ident: "t",
+            },
+        ],
+        Space,
+    ),
+    [
+        Newline,
+    ],
+)

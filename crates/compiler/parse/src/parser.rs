@@ -63,6 +63,27 @@ pub enum SyntaxError<'a> {
     Space(BadInputError),
     NotEndOfFile(Position),
 }
+impl<'a> SyntaxError<'a> {
+    pub fn get_region(&self) -> Option<Region> {
+        match self {
+            SyntaxError::Unexpected(r) => Some(*r),
+            SyntaxError::Eof(r) => Some(*r),
+            SyntaxError::ReservedKeyword(r) => Some(*r),
+            SyntaxError::ArgumentsBeforeEquals(r) => Some(*r),
+            SyntaxError::Type(e_type) => Some(e_type.get_region()),
+            SyntaxError::Pattern(e_pattern) => Some(e_pattern.get_region()),
+            SyntaxError::NotEndOfFile(pos) => Some(Region::from_pos(*pos)),
+            SyntaxError::Expr(e_expr, _) => Some(e_expr.get_region()),
+            SyntaxError::Header(e_header) => Some(e_header.get_region()),
+            SyntaxError::NotYetImplemented(_) => None,
+            SyntaxError::OutdentedTooFar => None,
+            SyntaxError::Todo => None,
+            SyntaxError::InvalidPattern => None,
+            SyntaxError::BadUtf8 => None,
+            SyntaxError::Space(_bad_input) => None,
+        }
+    }
+}
 pub trait SpaceProblem: std::fmt::Debug {
     fn space_problem(e: BadInputError, pos: Position) -> Self;
 }
@@ -133,6 +154,27 @@ pub enum EHeader<'a> {
     InconsistentModuleName(Region),
 }
 
+impl<'a> EHeader<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EHeader::Provides(provides, _pos) => provides.get_region(),
+            EHeader::Params(params, _pos) => params.get_region(),
+            EHeader::Exposes(_, pos) => Region::from_pos(*pos),
+            EHeader::Imports(_, pos) => Region::from_pos(*pos),
+            EHeader::Requires(requires, _pos) => requires.get_region(),
+            EHeader::Packages(packages, _pos) => packages.get_region(),
+            EHeader::Space(_, pos) => Region::from_pos(*pos),
+            EHeader::Start(pos) => Region::from_pos(*pos),
+            EHeader::ModuleName(pos) => Region::from_pos(*pos),
+            EHeader::AppName(app_name, _pos) => app_name.get_region(),
+            EHeader::PackageName(package_name, _pos) => package_name.get_region(),
+            EHeader::PlatformName(platform_name, _pos) => platform_name.get_region(),
+            EHeader::IndentStart(pos) => Region::from_pos(*pos),
+            EHeader::InconsistentModuleName(region) => *region,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EProvides<'a> {
     Provides(Position),
@@ -149,6 +191,26 @@ pub enum EProvides<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> EProvides<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EProvides::Provides(p)
+            | EProvides::Open(p)
+            | EProvides::To(p)
+            | EProvides::IndentProvides(p)
+            | EProvides::IndentTo(p)
+            | EProvides::IndentListStart(p)
+            | EProvides::IndentPackage(p)
+            | EProvides::ListStart(p)
+            | EProvides::ListEnd(p)
+            | EProvides::Identifier(p)
+            | EProvides::Package(_, p)
+            | EProvides::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EParams<'a> {
     Pattern(PRecord<'a>, Position),
@@ -156,6 +218,19 @@ pub enum EParams<'a> {
     Arrow(Position),
     AfterArrow(Position),
     Space(BadInputError, Position),
+}
+
+impl<'a> EParams<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EParams::Pattern(_, p)
+            | EParams::BeforeArrow(p)
+            | EParams::Arrow(p)
+            | EParams::AfterArrow(p)
+            | EParams::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -168,6 +243,22 @@ pub enum EExposes {
     ListEnd(Position),
     Identifier(Position),
     Space(BadInputError, Position),
+}
+
+impl EExposes {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EExposes::Exposes(p)
+            | EExposes::Open(p)
+            | EExposes::IndentExposes(p)
+            | EExposes::IndentListStart(p)
+            | EExposes::ListStart(p)
+            | EExposes::ListEnd(p)
+            | EExposes::Identifier(p)
+            | EExposes::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +274,23 @@ pub enum ERequires<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> ERequires<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ERequires::Requires(p)
+            | ERequires::Open(p)
+            | ERequires::IndentRequires(p)
+            | ERequires::IndentListStart(p)
+            | ERequires::ListStart(p)
+            | ERequires::ListEnd(p)
+            | ERequires::TypedIdent(_, p)
+            | ERequires::Rigid(p)
+            | ERequires::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypedIdent<'a> {
     Space(BadInputError, Position),
@@ -192,6 +300,21 @@ pub enum ETypedIdent<'a> {
     Type(EType<'a>, Position),
     IndentType(Position),
     Identifier(Position),
+}
+
+impl<'a> ETypedIdent<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypedIdent::Space(_, p)
+            | ETypedIdent::HasType(p)
+            | ETypedIdent::IndentHasType(p)
+            | ETypedIdent::Name(p)
+            | ETypedIdent::Type(_, p)
+            | ETypedIdent::IndentType(p)
+            | ETypedIdent::Identifier(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,11 +330,39 @@ pub enum EPackages<'a> {
     PackageEntry(EPackageEntry<'a>, Position),
 }
 
+impl<'a> EPackages<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackages::Open(p)
+            | EPackages::Space(_, p)
+            | EPackages::Packages(p)
+            | EPackages::IndentPackages(p)
+            | EPackages::ListStart(p)
+            | EPackages::ListEnd(p)
+            | EPackages::IndentListStart(p)
+            | EPackages::IndentListEnd(p)
+            | EPackages::PackageEntry(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EPackageName<'a> {
     BadPath(EString<'a>, Position),
     Escapes(Position),
     Multiline(Position),
+}
+
+impl<'a> EPackageName<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackageName::BadPath(_, p) | EPackageName::Escapes(p) | EPackageName::Multiline(p) => {
+                p
+            }
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -223,6 +374,21 @@ pub enum EPackageEntry<'a> {
     IndentPlatform(Position),
     Platform(Position),
     Space(BadInputError, Position),
+}
+
+impl<'a> EPackageEntry<'a> {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EPackageEntry::BadPackage(_, p)
+            | EPackageEntry::Shorthand(p)
+            | EPackageEntry::Colon(p)
+            | EPackageEntry::IndentPackage(p)
+            | EPackageEntry::IndentPlatform(p)
+            | EPackageEntry::Platform(p)
+            | EPackageEntry::Space(_, p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -246,6 +412,33 @@ pub enum EImports {
     TypedIdent(Position),
     AsKeyword(Position),
     StrLiteral(Position),
+}
+
+impl EImports {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            EImports::Open(p)
+            | EImports::Imports(p)
+            | EImports::IndentImports(p)
+            | EImports::IndentListStart(p)
+            | EImports::IndentListEnd(p)
+            | EImports::ListStart(p)
+            | EImports::ListEnd(p)
+            | EImports::Identifier(p)
+            | EImports::ExposingDot(p)
+            | EImports::ShorthandDot(p)
+            | EImports::Shorthand(p)
+            | EImports::ModuleName(p)
+            | EImports::Space(_, p)
+            | EImports::IndentSetStart(p)
+            | EImports::SetStart(p)
+            | EImports::SetEnd(p)
+            | EImports::TypedIdent(p)
+            | EImports::AsKeyword(p)
+            | EImports::StrLiteral(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -326,9 +519,6 @@ pub enum EExpr<'a> {
     ElmStyleFunction(Region, Position),
     MalformedPattern(Position),
     QualifiedTag(Position),
-    BackpassComma(Position),
-    BackpassArrow(Position),
-    BackpassContinue(Position),
     DbgContinue(Position),
 
     When(EWhen<'a>, Position),
@@ -363,6 +553,66 @@ pub enum EExpr<'a> {
     UnexpectedTopLevelExpr(Position),
 }
 
+impl<'a> EExpr<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EExpr::Type(e_type, _) => e_type.get_region(),
+            EExpr::Pattern(e_pattern, _) => e_pattern.get_region(),
+            EExpr::Ability(e_ability, _) => e_ability.get_region(),
+            EExpr::When(e_when, _) => e_when.get_region(),
+            EExpr::If(e_if, _) => e_if.get_region(),
+            EExpr::Expect(e_expect, _) => e_expect.get_region(),
+            EExpr::Dbg(e_expect, _) => e_expect.get_region(),
+            EExpr::Import(e_import, _) => e_import.get_region(),
+            EExpr::Return(e_return, _) => e_return.get_region(),
+            EExpr::Closure(e_closure, _) => e_closure.get_region(),
+            EExpr::InParens(e_in_parens, _) => e_in_parens.get_region(),
+            EExpr::Record(e_record, _) => e_record.get_region(),
+            EExpr::Str(e_string, _) => e_string.get_region(),
+            EExpr::List(e_list, _) => e_list.get_region(),
+
+            // Cases with direct Region values
+            EExpr::RecordUpdateOldBuilderField(r)
+            | EExpr::RecordUpdateIgnoredField(r)
+            | EExpr::RecordBuilderOldBuilderField(r) => *r,
+
+            // Cases with Position values
+            EExpr::TrailingOperator(p)
+            | EExpr::Start(p)
+            | EExpr::End(p)
+            | EExpr::BadExprEnd(p)
+            | EExpr::Space(_, p)
+            | EExpr::Dot(p)
+            | EExpr::Access(p)
+            | EExpr::UnaryNot(p)
+            | EExpr::UnaryNegate(p)
+            | EExpr::BadOperator(_, p)
+            | EExpr::DefMissingFinalExpr(p)
+            | EExpr::DefMissingFinalExpr2(_, p)
+            | EExpr::IndentDefBody(p)
+            | EExpr::IndentEquals(p)
+            | EExpr::IndentAnnotation(p)
+            | EExpr::Equals(p)
+            | EExpr::Colon(p)
+            | EExpr::DoubleColon(p)
+            | EExpr::Ident(p)
+            | EExpr::ElmStyleFunction(_, p)
+            | EExpr::MalformedPattern(p)
+            | EExpr::QualifiedTag(p)
+            | EExpr::DbgContinue(p)
+            | EExpr::Underscore(p)
+            | EExpr::Crash(p)
+            | EExpr::Try(p)
+            | EExpr::Number(_, p)
+            | EExpr::IndentStart(p)
+            | EExpr::IndentEnd(p)
+            | EExpr::UnexpectedComma(p)
+            | EExpr::UnexpectedTopLevelExpr(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ENumber {
     End,
@@ -386,6 +636,34 @@ pub enum EString<'a> {
     FormatEnd(Position),
     MultilineInsufficientIndent(Position),
     ExpectedDoubleQuoteGotSingleQuote(Position),
+    InvalidUnicodeCodepoint(Region),
+    UnicodeEscapeTooLarge(Region),
+}
+
+impl<'a> EString<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EString::Format(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EString::Open(p)
+            | EString::CodePtOpen(p)
+            | EString::CodePtEnd(p)
+            | EString::InvalidSingleQuote(_, p)
+            | EString::Space(_, p)
+            | EString::EndlessSingleLine(p)
+            | EString::EndlessMultiLine(p)
+            | EString::EndlessSingleQuote(p)
+            | EString::UnknownEscape(p)
+            | EString::FormatEnd(p)
+            | EString::MultilineInsufficientIndent(p)
+            | EString::ExpectedDoubleQuoteGotSingleQuote(p) => Region::from_pos(*p),
+            EString::InvalidUnicodeCodepoint(region) | EString::UnicodeEscapeTooLarge(region) => {
+                *region
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -405,6 +683,7 @@ pub enum ERecord<'a> {
     UnderscoreField(Position),
     Colon(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Arrow(Position),
     Ampersand(Position),
 
@@ -412,6 +691,28 @@ pub enum ERecord<'a> {
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> ERecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child node that has get_region()
+            ERecord::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            ERecord::End(p)
+            | ERecord::Open(p)
+            | ERecord::Prefix(p)
+            | ERecord::Field(p)
+            | ERecord::UnderscoreField(p)
+            | ERecord::Colon(p)
+            | ERecord::QuestionMark(p)
+            | ERecord::SecondQuestionMark(p)
+            | ERecord::Arrow(p)
+            | ERecord::Ampersand(p)
+            | ERecord::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -429,8 +730,24 @@ pub enum EInParens<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> EInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child node that has get_region()
+            EInParens::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EInParens::End(p)
+            | EInParens::Open(p)
+            | EInParens::Empty(p)
+            | EInParens::Space(_, p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EClosure<'a> {
+    Bar(Position),
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -444,6 +761,27 @@ pub enum EClosure<'a> {
     IndentArg(Position),
 }
 
+impl<'a> EClosure<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EClosure::Pattern(pattern, _) => pattern.get_region(),
+            EClosure::Body(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EClosure::Bar(p)
+            | EClosure::Space(_, p)
+            | EClosure::Start(p)
+            | EClosure::Arrow(p)
+            | EClosure::Comma(p)
+            | EClosure::Arg(p)
+            | EClosure::IndentArrow(p)
+            | EClosure::IndentBody(p)
+            | EClosure::IndentArg(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EList<'a> {
     Open(Position),
@@ -451,6 +789,18 @@ pub enum EList<'a> {
     Space(BadInputError, Position),
 
     Expr(&'a EExpr<'a>, Position),
+}
+
+impl<'a> EList<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EList::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EList::Open(p) | EList::End(p) | EList::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -476,6 +826,32 @@ pub enum EWhen<'a> {
     PatternAlignment(u32, Position),
 }
 
+impl<'a> EWhen<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EWhen::Pattern(pattern, _) => pattern.get_region(),
+            EWhen::IfGuard(expr, _) => expr.get_region(),
+            EWhen::Condition(expr, _) => expr.get_region(),
+            EWhen::Branch(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            EWhen::Space(_, p)
+            | EWhen::When(p)
+            | EWhen::Is(p)
+            | EWhen::Arrow(p)
+            | EWhen::Bar(p)
+            | EWhen::IfToken(p)
+            | EWhen::IndentCondition(p)
+            | EWhen::IndentPattern(p)
+            | EWhen::IndentArrow(p)
+            | EWhen::IndentBranch(p)
+            | EWhen::IndentIfGuard(p)
+            | EWhen::PatternAlignment(_, p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EAbility<'a> {
     Space(BadInputError, Position),
@@ -484,6 +860,21 @@ pub enum EAbility<'a> {
     DemandAlignment(i32, Position),
     DemandName(Position),
     DemandColon(Position),
+}
+
+impl<'a> EAbility<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            EAbility::Type(e_type, _) => e_type.get_region(),
+
+            // Cases with Position values
+            EAbility::Space(_, p)
+            | EAbility::DemandAlignment(_, p)
+            | EAbility::DemandName(p)
+            | EAbility::DemandColon(p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -505,6 +896,26 @@ pub enum EIf<'a> {
     IndentElseBranch(Position),
 }
 
+impl<'a> EIf<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EIf::Condition(expr, _) | EIf::ThenBranch(expr, _) | EIf::ElseBranch(expr, _) => {
+                expr.get_region()
+            }
+            EIf::Space(_, p)
+            | EIf::If(p)
+            | EIf::Then(p)
+            | EIf::Else(p)
+            | EIf::IndentCondition(p)
+            | EIf::IndentIf(p)
+            | EIf::IndentThenToken(p)
+            | EIf::IndentElseToken(p)
+            | EIf::IndentThenBranch(p)
+            | EIf::IndentElseBranch(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EExpect<'a> {
     Space(BadInputError, Position),
@@ -515,12 +926,34 @@ pub enum EExpect<'a> {
     IndentCondition(Position),
 }
 
+impl<'a> EExpect<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EExpect::Condition(expr, _) | EExpect::Continuation(expr, _) => expr.get_region(),
+            EExpect::Space(_, p)
+            | EExpect::Dbg(p)
+            | EExpect::Expect(p)
+            | EExpect::IndentCondition(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EReturn<'a> {
     Space(BadInputError, Position),
     Return(Position),
     ReturnValue(&'a EExpr<'a>, Position),
     IndentReturnValue(Position),
+}
+impl<'a> EReturn<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EReturn::ReturnValue(expr, _) => expr.get_region(),
+            EReturn::Space(_, p) | EReturn::Return(p) | EReturn::IndentReturnValue(p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -553,6 +986,44 @@ pub enum EImport<'a> {
     EndNewline(Position),
 }
 
+impl<'a> EImport<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EImport::Params(params, _) => params.get_region(),
+            EImport::Annotation(e_type, _) => e_type.get_region(),
+
+            // Case with direct Region value
+            EImport::LowercaseAlias(r) => *r,
+
+            // Cases with Position values
+            EImport::Import(p)
+            | EImport::IndentStart(p)
+            | EImport::PackageShorthand(p)
+            | EImport::PackageShorthandDot(p)
+            | EImport::ModuleName(p)
+            | EImport::IndentAs(p)
+            | EImport::As(p)
+            | EImport::IndentAlias(p)
+            | EImport::Alias(p)
+            | EImport::IndentExposing(p)
+            | EImport::Exposing(p)
+            | EImport::ExposingListStart(p)
+            | EImport::ExposedName(p)
+            | EImport::ExposingListEnd(p)
+            | EImport::IndentIngestedPath(p)
+            | EImport::IngestedPath(p)
+            | EImport::IndentIngestedName(p)
+            | EImport::IngestedName(p)
+            | EImport::IndentColon(p)
+            | EImport::Colon(p)
+            | EImport::IndentAnnotation(p)
+            | EImport::Space(_, p)
+            | EImport::EndNewline(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EImportParams<'a> {
     Indent(Position),
@@ -561,6 +1032,19 @@ pub enum EImportParams<'a> {
     RecordBuilderFound(Region),
     RecordIgnoredFieldFound(Region),
     Space(BadInputError, Position),
+}
+
+impl<'a> EImportParams<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            EImportParams::Indent(p) | EImportParams::Record(_, p) | EImportParams::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+            EImportParams::RecordUpdateFound(r)
+            | EImportParams::RecordBuilderFound(r)
+            | EImportParams::RecordIgnoredFieldFound(r) => *r,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -585,6 +1069,39 @@ pub enum EPattern<'a> {
 
     AccessorFunction(Position),
     RecordUpdaterFunction(Position),
+    Str(EString<'a>, Position),
+
+    ParenStart(Position),
+    ParenEnd(Position),
+}
+
+impl<'a> EPattern<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EPattern::Record(expr, _) => expr.get_region(),
+            EPattern::List(expr, _) => expr.get_region(),
+            EPattern::PInParens(expr, _) => expr.get_region(),
+            EPattern::Str(e_string, _) => e_string.get_region(),
+
+            // Cases with Position values
+            EPattern::AsKeyword(position)
+            | EPattern::AsIdentifier(position)
+            | EPattern::Underscore(position)
+            | EPattern::NotAPattern(position)
+            | EPattern::Start(position)
+            | EPattern::End(position)
+            | EPattern::Space(_, position)
+            | EPattern::NumLiteral(_, position)
+            | EPattern::IndentStart(position)
+            | EPattern::IndentEnd(position)
+            | EPattern::AsIndentStart(position)
+            | EPattern::AccessorFunction(position)
+            | EPattern::RecordUpdaterFunction(position)
+            | EPattern::ParenStart(position)
+            | EPattern::ParenEnd(position) => Region::from_pos(*position),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -594,12 +1111,32 @@ pub enum PRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
 
     Pattern(&'a EPattern<'a>, Position),
     Expr(&'a EExpr<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> PRecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            PRecord::Pattern(pattern, _) => pattern.get_region(),
+            PRecord::Expr(expr, _) => expr.get_region(),
+
+            // Cases with Position values
+            PRecord::End(p)
+            | PRecord::Open(p)
+            | PRecord::Field(p)
+            | PRecord::Colon(p)
+            | PRecord::OptionalFirst(p)
+            | PRecord::OptionalSecond(p)
+            | PRecord::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -613,6 +1150,20 @@ pub enum PList<'a> {
     Space(BadInputError, Position),
 }
 
+impl<'a> PList<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            PList::Pattern(pattern, _) => pattern.get_region(),
+
+            // Cases with Position values
+            PList::End(p) | PList::Open(p) | PList::Rest(p) | PList::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PInParens<'a> {
     Empty(Position),
@@ -621,6 +1172,21 @@ pub enum PInParens<'a> {
     Pattern(&'a EPattern<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> PInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            PInParens::Pattern(pattern, _) => pattern.get_region(),
+
+            // Cases with Position values
+            PInParens::Empty(p)
+            | PInParens::End(p)
+            | PInParens::Open(p)
+            | PInParens::Space(_, p) => Region::from_pos(*p),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -648,6 +1214,34 @@ pub enum EType<'a> {
     TIndentEnd(Position),
     TAsIndentStart(Position),
 }
+impl<'a> EType<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            EType::TRecord(expr, _) => expr.get_region(),
+            EType::TTagUnion(expr, _) => expr.get_region(),
+            EType::TInParens(expr, _) => expr.get_region(),
+            EType::TApply(eapply, _) => eapply.get_region(),
+            EType::TInlineAlias(einline, _) => einline.get_region(),
+            EType::TAbilityImpl(eability, _) => eability.get_region(),
+
+            // Cases with Position values
+            EType::Space(_, p)
+            | EType::UnderscoreSpacing(p)
+            | EType::TBadTypeVariable(p)
+            | EType::TWildcard(p)
+            | EType::TInferred(p)
+            | EType::TStart(p)
+            | EType::TEnd(p)
+            | EType::TFunctionArgument(p)
+            | EType::TWhereBar(p)
+            | EType::TImplementsClause(p)
+            | EType::TIndentStart(p)
+            | EType::TIndentEnd(p)
+            | EType::TAsIndentStart(p) => Region::from_pos(*p),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeRecord<'a> {
@@ -656,7 +1250,8 @@ pub enum ETypeRecord<'a> {
 
     Field(Position),
     Colon(Position),
-    Optional(Position),
+    OptionalFirst(Position),
+    OptionalSecond(Position),
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
@@ -667,6 +1262,28 @@ pub enum ETypeRecord<'a> {
     IndentEnd(Position),
 }
 
+impl<'a> ETypeRecord<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeRecord::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeRecord::End(p)
+            | ETypeRecord::Open(p)
+            | ETypeRecord::Field(p)
+            | ETypeRecord::Colon(p)
+            | ETypeRecord::OptionalFirst(p)
+            | ETypeRecord::OptionalSecond(p)
+            | ETypeRecord::Space(_, p)
+            | ETypeRecord::IndentOpen(p)
+            | ETypeRecord::IndentColon(p)
+            | ETypeRecord::IndentOptional(p)
+            | ETypeRecord::IndentEnd(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeTagUnion<'a> {
     End(Position),
@@ -675,6 +1292,20 @@ pub enum ETypeTagUnion<'a> {
     Type(&'a EType<'a>, Position),
 
     Space(BadInputError, Position),
+}
+
+impl<'a> ETypeTagUnion<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeTagUnion::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeTagUnion::End(p) | ETypeTagUnion::Open(p) | ETypeTagUnion::Space(_, p) => {
+                Region::from_pos(*p)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -694,6 +1325,23 @@ pub enum ETypeInParens<'a> {
     IndentEnd(Position),
 }
 
+impl<'a> ETypeInParens<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Cases with child nodes that have get_region()
+            ETypeInParens::Type(type_expr, _) => type_expr.get_region(),
+
+            // Cases with Position values
+            ETypeInParens::Empty(p)
+            | ETypeInParens::End(p)
+            | ETypeInParens::Open(p)
+            | ETypeInParens::Space(_, p)
+            | ETypeInParens::IndentOpen(p)
+            | ETypeInParens::IndentEnd(p) => Region::from_pos(*p),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeApply {
     ///
@@ -706,11 +1354,36 @@ pub enum ETypeApply {
     StartIsNumber(Position),
 }
 
+impl ETypeApply {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypeApply::StartNotUppercase(p)
+            | ETypeApply::End(p)
+            | ETypeApply::Space(_, p)
+            | ETypeApply::DoubleDot(p)
+            | ETypeApply::TrailingDot(p)
+            | ETypeApply::StartIsNumber(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ETypeInlineAlias {
     NotAnAlias(Position),
     Qualified(Position),
     ArgumentNotLowercase(Position),
+}
+
+impl ETypeInlineAlias {
+    pub fn get_region(&self) -> Region {
+        let pos = match self {
+            ETypeInlineAlias::NotAnAlias(p)
+            | ETypeInlineAlias::Qualified(p)
+            | ETypeInlineAlias::ArgumentNotLowercase(p) => p,
+        };
+        Region::from_pos(*pos)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -729,10 +1402,35 @@ pub enum ETypeAbilityImpl<'a> {
 
     Prefix(Position),
     QuestionMark(Position),
+    SecondQuestionMark(Position),
     Ampersand(Position),
     Expr(&'a EExpr<'a>, Position),
     IndentBar(Position),
     IndentAmpersand(Position),
+}
+impl<'a> ETypeAbilityImpl<'a> {
+    pub fn get_region(&self) -> Region {
+        match self {
+            // Case with child node that has get_region()
+            ETypeAbilityImpl::Type(type_expr, _) => type_expr.get_region(),
+            ETypeAbilityImpl::Expr(expr, _) => expr.get_region(),
+            // Cases with Position values
+            ETypeAbilityImpl::End(p)
+            | ETypeAbilityImpl::Open(p)
+            | ETypeAbilityImpl::Field(p)
+            | ETypeAbilityImpl::UnderscoreField(p)
+            | ETypeAbilityImpl::Colon(p)
+            | ETypeAbilityImpl::Arrow(p)
+            | ETypeAbilityImpl::Optional(p)
+            | ETypeAbilityImpl::Space(_, p)
+            | ETypeAbilityImpl::Prefix(p)
+            | ETypeAbilityImpl::QuestionMark(p)
+            | ETypeAbilityImpl::SecondQuestionMark(p)
+            | ETypeAbilityImpl::Ampersand(p)
+            | ETypeAbilityImpl::IndentBar(p)
+            | ETypeAbilityImpl::IndentAmpersand(p) => Region::from_pos(*p),
+        }
+    }
 }
 
 impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
@@ -747,6 +1445,7 @@ impl<'a> From<ERecord<'a>> for ETypeAbilityImpl<'a> {
             ERecord::Space(s, p) => ETypeAbilityImpl::Space(s, p),
             ERecord::Prefix(p) => ETypeAbilityImpl::Prefix(p),
             ERecord::QuestionMark(p) => ETypeAbilityImpl::QuestionMark(p),
+            ERecord::SecondQuestionMark(p) => ETypeAbilityImpl::SecondQuestionMark(p),
             ERecord::Ampersand(p) => ETypeAbilityImpl::Ampersand(p),
             ERecord::Expr(e, p) => ETypeAbilityImpl::Expr(e, p),
         }
@@ -1894,6 +2593,10 @@ where
     move |arena, state, _min_indent| parser.parse(arena, state, 0)
 }
 
+pub fn capture_line_indent<'a, X: 'a>() -> impl Parser<'a, u32, X> {
+    move |_arena, state: State<'a>, _min_indent| Ok((NoProgress, state.line_indent(), state))
+}
+
 pub fn set_min_indent<'a, P, T, X: 'a>(min_indent: u32, parser: P) -> impl Parser<'a, T, X>
 where
     P: Parser<'a, T, X>,
@@ -2011,7 +2714,7 @@ where
     }
 }
 
-/// Matches an entire `str` and moves the state's position forward if it succeeds.
+/// Matches an entire `str` at the beginning of the state's bytes and moves the state's position forward if it succeeds.
 ///
 /// # Example
 ///
@@ -2036,6 +2739,10 @@ where
 ///
 /// // Error case
 /// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+///
+/// let (progress, problem) = parser.parse(&arena, State::new("world, hello".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(problem, Problem::NotFound(Position::zero()));
 /// ```

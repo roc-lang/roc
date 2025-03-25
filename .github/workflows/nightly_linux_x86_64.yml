@@ -2,9 +2,12 @@ on:
   #pull_request:
   workflow_dispatch:
   schedule:
-    - cron:  '0 9 * * *'
+    - cron: "0 9 * * *"
 
 name: Nightly Release Linux x86_64
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
 
 jobs:
   build:
@@ -15,9 +18,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update PATH to use zig 11
+      - name: Update PATH to use zig 13
         run: |
-          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
@@ -29,7 +32,7 @@ jobs:
         # target-cpu=x86-64 -> For maximal compatibility for all CPU's. This was also faster in our tests: https://roc.zulipchat.com/#narrow/stream/231635-compiler-development/topic/.2Ecargo.2Fconfig.2Etoml/near/325726299
 
       - name: get commit SHA
-        run:  echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
+        run: echo "SHA=$(git rev-parse --short "$GITHUB_SHA")" >> $GITHUB_ENV
 
       - name: get date
         run: echo "DATE=$(date "+%Y-%m-%d")" >> $GITHUB_ENV
@@ -40,14 +43,14 @@ jobs:
       - name: Upload wasm repl tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v4
         with:
-           name: roc_repl_wasm.tar.gz
-           path: roc_repl_wasm.tar.gz
-           retention-days: 4
+          name: roc_repl_wasm.tar.gz
+          path: roc_repl_wasm.tar.gz
+          retention-days: 4
 
       - name: build file name
         env:
-            DATE: ${{ env.DATE }}
-            SHA: ${{ env.SHA }}
+          DATE: ${{ env.DATE }}
+          SHA: ${{ env.SHA }}
         run: echo "RELEASE_FOLDER_NAME=roc_nightly-linux_x86_64-$DATE-$SHA" >> $GITHUB_ENV
 
       # this makes the roc binary a lot smaller
@@ -60,6 +63,6 @@ jobs:
       - name: Upload roc nightly tar. Actually uploading to github releases has to be done manually.
         uses: actions/upload-artifact@v4
         with:
-           name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
-           retention-days: 4
+          name: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          path: ${{ env.RELEASE_FOLDER_NAME }}.tar.gz
+          retention-days: 4

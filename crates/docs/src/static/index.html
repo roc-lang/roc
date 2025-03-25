@@ -1,107 +1,114 @@
 <!doctype html>
 <html lang="en">
-    <head>
-        <meta charset="utf-8" />
-        <!-- Page title -->
-        <!-- <meta name="description" content="TODO populate this based on the module's description"> -->
-        <meta name="viewport" content="width=device-width" />
-        <base href="<!-- base -->" />
-        <script type="text/javascript" src="search.js" defer></script>
-        <link rel="stylesheet" href="styles.css" />
-        <link rel="icon" href="/favicon.svg" />
-        <!-- Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
+
+<head>
+    <meta charset="utf-8" />
+    <!-- Page title -->
+    <!-- <meta name="description" content="TODO populate this based on the module's description"> -->
+    <meta name="viewport" content="width=device-width" />
+    <base href="<!-- base -->" />
+    <script type="text/javascript" src="search.js" defer></script>
+    <link rel="stylesheet" href="styles.css" />
+    <link rel="icon" href="/favicon.svg" />
+    <!-- Safari ignores rel="icon" and only respects rel="mask-icon". It will render the SVG with
     fill="#000" unless this `color` attribute here is hardcoded (not a CSS `var()`) to override it.
   -->
-        <link rel="mask-icon" href="/favicon.svg" color="#7d59dd" />
-        <!-- Prefetch links -->
-    </head>
+    <link rel="mask-icon" href="/favicon.svg" color="#7d59dd" />
+    <!-- Prefetch links -->
+</head>
 
-    <body>
-        <nav id="sidebar-nav">
+<body>
+    <nav id="sidebar-nav">
+        <div class="pkg-and-logo">
+            <a class="logo" href="/" aria-labelledby="logo-link">
+                <svg viewBox="0 -6 51 58" fill="none" xmlns="http://www.w3.org/2000/svg" aria-labelledby="logo-link"
+                    role="img">
+                    <title id="logo-link">Return to Roc packages</title>
+                    <polygon role="presentation"
+                        points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086" />
+                </svg>
+            </a>
+            <!-- Package Name -->
+            <button class="menu-toggle" aria-label="Toggle sidebar">
+                <svg viewBox="0 0 72 72" id="emoji" xmlns="http://www.w3.org/2000/svg" fill="currentcolor">
+                    <g id="SVGRepo_iconCarrier">
+                        <g id="color"></g>
+                        <g id="hair"></g>
+                        <g id="skin"></g>
+                        <g id="skin-shadow"></g>
+                        <g id="line">
+                            <line x1="16" x2="56" y1="26" y2="26" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                            <line x1="16" x2="56" y1="36" y2="36" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                            <line x1="16" x2="56" y1="46" y2="46" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                        </g>
+                    </g>
+                </svg>
+            </button>
+        </div>
+        <div class="module-links-container">
             <div class="module-links">
                 <!-- Module links -->
             </div>
-        </nav>
-        <div class="header-start-extension">
-            <!-- if the window gets big, this extends the purple bar on the top header to the left edge of the window -->
         </div>
-        <header class="top-header">
-            <div class="pkg-and-logo">
-                <a class="logo" href="/" aria-labelledby="logo-link">
-                    <svg
-                        viewBox="0 -6 51 58"
-                        fill="none"
-                        xmlns="http://www.w3.org/2000/svg"
-                        aria-labelledby="logo-link"
-                        role="img"
-                    >
-                        <title id="logo-link">Return to Roc packages</title>
-                        <polygon
-                            role="presentation"
-                            points="0,0 23.8834,3.21052 37.2438,19.0101 45.9665,16.6324 50.5,22 45,22 44.0315,26.3689 26.4673,39.3424 27.4527,45.2132 17.655,53 23.6751,22.7086"
-                        />
-                    </svg>
-                </a>
-                <!-- Package Name -->
-            </div>
-            <form id="module-search-form">
-                <input
-                    id="module-search"
-                    aria-labelledby="search-label"
-                    type="text"
-                    placeholder="Search"
-                    role="combobox"
-                    aria-autocomplete="list"
-                    aria-expanded="false"
-                    aria-controls="search-type-ahead"
-                />
-                <label for="module-search" id="search-label"
-                    >(press
-                    <span id="search-shortcut-key" aria-hidden="true">s</span
-                    >)</label
-                >
-                <!-- Magnifying Glass icon -->
-                <svg
-                    version="1.1"
-                    xmlns="http://www.w3.org/2000/svg"
-                    class="search-icon"
-                    xmlns:xlink="http://www.w3.org/1999/xlink"
-                    width="24px"
-                    height="24px"
-                    viewBox="0 0 512 512"
-                    xml:space="preserve"
-                >
-                    <g>
-                        <path
-                            d="M449.803,62.197C408.443,20.807,353.85-0.037,299.646-0.006C245.428-0.037,190.85,20.807,149.49,62.197
+    </nav>
+    <main>
+        <form id="module-search-form">
+            <button class="menu-toggle" aria-label="Toggle sidebar">
+                <svg viewBox="0 0 72 72" id="emoji" xmlns="http://www.w3.org/2000/svg" fill="currentcolor">
+                    <g id="SVGRepo_iconCarrier">
+                        <g id="color"></g>
+                        <g id="hair"></g>
+                        <g id="skin"></g>
+                        <g id="skin-shadow"></g>
+                        <g id="line">
+                            <line x1="16" x2="56" y1="26" y2="26" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                            <line x1="16" x2="56" y1="36" y2="36" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                            <line x1="16" x2="56" y1="46" y2="46" fill="none" stroke="currentColor"
+                                stroke-linecap="round" stroke-linejoin="round" stroke-miterlimit="10" stroke-width="2">
+                            </line>
+                        </g>
+                    </g>
+                </svg>
+            </button>
+            <input id="module-search" aria-labelledby="search-label" type="text"
+                placeholder="Search <!-- Package Name String -->" role="combobox" aria-autocomplete="list"
+                aria-expanded="false" aria-controls="search-type-ahead" />
+            <label for="module-search" id="search-label">(press
+                <span id="search-shortcut-key" aria-hidden="true">s</span>)</label>
+            <!-- Magnifying Glass icon -->
+            <svg version="1.1" xmlns="http://www.w3.org/2000/svg" class="search-icon"
+                xmlns:xlink="http://www.w3.org/1999/xlink" width="24px" height="24px" viewBox="0 0 512 512"
+                xml:space="preserve">
+                <g>
+                    <path d="M449.803,62.197C408.443,20.807,353.85-0.037,299.646-0.006C245.428-0.037,190.85,20.807,149.49,62.197
 		C108.1,103.557,87.24,158.15,87.303,212.338c-0.047,37.859,10.359,75.766,30.547,109.359L15.021,424.525
 		c-20.016,20.016-20.016,52.453,0,72.469c20,20.016,52.453,20.016,72.453,0L190.318,394.15
 		c33.578,20.203,71.5,30.594,109.328,30.547c54.203,0.047,108.797-20.797,150.156-62.188
 		c41.375-41.359,62.234-95.938,62.188-150.172C512.053,158.15,491.178,103.557,449.803,62.197z M391.818,304.541
 		c-25.547,25.531-58.672,38.125-92.172,38.188c-33.5-0.063-66.609-12.656-92.188-38.188c-25.531-25.578-38.125-58.688-38.188-92.203
 		c0.063-33.484,12.656-66.609,38.188-92.172c25.578-25.531,58.688-38.125,92.188-38.188c33.5,0.063,66.625,12.656,92.188,38.188
-		c25.531,25.563,38.125,58.688,38.188,92.172C429.959,245.854,417.365,278.963,391.818,304.541z"
-                        ></path>
-                    </g>
-                </svg>
-                <ul
-                    id="search-type-ahead"
-                    role="listbox"
-                    aria-label="Search Results"
-                    class="hidden"
-                >
-                    <!-- Search Type Ahead -->
-                </ul>
-            </form>
-        </header>
-        <div class="header-end-extension">
-            <!-- if the window gets big, this extends the purple bar on the top header to the right edge of the window -->
-        </div>
-        <main>
-            <!-- Module Docs -->
-        </main>
+		c25.531,25.563,38.125,58.688,38.188,92.172C429.959,245.854,417.365,278.963,391.818,304.541z"></path>
+                </g>
+            </svg>
+            <ul id="search-type-ahead" role="listbox" aria-label="Search Results" class="hidden">
+                <!-- Search Type Ahead -->
+            </ul>
+        </form>
+        <!-- Module Docs -->
         <footer>
             <p>Made by people who like to make nice things.</p>
         </footer>
-    </body>
+    </main>
+</body>
+
 </html>

@@ -80,21 +80,6 @@ pub fn get_relative_path(sub_path: &Path) -> Option<PathBuf> {
     None
 }
 
-fn find_zig_glue_path() -> PathBuf {
-    // First try using the repo path relative to the executable location.
-    let path = get_relative_path(Path::new("crates/compiler/builtins/bitcode/src/glue.zig"));
-    if let Some(path) = path {
-        return path;
-    }
-    // Fallback on a lib path relative to the executable location.
-    let path = get_relative_path(Path::new("lib/glue.zig"));
-    if let Some(path) = path {
-        return path;
-    }
-
-    internal_error!("cannot find `glue.zig`. Check the source code in find_zig_glue_path() to show all the paths I tried.")
-}
-
 fn find_wasi_libc_path() -> PathBuf {
     // This path is available when built and run from source
     // Environment variable defined in wasi-libc-sys/build.rs
@@ -148,10 +133,6 @@ pub fn build_zig_host_native(
     zig_cmd.args([
         zig_host_src,
         &format!("-femit-bin={emit_bin}"),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include libc
         "-lc",
         // cross-compile?
@@ -220,10 +201,6 @@ pub fn build_zig_host_native(
     zig_cmd.args(&[
         zig_host_src,
         &format!("-femit-bin={}", emit_bin),
-        "--mod",
-        &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-        "--deps",
-        "glue",
         // include the zig runtime
         // "-fcompiler-rt", compiler-rt causes segfaults on windows; investigate why
         // include libc
@@ -267,15 +244,8 @@ pub fn build_zig_host_wasm32(
             "build-obj",
             zig_host_src,
             emit_bin,
-            "--mod",
-            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-            "--deps",
-            "glue",
             // include the zig runtime
             // "-fcompiler-rt",
-            // include libc
-            "--library",
-            "c",
             "-target",
             "wasm32-wasi",
             // "-femit-llvm-ir=/home/folkertdev/roc/roc/crates/cli/tests/benchmarks/platform/host.ll",
@@ -782,11 +752,9 @@ fn nix_glibc_path_opt() -> Option<OsString> {
     env::var_os("NIX_GLIBC_PATH")
 }
 
-fn build_path_or_panic<const N: usize>(segments: [&str; N]) -> PathBuf {
-    let mut guess_path = PathBuf::new();
-    for s in segments {
-        guess_path.push(s);
-    }
+fn check_path_or_panic(path_str: &str) -> PathBuf {
+    let guess_path = PathBuf::from(path_str);
+
     if guess_path.exists() {
         guess_path
     } else {
@@ -941,26 +909,40 @@ fn link_linux(
         scrt1_path.to_string_lossy(),
     );
 
+    fn get_ld_linux_path(
+        nix_glibc_path_opt: Option<OsString>,
+        native_lib_path: &str,
+        ld_file_name: &str,
+    ) -> String {
+        let mut full_path_str = String::new();
+
+        if let Some(nix_glibc_path) = nix_glibc_path_opt {
+            full_path_str.push_str(&nix_glibc_path.to_string_lossy())
+        } else {
+            full_path_str.push_str(native_lib_path)
+        };
+
+        full_path_str.push('/');
+        full_path_str.push_str(ld_file_name);
+
+        check_path_or_panic(&full_path_str);
+        full_path_str.to_string()
+    }
+
     let ld_linux_path = match target.architecture() {
         Architecture::X86_64 => {
-            // give preference to nix_path if it's defined, this prevents bugs
-            if let Some(nix_glibc_path) = nix_glibc_path_opt() {
-                build_path_or_panic([
-                    &nix_glibc_path.into_string().unwrap(),
-                    "ld-linux-x86-64.so.2",
-                ])
-            } else {
-                build_path_or_panic(["/lib64", "ld-linux-x86-64.so.2"])
-            }
+            get_ld_linux_path(nix_glibc_path_opt(), "/lib64", "ld-linux-x86-64.so.2")
         }
-        Architecture::Aarch64 => build_path_or_panic(["/lib", "ld-linux-aarch64.so.1"]),
+        Architecture::Aarch64 => {
+            get_ld_linux_path(nix_glibc_path_opt(), "/lib", "ld-linux-aarch64.so.1")
+        }
         _ => internal_error!(
             "TODO gracefully handle unsupported linux architecture: {:?}",
             target.architecture()
         ),
     };
 
-    let ld_linux_path_str = &ld_linux_path.to_string_lossy();
+    let ld_linux_path_str = &ld_linux_path;
 
     let (base_args, output_path) = match link_type {
         LinkType::Executable => (
@@ -1071,14 +1053,16 @@ fn link_macos(
             // "--gc-sections",
             "-arch",
             &arch,
-            // Suppress warnings, because otherwise it prints:
-            //
-            //   ld: warning: -undefined dynamic_lookup may not work with chained fixups
-            //
-            // We can't disable that option without breaking either x64 mac or ARM mac
-            "-w",
             "-macos_version_min",
             &get_macos_version(),
+            // Suppress fixup chains to ease working out dynamic relocs by the
+            // surgical linker. In my experience, working with dyld opcodes is
+            // slightly easier than unpacking compressed info from the __got section
+            // and fixups load command.
+            "-no_fixup_chains",
+            // Suppress all warnings, at least for now. Ideally, there are no warnings
+            // from the linker.
+            "-w",
         ])
         .args(input_paths)
         .args(extra_link_flags());
@@ -1206,10 +1190,6 @@ fn link_wasm32(
             &format!("-femit-bin={}", output_path.to_str().unwrap()),
             "-target",
             "wasm32-wasi-musl",
-            "--mod",
-            &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-            "--deps",
-            "glue",
             "-fstrip",
             "-O",
             "ReleaseSmall",
@@ -1237,10 +1217,6 @@ fn link_windows(
                     &format!("-femit-bin={}", output_path.to_str().unwrap()),
                     "-target",
                     "native",
-                    "--mod",
-                    &format!("glue::{}", find_zig_glue_path().to_str().unwrap()),
-                    "--deps",
-                    "glue",
                     "-O",
                     "Debug",
                     "-dynamic",
@@ -1389,7 +1365,7 @@ fn run_build_command(mut command: Command, file_to_build: &str, flaky_fail_count
     if !cmd_output.status.success() {
         match std::str::from_utf8(&cmd_output.stderr) {
             Ok(stderr) => {
-                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/9711
+                // flaky error seen on macos 12 apple silicon, related to https://github.com/ziglang/zig/issues/20501
                 if stderr.contains("unable to save cached ZIR code") {
                     if flaky_fail_counter < max_flaky_fail_count {
                         run_build_command(command, file_to_build, flaky_fail_counter + 1)

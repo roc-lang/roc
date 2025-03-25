@@ -14,7 +14,9 @@ use core::{
 };
 use std::{cmp::max, ops::Range};
 
-use crate::{roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted};
+use crate::{
+    roc_alloc, roc_dealloc, roc_realloc, storage::Storage, RocRefcounted, ROC_REFCOUNT_CONSTANT,
+};
 
 #[cfg(feature = "serde")]
 use core::marker::PhantomData;
@@ -172,9 +174,12 @@ where
     /// There is no way to tell how many references it has and if it is safe to free.
     /// As such, only values that should have a static lifetime for the entire application run
     /// should be considered for marking read-only.
-    pub unsafe fn set_readonly(&self) {
+    pub unsafe fn set_readonly(&mut self) {
         if let Some((_, storage)) = self.elements_and_storage() {
-            storage.set(Storage::Readonly);
+            // Only safe to write to the pointer if it is not constant (0)
+            if !matches!(storage.get(), Storage::Readonly) {
+                storage.set(Storage::Readonly);
+            }
         }
     }
 
@@ -676,7 +681,10 @@ where
         let ptr = self.ptr_to_refcount();
         unsafe {
             let value = std::ptr::read(ptr);
-            std::ptr::write(ptr, Ord::max(0, ((value as isize) + 1) as usize));
+            // Only safe to write to the pointer if it is not constant (0)
+            if value != ROC_REFCOUNT_CONSTANT {
+                std::ptr::write(ptr, (value as isize + 1) as usize);
+            }
         }
     }
 
@@ -860,6 +868,23 @@ where
 
 unsafe impl<T> Send for SendSafeRocList<T> where T: Send + RocRefcounted {}
 
+impl<T> RocRefcounted for SendSafeRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {
+        self.0.inc()
+    }
+
+    fn dec(&mut self) {
+        self.0.dec()
+    }
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
 impl<T> Clone for SendSafeRocList<T>
 where
     T: Clone + RocRefcounted,
@@ -895,6 +920,62 @@ where
     T: RocRefcounted,
 {
     fn from(l: SendSafeRocList<T>) -> Self {
+        l.0
+    }
+}
+
+#[repr(transparent)]
+pub struct ReadOnlyRocList<T>(RocList<T>)
+where
+    T: RocRefcounted;
+
+unsafe impl<T> Send for ReadOnlyRocList<T> where T: Send + RocRefcounted {}
+unsafe impl<T> Sync for ReadOnlyRocList<T> where T: Sync + RocRefcounted {}
+
+impl<T> RocRefcounted for ReadOnlyRocList<T>
+where
+    T: RocRefcounted,
+{
+    fn inc(&mut self) {}
+
+    fn dec(&mut self) {}
+
+    fn is_refcounted() -> bool {
+        true
+    }
+}
+
+impl<T> Clone for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn clone(&self) -> Self {
+        ReadOnlyRocList(self.0.clone())
+    }
+}
+
+impl<T> From<RocList<T>> for ReadOnlyRocList<T>
+where
+    T: Clone + RocRefcounted,
+{
+    fn from(mut l: RocList<T>) -> Self {
+        if l.is_unique() {
+            unsafe { l.set_readonly() };
+        }
+        if l.is_readonly() {
+            ReadOnlyRocList(l)
+        } else {
+            // This is not unique, do a deep copy.
+            ReadOnlyRocList::from(RocList::from_slice(&l))
+        }
+    }
+}
+
+impl<T> From<ReadOnlyRocList<T>> for RocList<T>
+where
+    T: RocRefcounted,
+{
+    fn from(l: ReadOnlyRocList<T>) -> Self {
         l.0
     }
 }
@@ -1008,7 +1089,7 @@ mod tests {
 
     #[test]
     fn readonly_list_is_sendsafe() {
-        let x = RocList::from_slice(&[1, 2, 3, 4, 5]);
+        let mut x = RocList::from_slice(&[1, 2, 3, 4, 5]);
         unsafe { x.set_readonly() };
         assert!(x.is_readonly());
 

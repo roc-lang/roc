@@ -15,15 +15,12 @@ use bumpalo::Bump;
 use roc_can::abilities::{AbilitiesStore, MemberSpecializationInfo};
 use roc_can::constraint::Constraint::{self, *};
 use roc_can::constraint::{
-    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, LetConstraint, OpportunisticResolve,
-    TryTargetConstraint,
+    Cycle, FxCallConstraint, FxSuffixConstraint, FxSuffixKind, Generalizable, LetConstraint,
+    OpportunisticResolve, TryTargetConstraint,
 };
 use roc_can::expected::{Expected, PExpected};
 use roc_can::module::ModuleParams;
 use roc_collections::{VecMap, VecSet};
-use roc_debug_flags::dbg_do;
-#[cfg(debug_assertions)]
-use roc_debug_flags::ROC_VERIFY_RIGID_LET_GENERALIZED;
 use roc_error_macros::internal_error;
 use roc_module::ident::IdentSuffix;
 use roc_module::symbol::{ModuleId, Symbol};
@@ -32,8 +29,8 @@ use roc_region::all::{Loc, Region};
 use roc_solve_problem::TypeError;
 use roc_solve_schema::UnificationMode;
 use roc_types::subs::{
-    self, Content, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt, UlsOfVar,
-    Variable,
+    self, Content, ErrorTypeContext, FlatType, GetSubsSlice, Mark, OptVariable, Rank, Subs, TagExt,
+    UlsOfVar, Variable,
 };
 use roc_types::types::{Category, Polarity, Reason, RecordField, Type, TypeExtension, Types, Uls};
 use roc_unify::unify::{
@@ -211,18 +208,7 @@ enum Work<'a> {
         constraint: &'a Constraint,
     },
     CheckForInfiniteTypes(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
-    /// The ret_con part of a let constraint that does NOT introduces rigid and/or flex variables
-    LetConNoVariables {
-        scope: &'a Scope,
-        rank: Rank,
-        let_con: &'a LetConstraint,
-
-        /// The variables used to store imported types in the Subs.
-        /// The `Contents` are copied from the source module, but to
-        /// mimic `type_to_var`, we must add these variables to `Pools`
-        /// at the correct rank
-        pool_variables: &'a [Variable],
-    },
+    CheckSuffixFx(LocalDefVarsVec<(Symbol, Loc<Variable>)>),
     /// The ret_con part of a let constraint that introduces rigid and/or flex variables
     ///
     /// These introduced variables must be generalized, hence this variant
@@ -285,56 +271,6 @@ fn solve(
                 for (symbol, loc_var) in def_vars.iter() {
                     check_for_infinite_type(env, problems, *symbol, *loc_var);
                 }
-
-                continue;
-            }
-            Work::LetConNoVariables {
-                scope,
-                rank,
-                let_con,
-                pool_variables,
-            } => {
-                // NOTE be extremely careful with shadowing here
-                let offset = let_con.defs_and_ret_constraint.index();
-                let ret_constraint = &env.constraints.constraints[offset + 1];
-
-                // Add a variable for each def to new_vars_by_env.
-                let local_def_vars = LocalDefVarsVec::from_def_types(
-                    env,
-                    rank,
-                    problems,
-                    abilities_store,
-                    obligation_cache,
-                    &mut can_types,
-                    aliases,
-                    let_con.def_types,
-                );
-
-                env.pools.get_mut(rank).extend(pool_variables);
-
-                let mut new_scope = scope.clone();
-                for (symbol, loc_var) in local_def_vars.iter() {
-                    check_ability_specialization(
-                        env,
-                        rank,
-                        abilities_store,
-                        obligation_cache,
-                        awaiting_specializations,
-                        problems,
-                        *symbol,
-                        *loc_var,
-                    );
-
-                    new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
-                }
-
-                stack.push(Work::Constraint {
-                    scope: env.arena.alloc(new_scope),
-                    rank,
-                    constraint: ret_constraint,
-                });
-                // Check for infinite types first
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
 
                 continue;
             }
@@ -417,29 +353,13 @@ fn solve(
                 generalize(env, young_mark, visit_mark, rank.next());
                 debug_assert!(env.pools.get(rank.next()).is_empty(), "variables left over in let-binding scope, but they should all be in a lower scope or generalized now");
 
-                // check that things went well
-                dbg_do!(ROC_VERIFY_RIGID_LET_GENERALIZED, {
-                    let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
-
-                    // NOTE the `subs.redundant` check does not come from elm.
-                    // It's unclear whether this is a bug with our implementation
-                    // (something is redundant that shouldn't be)
-                    // or that it just never came up in elm.
-                    let mut it = rigid_vars
-                        .iter()
-                        .filter(|&var| {
-                            !env.subs.redundant(*var)
-                                && env.subs.get_rank(*var) != Rank::GENERALIZED
-                        })
-                        .peekable();
-
-                    if it.peek().is_some() {
-                        let failing: Vec<_> = it.collect();
-                        println!("Rigids {:?}", &rigid_vars);
-                        println!("Failing {failing:?}");
-                        debug_assert!(false);
-                    }
-                });
+                let named_variables = &env.constraints[let_con.rigid_vars];
+                check_named_variables_are_generalized(
+                    env,
+                    problems,
+                    named_variables,
+                    let_con.generalizable,
+                );
 
                 let mut new_scope = scope.clone();
                 for (symbol, loc_var) in local_def_vars.iter() {
@@ -456,14 +376,8 @@ fn solve(
 
                     new_scope.insert_symbol_var_if_vacant(*symbol, loc_var.value);
 
-                    solve_suffix_fx(
-                        env,
-                        problems,
-                        host_exposed_symbols,
-                        FxSuffixKind::Let(*symbol),
-                        loc_var.value,
-                        &loc_var.region,
-                    );
+                    // At the time of introduction, promote explicitly-effectful symbols.
+                    promote_effectful_symbol(env, FxSuffixKind::Let(*symbol), loc_var.value);
                 }
 
                 // Note that this vars_by_symbol is the one returned by the
@@ -473,18 +387,40 @@ fn solve(
                     mark: final_mark,
                 };
 
-                // Now solve the body, using the new vars_by_symbol which includes
-                // the assignments' name-to-variable mappings.
-                stack.push(Work::Constraint {
-                    scope: env.arena.alloc(new_scope),
-                    rank,
-                    constraint: ret_constraint,
-                });
-                // Check for infinite types first
-                stack.push(Work::CheckForInfiniteTypes(local_def_vars));
+                let next_work = [
+                    // Check for infinite types first
+                    Work::CheckForInfiniteTypes(local_def_vars.clone()),
+                    // Now solve the body, using the new vars_by_symbol which includes
+                    // the assignments' name-to-variable mappings.
+                    Work::Constraint {
+                        scope: env.arena.alloc(new_scope),
+                        rank,
+                        constraint: ret_constraint,
+                    },
+                    // Finally, check the suffix fx, after we have solved all types.
+                    Work::CheckSuffixFx(local_def_vars),
+                ];
+
+                for work in next_work.into_iter().rev() {
+                    stack.push(work);
+                }
 
                 state = state_for_ret_con;
 
+                continue;
+            }
+
+            Work::CheckSuffixFx(local_def_vars) => {
+                for (symbol, loc_var) in local_def_vars.iter() {
+                    solve_suffix_fx(
+                        env,
+                        problems,
+                        host_exposed_symbols,
+                        FxSuffixKind::Let(*symbol),
+                        loc_var.value,
+                        &loc_var.region,
+                    );
+                }
                 continue;
             }
         };
@@ -1004,100 +940,64 @@ fn solve(
 
                 let offset = let_con.defs_and_ret_constraint.index();
                 let defs_constraint = &env.constraints.constraints[offset];
-                let ret_constraint = &env.constraints.constraints[offset + 1];
 
                 let flex_vars = &env.constraints.variables[let_con.flex_vars.indices()];
-                let rigid_vars = &env.constraints.variables[let_con.rigid_vars.indices()];
+                let rigid_vars = &env.constraints[let_con.rigid_vars];
 
                 let pool_variables = &env.constraints.variables[pool_slice.indices()];
 
-                if matches!(&ret_constraint, True) && let_con.rigid_vars.is_empty() {
-                    debug_assert!(pool_variables.is_empty());
-
-                    env.introduce(rank, flex_vars);
-
-                    // If the return expression is guaranteed to solve,
-                    // solve the assignments themselves and move on.
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
-                } else if let_con.rigid_vars.is_empty() && let_con.flex_vars.is_empty() {
-                    // items are popped from the stack in reverse order. That means that we'll
-                    // first solve then defs_constraint, and then (eventually) the ret_constraint.
-                    //
-                    // Note that the LetConSimple gets the current env and rank,
-                    // and not the env/rank from after solving the defs_constraint
-                    stack.push(Work::LetConNoVariables {
-                        scope,
-                        rank,
-                        let_con,
-                        pool_variables,
-                    });
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
+                // If the let-binding is generalizable, work at the next rank (which will be
+                // the rank at which introduced variables will become generalized, if they end up
+                // staying there); otherwise, stay at the current level.
+                let binding_rank = if let_con.generalizable.0 {
+                    rank.next()
                 } else {
-                    // If the let-binding is generalizable, work at the next rank (which will be
-                    // the rank at which introduced variables will become generalized, if they end up
-                    // staying there); otherwise, stay at the current level.
-                    let binding_rank = if let_con.generalizable.0 {
-                        rank.next()
-                    } else {
-                        rank
-                    };
+                    rank
+                };
 
-                    // determine the next pool
-                    if binding_rank.into_usize() < env.pools.len() {
-                        // Nothing to do, we already accounted for the next rank, no need to
-                        // adjust the pools
-                    } else {
-                        // we should be off by one at this point
-                        debug_assert_eq!(binding_rank.into_usize(), 1 + env.pools.len());
-                        env.pools.extend_to(binding_rank.into_usize());
-                    }
-
-                    let pool: &mut Vec<Variable> = env.pools.get_mut(binding_rank);
-
-                    // Introduce the variables of this binding, and extend the pool at our binding
-                    // rank.
-                    for &var in rigid_vars.iter().chain(flex_vars.iter()) {
-                        env.subs.set_rank(var, binding_rank);
-                    }
-                    pool.reserve(rigid_vars.len() + flex_vars.len());
-                    pool.extend(rigid_vars.iter());
-                    pool.extend(flex_vars.iter());
-
-                    // Now, run our binding constraint, generalize, then solve the rest of the
-                    // program.
-                    //
-                    // Items are popped from the stack in reverse order. That means that we'll
-                    // first solve the defs_constraint, and then (eventually) the ret_constraint.
-                    //
-                    // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
-                    // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
-                    // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
-                    stack.push(Work::LetConIntroducesVariables {
-                        scope,
-                        rank,
-                        let_con,
-                        pool_variables,
-                    });
-                    stack.push(Work::Constraint {
-                        scope,
-                        rank: binding_rank,
-                        constraint: defs_constraint,
-                    });
-
-                    state
+                // determine the next pool
+                if binding_rank.into_usize() < env.pools.len() {
+                    // Nothing to do, we already accounted for the next rank, no need to
+                    // adjust the pools
+                } else {
+                    // we should be off by one at this point
+                    debug_assert_eq!(binding_rank.into_usize(), 1 + env.pools.len());
+                    env.pools.extend_to(binding_rank.into_usize());
                 }
+
+                let pool: &mut Vec<Variable> = env.pools.get_mut(binding_rank);
+
+                // Introduce the variables of this binding, and extend the pool at our binding
+                // rank.
+                for &var in rigid_vars.iter().map(|v| &v.value).chain(flex_vars.iter()) {
+                    env.subs.set_rank(var, binding_rank);
+                }
+                pool.reserve(rigid_vars.len() + flex_vars.len());
+                pool.extend(rigid_vars.iter().map(|v| &v.value));
+                pool.extend(flex_vars.iter());
+
+                // Now, run our binding constraint, generalize, then solve the rest of the
+                // program.
+                //
+                // Items are popped from the stack in reverse order. That means that we'll
+                // first solve the defs_constraint, and then (eventually) the ret_constraint.
+                //
+                // NB: LetCon gets the current scope's env and rank, not the env/rank from after solving the defs_constraint.
+                // That's because the defs constraints will be solved in next_rank if it is eligible for generalization.
+                // The LetCon will then generalize variables that are at a higher rank than the rank of the current scope.
+                stack.push(Work::LetConIntroducesVariables {
+                    scope,
+                    rank,
+                    let_con,
+                    pool_variables,
+                });
+                stack.push(Work::Constraint {
+                    scope,
+                    rank: binding_rank,
+                    constraint: defs_constraint,
+                });
+
+                state
             }
             IsOpenType(type_index) => {
                 let actual = either_type_index_to_var(
@@ -1717,6 +1617,30 @@ fn solve(
     state
 }
 
+fn check_named_variables_are_generalized(
+    env: &mut InferenceEnv<'_>,
+    problems: &mut Vec<TypeError>,
+    named_variables: &[Loc<Variable>],
+    generalizable: Generalizable,
+) {
+    for loc_var in named_variables {
+        let is_generalized = env.subs.get_rank(loc_var.value) == Rank::GENERALIZED;
+        if !is_generalized {
+            // TODO: should be OF_PATTERN if on the LHS of a function, otherwise OF_VALUE.
+            let polarity = Polarity::OF_VALUE;
+            let ctx = ErrorTypeContext::NON_GENERALIZED_AS_INFERRED;
+            let error_type = env
+                .subs
+                .var_to_error_type_contextual(loc_var.value, ctx, polarity);
+            problems.push(TypeError::TypeIsNotGeneralized(
+                loc_var.region,
+                error_type,
+                generalizable,
+            ));
+        }
+    }
+}
+
 fn solve_suffix_fx(
     env: &mut InferenceEnv<'_>,
     problems: &mut Vec<TypeError>,
@@ -1771,6 +1695,20 @@ fn solve_suffix_fx(
             _ => {}
         },
     }
+}
+
+fn promote_effectful_symbol(env: &mut InferenceEnv<'_>, kind: FxSuffixKind, variable: Variable) {
+    if kind.suffix() != IdentSuffix::Bang {
+        return;
+    }
+    if !matches!(
+        env.subs.get_content_without_compacting(variable),
+        Content::FlexVar(_)
+    ) {
+        return;
+    }
+    env.subs
+        .set_content(variable, Content::Structure(FlatType::EffectfulFunc));
 }
 
 fn chase_alias_content(subs: &Subs, mut var: Variable) -> (Variable, &Content) {
@@ -2147,7 +2085,7 @@ fn check_ability_specialization(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 enum LocalDefVarsVec<T> {
     Stack(arrayvec::ArrayVec<T, 32>),
     Heap(Vec<T>),

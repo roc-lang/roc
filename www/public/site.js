@@ -351,17 +351,30 @@ function createHistoryEntry(inputText) {
   const historyIndex = repl.inputHistory.length;
   repl.inputHistory.push(inputText);
 
-  const firstLinePrefix = '<span class="input-line-prefix">» </span>';
-  const otherLinePrefix = '<br><span class="input-line-prefix">… </span>';
-  const inputLines = inputText.split("\n");
-  if (inputLines[inputLines.length - 1] === "") {
-    inputLines.pop();
-  }
-  const inputWithPrefixes = firstLinePrefix + inputLines.join(otherLinePrefix);
-
   const inputElem = document.createElement("div");
-  inputElem.innerHTML = inputWithPrefixes;
   inputElem.classList.add("input");
+
+  const inputLines = inputText.split("\n").filter(line => line !== ""); // Remove empty last line if present
+  
+  inputLines.forEach((line, index) => {
+      if (index > 0) {
+          // Add line break for subsequent lines
+          inputElem.appendChild(document.createElement("br"));
+          const prefixSpan = document.createElement("span");
+          prefixSpan.className = "input-line-prefix";
+          prefixSpan.textContent = "… ";
+          inputElem.appendChild(prefixSpan);
+      } else {
+          // First line prefix
+          const prefixSpan = document.createElement("span");
+          prefixSpan.className = "input-line-prefix";
+          prefixSpan.textContent = "» ";
+          inputElem.appendChild(prefixSpan);
+      }
+      
+      // Add the line text as plain text
+      inputElem.appendChild(document.createTextNode(line));
+  });
 
   const historyItem = document.createElement("div");
   historyItem.appendChild(inputElem);

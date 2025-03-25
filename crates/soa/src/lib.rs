@@ -8,6 +8,6 @@ mod soa_slice3;
 
 pub use either_index::*;
 pub use soa_index::*;
-pub use soa_slice::{NonEmptySlice, Slice};
+pub use soa_slice::{NonEmptySlice, PairSlice, Slice};
 pub use soa_slice2::Slice2;
 pub use soa_slice3::Slice3;

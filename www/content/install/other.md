@@ -4,16 +4,11 @@
 
 1. [Build Roc from source](https://github.com/roc-lang/roc/blob/main/BUILDING_FROM_SOURCE.md)
 
-1. Run examples:
+1. Download and run hello world:
 
     ```sh
-    cargo run examples/platform-switching/rocLovesRust.roc
-
-    # This requires installing the Zig compiler, too.
-    cargo run examples/platform-switching/rocLovesZig.roc
-
-    # This requires installing the `clang` C compiler, too.
-    cargo run examples/platform-switching/rocLovesC.roc
+    curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
+    roc main.roc
     ```
 
 ## Next Steps

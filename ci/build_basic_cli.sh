@@ -54,6 +54,6 @@ fi
 ./jump-start.sh
 
 # build the basic cli platform
-roc build.roc
+roc build.roc --linker=legacy
 
 cd ..

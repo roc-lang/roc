@@ -4,8 +4,8 @@ use memmap2::MmapMut;
 use object::{elf, endian};
 use object::{
     CompressedFileRange, CompressionFormat, LittleEndian as LE, Object, ObjectSection,
-    ObjectSymbol, RelocationKind, RelocationTarget, Section, SectionIndex, SectionKind, Symbol,
-    SymbolIndex, SymbolSection,
+    ObjectSymbol, RelocationFlags, RelocationKind, RelocationTarget, Section, SectionIndex,
+    SectionKind, Symbol, SymbolIndex, SymbolSection,
 };
 use roc_collections::all::MutMap;
 use roc_error_macros::{internal_error, user_error};
@@ -407,8 +407,12 @@ pub(crate) fn preprocess_elf_le(
                 }
             })
             .filter_map(|(_, reloc)| {
-                if let RelocationKind::Elf(7) = reloc.kind() {
-                    Some(reloc)
+                if let RelocationFlags::Elf { r_type}  = reloc.flags() {
+                    if r_type == elf::R_X86_64_JUMP_SLOT {
+                        Some(reloc)
+                    } else {
+                        None
+                    }
                 } else {
                     None
                 }
@@ -1069,10 +1073,12 @@ fn scan_elf_dynamic_deps(
         }
     })
     .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(elf::R_X86_64_GLOB_DAT) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+        if let RelocationFlags::Elf { r_type } = reloc.flags() {
+            if r_type == elf::R_X86_64_GLOB_DAT {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        return Some((symbol.name().unwrap().to_string(), symbol.index().0));
+                    }
                 }
             }
         }
@@ -1088,10 +1094,12 @@ fn scan_elf_dynamic_deps(
         }
     })
     .filter_map(|(_, reloc)| {
-        if let RelocationKind::Elf(elf::R_X86_64_JUMP_SLOT) = reloc.kind() {
-            for symbol in app_syms.iter() {
-                if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
-                    return Some(symbol.index().0);
+        if let RelocationFlags::Elf { r_type } = reloc.flags() {
+            if r_type == elf::R_X86_64_JUMP_SLOT {
+                for symbol in app_syms.iter() {
+                    if reloc.target() == RelocationTarget::Symbol(symbol.index()) {
+                        return Some(symbol.index().0);
+                    }
                 }
             }
         }

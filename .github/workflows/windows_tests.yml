@@ -3,6 +3,9 @@ on:
 
 name: windows - subset of tests
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
 
@@ -11,7 +14,7 @@ jobs:
     name: windows-test-subset
     runs-on: windows-2022
     env:
-      LLVM_SYS_160_PREFIX: C:\LLVM-16.0.6-win64
+      LLVM_SYS_180_PREFIX: C:\LLVM-18.1.8-win64
 
     timeout-minutes: 150
     steps:
@@ -25,10 +28,10 @@ jobs:
 
       - name: download and install zig
         run: |
-          curl.exe -f --output "C:\zig-windows-x86_64-0.11.0.zip" --url https://ziglang.org/download/0.11.0/zig-windows-x86_64-0.11.0.zip
+          curl.exe -f --output "C:\zig-windows-x86_64-0.13.0.zip" --url https://ziglang.org/download/0.13.0/zig-windows-x86_64-0.13.0.zip
           cd C:\
-          7z x zig-windows-x86_64-0.11.0.zip
-          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.11.0\"
+          7z x zig-windows-x86_64-0.13.0.zip
+          Add-Content $env:GITHUB_PATH "C:\zig-windows-x86_64-0.13.0\"
 
       - run: zig version
 
@@ -40,10 +43,10 @@ jobs:
       - name: install rust nightly 1.77.0
         run: rustup install nightly-2024-02-03
 
-      - name: set up llvm 16
+      - name: set up llvm 18
         run: |
-          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v16.0.6/LLVM-16.0.6-win64.7z
-          7z x LLVM-16.0.6-win64.7z -oC:\LLVM-16.0.6-win64
+          curl.exe -f -L -O -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z
+          7z x LLVM-18.1.8-win64.7z -oC:\LLVM-18.1.8-win64
 
       - name: Build tests --release without running.
         run: cargo test --locked --release --no-run

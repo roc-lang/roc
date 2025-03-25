@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 StrConsList : [Nil, Cons Str StrConsList]
 
-mainForHost : StrConsList
-mainForHost = main
+main_for_host : StrConsList
+main_for_host = main

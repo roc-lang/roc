@@ -1,18 +1,18 @@
-procedure Bool.11 (#Attr.2, #Attr.3):
-    let Bool.23 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
-    ret Bool.23;
-
 procedure Bool.2 ():
-    let Bool.24 : Int1 = true;
-    ret Bool.24;
+    let Bool.22 : Int1 = true;
+    ret Bool.22;
+
+procedure Bool.9 (#Attr.2, #Attr.3):
+    let Bool.21 : Int1 = lowlevel Eq #Attr.2 #Attr.3;
+    ret Bool.21;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.282 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.284 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Test.0 (Test.8):
     let Test.20 : Int1 = CallByName Bool.2;
@@ -40,7 +40,7 @@ procedure Test.7 ():
     let Test.14 : Int1 = CallByName Test.0 Test.15;
     let Test.11 : U64 = CallByName Test.5 Test.13 Test.14;
     let Test.12 : U64 = 9i64;
-    let Test.10 : Int1 = CallByName Bool.11 Test.11 Test.12;
+    let Test.10 : Int1 = CallByName Bool.9 Test.11 Test.12;
     expect Test.10;
     let Test.9 : {} = Struct {};
     ret Test.9;

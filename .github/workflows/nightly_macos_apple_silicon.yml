@@ -1,14 +1,17 @@
 on:
-  #pull_request:
+  #  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 9 * * *"
 
 name: Nightly Release macOS Apple Silicon
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
-  LLVM_SYS_160_PREFIX: /opt/homebrew/opt/llvm@16
+  LLVM_SYS_180_PREFIX: /opt/homebrew/opt/llvm@18
 
 jobs:
   test-and-build:
@@ -20,9 +23,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Update PATH to use zig 11
+      - name: Update PATH to use zig 13
         run: |
-          echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/Users/m1ci/Downloads/zig-macos-aarch64-0.13.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
@@ -58,7 +61,7 @@ jobs:
 
       - name: test with zig platform
         run: |
-          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/roc_loves_zig.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"

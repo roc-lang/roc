@@ -17,28 +17,32 @@
             type_defs: [],
             value_defs: [
                 Annotation(
-                    @0-1 Apply(
-                        @0-1 NumLiteral(
-                            "1",
-                        ),
-                        [
-                            @2-8 Apply(
-                                @3-4 SpaceAfter(
-                                    NumLiteral(
-                                        "0",
+                    @0-17 PncApply(
+                        @0-9 PncApply(
+                            @0-1 NumLiteral(
+                                "1",
+                            ),
+                            [
+                                @2-8 Apply(
+                                    @3-4 SpaceAfter(
+                                        NumLiteral(
+                                            "0",
+                                        ),
+                                        [
+                                            LineComment(
+                                                "",
+                                            ),
+                                        ],
                                     ),
                                     [
-                                        LineComment(
-                                            "",
-                                        ),
+                                        @7-8 Identifier {
+                                            ident: "f",
+                                        },
                                     ],
                                 ),
-                                [
-                                    @7-8 Identifier {
-                                        ident: "f",
-                                    },
-                                ],
-                            ),
+                            ],
+                        ),
+                        [
                             @10-16 Apply(
                                 @11-12 SpaceAfter(
                                     NumLiteral(

@@ -3,15 +3,16 @@ use bumpalo::Bump;
 use roc_build::link::LinkType;
 use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
-    build_app, format_files, format_src, test, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK,
-    CMD_DEV, CMD_DOCS, CMD_FORMAT, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_LIB, FLAG_MAIN, FLAG_MIGRATE,
-    FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB, FLAG_PP_HOST,
-    FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, GLUE_DIR, GLUE_SPEC,
-    ROC_FILE, VERSION,
+    annotate_file, build_app, default_linking_strategy, format_files, format_src, test,
+    AnnotationProblem, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS,
+    CMD_FORMAT, CMD_FORMAT_ANNOTATE, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
+    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT, FLAG_LIB, FLAG_MAIN,
+    FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
+    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_VERBOSE,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
-use roc_error_macros::user_error;
+use roc_error_macros::{internal_error, user_error};
 use roc_fmt::MigrationFlags;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
@@ -54,6 +55,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 Ok(1)
@@ -69,6 +71,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 eprintln!("What .roc file do you want to run? Specify it at the end of the `roc run` command.");
@@ -95,6 +98,7 @@ fn main() -> io::Result<()> {
                     None,
                     RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                     LinkType::Executable,
+                    false,
                 )
             } else {
                 eprintln!("What .roc file do you want to build? Specify it at the end of the `roc run` command.");
@@ -113,8 +117,19 @@ fn main() -> io::Result<()> {
                 false => CodeGenBackend::Llvm(LlvmBackendMode::BinaryGlue),
             };
 
+            let link_type = LinkType::Dylib;
+            let target = Triple::host().into();
+            let linking_strategy = default_linking_strategy(matches, link_type, target);
+
             if !output_path.exists() || output_path.is_dir() {
-                roc_glue::generate(input_path, output_path, spec_path, backend)
+                roc_glue::generate(
+                    input_path,
+                    output_path,
+                    spec_path,
+                    backend,
+                    link_type,
+                    linking_strategy,
+                )
             } else {
                 eprintln!("`roc glue` must be given a directory to output into, because the glue might generate multiple files.");
 
@@ -153,7 +168,7 @@ fn main() -> io::Result<()> {
                 .and_then(|s| Target::from_str(s).ok())
                 .unwrap_or_default();
 
-            let verbose_and_time = matches.get_one::<bool>(roc_cli::FLAG_VERBOSE).unwrap();
+            let verbose_and_time = matches.get_one::<bool>(FLAG_VERBOSE).unwrap();
 
             let preprocessed_path = platform_path.with_file_name(target.prebuilt_surgical_host());
             let metadata_path = platform_path.with_file_name(target.metadata_file_name());
@@ -184,6 +199,7 @@ fn main() -> io::Result<()> {
             let out_path = matches
                 .get_one::<OsString>(FLAG_OUTPUT)
                 .map(OsString::as_ref);
+            let verbose = matches.get_flag(FLAG_VERBOSE);
 
             Ok(build(
                 matches,
@@ -193,6 +209,7 @@ fn main() -> io::Result<()> {
                 out_path,
                 RocCacheDir::Persistent(cache::roc_cache_packages_dir().as_path()),
                 link_type,
+                verbose,
             )?)
         }
         Some((CMD_CHECK, matches)) => {
@@ -254,7 +271,7 @@ fn main() -> io::Result<()> {
                                 exit_code = problems.exit_code();
                             }
 
-                            Err(LoadingProblem::FormattedReport(report)) => {
+                            Err(LoadingProblem::FormattedReport(report, _)) => {
                                 print!("{report}");
 
                                 exit_code = 1;
@@ -282,10 +299,11 @@ fn main() -> io::Result<()> {
                     ) {
                         Ok((problems, total_time)) => {
                             problems.print_error_warning_count(total_time);
+                            println!(".\n");
                             Ok(problems.exit_code())
                         }
 
-                        Err(LoadingProblem::FormattedReport(report)) => {
+                        Err(LoadingProblem::FormattedReport(report, _)) => {
                             print!("{report}");
 
                             Ok(1)
@@ -307,9 +325,63 @@ fn main() -> io::Result<()> {
             let root_path = matches.get_one::<PathBuf>(ROC_FILE).unwrap();
             let out_dir = matches.get_one::<OsString>(FLAG_OUTPUT).unwrap();
 
-            generate_docs_html(root_path.to_owned(), out_dir.as_ref());
+            let maybe_root_dir: Option<String> = {
+                if let Ok(root_dir) = std::env::var("ROC_DOCS_URL_ROOT") {
+                    // if the env var is set, it should override the flag for now
+                    // TODO -- confirm we no longer need this and remove
+                    // once docs are migrated to individual repositories and not roc website
+                    Some(root_dir)
+                } else {
+                    matches
+                        .get_one::<Option<String>>(FLAG_DOCS_ROOT)
+                        .unwrap_or(&None)
+                        .clone()
+                }
+            };
+
+            generate_docs_html(
+                root_path.to_owned(),
+                out_dir.as_ref(),
+                maybe_root_dir.clone(),
+            );
 
             Ok(0)
+        }
+        Some((CMD_FORMAT, fmatches)) if Some(CMD_FORMAT_ANNOTATE) == fmatches.subcommand_name() => {
+            let matches = fmatches
+                .subcommand_matches(CMD_FORMAT_ANNOTATE)
+                .unwrap_or_else(|| internal_error!("No annotate subcommand present"));
+
+            let arena = Bump::new();
+            let roc_file_path = matches
+                .get_one::<PathBuf>(ROC_FILE)
+                .unwrap_or_else(|| internal_error!("No default for ROC_FILE"));
+
+            let annotate_exit_code = match annotate_file(&arena, roc_file_path.to_owned()) {
+                Ok(()) => 0,
+                Err(AnnotationProblem::Loading(LoadingProblem::FormattedReport(report, ..))) => {
+                    eprintln!("{report}");
+                    1
+                }
+                Err(AnnotationProblem::Type(type_problem)) => {
+                    eprintln!(
+                        "The type generated for `{}` on line {} contains an error",
+                        type_problem.name, type_problem.position.line,
+                    );
+                    eprintln!(
+                        "run `roc check \"{}\"` for a more detailed error",
+                        roc_file_path.to_str().unwrap_or_else(|| internal_error!(
+                            "File path is not a valid utf8 string"
+                        ))
+                    );
+                    1
+                }
+                Err(other) => {
+                    internal_error!("build_file failed with error:\n{other:?}");
+                }
+            };
+
+            Ok(annotate_exit_code)
         }
         Some((CMD_FORMAT, matches)) => {
             let from_stdin = matches.get_flag(FLAG_STDIN);
@@ -323,7 +395,10 @@ fn main() -> io::Result<()> {
                     false => FormatMode::WriteToFile,
                 }
             };
-            let flags = MigrationFlags::new(migrate);
+            let flags = MigrationFlags {
+                snakify: migrate,
+                parens_and_commas: migrate,
+            };
 
             if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
                 eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");

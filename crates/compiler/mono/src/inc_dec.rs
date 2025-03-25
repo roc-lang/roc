@@ -1258,10 +1258,13 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         StrReleaseExcessCapacity => &[OWNED],
         ListIncref => &[OWNED],
         ListDecref => &[OWNED],
+        StrWithAsciiLowercased => &[OWNED],
+        StrWithAsciiUppercased => &[OWNED],
+        StrCaselessAsciiEquals => &[BORROWED, BORROWED],
 
         Eq | NotEq => &[BORROWED, BORROWED],
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
         | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
@@ -1302,6 +1305,7 @@ pub(crate) fn lowlevel_borrow_signature(op: LowLevel) -> &'static [Ownership] {
         | NumF64FromParts => &[IRRELEVANT],
         StrStartsWith | StrEndsWith => &[BORROWED, BORROWED],
         StrFromUtf8 => &[OWNED],
+        StrFromUtf8Lossy => &[BORROWED],
         StrToUtf8 => &[OWNED],
         StrRepeat => &[BORROWED, IRRELEVANT],
         StrFromInt | StrFromFloat => &[IRRELEVANT],

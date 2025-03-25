@@ -310,11 +310,11 @@ fn return_unnamed_fn() {
         indoc!(
             r"
             wrapper = \{} ->
-                alwaysFloatIdentity : Int * -> (Frac a -> Frac a)
-                alwaysFloatIdentity = \_ ->
+                always_float_identity : Int * -> (Frac a -> Frac a)
+                always_float_identity = \_ ->
                     (\a -> a)
 
-                (alwaysFloatIdentity 2) 1.23f64
+                (always_float_identity 2) 1.23f64
 
             wrapper {}
             "
@@ -330,13 +330,13 @@ fn gen_when_fn() {
     assert_evals_to!(
         indoc!(
             r"
-                limitedNegate = \num ->
+                limited_negate = \num ->
                     when num is
                         1 -> -1
                         -1 -> 1
                         _ -> num
 
-                limitedNegate 1
+                limited_negate 1
             "
         ),
         -1,
@@ -662,7 +662,7 @@ fn linked_list_len_1() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            one : LinkedList (Int *)
+            one : LinkedList (Int _)
             one = Cons 1 Nil
 
             length : LinkedList a -> Int *
@@ -690,7 +690,7 @@ fn linked_list_len_twice_1() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            one : LinkedList (Int *)
+            one : LinkedList (Int _)
             one = Cons 1 Nil
 
             length : LinkedList a -> Int *
@@ -718,7 +718,7 @@ fn linked_list_len_3() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
             length : LinkedList a -> Int *
@@ -747,7 +747,7 @@ fn linked_list_sum_num_a() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
 
@@ -776,7 +776,7 @@ fn linked_list_sum_int() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            zero : LinkedList (Int *)
+            zero : LinkedList (Int _)
             zero = Nil
 
             sum : LinkedList (Int a) -> Int a
@@ -804,7 +804,7 @@ fn linked_list_map() {
 
             LinkedList a : [Nil, Cons a (LinkedList a)]
 
-            three : LinkedList (Int *)
+            three : LinkedList (Int _)
             three = Cons 3 (Cons 2 (Cons 1 Nil))
 
             sum : LinkedList (Num a) -> Num a
@@ -836,7 +836,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int a))
+            x : Maybe (Maybe (Int _))
             x = Just (Just 41)
 
             when x is
@@ -853,7 +853,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int *))
+            x : Maybe (Maybe (Int _))
             x = Just Nothing
 
             when x is
@@ -871,7 +871,7 @@ fn when_nested_maybe() {
             r"
             Maybe a : [Nothing, Just a]
 
-            x : Maybe (Maybe (Int *))
+            x : Maybe (Maybe (Int _))
             x = Nothing
 
             when x is
@@ -944,7 +944,7 @@ fn when_peano() {
 }
 
 #[test]
-// This doesn't work on Windows. If you make it return a Result.withDefault 0 (so it's returning
+// This doesn't work on Windows. If you make it return a Result.with_default 0 (so it's returning
 // an integer instead of a Result), then it works on Windows, suggesting this is a C ABI issue.
 // We should try this out on Windows again after making adjustments to the Result C ABI!
 #[cfg(all(
@@ -956,17 +956,17 @@ fn overflow_frees_list() {
     assert_evals_to!(
         indoc!(
             r"
-            myList = [1,2,3]
+            my_list = [1,2,3]
 
             # integer overflow; must use the list so it is defined before the overflow
             # the list will then be freed in a cleanup block
             n : I64
-            n = 9_223_372_036_854_775_807 + (Num.intCast (List.len myList))
+            n = 9_223_372_036_854_775_807 + (Num.int_cast (List.len my_list))
 
             index : U64
-            index = Num.intCast n
+            index = Num.int_cast n
 
-            List.get myList index
+            List.get my_list index
                  "
         ),
         (3, 0),
@@ -1117,7 +1117,7 @@ fn specialize_closure() {
                 y = [1]
 
                 f = \{} -> x
-                g = \{} -> x + Num.intCast (List.len y)
+                g = \{} -> x + Num.int_cast (List.len y)
 
                 [f, g]
 
@@ -1147,8 +1147,8 @@ fn io_poc_effect() {
             succeed : a -> Effect a
             succeed = \x -> @Effect \{} -> x
 
-            runEffect : Effect a -> a
-            runEffect = \@Effect thunk -> thunk {}
+            run_effect : Effect a -> a
+            run_effect = \@Effect thunk -> thunk {}
 
             foo : Effect F64
             foo =
@@ -1156,7 +1156,7 @@ fn io_poc_effect() {
 
             main : F64
             main =
-                runEffect foo
+                run_effect foo
 
             "#
         ),
@@ -1180,12 +1180,12 @@ fn io_poc_desugared() {
             foo =
                 succeed 1.23
 
-            # runEffect : ({} ->  a) -> a
-            runEffect = \thunk -> thunk ""
+            # run_effect : ({} ->  a) -> a
+            run_effect = \thunk -> thunk ""
 
             main : F64
             main =
-                runEffect foo
+                run_effect foo
             "#
         ),
         1.23,
@@ -1274,8 +1274,8 @@ fn linked_list_is_singleton() {
             empty : {} -> ConsList a
             empty = \{} -> Nil
 
-            isSingleton : ConsList a -> Bool
-            isSingleton = \list ->
+            is_singleton : ConsList a -> Bool
+            is_singleton = \list ->
                 when list is
                     Cons _ Nil ->
                         Bool.true
@@ -1285,10 +1285,10 @@ fn linked_list_is_singleton() {
 
             main : Bool
             main =
-                myList : ConsList I64
-                myList = empty {}
+                my_list : ConsList I64
+                my_list = empty {}
 
-                isSingleton myList
+                is_singleton my_list
             "#
         ),
         false,
@@ -1309,8 +1309,8 @@ fn linked_list_is_empty_1() {
             empty : {} -> ConsList a
             empty = \{} -> Nil
 
-            isEmpty : ConsList a -> Bool
-            isEmpty = \list ->
+            is_empty : ConsList a -> Bool
+            is_empty = \list ->
                 when list is
                     Cons _ _ ->
                         Bool.false
@@ -1320,10 +1320,10 @@ fn linked_list_is_empty_1() {
 
             main : Bool
             main =
-                myList : ConsList U8
-                myList = empty {}
+                my_list : ConsList U8
+                my_list = empty {}
 
-                isEmpty myList
+                is_empty my_list
             "#
         ),
         true,
@@ -1341,8 +1341,8 @@ fn linked_list_is_empty_2() {
 
             ConsList a : [Cons a (ConsList a), Nil]
 
-            isEmpty : ConsList a -> Bool
-            isEmpty = \list ->
+            is_empty : ConsList a -> Bool
+            is_empty = \list ->
                 when list is
                     Cons _ _ ->
                         Bool.false
@@ -1352,10 +1352,10 @@ fn linked_list_is_empty_2() {
 
             main : Bool
             main =
-                myList : ConsList I64
-                myList = Cons 0x1 Nil
+                my_list : ConsList I64
+                my_list = Cons 0x1 Nil
 
-                isEmpty myList
+                is_empty my_list
             "#
         ),
         false,
@@ -1402,7 +1402,7 @@ fn recursive_function_with_rigid() {
                 else
                     1 + foo { count: state.count - 1, x: state.x }
 
-            main : Int *
+            main : Int _
             main =
                 foo { count: 3, x: {} }
             "#
@@ -1428,57 +1428,57 @@ fn rbtree_insert() {
 
             insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
             insert = \key, value, dict ->
-                when insertHelp key value dict is
+                when insert_help key value dict is
                     Node Red k v l r ->
                         Node Black k v l r
 
                     x ->
                         x
 
-            insertHelp : (Key k), v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
-            insertHelp = \key, value, dict ->
+            insert_help : (Key k), v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
+            insert_help = \key, value, dict ->
               when dict is
                 Empty ->
                   # New nodes are always red. If it violates the rules, it will be fixed
                   # when balancing.
                   Node Red key value Empty Empty
 
-                Node nColor nKey nValue nLeft nRight ->
-                  when Num.compare key nKey is
+                Node n_color n_key n_value n_left n_right ->
+                  when Num.compare key n_key is
                     LT ->
-                      balance nColor nKey nValue (insertHelp key value nLeft) nRight
+                      balance n_color n_key n_value (insert_help key value n_left) n_right
 
                     EQ ->
-                      Node nColor nKey value nLeft nRight
+                      Node n_color n_key value n_left n_right
 
                     GT ->
-                      balance nColor nKey nValue nLeft (insertHelp key value nRight)
+                      balance n_color n_key n_value n_left (insert_help key value n_right)
 
             balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, left, right ->
               when right is
-                Node Red rK rV rLeft rRight ->
+                Node Red r_k r_v r_left r_right ->
                   when left is
-                    Node Red lK lV lLeft lRight ->
+                    Node Red l_k l_v l_left l_right ->
                       Node
                         Red
                         key
                         value
-                        (Node Black lK lV lLeft lRight)
-                        (Node Black rK rV rLeft rRight)
+                        (Node Black l_k l_v l_left l_right)
+                        (Node Black r_k r_v r_left r_right)
 
                     _ ->
-                      Node color rK rV (Node Red key value left rLeft) rRight
+                      Node color r_k r_v (Node Red key value left r_left) r_right
 
                 _ ->
                   when left is
-                    Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                    Node Red l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right ->
                       Node
                         Red
-                        lK
-                        lV
-                        (Node Black llK llV llLeft llRight)
-                        (Node Black key value lRight right)
+                        l_k
+                        l_v
+                        (Node Black ll_k ll_v ll_left ll_right)
+                        (Node Black key value l_right right)
 
                     _ ->
                       Node color key value left right
@@ -1517,7 +1517,7 @@ fn rbtree_balance_3() {
             balance = \key, left ->
                 Node key left Empty
 
-            main : RedBlackTree (Int *)
+            main : RedBlackTree (Int _)
             main =
                 balance 0 Empty
             "#
@@ -1545,8 +1545,8 @@ fn rbtree_layout_issue() {
             # balance : NodeColor, k, v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, right ->
               when right is
-                Node Red _ _ rLeft rRight ->
-                    Node color key value rLeft rRight
+                Node Red _ _ r_left r_right ->
+                    Node color key value r_left r_right
 
 
                 _ ->
@@ -1579,7 +1579,7 @@ fn rbtree_balance_mono_problem() {
     // constraint generation where the specialization required by `main` does not fix the
     // problem. As a result, the first argument is dropped and we run into issues down the line
     //
-    // concretely, the `rRight` symbol will not be defined
+    // concretely, the `r_right` symbol will not be defined
     assert_evals_to!(
         indoc!(
             r#"
@@ -1592,18 +1592,18 @@ fn rbtree_balance_mono_problem() {
             # balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, left, right ->
               when right is
-                Node Red rK rV rLeft rRight ->
+                Node Red r_k r_v r_left r_right ->
                   when left is
-                    Node Red lK lV lLeft lRight ->
+                    Node Red l_k l_v l_left l_right ->
                       Node
                         Red
                         key
                         value
-                        (Node Black lK lV lLeft lRight)
-                        (Node Black rK rV rLeft rRight)
+                        (Node Black l_k l_v l_left l_right)
+                        (Node Black r_k r_v r_left r_right)
 
                     _ ->
-                      Node color rK rV (Node Red key value left rLeft) rRight
+                      Node color r_k r_v (Node Red key value left r_left) r_right
 
                 _ ->
                     Empty
@@ -1639,28 +1639,28 @@ fn rbtree_balance_full() {
             balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
             balance = \color, key, value, left, right ->
               when right is
-                Node Red rK rV rLeft rRight ->
+                Node Red r_k r_v r_left r_right ->
                   when left is
-                    Node Red lK lV lLeft lRight ->
+                    Node Red l_k l_v l_left l_right ->
                       Node
                         Red
                         key
                         value
-                        (Node Black lK lV lLeft lRight)
-                        (Node Black rK rV rLeft rRight)
+                        (Node Black l_k l_v l_left l_right)
+                        (Node Black r_k r_v r_left r_right)
 
                     _ ->
-                      Node color rK rV (Node Red key value left rLeft) rRight
+                      Node color r_k r_v (Node Red key value left r_left) r_right
 
                 _ ->
                   when left is
-                    Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                    Node Red l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right ->
                       Node
                         Red
-                        lK
-                        lV
-                        (Node Black llK llV llLeft llRight)
-                        (Node Black key value lRight right)
+                        l_k
+                        l_v
+                        (Node Black ll_k ll_v ll_left ll_right)
+                        (Node Black key value l_right right)
 
                     _ ->
                       Node color key value left right
@@ -1696,7 +1696,7 @@ fn nested_pattern_match_two_ways() {
                         _ -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1719,7 +1719,7 @@ fn nested_pattern_match_two_ways() {
                 Cons 1 (Cons 1 _) -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1751,7 +1751,7 @@ fn linked_list_guarded_double_pattern_match() {
                         _ -> 3
                 _ -> 3
 
-            main : Int *
+            main : Int _
             main =
                 when balance Nil is
                     _ -> 3
@@ -1778,7 +1778,7 @@ fn linked_list_double_pattern_match() {
                     Cons _ (Cons x _) -> x
                     _ -> 0
 
-            main : Int *
+            main : Int _
             main =
                 foo (Cons 1 (Cons 32 Nil))
             "#
@@ -1868,51 +1868,6 @@ fn unified_empty_closure_byte() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
-fn task_always_twice() {
-    assert_evals_to!(
-        indoc!(
-            r#"
-            app "test" provides [main] to "./platform"
-
-            Effect a := {} -> a
-
-            effectAlways : a -> Effect a
-            effectAlways = \x ->
-                inner = \{} -> x
-
-                @Effect inner
-
-            effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
-
-            MyTask a err : Effect (Result a err)
-
-            always : a -> MyTask a *
-            always = \x -> effectAlways (Ok x)
-
-            fail : err -> MyTask * err
-            fail = \x -> effectAlways (Err x)
-
-            after : MyTask a err, (a -> MyTask b err) -> MyTask b err
-            after = \task, transform ->
-                effectAfter task \res ->
-                    when res is
-                        Ok x -> transform x
-                        Err e -> fail e
-
-            main : MyTask {} F64
-            main = after (always "foo") (\_ -> always {})
-
-            "#
-        ),
-        (),
-        (f64, u8),
-        |_| ()
-    );
-}
-
-#[test]
-#[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn wildcard_rigid() {
     assert_evals_to!(
         indoc!(
@@ -1931,7 +1886,7 @@ fn wildcard_rigid() {
                 @Effect inner
 
 
-            main : MyTask {} (Frac *)
+            main : MyTask {} (Frac _)
             main = always {}
             "#
         ),
@@ -1980,27 +1935,27 @@ fn todo_bad_error_message() {
 
             Effect a := {} -> a
 
-            effectAlways : a -> Effect a
-            effectAlways = \x ->
+            effect_always : a -> Effect a
+            effect_always = \x ->
                 inner = \{} -> x
 
                 @Effect inner
 
-            effectAfter : Effect a, (a -> Effect b) -> Effect b
-            effectAfter = \(@Effect thunk), transform -> transform (thunk {})
+            effect_after : Effect a, (a -> Effect b) -> Effect b
+            effect_after = \(@Effect thunk), transform -> transform (thunk {})
 
             MyTask a err : Effect (Result a err)
 
             always : a -> MyTask a (Frac *)
-            always = \x -> effectAlways (Ok x)
+            always = \x -> effect_always (Ok x)
 
             # the problem is that this restricts to `MyTask {} *`
             fail : err -> MyTask {} err
-            fail = \x -> effectAlways (Err x)
+            fail = \x -> effect_always (Err x)
 
             after : MyTask a err, (a -> MyTask b err) -> MyTask b err
             after = \task, transform ->
-                effectAfter task \res ->
+                effect_after task \res ->
                     when res is
                         Ok x -> transform x
                         # but here it must be `forall b. MyTask b {}`
@@ -2024,9 +1979,9 @@ fn hof_conditional() {
     assert_evals_to!(
         indoc!(
             r"
-                passTrue = \f -> f Bool.true
+                pass_true = \f -> f Bool.true
 
-                passTrue (\trueVal -> if trueVal then Bool.false else Bool.true)
+                pass_true (\true_val -> if true_val then Bool.false else Bool.true)
             "
         ),
         0,
@@ -2097,10 +2052,10 @@ fn fingertree_basic() {
                         when some is
                             One y -> More (Two x y) q u
                             Two y z -> More (Three x y z) q u
-                            Three y z w -> More (Two x y) (consTuple (Pair z w) q) u
+                            Three y z w -> More (Two x y) (cons_tuple (Pair z w) q) u
 
-            consTuple : Tuple a, Seq (Tuple a) -> Seq (Tuple a)
-            consTuple = \a, b -> cons a b
+            cons_tuple : Tuple a, Seq (Tuple a) -> Seq (Tuple a)
+            cons_tuple = \a, b -> cons a b
 
             main : Bool
             main =
@@ -2201,11 +2156,11 @@ fn nullable_eval_cfold() {
 
             Expr : [Var, Val I64, Add Expr Expr, Mul Expr Expr]
 
-            mkExpr : I64, I64 -> Expr
-            mkExpr = \n , v ->
+            mk_expr : I64, I64 -> Expr
+            mk_expr = \n , v ->
                 when n is
                     0 -> if v == 0 then Var else Val v
-                    _ -> Add (mkExpr (n-1) (v+1)) (mkExpr (n-1) (max (v-1) 0))
+                    _ -> Add (mk_expr (n-1) (v+1)) (mk_expr (n-1) (max (v-1) 0))
 
             max : I64, I64 -> I64
             max = \a, b -> if a > b then a else b
@@ -2219,7 +2174,7 @@ fn nullable_eval_cfold() {
                     Mul l r -> eval l * eval r
 
             main : I64
-            main = eval (mkExpr 3 1)
+            main = eval (mk_expr 3 1)
             "#
         ),
         11,
@@ -2247,8 +2202,8 @@ fn nested_switch() {
                     Val v -> v
                     ZAdd l r -> eval l + eval r
 
-            constFolding : Expr -> Expr
-            constFolding = \e ->
+            const_folding : Expr -> Expr
+            const_folding = \e ->
                 when e is
                     ZAdd e1 e2 ->
                         when Pair e1 e2 is
@@ -2263,7 +2218,7 @@ fn nested_switch() {
             expr = ZAdd (Val 3) (ZAdd (Val 4) (Val 5))
 
             main : I64
-            main = eval (constFolding expr)
+            main = eval (const_folding expr)
             "#
         ),
         12,
@@ -2653,7 +2608,7 @@ fn mirror_llvm_alignment_padding() {
                     p1 = {name : "test1", test: 1 == 1 }
 
                     List.map [p1, p1] (\{ test } -> if test  then "pass" else "fail")
-                       |> Str.joinWith "\n"
+                       |> Str.join_with "\n"
 
             "#
         ),
@@ -2675,9 +2630,9 @@ fn lambda_set_bool() {
 
                 main : I64
                 main =
-                    oneOfResult = List.map [p1, p2] (\p -> p 42)
+                    one_of_result = List.map [p1, p2] (\p -> p 42)
 
-                    when oneOfResult is
+                    when one_of_result is
                         _ -> 32
 
             "#
@@ -2701,9 +2656,9 @@ fn lambda_set_byte() {
 
                 main : I64
                 main =
-                    oneOfResult = List.map [p1, p2, p3] (\p -> p 42)
+                    one_of_result = List.map [p1, p2, p3] (\p -> p 42)
 
-                    when oneOfResult is
+                    when one_of_result is
                         _ -> 32
 
             "#
@@ -2729,9 +2684,9 @@ fn lambda_set_struct_byte() {
 
                     p1 = (\u -> r == u)
                     foobarbaz = (\p -> p Green)
-                    oneOfResult = List.map [p1, p1] foobarbaz
+                    one_of_result = List.map [p1, p1] foobarbaz
 
-                    when oneOfResult is
+                    when one_of_result is
                         _ -> 32
 
             "#
@@ -2760,9 +2715,9 @@ fn lambda_set_enum_byte_byte() {
 
                     p1 = (\u -> r == u)
                     p2 = (\u -> g == u)
-                    oneOfResult = List.map [p1, p2] (\p -> p Green)
+                    one_of_result = List.map [p1, p2] (\p -> p Green)
 
-                    when oneOfResult is
+                    when one_of_result is
                         _ -> 32
 
             "#
@@ -2782,14 +2737,14 @@ fn list_walk_until() {
             app "test" provides [main] to "./platform"
 
 
-            satisfyA : {} -> List {}
-            satisfyA = \_ -> []
+            satisfy_a : {} -> List {}
+            satisfy_a = \_ -> []
 
-            oneOfResult =
-                List.walkUntil [satisfyA] [] \_, _ -> Break []
+            one_of_result =
+                List.walk_until [satisfy_a] [] \_, _ -> Break []
 
             main =
-                when oneOfResult is
+                when one_of_result is
                     _ -> 32
             "#
         ),
@@ -2811,11 +2766,11 @@ fn int_literal_not_specialized_with_annotation() {
                 satisfy : (U8 -> Str) -> Str
                 satisfy = \_ -> "foo"
 
-                myEq : a, a -> Str
-                myEq = \_, _ -> "bar"
+                my_eq : a, a -> Str
+                my_eq = \_, _ -> "bar"
 
                 p1 : Num * -> Str
-                p1 = (\u -> myEq u 64)
+                p1 = (\u -> my_eq u 64)
 
                 when satisfy p1 is
                     _ -> 32
@@ -2839,10 +2794,10 @@ fn int_literal_not_specialized_no_annotation() {
                 satisfy : (U8 -> Str) -> Str
                 satisfy = \_ -> "foo"
 
-                myEq : a, a -> Str
-                myEq = \_, _ -> "bar"
+                my_eq : a, a -> Str
+                my_eq = \_, _ -> "bar"
 
-                p1 = (\u -> myEq u 64)
+                p1 = (\u -> my_eq u 64)
 
                 when satisfy p1 is
                     _ -> 32
@@ -2868,9 +2823,9 @@ fn unresolved_tvar_when_capture_is_unused() {
                     r = 1
 
                     p1 = (\_ -> r == 1)
-                    oneOfResult = List.map [p1] (\p -> p Green)
+                    one_of_result = List.map [p1] (\p -> p Green)
 
-                    when oneOfResult is
+                    when one_of_result is
                         _ -> 32
 
             "#
@@ -2891,7 +2846,7 @@ fn value_not_exposed_hits_panic() {
 
                 main : I64
                 main =
-                    Str.toInt 32
+                    Str.to_int 32
             "#
         ),
         32,
@@ -2974,7 +2929,7 @@ fn do_pass_bool_byte_closure_layout() {
             any: Parser U8
             any = \inp ->
                when List.first inp is
-                 Ok u -> [Pair u (List.dropFirst inp 1)]
+                 Ok u -> [Pair u (List.drop_first inp 1)]
                  _ -> []
 
 
@@ -2991,12 +2946,12 @@ fn do_pass_bool_byte_closure_layout() {
                         else
                             Break accum
 
-                    List.walkUntil (any input) [] walker
+                    List.walk_until (any input) [] walker
 
 
 
-            oneOf : List (Parser a) -> Parser a
-            oneOf = \parserList ->
+            one_of : List (Parser a) -> Parser a
+            one_of = \parserList ->
                 \input ->
                     walker = \accum, p ->
                         output = p input
@@ -3006,20 +2961,20 @@ fn do_pass_bool_byte_closure_layout() {
                         else
                             Continue accum
 
-                    List.walkUntil parserList [] walker
+                    List.walk_until parserList [] walker
 
 
-            satisfyA = satisfy (\u -> u == 97) # recognize 97
-            satisfyB = satisfy (\u -> u == 98) # recognize 98
+            satisfy_a = satisfy (\u -> u == 97) # recognize 97
+            satisfy_b = satisfy (\u -> u == 98) # recognize 98
 
-            test1 = if List.len ((oneOf [satisfyA, satisfyB]) [97, 98, 99, 100] ) == 1  then "PASS" else "FAIL"
-            test2 = if List.len ((oneOf [satisfyA, satisfyB]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
-            test3 = if List.len ((oneOf [satisfyB , satisfyA]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
-            test4 = if List.len ((oneOf [satisfyA, satisfyB]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
+            test1 = if List.len ((one_of [satisfy_a, satisfy_b]) [97, 98, 99, 100] ) == 1  then "PASS" else "FAIL"
+            test2 = if List.len ((one_of [satisfy_a, satisfy_b]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test3 = if List.len ((one_of [satisfy_b , satisfy_a]) [98, 99, 100, 97] ) == 1  then "PASS" else "FAIL"
+            test4 = if List.len ((one_of [satisfy_a, satisfy_b]) [99, 100, 101] ) == 0  then "PASS" else "FAIL"
 
 
             main : Str
-            main = [test1, test2, test3, test4] |> Str.joinWith ", "
+            main = [test1, test2, test3, test4] |> Str.join_with ", "
        "#
         ),
         RocStr::from("PASS, PASS, PASS, PASS"),
@@ -3108,23 +3063,23 @@ fn nested_rigid_tag_union() {
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn call_that_needs_closure_parameter() {
     // here both p2 is lifted to the top-level, which means that `list` must be
-    // passed to it from `manyAux`.
+    // passed to it from `many_aux`.
     assert_evals_to!(
         indoc!(
             r#"
             Step state a : [Loop state, Done a]
 
-            manyAux : List a -> [Pair (Step (List a) (List a))]
-            manyAux = \list ->
+            many_aux : List a -> [Pair (Step (List a) (List a))]
+            many_aux = \list ->
                     p2 = \_ -> Pair (Done list)
 
                     p2 "foo"
 
-            manyAuxTest =  (manyAux []) == Pair (Loop [97])
+            many_aux_test =  (many_aux []) == Pair (Loop [97])
 
-            runTest = \t -> if t then "PASS" else "FAIL"
+            run_test = \t -> if t then "PASS" else "FAIL"
 
-            runTest manyAuxTest
+            run_test many_aux_test
             "#
         ),
         RocStr::from("FAIL"),
@@ -3165,20 +3120,20 @@ fn recursively_build_effect() {
                 hi = "Hello"
                 name = "World"
 
-                "$(hi), $(name)!"
+                "${hi}, ${name}!"
 
             main =
-                when nestHelp 4 is
+                when nest_help 4 is
                     _ -> greeting
 
-            nestHelp : I64 -> XEffect {}
-            nestHelp = \m ->
+            nest_help : I64 -> XEffect {}
+            nest_help = \m ->
                 when m is
                     0 ->
                         always {}
 
                     _ ->
-                        always {} |> after \_ -> nestHelp (m - 1)
+                        always {} |> after \_ -> nest_help (m - 1)
 
 
             XEffect a := {} -> a
@@ -3208,13 +3163,13 @@ fn polymophic_expression_captured_inside_closure() {
             r#"
             app "test" provides [main] to "./platform"
 
-            asU8 : U8 -> U8
-            asU8 = \_ -> 30
+            as_u8 : U8 -> U8
+            as_u8 = \_ -> 30
 
             main =
                 a = 15
                 f = \{} ->
-                    asU8 a
+                    as_u8 a
 
                 f {}
             "#
@@ -3231,9 +3186,9 @@ fn issue_2322() {
         indoc!(
             r"
             double = \x -> x * 2
-            doubleBind = \x -> (\_ -> double x)
-            doubleThree = doubleBind 3
-            doubleThree {}
+            double_bind = \x -> (\_ -> double x)
+            double_three = double_bind 3
+            double_three {}
             "
         ),
         6,
@@ -3458,10 +3413,10 @@ fn closure_called_in_its_defining_scope() {
                 g : Str
                 g = "hello world"
 
-                getG : {} -> Str
-                getG = \{} -> g
+                get_g : {} -> Str
+                get_g = \{} -> g
 
-                getG {}
+                get_g {}
             "#
         ),
         RocStr::from("hello world"),
@@ -3483,11 +3438,11 @@ fn issue_2894() {
                 g : { x : U32 }
                 g = { x: 1u32 }
 
-                getG : {} -> { x : U32 }
-                getG = \{} -> g
+                get_g : {} -> { x : U32 }
+                get_g = \{} -> g
 
                 h : {} -> U32
-                h = \{} -> (getG {}).x
+                h = \{} -> (get_g {}).x
 
                 h {}
             "#
@@ -3548,7 +3503,7 @@ fn polymorphic_lambda_set_multiple_specializations() {
                 f = if Bool.true then id1 else id2
                 f z
 
-            (id 9u8) + Num.toU8 (id 16u16)
+            (id 9u8) + Num.to_u8 (id 16u16)
             "
         ),
         25,
@@ -3585,19 +3540,19 @@ fn mutual_recursion_top_level_defs() {
             r#"
             app "test" provides [ main ] to "./platform"
 
-            isEven = \n ->
+            is_even = \n ->
                 when n is
                     0 -> Bool.true
                     1 -> Bool.false
-                    _ -> isOdd (n - 1)
+                    _ -> is_odd (n - 1)
 
-            isOdd = \n ->
+            is_odd = \n ->
                 when n is
                     0 -> Bool.false
                     1 -> Bool.true
-                    _ -> isEven (n - 1)
+                    _ -> is_even (n - 1)
 
-            main = isOdd 11
+            main = is_odd 11
             "#
         ),
         true,
@@ -3633,7 +3588,7 @@ fn lambda_capture_niche_u64_vs_u8_capture() {
             capture : _ -> ({} -> Str)
             capture = \val ->
                 \{} ->
-                    Num.toStr val
+                    Num.to_str val
 
             x : Bool
             x = Bool.true
@@ -3661,7 +3616,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
             capture : _ -> ({} -> Str)
             capture = \val ->
                 \{} ->
-                    Num.toStr val
+                    Num.to_str val
 
             capture2 = \val -> \{} -> val
 
@@ -3694,7 +3649,7 @@ fn lambda_capture_niches_with_non_capturing_function() {
             capture : _ -> ({} -> Str)
             capture = \val ->
                 \{} ->
-                    Num.toStr val
+                    Num.to_str val
 
             triv = \{} -> "triv"
 
@@ -3921,8 +3876,8 @@ fn compose_recursive_lambda_set_productive_toplevel() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "$(s)!"
-            whisper = \s -> "($(s))"
+            exclaim = \s -> "${s}!"
+            whisper = \s -> "(${s})"
 
             main =
                 res: Str -> Str
@@ -3944,8 +3899,8 @@ fn compose_recursive_lambda_set_productive_nested() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "$(s)!"
-            whisper = \s -> "($(s))"
+            exclaim = \s -> "${s}!"
+            whisper = \s -> "(${s})"
 
             res: Str -> Str
             res = List.walk [ exclaim, whisper ] identity compose
@@ -3966,8 +3921,8 @@ fn compose_recursive_lambda_set_productive_inferred() {
             compose = \f, g -> \x -> g (f x)
 
             identity = \x -> x
-            exclaim = \s -> "$(s)!"
-            whisper = \s -> "($(s))"
+            exclaim = \s -> "${s}!"
+            whisper = \s -> "(${s})"
 
             res = List.walk [ exclaim, whisper ] identity compose
             res "hello"
@@ -3992,8 +3947,8 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
                 else \x -> f (g x)
 
              identity = \x -> x
-             exclame = \s -> "$(s)!"
-             whisper = \s -> "($(s))"
+             exclame = \s -> "${s}!"
+             whisper = \s -> "(${s})"
 
              main =
                  res: Str -> Str
@@ -4058,9 +4013,9 @@ fn transient_captures() {
             r#"
             x = "abc"
 
-            getX = \{} -> x
+            get_x = \{} -> x
 
-            h = \{} -> getX {}
+            h = \{} -> get_x {}
 
             h {}
             "#
@@ -4076,9 +4031,9 @@ fn transient_captures_after_def_ordering() {
     assert_evals_to!(
         indoc!(
             r#"
-            h = \{} -> getX {}
+            h = \{} -> get_x {}
 
-            getX = \{} -> x
+            get_x = \{} -> x
 
             x = "abc"
 
@@ -4098,11 +4053,11 @@ fn deep_transient_capture_chain() {
             r#"
             z = "abc"
 
-            getX = \{} -> getY {}
-            getY = \{} -> getZ {}
-            getZ = \{} -> z
+            get_x = \{} -> get_y {}
+            get_y = \{} -> get_z {}
+            get_z = \{} -> z
 
-            h = \{} -> getX {}
+            h = \{} -> get_x {}
 
             h {}
             "#
@@ -4123,13 +4078,13 @@ fn deep_transient_capture_chain_with_multiple_captures() {
             y = "y"
             z = "z"
 
-            getX = \{} -> Str.concat x (getY {})
-            getY = \{} -> Str.concat y (getZ {})
-            getZ = \{} -> z
+            get_x = \{} -> Str.concat x (get_y {})
+            get_y = \{} -> Str.concat y (get_z {})
+            get_z = \{} -> z
 
-            getH = \{} -> Str.concat h (getX {})
+            get_h = \{} -> Str.concat h (get_x {})
 
-            getH {}
+            get_h {}
             "#
         ),
         RocStr::from("hxyz"),
@@ -4145,13 +4100,13 @@ fn transient_captures_from_outer_scope() {
             r#"
             x = "abc"
 
-            getX = \{} -> x
+            get_x = \{} -> x
 
-            innerScope =
-                h = \{} -> getX {}
+            inner_scope =
+                h = \{} -> get_x {}
                 h {}
 
-            innerScope
+            inner_scope
             "#
         ),
         RocStr::from("abc"),
@@ -4191,13 +4146,13 @@ fn int_let_generalization() {
     assert_evals_to!(
         indoc!(
             r#"
-            manyAux : {} -> I32
-            manyAux = \_ ->
+            many_aux : {} -> I32
+            many_aux = \_ ->
                 output = \_ -> 42
 
                 output {}
 
-            when manyAux {} is
+            when many_aux {} is
                 _ -> "done"
             "#
         ),
@@ -4281,18 +4236,18 @@ fn issue_4712() {
             v2 = "cd"
 
             apply : Parser (a -> Str), a -> Parser Str
-            apply = \fnParser, valParser ->
+            apply = \fn_parser, val_parser ->
                 \{} ->
-                    (fnParser {}) (valParser)
+                    (fn_parser {}) (val_parser)
 
             map : a, (a -> Str) -> Parser Str
-            map = \simpleParser, transform ->
-                apply (\{} -> transform) simpleParser
+            map = \simple_parser, transform ->
+                apply (\{} -> transform) simple_parser
 
             gen = \{} ->
                 [ map v1 (\{} -> "ab"), map v2 (\s -> s) ]
                 |> List.map (\f -> f {})
-                |> Str.joinWith  ","
+                |> Str.join_with  ","
 
             main = gen {}
             "#
@@ -4370,11 +4325,11 @@ fn function_specialization_information_in_lambda_set_thunk() {
             r#"
             app "test" provides [main] to "./platform"
 
-            andThen = \{} ->
+            and_then = \{} ->
                 x = 10u8
-                \newFn -> Num.add (newFn {}) x
+                \new_fn -> Num.add (new_fn {}) x
 
-            between = andThen {}
+            between = and_then {}
 
             main = between \{} -> between \{} -> 10u8
             "#
@@ -4392,13 +4347,13 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
             r#"
             app "test" provides [main] to "./platform"
 
-            andThen = \{} ->
+            and_then = \{} ->
                 x = 10u8
-                \newFn -> Num.add (newFn {}) x
+                \new_fn -> Num.add (new_fn {}) x
 
-            between1 = andThen {}
+            between1 = and_then {}
 
-            between2 = andThen {}
+            between2 = and_then {}
 
             main = between1 \{} -> between2 \{} -> 10u8
             "#
@@ -4439,14 +4394,14 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
             r#"
             app "test" provides [main] to "./platform"
 
-            factCPS = \n, cont ->
+            fact_cps = \n, cont ->
                 if n == 0 then
                     cont 1
                 else
-                    factCPS (n - 1) \value -> cont (n * value)
+                    fact_cps (n - 1) \value -> cont (n * value)
 
             main =
-                factCPS 5u64 \x -> x
+                fact_cps 5u64 \x -> x
             "#
         ),
         120,
@@ -4499,28 +4454,28 @@ fn reset_recursive_type_wraps_in_named_type() {
 
             main : Str
             main =
-              newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
-              printLinkedList newList Num.toStr
+              new_list = map_linked_list (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+              print_linked_list new_list Num.to_str
 
             LinkedList a : [Cons a (LinkedList a), Nil]
 
-            mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
-            mapLinkedList = \linkedList, f -> when linkedList is
+            map_linked_list : LinkedList a, (a -> b) -> LinkedList b
+            map_linked_list = \linked_list, f -> when linked_list is
               Nil -> Nil
               Cons x xs ->
                 s = if Bool.true then "true" else "false"
                 expect s == "true"
 
-                Cons (f x) (mapLinkedList xs f)
+                Cons (f x) (map_linked_list xs f)
 
-            printLinkedList : LinkedList a, (a -> Str) -> Str
-            printLinkedList = \linkedList, f ->
-              when linkedList is
+            print_linked_list : LinkedList a, (a -> Str) -> Str
+            print_linked_list = \linked_list, f ->
+              when linked_list is
                 Nil -> "Nil"
                 Cons x xs ->
-                  strX = f x
-                  strXs = printLinkedList xs f
-                  "Cons $(strX) ($(strXs))"
+                  str_x = f x
+                  str_xs = print_linked_list xs f
+                  "Cons ${str_x} (${str_xs})"
             "#
         ),
         RocStr::from("Cons 2 (Cons 3 (Cons 4 (Nil)))"),
@@ -4643,12 +4598,12 @@ fn issue_6139_contains() {
                     seen
                 else
                     # node = "B"
-                    nextNode = stepNode node
+                    next_node = step_node node
 
                     # node = "C"
-                    buggy nextNode (List.append seen node)
+                    buggy next_node (List.append seen node)
 
-            stepNode = \node ->
+            step_node = \node ->
                 when node is
                     "A" -> "B"
                     "B" -> "C"
@@ -4676,15 +4631,15 @@ fn issue_6139_prefixes() {
         indoc!(
             r#"
             prefixes = \str, soFar ->
-                if Str.isEmpty str then
+                if Str.is_empty str then
                     soFar
 
                 else
                     graphemes =
-                        Str.toUtf8 str
-                        |> List.map \c -> Str.fromUtf8 [c] |> Result.withDefault ""
-                    remaining = List.dropFirst graphemes 1
-                    next = Str.joinWith remaining ""
+                        Str.to_utf8 str
+                        |> List.map \c -> Str.from_utf8 [c] |> Result.with_default ""
+                    remaining = List.drop_first graphemes 1
+                    next = Str.join_with remaining ""
 
                     prefixes next (List.append soFar str)
 

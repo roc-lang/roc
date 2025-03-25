@@ -204,7 +204,6 @@ fn gen_from_mono_module_llvm<'a>(
 
     let builder = context.create_builder();
     let (dibuilder, compile_unit) = roc_gen_llvm::llvm::build::Env::new_debug_info(module);
-    let (mpm, _fpm) = roc_gen_llvm::llvm::build::construct_optimization_passes(module, opt_level);
 
     // Compile and add all the Procs before adding main
     let env = roc_gen_llvm::llvm::build::Env {
@@ -264,31 +263,7 @@ fn gen_from_mono_module_llvm<'a>(
     let generate_final_ir = all_code_gen_start.elapsed();
     let code_gen_object_start = Instant::now();
 
-    env.dibuilder.finalize();
-
-    if !emit_debug_info {
-        module.strip_debug_info();
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
-
-    mpm.run_on(module);
-
-    // Verify the module
-    if let Err(errors) = env.module.verify() {
-        // write the ll code to a file, so we can modify it
-        env.module.print_to_file(&app_ll_file).unwrap();
-
-        internal_error!(
-            "😱 LLVM errors when defining module; I wrote the full LLVM IR to {:?}\n\n {}",
-            app_ll_file,
-            errors.to_string(),
-        );
-    }
-
-    // Uncomment this to see the module's optimized LLVM instruction output:
-    // env.module.print_to_stderr();
+    crate::llvm_passes::optimize_llvm_ir(&env, target, opt_level, emit_debug_info, &app_ll_file);
 
     let gen_sanitizers = cfg!(feature = "sanitizers") && std::env::var("ROC_SANITIZERS").is_ok();
     let memory_buffer = if fuzz || gen_sanitizers {
@@ -481,7 +456,7 @@ fn gen_from_mono_module_dev<'a>(
 
             #[cfg(feature = "target-wasm32")]
             {
-                internal_error!("Compiler was not built with feature 'target-wasm32'.")
+                internal_error!("Compiler was built with feature 'target-wasm32'.")
             }
         }
         (_, Architecture::Aarch32) => {
@@ -702,7 +677,7 @@ pub fn handle_error_module(
 
 pub fn handle_loading_problem(problem: LoadingProblem) -> std::io::Result<i32> {
     match problem {
-        LoadingProblem::FormattedReport(report) => {
+        LoadingProblem::FormattedReport(report, _) => {
             print!("{report}");
             Ok(1)
         }
@@ -750,6 +725,7 @@ pub fn build_file<'a>(
     roc_cache_dir: RocCacheDir<'_>,
     load_config: LoadConfig,
     out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     let compilation_start = Instant::now();
 
@@ -776,6 +752,7 @@ pub fn build_file<'a>(
         loaded,
         compilation_start,
         out_path,
+        verbose,
     )
 }
 
@@ -852,6 +829,7 @@ fn build_loaded_file<'a>(
     loaded: roc_load::MonomorphizedModule<'a>,
     compilation_start: Instant,
     out_path: Option<&Path>,
+    verbose: bool,
 ) -> Result<BuiltFile<'a>, BuildFileError<'a>> {
     // get the platform path from the app header
     let platform_main_roc_path = match &loaded.entry_point {
@@ -981,6 +959,7 @@ fn build_loaded_file<'a>(
                 &roc_app_bytes,
                 &output_exe_path,
                 metadata_file,
+                verbose,
             );
         }
         (LinkingStrategy::Additive, _) | (LinkingStrategy::Legacy, LinkType::None) => {
@@ -1500,6 +1479,7 @@ pub fn build_str_test<'a>(
         loaded,
         compilation_start,
         None,
+        false,
     )
 }
 

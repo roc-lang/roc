@@ -1,4 +1,4 @@
-\{} ->
+|{}|
     echo "Welcome to the DMV!"
     age = readInt
 

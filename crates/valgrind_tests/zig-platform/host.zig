@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("glue").str;
+const str = @import("glue/str.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -17,7 +17,7 @@ const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
-        var ptr = malloc(size);
+        const ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
@@ -89,24 +89,24 @@ fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_
 
 comptime {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
-        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
     }
 
     if (builtin.os.tag == .windows) {
-        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
     }
 }
 
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic(*RocStr) void;
+extern fn roc__main_for_host_1_exposed_generic(*RocStr) void;
 
 const Unit = extern struct {};
 
-pub fn main() u8 {
+pub export fn main() u8 {
     const stdout = std.io.getStdOut().writer();
     const stderr = std.io.getStdErr().writer();
 
@@ -114,7 +114,7 @@ pub fn main() u8 {
 
     // actually call roc to populate the callresult
     var callresult = RocStr.empty();
-    roc__mainForHost_1_exposed_generic(&callresult);
+    roc__main_for_host_1_exposed_generic(&callresult);
 
     const nanos = timer.read();
     const seconds = (@as(f64, @floatFromInt(nanos)) / 1_000_000_000.0);

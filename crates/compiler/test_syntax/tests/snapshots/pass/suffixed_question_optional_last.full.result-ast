@@ -108,13 +108,12 @@ Full(
                                 ),
                             ],
                             @167-204 Apply(
-                                @167-180 TrySuffix {
-                                    target: Result,
-                                    expr: Var {
+                                @167-180 TrySuffix(
+                                    Var {
                                         module_name: "Result",
                                         ident: "mapErr",
                                     },
-                                },
+                                ),
                                 [
                                     @182-204 Tag(
                                         "UnableToCheckJQVersion",

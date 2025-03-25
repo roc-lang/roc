@@ -60,7 +60,7 @@ pub fn arch_str(target: Target) -> &'static str {
         roc_target::Architecture::X86_32 if cfg!(feature = "target-x86") => "x86",
         roc_target::Architecture::Aarch64 if cfg!(feature = "target-aarch64") => "aarch64",
         roc_target::Architecture::Aarch32 if cfg!(feature = "target-arm") => "arm",
-        roc_target::Architecture::Wasm32 if cfg!(feature = "target-webassembly") => "wasm32",
+        roc_target::Architecture::Wasm32 if cfg!(feature = "target-wasm32") => "wasm32",
         _ => internal_error!(
             "TODO gracefully handle unsupported target architecture: {:?}",
             target.architecture()

@@ -1,123 +1,123 @@
-module [findPath, Model, initialModel, cheapestOpen, reconstructPath]
+module [find_path, Model, initial_model, cheapest_open, reconstruct_path]
 
 import Quicksort
 
-findPath = \costFn, moveFn, start, end ->
-    astar costFn moveFn end (initialModel start)
+find_path = \cost_fn, move_fn, start, end ->
+    astar(cost_fn, move_fn, end, initial_model(start))
 
 Model position : {
     evaluated : Set position,
-    openSet : Set position,
+    open_set : Set position,
     costs : Dict position F64,
-    cameFrom : Dict position position,
+    came_from : Dict position position,
 } where position implements Hash & Eq
 
-initialModel : position -> Model position where position implements Hash & Eq
-initialModel = \start -> {
-    evaluated: Set.empty {},
-    openSet: Set.single start,
-    costs: Dict.single start 0,
-    cameFrom: Dict.empty {},
+initial_model : position -> Model position where position implements Hash & Eq
+initial_model = \start -> {
+    evaluated: Set.empty({}),
+    open_set: Set.single(start),
+    costs: Dict.single(start, 0),
+    came_from: Dict.empty({}),
 }
 
-cheapestOpen : (position -> F64), Model position -> Result position {} where position implements Hash & Eq
-cheapestOpen = \costFn, model ->
-    model.openSet
-    |> Set.toList
-    |> List.keepOks
-        (\position ->
-            when Dict.get model.costs position is
-                Err _ -> Err {}
-                Ok cost -> Ok { cost: cost + costFn position, position }
-        )
-    |> Quicksort.sortBy .cost
+cheapest_open : (position -> F64), Model position -> Result position {} where position implements Hash & Eq
+cheapest_open = \cost_fn, model ->
+    model.open_set
+    |> Set.to_list
+    |> List.keep_oks(
+        \position ->
+            when Dict.get(model.costs, position) is
+                Err(_) -> Err({})
+                Ok(cost) -> Ok({ cost: cost + cost_fn(position), position }),
+    )
+    |> Quicksort.sort_by(.cost)
     |> List.first
-    |> Result.map .position
-    |> Result.mapErr (\_ -> {})
+    |> Result.map_ok(.position)
+    |> Result.map_err(\_ -> {})
 
-reconstructPath : Dict position position, position -> List position where position implements Hash & Eq
-reconstructPath = \cameFrom, goal ->
-    when Dict.get cameFrom goal is
-        Err _ -> []
-        Ok next -> List.append (reconstructPath cameFrom next) goal
+reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq
+reconstruct_path = \came_from, goal ->
+    when Dict.get(came_from, goal) is
+        Err(_) -> []
+        Ok(next) -> List.append(reconstruct_path(came_from, next), goal)
 
-updateCost : position, position, Model position -> Model position where position implements Hash & Eq
-updateCost = \current, neighbor, model ->
-    newCameFrom =
-        Dict.insert model.cameFrom neighbor current
+update_cost : position, position, Model position -> Model position where position implements Hash & Eq
+update_cost = \current, neighbor, model ->
+    new_came_from =
+        Dict.insert(model.came_from, neighbor, current)
 
-    newCosts =
-        Dict.insert model.costs neighbor distanceTo
+    new_costs =
+        Dict.insert(model.costs, neighbor, distance_to)
 
-    distanceTo =
-        reconstructPath newCameFrom neighbor
+    distance_to =
+        reconstruct_path(new_came_from, neighbor)
         |> List.len
-        |> Num.toFrac
+        |> Num.to_frac
 
-    newModel =
+    new_model =
         { model &
-            costs: newCosts,
-            cameFrom: newCameFrom,
+            costs: new_costs,
+            came_from: new_came_from,
         }
 
-    when Dict.get model.costs neighbor is
-        Err _ ->
-            newModel
+    when Dict.get(model.costs, neighbor) is
+        Err(_) ->
+            new_model
 
-        Ok previousDistance ->
-            if distanceTo < previousDistance then
-                newModel
+        Ok(previous_distance) ->
+            if distance_to < previous_distance then
+                new_model
             else
                 model
 
 astar : (position, position -> F64), (position -> Set position), position, Model position -> Result (List position) {} where position implements Hash & Eq
-astar = \costFn, moveFn, goal, model ->
-    when cheapestOpen (\source -> costFn source goal) model is
-        Err {} -> Err {}
-        Ok current ->
+astar = \cost_fn, move_fn, goal, model ->
+    when cheapest_open(\source -> cost_fn(source, goal), model) is
+        Err({}) -> Err({})
+        Ok(current) ->
             if current == goal then
-                Ok (reconstructPath model.cameFrom goal)
+                Ok(reconstruct_path(model.came_from, goal))
             else
-                modelPopped =
+                model_popped =
                     { model &
-                        openSet: Set.remove model.openSet current,
-                        evaluated: Set.insert model.evaluated current,
+                        open_set: Set.remove(model.open_set, current),
+                        evaluated: Set.insert(model.evaluated, current),
                     }
 
                 neighbors =
-                    moveFn current
+                    move_fn(current)
 
-                newNeighbors =
-                    Set.difference neighbors modelPopped.evaluated
+                new_neighbors =
+                    Set.difference(neighbors, model_popped.evaluated)
 
-                modelWithNeighbors : Model position
-                modelWithNeighbors =
-                    modelPopped
-                    |> &openSet (Set.union modelPopped.openSet newNeighbors)
+                model_with_neighbors : Model _
+                model_with_neighbors =
+                    model_popped
+                    |> &open_set(Set.union(model_popped.open_set, new_neighbors))
 
-                walker : Model position, position -> Model position
-                walker = \amodel, n -> updateCost current n amodel
+                walker : Model _, _ -> Model _
+                walker = \amodel, n -> update_cost(current, n, amodel)
 
-                modelWithCosts =
-                    Set.walk newNeighbors modelWithNeighbors walker
+                model_with_costs =
+                    Set.walk(new_neighbors, model_with_neighbors, walker)
 
-                astar costFn moveFn goal modelWithCosts
+                astar(cost_fn, move_fn, goal, model_with_costs)
 
-# takeStep = \moveFn, _goal, model, current ->
-#     modelPopped =
+# take_step = \move_fn, _goal, model, current ->
+#     model_popped =
 #         { model &
-#             openSet: Set.remove model.openSet current,
+#             open_set: Set.remove model.open_set current,
 #             evaluated: Set.insert model.evaluated current,
 #         }
 #
-#     neighbors = moveFn current
+#     neighbors = move_fn current
 #
-#     newNeighbors = Set.difference neighbors modelPopped.evaluated
+#     new_neighbors = Set.difference neighbors model_popped.evaluated
 #
-#     modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
+#     model_with_neighbors = { model_popped & open_set: Set.union model_popped.open_set new_neighbors }
 #
 #     # a lot goes wrong here
-#     modelWithCosts =
-#         Set.walk newNeighbors modelWithNeighbors (\n, m -> updateCost current n m)
+#     model_with_costs =
+#         Set.walk new_neighbors model_with_neighbors (\n, m -> update_cost current n m)
 #
-#     modelWithCosts
+#     model_with_costs

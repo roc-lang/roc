@@ -30,19 +30,19 @@ use super::wrap_in_decode_custom_decode_with;
 /// ```roc
 /// decoder : Decoder {first: a, second: b} fmt where a implements Decoding, b implements Decoding, fmt implements DecoderFormatting
 /// decoder =
-///     initialState : {f0: Result a [NoField], f1: Result b [NoField]}
-///     initialState = {f0: Err NoField, f1: Err NoField}
+///     initial_state : {f0: Result a [NoField], f1: Result b [NoField]}
+///     initial_state = {f0: Err NoField, f1: Err NoField}
 ///
-///     stepField = \state, field ->
+///     step_field = \state, field ->
 ///         when field is
 ///             "first" ->
 ///                 Keep (Decode.custom \bytes, fmt ->
-///                     when Decode.decodeWith bytes Decode.decoder fmt is
+///                     when Decode.decode_with bytes Decode.decoder fmt is
 ///                         {result, rest} ->
 ///                             {result: Result.map result \val -> {state & f0: Ok val}, rest})
 ///             "second" ->
 ///                 Keep (Decode.custom \bytes, fmt ->
-///                     when Decode.decodeWith bytes Decode.decoder fmt is
+///                     when Decode.decode_with bytes Decode.decoder fmt is
 ///                         {result, rest} ->
 ///                             {result: Result.map result \val -> {state & f1: Ok val}, rest})
 ///             _ -> Skip
@@ -51,7 +51,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///        when
 ///            when rec.f0 is
 ///                Err NoField ->
-///                    when Decode.decodeWith [] Decode.decoder fmt is
+///                    when Decode.decode_with [] Decode.decoder fmt is
 ///                        rec2 -> rec2.result
 ///                Ok a -> Ok a
 ///        is
@@ -59,7 +59,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///                when
 ///                    when rec.f1 is
 ///                        Err NoField ->
-///                            when Decode.decodeWith [] Decode.decoder fmt is
+///                            when Decode.decode_with [] Decode.decoder fmt is
 ///                                rec2 -> rec2.result
 ///                        Ok a -> Ok a
 ///                is
@@ -67,7 +67,7 @@ use super::wrap_in_decode_custom_decode_with;
 ///                    Err _ -> Err TooShort
 ///            Err _ -> Err TooShort
 ///
-///            Decode.custom \bytes, fmt -> Decode.decodeWith bytes (Decode.record initialState stepField finalizer) fmt
+///            Decode.custom \bytes, fmt -> Decode.decode_with bytes (Decode.record initial_state step_field finalizer) fmt
 ///```
 pub(crate) fn decoder(
     env: &mut Env,
@@ -79,7 +79,7 @@ pub(crate) fn decoder(
     // The type of each field in the decoding state, e.g. {first: Result a [NoField], second: Result b [NoField]}
     let mut result_field_vars = Vec::with_capacity(fields.len());
 
-    // initialState = ...
+    // initial_state = ...
     let (initial_state_var, initial_state) =
         initial_state(env, &fields, &mut field_vars, &mut result_field_vars);
 
@@ -92,7 +92,7 @@ pub(crate) fn decoder(
         &result_field_vars,
     );
 
-    // stepField = ...
+    // step_field = ...
     let (step_field, step_var) = step_field(
         env,
         fields,
@@ -120,7 +120,7 @@ pub(crate) fn decoder(
 
     env.unify(decode_record_var, this_decode_record_var);
 
-    // Decode.record initialState stepField finalizer
+    // Decode.record initial_state step_field finalizer
     let call_decode_record = Expr::Call(
         Box::new((
             this_decode_record_var,
@@ -161,13 +161,13 @@ pub(crate) fn decoder(
 }
 
 // Example:
-// stepField = \state, field ->
+// step_field = \state, field ->
 //     when field is
 //         "first" ->
 //             Keep (Decode.custom \bytes, fmt ->
 //                 # Uses a single-branch `when` because `let` is more expensive to monomorphize
 //                 # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-//                 when Decode.decodeWith bytes Decode.decoder fmt is
+//                 when Decode.decode_with bytes Decode.decoder fmt is
 //                     rec ->
 //                         {
 //                             rest: rec.rest,
@@ -178,7 +178,7 @@ pub(crate) fn decoder(
 //
 //         "second" ->
 //             Keep (Decode.custom \bytes, fmt ->
-//                 when Decode.decodeWith bytes Decode.decoder fmt is
+//                 when Decode.decode_with bytes Decode.decoder fmt is
 //                     rec ->
 //                         {
 //                             rest: rec.rest,
@@ -196,7 +196,7 @@ pub(super) fn step_field(
     state_record_var: Variable,
     decode_err_var: Variable,
 ) -> (Expr, Variable) {
-    let state_arg_symbol = env.new_symbol("stateRecord");
+    let state_arg_symbol = env.new_symbol("state_record");
     let field_arg_symbol = env.new_symbol("field");
 
     // +1 because of the default branch.
@@ -228,7 +228,7 @@ pub(super) fn step_field(
         //     Keep (Decode.custom \bytes, fmt ->
         //         # Uses a single-branch `when` because `let` is more expensive to monomorphize
         //         # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-        //         when Decode.decodeWith bytes Decode.decoder fmt is
+        //         when Decode.decode_with bytes Decode.decoder fmt is
         //             rec ->
         //                 {
         //                     rest: rec.rest,
@@ -254,7 +254,7 @@ pub(super) fn step_field(
 
         let keep = {
             // Keep (Decode.custom \bytes, fmt ->
-            //     when Decode.decodeWith bytes Decode.decoder fmt is
+            //     when Decode.decode_with bytes Decode.decoder fmt is
             //         rec ->
             //             {
             //                 rest: rec.rest,
@@ -274,7 +274,7 @@ pub(super) fn step_field(
         let branch = {
             // "first" ->
             //     Keep (Decode.custom \bytes, fmt ->
-            //         when Decode.decodeWith bytes Decode.decoder fmt is
+            //         when Decode.decode_with bytes Decode.decoder fmt is
             //             rec ->
             //                 {
             //                     rest: rec.rest,
@@ -326,7 +326,7 @@ pub(super) fn step_field(
         exhaustive: ExhaustiveMark::known_exhaustive(),
     };
 
-    let step_field_closure = env.new_symbol("stepField");
+    let step_field_closure = env.new_symbol("step_field");
     let function_type = env.subs.fresh_unnamed_flex_var();
     let closure_type = {
         let lambda_set = LambdaSet {
@@ -395,7 +395,7 @@ struct DecodingFieldArgs {
 /// Decode.custom \bytes, fmt ->
 ///    # Uses a single-branch `when` because `let` is more expensive to monomorphize
 ///    # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-///    when Decode.decodeWith bytes Decode.decoder fmt is
+///    when Decode.decode_with bytes Decode.decoder fmt is
 ///        rec ->
 ///            {
 ///                rest: rec.rest,
@@ -444,7 +444,7 @@ fn custom_decoder(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variable, Expr
 
 /// ```roc
 /// \bytes, fmt ->
-///     when Decode.decodeWith bytes Decode.decoder fmt is
+///     when Decode.decode_with bytes Decode.decoder fmt is
 ///         rec ->
 ///             {
 ///                 rest: rec.rest,
@@ -467,7 +467,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
     let custom_callback_ret_var;
 
     // \bytes, fmt ->
-    //     when Decode.decodeWith bytes Decode.decoder fmt is
+    //     when Decode.decode_with bytes Decode.decoder fmt is
     //         rec ->
     //             {
     //                 rest: rec.rest,
@@ -507,7 +507,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
             synth_var(env.subs, Content::Structure(flat_type))
         };
 
-        // Decode.decodeWith bytes Decode.decoder fmt
+        // Decode.decode_with bytes Decode.decoder fmt
         let (condition_expr, rec_var, rec_dot_result) = decode_with(
             env,
             field_var,
@@ -519,7 +519,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
 
         // # Uses a single-branch `when` because `let` is more expensive to monomorphize
         // # due to checks for polymorphic expressions, and `rec` would be polymorphic.
-        // when Decode.decodeWith bytes Decode.decoder fmt is
+        // when Decode.decode_with bytes Decode.decoder fmt is
         //     rec ->
         //         {
         //             rest: rec.rest,
@@ -556,7 +556,7 @@ fn custom_decoder_lambda(env: &mut Env<'_>, args: DecodingFieldArgs) -> (Variabl
                 redundant: RedundantMark::known_non_redundant(),
             };
 
-            // when Decode.decodeWith bytes Decode.decoder fmt is
+            // when Decode.decode_with bytes Decode.decoder fmt is
             // ...
             Expr::When {
                 loc_cond: Box::new(Loc::at_zero(condition_expr)),
@@ -806,7 +806,7 @@ fn state_record_update(
 /// when
 ///     when rec.f0 is
 ///         Err NoField ->
-///             when Decode.decodeWith [] Decode.decoder fmt is
+///             when Decode.decode_with [] Decode.decoder fmt is
 ///                 rec2 -> rec2.result
 ///         Ok a -> Ok a
 /// is
@@ -814,7 +814,7 @@ fn state_record_update(
 ///         when
 ///             when rec.f1 is
 ///                 Err NoField ->
-///                     when Decode.decodeWith [] Decode.decoder fmt is
+///                     when Decode.decode_with [] Decode.decoder fmt is
 ///                         rec2 -> rec2.result
 ///                 Ok a -> Ok a
 ///         is
@@ -828,7 +828,7 @@ pub(super) fn finalizer(
     field_vars: &[Variable],
     result_field_vars: &[Variable],
 ) -> (Expr, Variable, Variable) {
-    let state_arg_symbol = env.new_symbol("stateRecord");
+    let state_arg_symbol = env.new_symbol("state_record");
 
     let mut fields_map = SendMap::default();
     let mut pattern_symbols = Vec::with_capacity(fields.len());
@@ -909,7 +909,7 @@ pub(super) fn finalizer(
         // [Ok field_var, Err DecodeError]
         //   when rec.f0 is
         //       Err _ ->
-        //           when Decode.decodeWith [] Decode.decoder fmt is
+        //           when Decode.decode_with [] Decode.decoder fmt is
         //               rec2 -> rec2.result
         //       Ok a -> Ok a
         let (attempt_empty_decode_expr, attempt_empty_decode_var) = attempt_empty_decode_if_missing(
@@ -968,11 +968,11 @@ pub(super) fn finalizer(
         };
 
         // when
-        //    when stateRecord.f0 is
+        //    when state_record.f0 is
         //        Ok f0 -> Ok f0
         //        _ ->
-        //            when Decode.decodeWith [] Decode.decoder fmt is
-        //                decRec -> decRec.result
+        //            when Decode.decode_with [] Decode.decoder fmt is
+        //                dec_rec -> dec_rec.result
         // is
         //     _-> TooShort
         //     Ok x -> expr
@@ -1037,8 +1037,8 @@ pub(super) fn finalizer(
 /// ```roc
 /// when rec.f0 is
 ///     Err _ ->
-///         when Decode.decodeWith [] Decode.decoder fmt is
-///             decRec-> decRec.result
+///         when Decode.decode_with [] Decode.decoder fmt is
+///             dec_rec-> dec_rec.result
 ///     Ok a -> Ok a
 /// ```
 /// Tries to decode the field with a zero byte input if it missing,
@@ -1070,7 +1070,7 @@ fn attempt_empty_decode_if_missing(
         decode_err_var,
     );
     let decode_when = {
-        let decoder_rec_symb = env.new_symbol("decRec");
+        let decoder_rec_symb = env.new_symbol("dec_rec");
 
         let branch = WhenBranch {
             patterns: vec![WhenBranchPattern {
@@ -1088,7 +1088,7 @@ fn attempt_empty_decode_if_missing(
             redundant: RedundantMark::known_non_redundant(),
         };
 
-        // when Decode.decodeWith bytes Decode.decoder fmt is
+        // when Decode.decode_with bytes Decode.decoder fmt is
         Expr::When {
             loc_cond: Box::new(Loc::at_zero(decode_expr)),
             cond_var: rec_result,
@@ -1112,7 +1112,7 @@ fn attempt_empty_decode_if_missing(
     // Example: `Ok x -> Ok x`
     let ok_branch = ok_to_ok_branch(result_field_var, rec_dot_result, field_var, symbol, env);
 
-    // Example: `Err NoField -> when decodeWith [] decoder #Derived.fmt is`
+    // Example: `Err NoField -> when decode_with [] decoder #Derived.fmt is`
     let no_field_label = "NoField";
     let union_tags = UnionTags::tag_without_arguments(env.subs, no_field_label.into());
     let no_field_var = synth_var(
@@ -1159,8 +1159,8 @@ fn attempt_empty_decode_if_missing(
 }
 
 // Example:
-// initialState : {first: Result a [NoField], second: Result b [NoField]}
-// initialState = {first: Err NoField, second: Err NoField}
+// initial_state : {first: Result a [NoField], second: Result b [NoField]}
+// initial_state = {first: Err NoField, second: Err NoField}
 fn initial_state(
     env: &mut Env<'_>,
     field_names: &[Lowercase],
@@ -1237,16 +1237,16 @@ fn initial_state(
 }
 
 struct DecodeWithVars {
-    /// Type of the record returned by `Decode.decodeWith`
+    /// Type of the record returned by `Decode.decode_with`
     /// `rec : { rest: List U8, result: (typeof rec.result) }`
     rec_var: Variable,
-    /// type of the result field of the record returned by `Decode.decodeWith`
+    /// type of the result field of the record returned by `Decode.decode_with`
     rec_dot_result: Variable,
     /// type of `Decode.decoder`
     decoder_var: Variable,
-    /// lambda set for `Decode.decodeWith` call
+    /// lambda set for `Decode.decode_with` call
     lambda_set_var: Variable,
-    /// specialised type of this specific call to `Decode.decodeWith`
+    /// specialised type of this specific call to `Decode.decode_with`
     this_decode_with_var: Variable,
 }
 
@@ -1314,9 +1314,9 @@ fn make_decode_with_vars(
     }
 }
 
-/// `Decode.decodeWith bytes Decode.decoder fmt`
+/// `Decode.decode_with bytes Decode.decoder fmt`
 ///
-/// Generates a call to decodeWith, returns that expression,
+/// Generates a call to decode_with, returns that expression,
 /// the variable of the return value `{ rest: List U8, result: (typeof rec.result) }`,
 /// and the variable of the result field of the return value `[Ok field_var, Err DecodeError]`.
 pub(super) fn decode_with(

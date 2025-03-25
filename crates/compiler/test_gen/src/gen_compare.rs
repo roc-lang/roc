@@ -121,7 +121,7 @@ fn bool_logic() {
                 bool2 = Bool.false
                 bool3 = !bool1
 
-                (bool1 && bool2) || bool2 && bool3
+                (bool1 and bool2) or bool2 and bool3
                 "#
         ),
         false,
@@ -132,19 +132,19 @@ fn bool_logic() {
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn and_bool() {
-    assert_evals_to!("Bool.true && Bool.true", true, bool);
-    assert_evals_to!("Bool.true && Bool.false", false, bool);
-    assert_evals_to!("Bool.false && Bool.true", false, bool);
-    assert_evals_to!("Bool.false && Bool.false", false, bool);
+    assert_evals_to!("Bool.true and Bool.true", true, bool);
+    assert_evals_to!("Bool.true and Bool.false", false, bool);
+    assert_evals_to!("Bool.false and Bool.true", false, bool);
+    assert_evals_to!("Bool.false and Bool.false", false, bool);
 }
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-wasm", feature = "gen-dev"))]
 fn or_bool() {
-    assert_evals_to!("Bool.true || Bool.true", true, bool);
-    assert_evals_to!("Bool.true || Bool.false", true, bool);
-    assert_evals_to!("Bool.false || Bool.true", true, bool);
-    assert_evals_to!("Bool.false || Bool.false", false, bool);
+    assert_evals_to!("Bool.true or Bool.true", true, bool);
+    assert_evals_to!("Bool.true or Bool.false", true, bool);
+    assert_evals_to!("Bool.false or Bool.true", true, bool);
+    assert_evals_to!("Bool.false or Bool.false", false, bool);
 }
 
 #[test]
@@ -291,10 +291,10 @@ fn eq_expr() {
                 Expr : [Add Expr Expr, Mul Expr Expr, Val I64, Var I64]
 
                 x : Expr
-                x = Val 0
+                x = Val(0)
 
                 y : Expr
-                y = Val 0
+                y = Val(0)
 
                 x == y
                 "#
@@ -331,10 +331,10 @@ fn eq_linked_list() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 Nil
+                x = Cons(1, Nil)
 
                 y : LinkedList I64
-                y = Cons 1 Nil
+                y = Cons(1, Nil)
 
                 x == y
                 "#
@@ -349,10 +349,10 @@ fn eq_linked_list() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 (Cons 2 Nil)
+                x = Cons(1, Cons(2, Nil))
 
                 y : LinkedList I64
-                y = Cons 1 (Cons 2 Nil)
+                y = Cons(1, Cons(2, Nil))
 
                 x == y
                 "#
@@ -371,10 +371,10 @@ fn eq_linked_list_false() {
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
                 x : LinkedList I64
-                x = Cons 1 Nil
+                x = Cons(1, Nil)
 
                 y : LinkedList I64
-                y = Cons 1 (Cons 2 Nil)
+                y = Cons(1, Cons(2, Nil))
 
                 y == x
                 "#
@@ -394,20 +394,20 @@ fn eq_linked_list_long() {
 
                 LinkedList a : [Nil, Cons a (LinkedList a)]
 
-                prependOnes = \n, tail ->
+                prepend_ones = \n, tail ->
                     if n == 0 then
                         tail
                     else
-                        prependOnes (n-1) (Cons 1 tail)
+                        prepend_ones (n-1) (Cons 1 tail)
 
                 main =
                     n = 100_000 # be careful, can make a noticeble difference to test_gen total time!
 
                     x : LinkedList I64
-                    x = prependOnes n (Cons 999 Nil)
+                    x = prepend_ones n (Cons 999 Nil)
 
                     y : LinkedList I64
-                    y = prependOnes n (Cons 123 Nil)
+                    y = prepend_ones n (Cons 123 Nil)
 
                     y == x
                 "#
@@ -544,7 +544,7 @@ fn eq_different_rosetrees() {
 
                 cd = c2 == d2
 
-                ab && cd
+                ab and cd
         "#
         ),
         true,

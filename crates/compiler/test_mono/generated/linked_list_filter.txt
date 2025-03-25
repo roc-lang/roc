@@ -1,56 +1,42 @@
-procedure Num.31 (Num.219):
-    let Num.282 : I64 = 2i64;
-    let Num.281 : Int1 = CallByName Num.86 Num.219 Num.282;
-    ret Num.281;
-
-procedure Num.86 (#Attr.2, #Attr.3):
-    let Num.283 : Int1 = lowlevel NumIsMultipleOf #Attr.2 #Attr.3;
-    ret Num.283;
-
-procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
-    let #Derived_gen.3 : [<rnu><null>, C I64 *self] = NullPointer;
-    let #Derived_gen.2 : Ptr([<rnu><null>, C I64 *self]) = Alloca #Derived_gen.3;
-    joinpoint #Derived_gen.4 Test.4 Test.5 #Derived_gen.5 #Derived_gen.6:
-        let Test.22 : U8 = 1i64;
-        let Test.23 : U8 = GetTagId Test.4;
-        let Test.24 : Int1 = lowlevel Eq Test.22 Test.23;
-        if Test.24 then
-            let Test.17 : [<rnu><null>, C I64 *self] = TagId(1) ;
-            let #Derived_gen.8 : {} = lowlevel PtrStore #Derived_gen.5 Test.17;
-            let #Derived_gen.7 : [<rnu><null>, C I64 *self] = lowlevel PtrLoad #Derived_gen.6;
-            ret #Derived_gen.7;
+procedure Test.2 (Test.4, Test.5):
+    let Test.23 : U8 = 1i64;
+    let Test.24 : U8 = GetTagId Test.4;
+    let Test.25 : Int1 = lowlevel Eq Test.23 Test.24;
+    if Test.25 then
+        let Test.17 : [<rnu><null>, C I64 *self] = TagId(1) ;
+        ret Test.17;
+    else
+        let Test.7 : I64 = UnionAtIndex (Id 0) (Index 0) Test.4;
+        let Test.8 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.4;
+        joinpoint Bool.25:
+            dec Test.8;
+            let Test.22 : Str = "a Lambda Set is empty. Most likely there is a type error in your program.";
+            Crash Test.22
+        in
+        let Bool.26 : Int1 = lowlevel RefCountIsUnique Test.4;
+        if Bool.26 then
+            free Test.4;
+            jump Bool.25;
         else
-            let Test.7 : I64 = UnionAtIndex (Id 0) (Index 0) Test.4;
-            let Test.8 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.4;
-            joinpoint #Derived_gen.12 #Derived_gen.14:
-                let Test.19 : Int1 = CallByName Num.31 Test.7;
-                if Test.19 then
-                    let #Derived_gen.9 : [<rnu><null>, C I64 *self] = NullPointer;
-                    let Test.20 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.7 #Derived_gen.9;
-                    let #Derived_gen.10 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.20;
-                    let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.20;
-                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.10 #Derived_gen.6;
-                else
-                    decref #Derived_gen.14;
-                    jump #Derived_gen.4 Test.8 Test.5 #Derived_gen.5 #Derived_gen.6;
-            in
-            let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique Test.4;
-            if #Derived_gen.13 then
-                jump #Derived_gen.12 Test.4;
-            else
-                inc Test.8;
-                decref Test.4;
-                let #Derived_gen.15 : [<rnu><null>, C I64 *self] = NullPointer;
-                jump #Derived_gen.12 #Derived_gen.15;
-    in
-    jump #Derived_gen.4 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.2;
+            inc Test.8;
+            decref Test.4;
+            jump Bool.25;
 
 procedure Test.0 ():
-    let Test.25 : I64 = 1i64;
-    let Test.27 : I64 = 2i64;
-    let Test.28 : [<rnu><null>, C I64 *self] = TagId(1) ;
-    let Test.26 : [<rnu><null>, C I64 *self] = TagId(0) Test.27 Test.28;
-    let Test.14 : [<rnu><null>, C I64 *self] = TagId(0) Test.25 Test.26;
-    let Test.15 : {} = Struct {};
-    let Test.13 : [<rnu><null>, C I64 *self] = CallByName Test.2 Test.14 Test.15;
-    ret Test.13;
+    let Test.27 : I64 = 1i64;
+    let Test.29 : I64 = 2i64;
+    let Test.30 : [<rnu><null>, C I64 *self] = TagId(1) ;
+    let Test.28 : [<rnu><null>, C I64 *self] = TagId(0) Test.29 Test.30;
+    let Test.14 : [<rnu><null>, C I64 *self] = TagId(0) Test.27 Test.28;
+    joinpoint Bool.23:
+        let Test.26 : Str = "ValueNotExposed { module_name: ModuleName(IdentStr { string: \"Num\" }), ident: Ident(IdentStr { string: \"isEven\" }), region: @416-426, exposed_values: ['max_f32', 'min_f32', 'abs', 'neg', 'add', 'sub', 'mul', 'is_lt', 'is_lte', 'is_gt', 'is_gte', 'to_frac', 'sin', 'cos', 'tan', 'is_zero', 'is_even', 'is_odd', 'is_positive', 'is_negative', 'rem', 'rem_checked', 'div', 'div_checked', 'div_trunc', 'div_trunc_checked', 'sqrt', 'sqrt_checked', 'log', 'log_checked', 'round', 'compare', 'pow', 'ceiling', 'pow_int', 'floor', 'add_wrap', 'add_checked', 'add_saturated', 'atan', 'acos', 'asin', 'bitwise_and', 'bitwise_xor', 'bitwise_or', 'shift_left_by', 'shift_right_by', 'shift_right_zf_by', 'sub_wrap', 'sub_checked', 'sub_saturated', 'mul_wrap', 'mul_checked', 'mul_saturated', 'e', 'pi', 'tau', 'is_multiple_of', 'count_one_bits', 'abs_diff', 'is_nan', 'is_infinite', 'is_finite', 'count_leading_zero_bits', 'count_trailing_zero_bits', 'to_str', 'min_i8', 'max_i8', 'min_u8', 'max_u8', 'min_i16', 'max_i16', 'min_u16', 'max_u16', 'min_i32', 'max_i32', 'min_u32', 'max_u32', 'min_i64', 'max_i64', 'min_u64', 'max_u64', 'min_i128', 'max_i128', 'min_u128', 'max_u128', 'to_i8', 'to_i8_checked', 'to_i16', 'to_i16_checked', 'to_i32', 'to_i32_checked', 'to_i64', 'to_i64_checked', 'to_i128', 'to_i128_checked', 'to_u8', 'to_u8_checked', 'to_u16', 'to_u16_checked', 'to_u32', 'to_u32_checked', 'to_u64', 'to_u64_checked', 'to_u128', 'to_u128_checked', 'div_ceil', 'div_ceil_checked', 'to_f32', 'to_f32_checked', 'to_f64', 'to_f64_checked', 'max_f64', 'min_f64', 'add_checked_lowlevel', 'sub_checked_lowlevel', 'mul_checked_lowlevel', 'min', 'max', 'bitwise_not', 'int_cast', 'is_approx_eq', 'bytes_to_u16_owlevel', 'bytes_to_u32_lowlevel', 'bytes_to_u64_lowlevel', 'bytes_to_u128_lowlevel', 'div_trunc_unchecked', 'rem_unchecked', 'without_decimal_point', 'with_decimal_point', 'f32_to_parts', 'f64_to_parts', 'f32_from_parts', 'f64_from_parts', 'nan_f32', 'nan_f64', 'infinity_f32', 'infinity_f64', 'from_bool'] }";
+        Crash Test.26
+    in
+    let Bool.24 : Int1 = lowlevel RefCountIsUnique Test.14;
+    if Bool.24 then
+        dec Test.28;
+        free Test.14;
+        jump Bool.23;
+    else
+        decref Test.14;
+        jump Bool.23;

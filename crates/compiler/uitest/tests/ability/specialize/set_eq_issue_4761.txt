@@ -2,11 +2,11 @@ app "test" provides [main] to "./platform"
 
 main =
     s1 : Set U8
-    s1 = Set.empty {}
+    s1 = Set.empty({})
 
     s2 : Set Str
-    s2 = Set.empty {}
+    s2 = Set.empty({})
 
-    Bool.isEq s1 s1 && Bool.isEq s2 s2
-#                      ^^^^^^^^^ Set#Bool.isEq(31): Set Str, Set Str -[[Set.isEq(31)]]-> Bool
-#   ^^^^^^^^^ Set#Bool.isEq(31): Set U8, Set U8 -[[Set.isEq(31)]]-> Bool
+    Bool.is_eq(s1, s1) and Bool.is_eq(s2, s2)
+#                          ^^^^^^^^^^ Set#Bool.is_eq(31): Set Str, Set Str -[[Set.is_eq(31)]]-> Bool
+#   ^^^^^^^^^^ Set#Bool.is_eq(31): Set U8, Set U8 -[[Set.is_eq(31)]]-> Bool

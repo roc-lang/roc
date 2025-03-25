@@ -1,0 +1,13 @@
+~~~META
+description=
+~~~SOURCE
+module
+~~~PROBLEMS
+PARSER: header_expected_open_square
+~~~TOKENS
+KwModule(1:1-1:7),EndOfFile(1:7-1:7),
+~~~PARSE
+(file (1:1-1:7) (malformed_header (1:7-1:7) "header_expected_open_square"))
+~~~FORMATTED
+
+~~~END

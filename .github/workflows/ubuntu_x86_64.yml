@@ -3,6 +3,9 @@ on:
 
 name: CI
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
 
@@ -14,12 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for duplicate AUTHORS
-        run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
+      - name: Check for duplicate authors
+        run: diff <(sort authors) <(sort authors | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
 
-      - name: Update PATH to use zig 11
+      - name: Update PATH to use zig 13
         run: |
-          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+          echo "PATH=/home/big-ci-user/Downloads/zig-linux-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
 
       - run: zig version
 
@@ -62,3 +65,8 @@ jobs:
 
       - name: test website build script
         run: bash www/build.sh
+
+      #- name: run fuzz tests - ok to merge if this one fails # for now!
+      #  run: |
+      #    cargo +nightly-2024-02-03 install --locked cargo-fuzz
+      #    cd crates/compiler/test_syntax/fuzz && cargo +nightly-2024-02-03 fuzz run -j4 fuzz_expr --sanitizer=none -- -dict=dict.txt -max_total_time=60

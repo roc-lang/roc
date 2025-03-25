@@ -1,0 +1,1 @@
+hosted Foo exposes [] imports []

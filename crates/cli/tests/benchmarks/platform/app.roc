@@ -1,3 +1,4 @@
-app [main] { pf: platform "main.roc" }
+app [main!] { pf: platform "main.roc" }
 
-main = Task.ok {}
+main! : {} => {}
+main! = \{} -> {}

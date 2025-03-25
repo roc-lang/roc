@@ -45,12 +45,12 @@ Defs {
             header: TypeHeader {
                 name: @0-3 "App",
                 vars: [
-                    @4-9 Identifier {
-                        ident: "state",
-                    },
-                    @10-18 Identifier {
-                        ident: "initData",
-                    },
+                    @4-9 Identifier(
+                        "state",
+                    ),
+                    @10-18 Identifier(
+                        "initData",
+                    ),
                 ],
             },
             ann: @21-60 Apply(
@@ -70,9 +70,9 @@ Defs {
             header: TypeHeader {
                 name: @61-65 "Html",
                 vars: [
-                    @66-71 Identifier {
-                        ident: "state",
-                    },
+                    @66-71 Identifier(
+                        "state",
+                    ),
                 ],
             },
             ann: @74-105 Apply(
@@ -89,9 +89,9 @@ Defs {
             header: TypeHeader {
                 name: @106-115 "Attribute",
                 vars: [
-                    @116-121 Identifier {
-                        ident: "state",
-                    },
+                    @116-121 Identifier(
+                        "state",
+                    ),
                 ],
             },
             ann: @124-160 Apply(

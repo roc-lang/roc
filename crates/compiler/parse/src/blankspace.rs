@@ -1,5 +1,6 @@
 use crate::ast::CommentOrNewline;
 use crate::ast::Spaceable;
+use crate::ast::SpacesBefore;
 use crate::parser::succeed;
 use crate::parser::Progress;
 use crate::parser::SpaceProblem;
@@ -79,6 +80,24 @@ where
     )
 }
 
+pub fn space0_before<'a, P, S, E>(
+    parser: P,
+    indent_before_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(space0_e(indent_before_problem), parser),
+        |(space_list, loc_expr): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item: loc_expr,
+        },
+    )
+}
+
 pub fn spaces_before_optional_after<'a, P, S, E>(parser: P) -> impl Parser<'a, Loc<S>, E>
 where
     S: 'a + Spaceable<'a>,
@@ -97,7 +116,7 @@ where
     )
 }
 
-fn spaces_around_help<'a, S>(
+pub fn spaces_around_help<'a, S>(
     arena: &'a Bump,
     tuples: (
         &'a [CommentOrNewline<'a>],
@@ -171,6 +190,24 @@ where
                     .alloc(loc_expr.value)
                     .with_spaces_before(space_list, loc_expr.region)
             }
+        },
+    )
+}
+
+pub fn plain_spaces_before<'a, P, S, E>(
+    parser: P,
+    indent_problem: fn(Position) -> E,
+) -> impl Parser<'a, SpacesBefore<'a, S>, E>
+where
+    S: 'a,
+    P: 'a + Parser<'a, S, E>,
+    E: 'a + SpaceProblem,
+{
+    parser::map(
+        and(backtrackable(space0_e(indent_problem)), parser),
+        |(space_list, item): (&'a [CommentOrNewline<'a>], S)| SpacesBefore {
+            before: space_list,
+            item,
         },
     )
 }

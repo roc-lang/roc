@@ -1,33 +1,37 @@
 on:
-    workflow_call:
+  workflow_call:
 
 name: Macos x86-64 rust tests
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
-    RUST_BACKTRACE: 1
+  RUST_BACKTRACE: 1
 
 jobs:
-    test-rust-macos-x86-64:
-        runs-on: [self-hosted, macOS, X64]
-        timeout-minutes: 90
-        env:
-            RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
-        steps:
-            - uses: actions/checkout@v4
+  test-rust-macos-x86-64:
+    runs-on: [self-hosted, macOS, X64]
+    timeout-minutes: 90
+    env:
+      RUSTC_WRAPPER: /Users/username1/.cargo/bin/sccache
+    steps:
+      - uses: actions/checkout@v4
 
-            - name: set LLVM_SYS_160_PREFIX
-              run: echo "LLVM_SYS_160_PREFIX=$(brew --prefix llvm@16)" >> $GITHUB_ENV
+      - name: set LLVM_SYS_180_PREFIX
+        run: echo "LLVM_SYS_180_PREFIX=$(brew --prefix llvm@18)" >> $GITHUB_ENV
 
-            - name: Update PATH to use zig 11
-              run: |
-                  echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.11.0:$PATH" >> $GITHUB_ENV
+      - name: check for zig 13
+        run: ls /Users/username1/Downloads/zig-macos-x86_64-0.13.0
 
-            - run: zig version
+      - name: Update PATH to use zig 13
+        run: |
+          echo "PATH=/Users/username1/Downloads/zig-macos-x86_64-0.13.0:$PATH" >> $GITHUB_ENV
 
-            - name: test_gen llvm tests
-              run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"
+      - run: zig version
 
-            - name: regular rust tests
-              run: cargo test --locked --release -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip platform_switching_swift --skip swift_ui --skip gen_tags::phantom_polymorphic_record && sccache --show-stats
-              # swift tests are skipped because of "Could not find or use auto-linked library 'swiftCompatibilityConcurrency'" on macos x86_64 CI machine
-              # this issue may be caused by using older versions of XCode
+      - name: test_gen llvm tests
+        run: cargo nextest-gen-llvm --release --no-fail-fast --locked -E "package(test_gen) - test(gen_str::str_append_scalar)"
+
+      - name: regular rust tests
+        run: cargo test --locked --release -- --skip opaque_wrap_function --skip gen_list::bool_list_literal --skip gen_tags::phantom_polymorphic_record && sccache --show-stats

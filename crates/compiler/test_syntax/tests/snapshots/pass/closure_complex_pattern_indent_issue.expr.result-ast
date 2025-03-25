@@ -1,0 +1,57 @@
+@0-18 SpaceAfter(
+    Closure(
+        [
+            @1-13 Apply(
+                @1-2 Tag(
+                    "I",
+                ),
+                [
+                    @2-10 RecordDestructure(
+                        [
+                            @3-9 OptionalField(
+                                "p",
+                                @5-9 Apply(
+                                    @5-6 Tag(
+                                        "Y",
+                                    ),
+                                    [
+                                        @8-9 SpaceBefore(
+                                            Tag(
+                                                "Y",
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                    ),
+                    @10-13 List(
+                        Collection {
+                            items: [],
+                            final_comments: [
+                                Newline,
+                            ],
+                        },
+                    ),
+                ],
+            ),
+        ],
+        @17-18 SpaceBefore(
+            Tag(
+                "K",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        LineComment(
+            "(",
+        ),
+    ],
+)

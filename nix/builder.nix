@@ -1,6 +1,6 @@
 { pkgs, lib, rustPlatform, compile-deps, subPackage ? null }:
 let
-  inherit (compile-deps) zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath;
+  inherit (compile-deps) zigPkg llvmPkgs glibcPath libGccSPath;
 
   subPackagePath = if subPackage != null then "crates/${subPackage}" else null;
   mainBin = if subPackage == "language_server" then "roc_language_server" else "roc";
@@ -18,15 +18,13 @@ let
       cargoLock = {
         lockFile = ../Cargo.lock;
         outputHashes = {
-          "criterion-0.3.5" = "sha256-+FibPQGiR45g28xCHcM0pMN+C+Q8gO8206Wb5fiTy+k=";
-          "inkwell-0.2.0" = "sha256-VhTapYGonoSQ4hnDoLl4AAgj0BppAhPNA+UPuAJSuAU=";
-          "plotters-0.3.1" = "sha256-noy/RSjoEPZZbOJTZw1yxGcX5S+2q/7mxnUrzDyxOFw=";
+          "inkwell-0.4.0" = "sha256-J2mdwf167GhEadEL2XJ39FXeY8roV9aYdhOBfIwbPbE=";
           "rustyline-9.1.1" = "sha256-aqQqz6nSp+Qn44gm3jXmmQUO6/fYTx7iLph2tbA24Bs=";
         };
       };
 
       shellHook = ''
-        export LLVM_SYS_${llvmMajorMinorStr}_PREFIX="${llvmPkgs.llvm.dev}"
+        export LLVM_SYS_180_PREFIX="${llvmPkgs.dev}"
       '';
 
       # required for zig
@@ -46,9 +44,8 @@ let
         git
         pkg-config
         python3
-        llvmPkgs.clang
-        llvmPkgs.llvm.dev
-        llvmPkgs.bintools-unwrapped # contains lld
+        llvmPkgs.dev
+        llvmPkgs.lib
         zigPkg
       ]);
 
@@ -69,6 +66,9 @@ let
             Foundation
             Security
           ]));
+
+    LLVM_SYS_180_PREFIX = lib.optionalString (llvmPkgs.dev != null) "${llvmPkgs.dev}";
+
 
       # cp: to copy str.zig,list.zig...
       # wrapProgram pkgs.stdenv.cc: to make ld available for compiler/build/src/link.rs

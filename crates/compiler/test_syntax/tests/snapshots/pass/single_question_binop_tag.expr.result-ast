@@ -1,0 +1,27 @@
+@0-31 SpaceAfter(
+    BinOps(
+        [
+            (
+                @0-15 PncApply(
+                    @0-9 Var {
+                        module_name: "",
+                        ident: "fallible!",
+                    },
+                    [
+                        @10-14 Var {
+                            module_name: "",
+                            ident: "args",
+                        },
+                    ],
+                ),
+                @18-19 SingleQuestion,
+            ),
+        ],
+        @20-31 Tag(
+            "WrapOverErr",
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

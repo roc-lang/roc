@@ -669,7 +669,7 @@ impl From<&Types> for roc_type::Types {
             entrypoints,
             sizes: types.sizes.as_slice().into(),
             types: types.types.iter().map(roc_type::RocType::from).collect(),
-            typesByName: types_by_name,
+            types_by_name,
             target: types.target.into(),
         }
     }
@@ -708,11 +708,11 @@ impl From<&RocType> for roc_type::RocType {
                 is_toplevel,
             }) => roc_type::RocType::Function(roc_type::RocFn {
                 args: args.iter().map(|arg| arg.0 as _).collect(),
-                functionName: function_name.as_str().into(),
-                externName: extern_name.as_str().into(),
+                function_name: function_name.as_str().into(),
+                extern_name: extern_name.as_str().into(),
                 ret: ret.0 as _,
-                lambdaSet: lambda_set.0 as _,
-                isToplevel: *is_toplevel,
+                lambda_set: lambda_set.0 as _,
+                is_toplevel: *is_toplevel,
             }),
             RocType::Unit => roc_type::RocType::Unit,
             RocType::Unsized => roc_type::RocType::Unsized,
@@ -764,8 +764,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::Recursive {
                 name,
@@ -781,8 +781,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::NonNullableUnwrapped {
                 name,
@@ -790,7 +790,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 payload,
             } => roc_type::RocTagUnion::NonNullableUnwrapped(roc_type::R6 {
                 name: name.as_str().into(),
-                tagName: tag_name.as_str().into(),
+                tag_name: tag_name.as_str().into(),
                 payload: payload.0 as _,
             }),
             RocTagUnion::SingleTagStruct {
@@ -799,7 +799,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 payload,
             } => roc_type::RocTagUnion::SingleTagStruct(roc_type::R14 {
                 name: name.as_str().into(),
-                tagName: tag_name.as_str().into(),
+                tag_name: tag_name.as_str().into(),
                 payload: payload.into(),
             }),
             RocTagUnion::NullableWrapped {
@@ -810,7 +810,7 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 discriminant_offset,
             } => roc_type::RocTagUnion::NullableWrapped(roc_type::R10 {
                 name: name.as_str().into(),
-                indexOfNullTag: *index_of_null_tag,
+                index_of_null_tag: *index_of_null_tag,
                 tags: tags
                     .iter()
                     .map(|(name, payload)| roc_type::R8 {
@@ -818,8 +818,8 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                         payload: payload.into(),
                     })
                     .collect(),
-                discriminantSize: *discriminant_size,
-                discriminantOffset: *discriminant_offset,
+                discriminant_size: *discriminant_size,
+                discriminant_offset: *discriminant_offset,
             }),
             RocTagUnion::NullableUnwrapped {
                 name,
@@ -829,10 +829,10 @@ impl From<&RocTagUnion> for roc_type::RocTagUnion {
                 null_represents_first_tag,
             } => roc_type::RocTagUnion::NullableUnwrapped(roc_type::R9 {
                 name: name.as_str().into(),
-                nonNullPayload: non_null_payload.0 as _,
-                nonNullTag: non_null_tag.as_str().into(),
-                nullTag: null_tag.as_str().into(),
-                whichTagIsNull: if *null_represents_first_tag {
+                non_null_payload: non_null_payload.0 as _,
+                non_null_tag: non_null_tag.as_str().into(),
+                null_tag: null_tag.as_str().into(),
+                which_tag_is_null: if *null_represents_first_tag {
                     roc_type::U2::FirstTagIsNull
                 } else {
                     roc_type::U2::SecondTagIsNull
@@ -909,7 +909,7 @@ impl From<Target> for roc_type::Target {
     fn from(target: Target) -> Self {
         roc_type::Target {
             architecture: target.architecture().into(),
-            operatingSystem: target.operating_system().into(),
+            operating_system: target.operating_system().into(),
         }
     }
 }
@@ -1269,7 +1269,7 @@ fn add_function_type<'a>(
     let name = format!("RocFunction_{closure_var:?}");
 
     let extern_name = match env.lambda_set_ids.get(&closure_var) {
-        Some(id) => format!("roc__mainForHost_{}_caller", id.0),
+        Some(id) => format!("roc__main_for_host_{}_caller", id.0),
         None => {
             debug_assert!(is_toplevel);
             String::from("this_extern_should_not_be_used_this_is_a_bug")
@@ -1535,30 +1535,6 @@ fn add_type_help<'a>(
                         );
 
                         types.depends(type_id, key_id);
-
-                        type_id
-                    }
-                    LayoutRepr::LambdaSet(_lambda_set) if *name == Symbol::TASK_TASK => {
-                        let type_vars = env.subs.get_subs_slice(alias_vars.type_variables());
-                        debug_assert_eq!(type_vars.len(), 2);
-
-                        let ok_var = type_vars[0];
-                        let ok_layout = env.layout_cache.from_var(env.arena, ok_var, subs).unwrap();
-                        let ok_id = add_type_help(env, ok_layout, ok_var, None, types);
-
-                        let err_var = type_vars[1];
-                        let err_layout =
-                            env.layout_cache.from_var(env.arena, err_var, subs).unwrap();
-                        let err_id = add_type_help(env, err_layout, err_var, None, types);
-
-                        let type_id = types.add_anonymous(
-                            &env.layout_cache.interner,
-                            RocType::Unsized,
-                            layout,
-                        );
-
-                        types.depends(type_id, ok_id);
-                        types.depends(type_id, err_id);
 
                         type_id
                     }

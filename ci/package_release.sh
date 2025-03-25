@@ -7,14 +7,22 @@ set -euxo pipefail
 strip ./target/release-with-lto/roc
 strip ./target/release-with-lto/roc_language_server
 
-mkdir -p $1 $1/examples $1/crates/compiler/builtins/bitcode
+mkdir -p $1 $1/examples
 
 mv target/release-with-lto/{roc,roc_language_server,lib} $1
-mv LICENSE LEGAL_DETAILS $1
+mv LICENSE legal_details $1
 
-mv examples/{platform-switching,cli} $1/examples
+mv crates/cli/tests/platform-switching $1/examples
+mv examples/README.md $1/examples
 
-mv crates/roc_std $1/crates
-mv crates/compiler/builtins/bitcode/src $1/crates/compiler/builtins/bitcode
+# temporary github.com/roc-lang/roc/pull/7231
+rm $1/examples/platform-switching/roc_loves_rust.roc
+rm -rf $1/examples/platform-switching/rust-platform
+
+# copy zig builtins
+if [ ! -d "$1/examples/platform-switching/zig-platform/glue" ]; then
+    mkdir $1/examples/platform-switching/zig-platform/glue
+    mv crates/compiler/builtins/bitcode/src/* $1/examples/platform-switching/zig-platform/glue
+fi
  
 tar -czvf "$1.tar.gz" $1

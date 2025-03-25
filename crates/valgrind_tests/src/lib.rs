@@ -24,7 +24,7 @@ fn build_host() {
     }
 
     let stub_dll_symbols = roc_linker::ExposedSymbols {
-        top_level_values: vec![String::from("mainForHost")],
+        top_level_values: vec![String::from("main_for_host")],
         exported_closure_types: vec![],
     }
     .stub_dll_symbols();
@@ -61,6 +61,8 @@ fn build_host() {
 }
 
 fn valgrind_test(source: &str) {
+    copy_zig_glue::initialize_zig_test_platforms();
+
     #[cfg(target_os = "linux")]
     {
         valgrind_test_linux(source)
@@ -164,7 +166,7 @@ fn valgrind_test_linux(source: &str) {
             run_with_valgrind(&binary_path);
         }
         Err(roc_build::program::BuildFileError::LoadingProblem(
-            roc_load::LoadingProblem::FormattedReport(report),
+            roc_load::LoadingProblem::FormattedReport(report, _),
         )) => {
             eprintln!("{report}");
             panic!("");
@@ -202,7 +204,7 @@ fn run_with_valgrind(binary_path: &std::path::Path) {
 
 #[test]
 fn list_concat_consumes_first_argument() {
-    valgrind_test("List.concat (List.withCapacity 1024) [1,2,3] |> List.len |> Num.toStr");
+    valgrind_test("List.concat (List.with_capacity 1024) [1,2,3] |> List.len |> Num.to_str");
 }
 
 #[test]
@@ -215,7 +217,7 @@ fn list_concat_consumes_second_argument() {
             b = List.reserve [] 11
             List.concat a b
             |> List.len
-            |> Num.toStr
+            |> Num.to_str
         )
         "
     ));
@@ -223,15 +225,15 @@ fn list_concat_consumes_second_argument() {
 
 #[test]
 fn str_capacity_concat() {
-    valgrind_test(r#"Str.withCapacity 42 |> Str.concat "foobar""#);
+    valgrind_test(r#"Str.with_capacity 42 |> Str.concat "foobar""#);
 }
 
 #[test]
 fn split_not_present() {
     valgrind_test(indoc!(
         r#"
-        Str.splitOn (Str.concat "a string that is stored on the heap" "!") "\n"
-            |> Str.joinWith ""
+        Str.split_on (Str.concat "a string that is stored on the heap" "!") "\n"
+            |> Str.join_with ""
         "#
     ));
 }
@@ -263,7 +265,7 @@ fn list_concat_empty_list_zero_sized_type() {
             b = []
             List.concat a b
             |> List.len
-            |> Num.toStr
+            |> Num.to_str
         )
         "
     ));
@@ -275,7 +277,7 @@ fn str_trim_end_capacity() {
         r#"
         (
             str = "a" |> Str.reserve 30
-            out = str |> Str.trimEnd
+            out = str |> Str.trim_end
 
             if out == "" then "A" else "B"
         )
@@ -289,7 +291,7 @@ fn str_trim_start_capacity() {
         r#"
         (
             str = "    a" |> Str.reserve 30
-            out = str |> Str.trimStart
+            out = str |> Str.trim_start
 
             if out == "" then "A" else "B"
         )
@@ -303,12 +305,12 @@ fn str_concat_later_referencing_empty_list_with_capacity() {
         r"
         (
             a : List U8
-            a = List.withCapacity 1
+            a = List.with_capacity 1
 
             List.concat a [58]
             |> List.len
-            |> Num.addWrap (List.len a)
-            |> Num.toStr
+            |> Num.add_wrap (List.len a)
+            |> Num.to_str
         )
         "
     ));
@@ -321,25 +323,25 @@ fn joinpoint_with_closure() {
         (
             Animal : [Cat, Dog, Goose]
 
-            makeSound : Animal -> Str
-            makeSound = \animal ->
-                dogSound = "Woof"
+            make_sound : Animal -> Str
+            make_sound = \animal ->
+                dog_sound = "Woof"
                 when animal is
-                    Cat | Dog if isCat animal -> "Miauw"
+                    Cat | Dog if is_cat animal -> "Miauw"
                     Goose -> "Honk"
-                    _ -> dogSound
+                    _ -> dog_sound
 
-            isCat : Animal -> Bool
-            isCat = \animal ->
+            is_cat : Animal -> Bool
+            is_cat = \animal ->
                 when animal is
                     Cat -> Bool.true
                     _ -> Bool.false
 
             test =
-                catSound = makeSound Cat
-                dogSound = makeSound Dog
-                gooseSound = makeSound Goose
-                "Cat: $(catSound), Dog: $(dogSound), Goose: $(gooseSound)"
+                cat_sound = make_sound Cat
+                dog_sound = make_sound Dog
+                goose_sound = make_sound Goose
+                "Cat: ${cat_sound}, Dog: ${dog_sound}, Goose: ${goose_sound}"
 
             test
         )
@@ -354,25 +356,25 @@ fn joinpoint_with_reuse() {
         (
             LinkedList a : [Cons a (LinkedList a), Nil]
 
-            # mapLinkedList : LinkedList a, (a -> b) -> LinkedList b
-            mapLinkedList = \linkedList, f -> when linkedList is
+            # map_linked_list : LinkedList a, (a -> b) -> LinkedList b
+            map_linked_list = \linked_list, f -> when linked_list is
                 Nil -> Nil
                 Cons x xs ->
                     x2 = if Bool.true then x else x
-                    Cons (f x2) (mapLinkedList xs f)
+                    Cons (f x2) (map_linked_list xs f)
 
-            # printLinkedList : LinkedList a, (a -> Str) -> Str
-            printLinkedList = \linkedList, f ->
-                when linkedList is
+            # print_linked_list : LinkedList a, (a -> Str) -> Str
+            print_linked_list = \linked_list, f ->
+                when linked_list is
                 Nil -> "Nil"
                 Cons x xs ->
-                    strX = f x
-                    strXs = printLinkedList xs f
-                    "Cons $(strX) ($(strXs))"
+                    str_x = f x
+                    str_xs = print_linked_list xs f
+                    "Cons ${str_x} (${str_xs})"
 
             test =
-                newList = mapLinkedList (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
-                printLinkedList newList Num.toStr
+                new_list = map_linked_list (Cons 1 (Cons 2 (Cons 3 Nil))) (\x -> x + 1)
+                print_linked_list new_list Num.to_str
 
             test
         )
@@ -393,83 +395,83 @@ fn tree_rebalance() {
 
         insert : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
         insert = \key, value, dict ->
-            when insertHelp key value dict is
+            when insert_help key value dict is
                 Node Red k v l r -> Node Black k v l r
                 x -> x
 
-        insertHelp : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
-        insertHelp = \key, value, dict ->
+        insert_help : Key k, v, RedBlackTree (Key k) v -> RedBlackTree (Key k) v
+        insert_help = \key, value, dict ->
             when dict is
                 Empty ->
                     # New nodes are always red. If it violates the rules, it will be fixed
                     # when balancing.
                     Node Red key value Empty Empty
 
-                Node nColor nKey nValue nLeft nRight ->
-                    when Num.compare key nKey is
-                        LT -> balance nColor nKey nValue (insertHelp key value nLeft) nRight
-                        EQ -> Node nColor nKey value nLeft nRight
-                        GT -> balance nColor nKey nValue nLeft (insertHelp key value nRight)
+                Node n_color n_key n_value n_left n_right ->
+                    when Num.compare key n_key is
+                        LT -> balance n_color n_key n_value (insert_help key value n_left) n_right
+                        EQ -> Node n_color n_key value n_left n_right
+                        GT -> balance n_color n_key n_value n_left (insert_help key value n_right)
 
         balance : NodeColor, k, v, RedBlackTree k v, RedBlackTree k v -> RedBlackTree k v
         balance = \color, key, value, left, right ->
             when right is
-                Node Red rK rV rLeft rRight ->
+                Node Red r_k r_v r_left r_right ->
                     when left is
-                        Node Red lK lV lLeft lRight ->
+                        Node Red l_k l_v l_left l_right ->
                             Node
                                 Red
                                 key
                                 value
-                                (Node Black lK lV lLeft lRight)
-                                (Node Black rK rV rLeft rRight)
+                                (Node Black l_k l_v l_left l_right)
+                                (Node Black r_k r_v r_left r_right)
 
                         _ ->
-                            Node color rK rV (Node Red key value left rLeft) rRight
+                            Node color r_k r_v (Node Red key value left r_left) r_right
 
                 _ ->
                     when left is
-                        Node Red lK lV (Node Red llK llV llLeft llRight) lRight ->
+                        Node Red l_k l_v (Node Red ll_k ll_v ll_left ll_right) l_right ->
                             Node
                                 Red
-                                lK
-                                lV
-                                (Node Black llK llV llLeft llRight)
-                                (Node Black key value lRight right)
+                                l_k
+                                l_v
+                                (Node Black ll_k ll_v ll_left ll_right)
+                                (Node Black key value l_right right)
 
                         _ ->
                             Node color key value left right
 
 
         show : RedBlackTree I64 {} -> Str
-        show = \tree -> showRBTree tree Num.toStr (\{} -> "{}")
+        show = \tree -> show_rb_tree tree Num.to_str (\{} -> "{}")
 
-        showRBTree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
-        showRBTree = \tree, showKey, showValue ->
+        show_rb_tree : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+        show_rb_tree = \tree, show_key, show_value ->
             when tree is
                 Empty -> "Empty"
                 Node color key value left right ->
-                    sColor = showColor color
-                    sKey = showKey key
-                    sValue = showValue value
-                    sL = nodeInParens left showKey showValue
-                    sR = nodeInParens right showKey showValue
+                    s_color = show_color color
+                    s_key = show_key key
+                    s_value = show_value value
+                    s_l = node_in_parens left show_key show_value
+                    s_r = node_in_parens right show_key show_value
 
-                    "Node $(sColor) $(sKey) $(sValue) $(sL) $(sR)"
+                    "Node ${s_color} ${s_key} ${s_value} ${s_l} ${s_r}"
 
-        nodeInParens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
-        nodeInParens = \tree, showKey, showValue ->
+        node_in_parens : RedBlackTree k v, (k -> Str), (v -> Str) -> Str
+        node_in_parens = \tree, show_key, show_value ->
             when tree is
                 Empty ->
-                    showRBTree tree showKey showValue
+                    show_rb_tree tree show_key show_value
 
                 Node _ _ _ _ _ ->
-                    inner = showRBTree tree showKey showValue
+                    inner = show_rb_tree tree show_key show_value
 
-                    "($(inner))"
+                    "(${inner})"
 
-        showColor : NodeColor -> Str
-        showColor = \color ->
+        show_color : NodeColor -> Str
+        show_color = \color ->
             when color is
                 Red -> "Red"
                 Black -> "Black"
@@ -479,7 +481,6 @@ fn tree_rebalance() {
         RedBlackTree k v : [Node NodeColor k v (RedBlackTree k v) (RedBlackTree k v), Empty]
 
         Key k : Num k
-
 
         "#
     ));
@@ -494,9 +495,9 @@ fn lowlevel_list_calls() {
             b = List.map2 a [1,1,1,1,1] (\x, y -> x + y)
             c = List.map3 a b [1,1,1,1,1] (\x, y, z -> x + y + z)
             d = List.map4 a b c [1,1,1,1,1] (\x, y, z, w -> x + y + z + w)
-            e = List.sortWith d (\x, y -> Num.compare x y)
+            e = List.sort_with d (\x, y -> Num.compare x y)
 
-            Num.toStr (List.len e)
+            Num.to_str (List.len e)
         )
         "
     ));
@@ -509,25 +510,25 @@ fn joinpoint_nullpointer() {
         (
             LinkedList a : [Cons a (LinkedList a), Nil]
 
-            printLinkedList : LinkedList Str -> Str
-            printLinkedList = \linkedList->
-                when linkedList is
+            print_linked_list : LinkedList Str -> Str
+            print_linked_list = \linked_list->
+                when linked_list is
                     Nil -> "Nil"
                     Cons x xs ->
-                        strXs = printLinkedList xs
-                        "Cons $(x) ($(strXs))"
+                        str_xs = print_linked_list xs
+                        "Cons ${x} (${str_xs})"
 
-            linkedListHead : LinkedList Str -> LinkedList Str
-            linkedListHead = \linkedList ->
-                string = when linkedList is
+            linked_list_head : LinkedList Str -> LinkedList Str
+            linked_list_head = \linked_list ->
+                string = when linked_list is
                     Cons s _ -> s
                     Nil -> ""
                 Cons string Nil
 
             test =
-                cons = printLinkedList (linkedListHead (Cons "foo" Nil))
-                nil = printLinkedList (linkedListHead (Nil))
-                "$(cons) - $(nil)"
+                cons = print_linked_list (linked_list_head (Cons "foo" Nil))
+                nil = print_linked_list (linked_list_head (Nil))
+                "${cons} - ${nil}"
 
             test
         )
@@ -554,7 +555,7 @@ fn freeing_boxes() {
                 |> Box.unbox
 
             a
-            |> Num.toStr
+            |> Num.to_str
             |> Str.concat b
         )
         "#
@@ -566,15 +567,15 @@ fn joinpoint_that_owns() {
     valgrind_test(indoc!(
         r#"
         (
-        writeIndents = \buf, indents ->
+        write_indents = \buf, indents ->
             if indents <= 0 then
                 buf
             else
                 buf
                 |> Str.concat "    "
-                |> writeIndents (indents - 1)
+                |> write_indents (indents - 1)
 
-        List.walk [{}, {}] "" \accum, {} -> accum |> writeIndents 4
+        List.walk [{}, {}] "" \accum, {} -> accum |> write_indents 4
         )
         "#
     ));

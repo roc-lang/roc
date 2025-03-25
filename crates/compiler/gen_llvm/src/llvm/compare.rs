@@ -3,7 +3,6 @@ use crate::llvm::build_list::{list_len_usize, load_list_ptr};
 use crate::llvm::build_str::str_equal;
 use crate::llvm::convert::basic_type_from_layout;
 use bumpalo::collections::Vec;
-use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use inkwell::{AddressSpace, FloatPredicate, IntPredicate};
 use roc_builtins::bitcode;
@@ -528,7 +527,7 @@ fn build_list_eq_help<'a, 'ctx>(
 
         let builder = env.builder;
         let element_type = basic_type_from_layout(env, layout_interner, element_layout);
-        let ptr_type = element_type.ptr_type(AddressSpace::default());
+        let ptr_type = env.context.ptr_type(AddressSpace::default());
         let ptr1 = load_list_ptr(env, list1, ptr_type);
         let ptr2 = load_list_ptr(env, list2, ptr_type);
 
@@ -1286,13 +1285,13 @@ fn eq_ptr_to_struct<'a, 'ctx>(
     // cast the opaque pointer to a pointer of the correct shape
     let struct1_ptr = env.builder.new_build_pointer_cast(
         tag1,
-        wrapper_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 
     let struct2_ptr = env.builder.new_build_pointer_cast(
         tag2,
-        wrapper_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "opaque_to_correct",
     );
 

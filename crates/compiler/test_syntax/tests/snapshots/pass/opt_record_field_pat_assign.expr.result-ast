@@ -1,0 +1,78 @@
+@0-14 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-12,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Body(
+                    @0-7 RecordDestructure(
+                        [
+                            @1-6 OptionalField(
+                                "e",
+                                @3-6 Apply(
+                                    @3-4 Var {
+                                        module_name: "",
+                                        ident: "f",
+                                    },
+                                    [
+                                        @5-6 SpaceBefore(
+                                            Num(
+                                                "4",
+                                            ),
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                            ),
+                        ],
+                    ),
+                    @8-12 Apply(
+                        @8-9 Var {
+                            module_name: "",
+                            ident: "f",
+                        },
+                        [
+                            @11-12 SpaceBefore(
+                                Var {
+                                    module_name: "",
+                                    ident: "e",
+                                },
+                                [
+                                    Newline,
+                                ],
+                            ),
+                        ],
+                        Space,
+                    ),
+                ),
+            ],
+        },
+        @13-14 SpaceBefore(
+            Var {
+                module_name: "",
+                ident: "r",
+            },
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

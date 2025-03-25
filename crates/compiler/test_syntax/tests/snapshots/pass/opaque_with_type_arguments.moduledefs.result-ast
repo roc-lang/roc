@@ -19,9 +19,9 @@ Defs {
             header: TypeHeader {
                 name: @0-8 "Bookmark",
                 vars: [
-                    @9-10 Identifier {
-                        ident: "a",
-                    },
+                    @9-10 Identifier(
+                        "a",
+                    ),
                 ],
             },
             typ: @14-53 Record {

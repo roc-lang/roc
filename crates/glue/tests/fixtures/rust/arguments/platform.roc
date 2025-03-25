@@ -3,7 +3,7 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
-mainForHost : I64 -> I64
-mainForHost = \x -> main x
+main_for_host : I64 -> I64
+main_for_host = \x -> main(x)

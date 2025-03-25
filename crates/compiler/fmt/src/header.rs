@@ -3,6 +3,7 @@ use std::cmp::max;
 use crate::annotation::{is_collection_multiline, Formattable, Newlines, Parens};
 use crate::collection::{fmt_collection, Braces};
 use crate::expr::fmt_str_literal;
+use crate::pattern::snakify_camel_ident;
 use crate::spaces::{fmt_comments_only, fmt_default_spaces, fmt_spaces, NewlineAt, INDENT};
 use crate::Buf;
 use roc_parse::ast::{Collection, CommentOrNewline, Header, Spaced, Spaces, SpacesBefore};
@@ -198,15 +199,10 @@ pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
 pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
     buf.indent(0);
     buf.push_str("hosted");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
 
-    buf.push_str(header.name.value.as_str());
+    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, 0);
 
-    header.exposes.keyword.format(buf, indent);
-    fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
+    fmt_exposes(buf, header.exposes, indent);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {
@@ -410,7 +406,17 @@ impl<'a> Formattable for ExposedName<'a> {
         indent: u16,
     ) {
         buf.indent(indent);
-        buf.push_str(self.as_str());
+        if buf.flags().snakify
+            && self
+                .as_str()
+                .chars()
+                .next()
+                .is_some_and(|c| c.is_ascii_lowercase())
+        {
+            snakify_camel_ident(buf, self.as_str());
+        } else {
+            buf.push_str(self.as_str());
+        }
     }
 }
 

@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 MyEnum : [Foo, Bar, Baz]
 
-mainForHost : MyEnum
-mainForHost = main
+main_for_host : MyEnum
+main_for_host = main

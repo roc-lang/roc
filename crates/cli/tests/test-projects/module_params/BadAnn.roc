@@ -1,9 +1,9 @@
-module { appId } -> [fnAnnotatedAsValue, missingArg]
+module { app_id } -> [fn_annotated_as_value, missing_arg]
 
-fnAnnotatedAsValue : Str
-fnAnnotatedAsValue = \postId, commentId ->
-    "/posts/$(postId)/comments/$(Num.toStr commentId)"
+fn_annotated_as_value : Str
+fn_annotated_as_value = \post_id, comment_id ->
+    "/posts/${post_id}/comments/${Num.to_str(comment_id)}"
 
-missingArg : Str -> Str
-missingArg = \postId, _ ->
-    "/posts/$(postId)/comments"
+missing_arg : Str -> Str
+missing_arg = \post_id, _ ->
+    "/posts/${post_id}/comments"

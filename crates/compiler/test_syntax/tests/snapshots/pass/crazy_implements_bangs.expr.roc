@@ -1,0 +1,3 @@
+P:=p#
+  implements[]
+n

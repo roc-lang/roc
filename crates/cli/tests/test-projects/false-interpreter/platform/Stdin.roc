@@ -1,16 +1,11 @@
-module [
-    line,
-    char,
-]
+module [line!, char!]
 
-import pf.PlatformTasks
+import pf.Host
 
-line : {} -> Task Str *
-line = \{} ->
-    PlatformTasks.getLine
-    |> Task.mapErr \_ -> crash "unreachable Stdin.line"
+line! : {} => Str
+line! = \{} ->
+    Host.get_line!({})
 
-char : {} -> Task U8 *
-char = \{} ->
-    PlatformTasks.getChar
-    |> Task.mapErr \_ -> crash "unreachable Stdin.char"
+char! : {} => U8
+char! = \{} ->
+    Host.get_char!({})

@@ -1,0 +1,56 @@
+@0-15 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-13,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "1",
+                    ),
+                    @2-13 TagUnion {
+                        ext: None,
+                        tags: [
+                            @3-12 Apply {
+                                name: @3-4 "N",
+                                args: [
+                                    @5-0 As(
+                                        @5-6 Wildcard,
+                                        [],
+                                        TypeHeader {
+                                            name: @9-10 "S",
+                                            vars: [],
+                                        },
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                ),
+            ],
+        },
+        @14-15 SpaceBefore(
+            Underscore(
+                "",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

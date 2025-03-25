@@ -886,13 +886,13 @@ mod test {
                 ]
 
                 expect
-                    nonEmpty =
+                    non_empty =
                         a = "abcdefgh"
                         b = @NonEmpty (First "ijkl" 67u8)
                         c = Next [{ item: a, rest: b }]
                         @NonEmpty c
 
-                    when nonEmpty is
+                    when non_empty is
                         _ -> Bool.false
                 "#
             ),
@@ -901,19 +901,19 @@ mod test {
                 This expectation failed:
 
                  8│>  expect
-                 9│>      nonEmpty =
+                 9│>      non_empty =
                 10│>          a = "abcdefgh"
                 11│>          b = @NonEmpty (First "ijkl" 67u8)
                 12│>          c = Next [{ item: a, rest: b }]
                 13│>          @NonEmpty c
                 14│>
-                15│>      when nonEmpty is
+                15│>      when non_empty is
                 16│>          _ -> Bool.false
 
                 When it failed, these variables had these values:
 
-                nonEmpty : NonEmpty
-                nonEmpty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
+                non_empty : NonEmpty
+                non_empty = @NonEmpty (Next [{ item: "abcdefgh", rest: @NonEmpty (First "ijkl" 67) }])
                 "#
             ),
         );
@@ -926,11 +926,11 @@ mod test {
                 r#"
                 interface Test exposes [] imports []
 
-                makeForcer : {} -> (Str -> U8)
-                makeForcer = \{} -> \_ -> 2u8
+                make_forcer : {} -> (Str -> U8)
+                make_forcer = \{} -> \_ -> 2u8
 
                 expect
-                    forcer = makeForcer {}
+                    forcer = make_forcer {}
 
                     case = ""
 
@@ -942,7 +942,7 @@ mod test {
                 This expectation failed:
 
                  6│>  expect
-                 7│>      forcer = makeForcer {}
+                 7│>      forcer = make_forcer {}
                  8│>
                  9│>      case = ""
                 10│>
@@ -965,8 +965,8 @@ mod test {
                 interface Test exposes [] imports []
 
                 expect
-                    totalCount = \{} -> 1u8
-                    totalCount {} == 96u8
+                    total_count = \{} -> 1u8
+                    total_count {} == 96u8
                 "
             ),
             indoc!(
@@ -974,8 +974,8 @@ mod test {
                 This expectation failed:
 
                 3│>  expect
-                4│>      totalCount = \{} -> 1u8
-                5│>      totalCount {} == 96u8
+                4│>      total_count = \{} -> 1u8
+                5│>      total_count {} == 96u8
                 "
             ),
         );
@@ -1053,22 +1053,22 @@ mod test {
                 interface Test exposes [] imports []
 
                 Request : {
-                    fieldA : [Get, Post],
-                    fieldB : Str,
+                    field_a : [Get, Post],
+                    field_b : Str,
                 }
 
                 expect
 
                     actual : Request
                     actual = {
-                        fieldA: Get,
-                        fieldB: "/things?id=2",
+                        field_a: Get,
+                        field_b: "/things?id=2",
                     }
 
                     expected : Request
                     expected = {
-                        fieldA: Get,
-                        fieldB: "/things?id=1",
+                        field_a: Get,
+                        field_b: "/things?id=1",
                     }
                     actual == expected
                 "#
@@ -1081,24 +1081,24 @@ mod test {
                  9│>
                 10│>      actual : Request
                 11│>      actual = {
-                12│>          fieldA: Get,
-                13│>          fieldB: "/things?id=2",
+                12│>          field_a: Get,
+                13│>          field_b: "/things?id=2",
                 14│>      }
                 15│>
                 16│>      expected : Request
                 17│>      expected = {
-                18│>          fieldA: Get,
-                19│>          fieldB: "/things?id=1",
+                18│>          field_a: Get,
+                19│>          field_b: "/things?id=1",
                 20│>      }
                 21│>      actual == expected
 
                 When it failed, these variables had these values:
 
                 actual : Request
-                actual = { fieldA: Get, fieldB: "/things?id=2" }
+                actual = { field_a: Get, field_b: "/things?id=2" }
 
                 expected : Request
-                expected = { fieldA: Get, fieldB: "/things?id=1" }
+                expected = { field_a: Get, field_b: "/things?id=1" }
 
                 "#
             ),
@@ -1219,12 +1219,12 @@ mod test {
                 r"
                 interface Test exposes [] imports []
 
-                hexToByte : U8, U8 -> U8
-                hexToByte = \upper, lower ->
-                    Num.bitwiseOr (Num.shiftRightBy upper 4) lower
+                hex_to_byte : U8, U8 -> U8
+                hex_to_byte = \upper, lower ->
+                    Num.bitwise_or (Num.shift_right_by upper 4) lower
 
                 expect
-                    actual = hexToByte 7 4
+                    actual = hex_to_byte 7 4
                     expected = 't'
                     actual == expected
                 "
@@ -1234,7 +1234,7 @@ mod test {
                 This expectation failed:
 
                  7│>  expect
-                 8│>      actual = hexToByte 7 4
+                 8│>      actual = hex_to_byte 7 4
                  9│>      expected = 't'
                 10│>      actual == expected
 

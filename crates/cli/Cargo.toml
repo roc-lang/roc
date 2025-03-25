@@ -43,6 +43,7 @@ sanitizers = ["roc_build/sanitizers"]
 
 
 [dependencies]
+copy_zig_glue.workspace = true
 roc_build.workspace = true
 roc_builtins.workspace = true
 roc_can.workspace = true
@@ -59,10 +60,12 @@ roc_module.workspace = true
 roc_mono.workspace = true
 roc_packaging.workspace = true
 roc_parse.workspace = true
+roc_problem.workspace = true
 roc_region.workspace = true
 roc_reporting.workspace = true
 roc_target.workspace = true
 roc_tracing.workspace = true
+roc_types.workspace = true
 roc_repl_cli = { workspace = true, optional = true }
 roc_wasm_interp = { workspace = true, optional = true }
 

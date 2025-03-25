@@ -3,11 +3,12 @@ extern crate bumpalo;
 use self::bumpalo::Bump;
 use roc_can::abilities::AbilitiesStore;
 use roc_can::constraint::{Constraint, Constraints};
-use roc_can::desugar;
 use roc_can::env::Env;
 use roc_can::expected::Expected;
 use roc_can::expr::{canonicalize_expr, Expr, Output, PendingDerives};
 use roc_can::scope::Scope;
+use roc_can_solo::env::SoloEnv;
+use roc_can_solo::scope::SoloScope;
 use roc_collections::all::{ImMap, MutMap, SendSet};
 use roc_constrain::expr::constrain_expr;
 use roc_derive::SharedDerivedModule;
@@ -162,25 +163,6 @@ pub fn can_expr_with<'a>(
     // ensure the Test module is accessible in our tests
     module_ids.get_or_insert(&PQModuleName::Unqualified("Test".into()));
 
-    let mut scope = Scope::new(
-        home,
-        "TestPath".into(),
-        IdentIds::default(),
-        Default::default(),
-    );
-
-    let dep_idents = IdentIds::exposed_builtins(0);
-    let mut env = Env::new(
-        arena,
-        expr_str,
-        home,
-        Path::new("Test.roc"),
-        &dep_idents,
-        &module_ids,
-        None,
-        roc_can::env::FxMode::PurityInference,
-    );
-
     // Desugar operators (convert them to Apply calls, taking into account
     // operator precedence and associativity rules), before doing other canonicalization.
     //
@@ -188,7 +170,9 @@ pub fn can_expr_with<'a>(
     // visited a BinOp node we'd recursively try to apply this to each of its nested
     // operators, and then again on *their* nested operators, ultimately applying the
     // rules multiple times unnecessarily.
-    let loc_expr = desugar::desugar_expr(&mut env, &mut scope, &loc_expr);
+    let mut solo_env = SoloEnv::new(arena, expr_str, Path::new("Test.roc"));
+    let mut solo_scope = SoloScope::new();
+    let loc_expr = roc_can_solo::desugar::desugar_expr(&mut solo_env, &mut solo_scope, &loc_expr);
 
     let mut scope = Scope::new(
         home,
@@ -206,7 +190,6 @@ pub fn can_expr_with<'a>(
         &dep_idents,
         &module_ids,
         None,
-        roc_can::env::FxMode::PurityInference,
     );
     let (loc_expr, output) = canonicalize_expr(
         &mut env,

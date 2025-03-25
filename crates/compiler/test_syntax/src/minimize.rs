@@ -7,12 +7,20 @@
 
 use crate::test_helpers::{Input, InputKind};
 use bumpalo::Bump;
+use roc_fmt::MigrationFlags;
 use roc_parse::{ast::Malformed, normalize::Normalize};
 
-pub fn print_minimizations(text: &str, kind: InputKind) {
-    let Some(original_error) = round_trip_once_and_extract_error(text, kind) else {
+#[derive(Copy, Clone, Debug)]
+pub struct Options {
+    pub kind: InputKind,
+    pub minimize_full_error: bool,
+    pub minimize_initial_parse_error: bool,
+}
+
+pub fn print_minimizations(text: &str, options: Options) -> bool {
+    let Some(original_error) = round_trip_once_and_extract_error(text, options) else {
         eprintln!("No error found");
-        return;
+        return false;
     };
 
     eprintln!("Error found: {}", original_error);
@@ -23,14 +31,9 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
     loop {
         let mut found = false;
         for update in candidate_minimizations(s.clone()) {
-            let mut new_s = String::with_capacity(s.len());
-            let mut offset = 0;
-            for (start, end, replacement) in update.replacements.clone() {
-                new_s.push_str(&s[offset..start]);
-                new_s.push_str(&replacement);
-                offset = end;
-            }
-            new_s.push_str(&s[offset..]);
+            let Some(new_s) = make_replacements(&s, &update) else {
+                continue;
+            };
 
             assert!(
                 new_s.len() < s.len(),
@@ -38,7 +41,7 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
                 update.replacements
             );
 
-            if let Some(result) = round_trip_once_and_extract_error(&new_s, kind) {
+            if let Some(result) = round_trip_once_and_extract_error(&new_s, options) {
                 if result == original_error {
                     eprintln!("Successfully minimized, new length: {}", new_s.len());
                     s = new_s;
@@ -56,11 +59,30 @@ pub fn print_minimizations(text: &str, kind: InputKind) {
 
     eprintln!("Final result:");
     println!("{}", s);
+
+    true
 }
 
-fn round_trip_once_and_extract_error(text: &str, kind: InputKind) -> Option<String> {
-    let input = kind.with_text(text);
-    let res = std::panic::catch_unwind(|| round_trip_once(input));
+fn make_replacements(s: &str, update: &Update) -> Option<String> {
+    let mut new_s = String::with_capacity(s.len());
+    let mut offset = 0;
+    for (start, end, replacement) in update.replacements.clone() {
+        // check that start and end are not in the middle of a utf-8 character
+        if !s.is_char_boundary(start) || !s.is_char_boundary(end) {
+            return None;
+        }
+        new_s.push_str(&s[offset..start]);
+        new_s.push_str(&replacement);
+        offset = end;
+    }
+    new_s.push_str(&s[offset..]);
+
+    Some(new_s)
+}
+
+fn round_trip_once_and_extract_error(text: &str, options: Options) -> Option<String> {
+    let input = options.kind.with_text(text);
+    let res = std::panic::catch_unwind(|| round_trip_once(input, options));
 
     match res {
         Ok(res) => res,
@@ -76,23 +98,44 @@ fn round_trip_once_and_extract_error(text: &str, kind: InputKind) -> Option<Stri
     }
 }
 
-fn round_trip_once(input: Input<'_>) -> Option<String> {
+fn round_trip_once(input: Input<'_>, options: Options) -> Option<String> {
     let arena = Bump::new();
 
     let actual = match input.parse_in(&arena) {
         Ok(a) => a,
-        Err(e) => return Some(format!("Initial parse failed: {:?}", e.normalize(&arena))),
+        Err(e) => {
+            if options.minimize_initial_parse_error {
+                return Some(format!("Initial parse failed: {:?}", e.normalize(&arena)));
+            } else {
+                return None;
+            }
+        }
     };
 
     if actual.is_malformed() {
-        return Some("Initial parse is malformed".to_string());
+        if options.minimize_initial_parse_error {
+            return Some("Initial parse is malformed".to_string());
+        } else {
+            return None;
+        }
     }
 
-    let output = actual.format();
+    let flags = MigrationFlags {
+        snakify: false,
+        parens_and_commas: false,
+    };
+
+    let output = actual.format(flags);
 
     let reparsed_ast = match output.as_ref().parse_in(&arena) {
         Ok(r) => r,
-        Err(e) => return Some(format!("Reparse failed: {:?}", e.normalize(&arena))),
+        Err(e) => {
+            if options.minimize_full_error {
+                return Some(format!("Reparse failed: {:?}", e.normalize(&arena)));
+            } else {
+                return Some("Reparse failed".to_string());
+            }
+        }
     };
 
     let ast_normalized = actual.normalize(&arena);
@@ -102,10 +145,28 @@ fn round_trip_once(input: Input<'_>) -> Option<String> {
         return Some("Different ast".to_string());
     }
 
-    let reformatted = reparsed_ast.format();
+    let reformatted = reparsed_ast.format(flags);
 
     if output != reformatted {
         return Some("Formatting not stable".to_string());
+    }
+
+    let text = input.as_str();
+    let res = std::panic::catch_unwind(|| {
+        let new_arena = Bump::new();
+        actual.canonicalize(&new_arena, text);
+    });
+
+    if let Err(e) = res {
+        if options.minimize_full_error {
+            if let Some(s) = e.downcast_ref::<&'static str>() {
+                return Some(s.to_string());
+            }
+            if let Some(s) = e.downcast_ref::<String>() {
+                return Some(s.clone());
+            }
+        }
+        return Some("Panic during canonicalization".to_string());
     }
 
     None

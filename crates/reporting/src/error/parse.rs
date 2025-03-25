@@ -1,4 +1,4 @@
-use roc_parse::parser::{ENumber, EReturn, ESingleQuote, FileError, PList, SyntaxError};
+use roc_parse::parser::{ENumber, EReturn, ESingleQuote, EString, FileError, PList, SyntaxError};
 use roc_problem::Severity;
 use roc_region::all::{LineColumn, LineColumnRegion, LineInfo, Position, Region};
 use std::path::PathBuf;
@@ -247,8 +247,6 @@ fn to_expr_report<'a>(
             let suggestion = match *op {
                 "|" => vec![
                     alloc.reflow("Maybe you want "),
-                    alloc.parser_suggestion("||"),
-                    alloc.reflow(" or "),
                     alloc.parser_suggestion("|>"),
                     alloc.reflow(" instead?"),
                 ],
@@ -550,24 +548,6 @@ fn to_expr_report<'a>(
             }
         }
 
-        EExpr::BackpassArrow(pos) => {
-            let surroundings = Region::new(start, *pos);
-            let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
-
-            let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an expression, but I got stuck here:"),
-                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow("Looks like you are trying to define a function. ")]),
-            ]);
-
-            Report {
-                filename,
-                doc,
-                title: "BAD BACKPASSING ARROW".to_string(),
-                severity,
-            }
-        }
-
         EExpr::Record(erecord, pos) => {
             to_record_report(alloc, lines, filename, erecord, *pos, start)
         }
@@ -704,8 +684,6 @@ fn to_expr_report<'a>(
         | EExpr::Equals(pos)
         | EExpr::DoubleColon(pos)
         | EExpr::MalformedPattern(pos)
-        | EExpr::BackpassComma(pos)
-        | EExpr::BackpassContinue(pos)
         | EExpr::DbgContinue(pos)
         | EExpr::Underscore(pos)
         | EExpr::Crash(pos)
@@ -799,6 +777,26 @@ fn to_lambda_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
+        EClosure::Bar(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to parse the arguments list for a function, but I got stuck here:"),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting to find a "),
+                    alloc.parser_suggestion("|"),
+                    alloc.reflow(" next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MALFORMED ARGS LIST".to_string(),
+                severity,
+            }
+        }
         EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
@@ -1026,7 +1024,6 @@ fn to_str_report<'a>(
     parse_problem: &roc_parse::parser::EString<'a>,
     start: Position,
 ) -> Report<'a> {
-    use roc_parse::parser::EString;
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
@@ -1119,7 +1116,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is $(count)\""),
+                    alloc.parser_suggestion("\"The count is ${count}\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1197,7 +1194,7 @@ fn to_str_report<'a>(
                     alloc.stack([
                         alloc.concat([
                             alloc.reflow("I am part way through parsing this single-quote literal, "),
-                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("but I encountered a string interpolation like \"${this}\","),
                             alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
@@ -1308,6 +1305,52 @@ fn to_str_report<'a>(
                 filename,
                 doc,
                 title: "INSUFFICIENT INDENT IN MULTI-LINE STRING".to_string(),
+                severity,
+            }
+        }
+        EString::InvalidUnicodeCodepoint(region) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(region.start()));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a unicode code point, but I got stuck here:",
+                ),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow(r"I was expecting a hexadecimal number, like "),
+                    alloc.parser_suggestion("\\u(1100)"),
+                    alloc.reflow(" or "),
+                    alloc.parser_suggestion("\\u(00FF)"),
+                    alloc.text("."),
+                ]),
+                alloc.reflow(r"Learn more about working with unicode in roc at TODO"),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "INVALID UNICODE CODE POINT".to_string(),
+                severity,
+            }
+        }
+        EString::UnicodeEscapeTooLarge(region) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(region.start()));
+
+            let doc = alloc.stack([
+                alloc.reflow(
+                    r"I am partway through parsing a unicode code point, but I got stuck here:",
+                ),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow(r"The unicode code point is too large to fit in a U32."),
+                    alloc.reflow(r"Try using a smaller code point."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "UNICODE CODE POINT TOO LARGE".to_string(),
                 severity,
             }
         }
@@ -2218,7 +2261,7 @@ fn to_pattern_report<'a>(
     let severity = Severity::RuntimeError;
 
     match parse_problem {
-        EPattern::Start(pos) => {
+        EPattern::Str(EString::Open(..), pos) | EPattern::Start(pos) => {
             let surroundings = Region::new(start, *pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(*pos));
 
@@ -2235,6 +2278,7 @@ fn to_pattern_report<'a>(
                 severity,
             }
         }
+        EPattern::Str(err, pos) => to_str_report(alloc, lines, filename, err, *pos),
         EPattern::Record(record, pos) => to_precord_report(alloc, lines, filename, record, *pos),
         EPattern::List(list, pos) => to_plist_report(alloc, lines, filename, list, *pos),
         EPattern::PInParens(inparens, pos) => {
@@ -2255,7 +2299,9 @@ fn to_pattern_report<'a>(
         | EPattern::IndentEnd(pos)
         | EPattern::AsIndentStart(pos)
         | EPattern::AccessorFunction(pos)
-        | EPattern::RecordUpdaterFunction(pos) => to_unhandled_parse_error_report(
+        | EPattern::RecordUpdaterFunction(pos)
+        | EPattern::ParenStart(pos)
+        | EPattern::ParenEnd(pos) => to_unhandled_parse_error_report(
             alloc,
             lines,
             filename,
@@ -2421,7 +2467,7 @@ fn to_precord_report<'a>(
         PRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        PRecord::Optional(_) => {
+        PRecord::OptionalFirst(_) | PRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
@@ -2861,7 +2907,7 @@ fn to_trecord_report<'a>(
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                         alloc.concat([
                             alloc.reflow(
-                                r"I was expecting to see a colon, question mark, comma or closing curly brace.",
+                                r"I was expecting to see a colon, two question marks (??), comma or closing curly brace.",
                             ),
                         ]),
                     ]);
@@ -2948,7 +2994,7 @@ fn to_trecord_report<'a>(
         ETypeRecord::Colon(_) => {
             unreachable!("because `foo` is a valid field; the colon is not required")
         }
-        ETypeRecord::Optional(_) => {
+        ETypeRecord::OptionalFirst(_) | ETypeRecord::OptionalSecond(_) => {
             unreachable!("because `foo` is a valid field; the question mark is not required")
         }
 
@@ -4003,20 +4049,24 @@ fn to_exposes_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
-        EExposes::ListEnd(pos) | // TODO: give this its own error message
-        EExposes::Identifier(pos) => {
+        // TODO: It would be nice to give ListEnd it's own error message.
+        // However with how parsing error are currently reported, ListEnd and
+        // Identifier are tightly coupled and Identifier is basically never
+        // "thrown". Splitting these up to make more specific error messages
+        // would require tweaking how parsing works.
+        EExposes::ListEnd(pos) | EExposes::Identifier(pos) => {
             let surroundings = Region::new(start, pos);
             let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
 
             let doc = alloc.stack([
-                alloc.reflow(r"I am partway through parsing an `exposes` list, but I got stuck here:"),
+                alloc.concat([
+                    alloc.reflow("I am partway through parsing an "),
+                    alloc.keyword("exposes"),
+                    alloc.reflow(" list, but I got stuck here:"),
+                ]),
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
-                alloc.concat([alloc.reflow(
-                    "I was expecting a type name, value name or function name next, like",
-                )]),
-                alloc
-                    .parser_suggestion("[Animal, default, tame]")
-                    .indent(4),
+                alloc.reflow("I was expecting a type name, value name or function name next, like"),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
             ]);
 
             Report {
@@ -4039,9 +4089,7 @@ fn to_exposes_report<'a>(
                     alloc.keyword("exposes"),
                     alloc.reflow(" keyword next, like"),
                 ]),
-                alloc
-                    .parser_suggestion("[Animal, default, tame]")
-                    .indent(4),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
             ]);
 
             Report {
@@ -4054,13 +4102,53 @@ fn to_exposes_report<'a>(
 
         EExposes::Space(error, pos) => to_space_report(alloc, lines, filename, &error, pos),
 
+        // TODO: Depending on the type of header we're parsing, it would be
+        // great to add more context to this error message. For example, if
+        // we're parsing a `module` then saying something like:
+        //
+        //     I was expecting an exposes list like
+        //         ...
+        //
+        //     or module params like
+        //         ...
+        //
+        // would be great. But currently we don't capture the type of header in
+        // the parse problem data type, so this isn't possible
+        EExposes::ListStart(pos) => {
+            let surroundings = Region::new(start, pos);
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I am partway through parsing a header, but I got stuck here:"),
+                alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting an "),
+                    alloc.keyword("exposes"),
+                    alloc.reflow(" list like"),
+                ]),
+                alloc.parser_suggestion("[Animal, default, tame]").indent(4),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "WEIRD EXPOSES".to_string(),
+                severity,
+            }
+        }
+
         // If you're adding or changing syntax, please handle the case with a
         // good error message above instead of adding more unhandled cases below.
-        EExposes::Open(pos) |
-        EExposes::IndentExposes(pos) |
-        EExposes::IndentListStart(pos) |
-        EExposes::ListStart(pos) =>
-            to_unhandled_parse_error_report(alloc, lines, filename, format!("{:?}", parse_problem), pos, start)
+        EExposes::Open(pos) | EExposes::IndentExposes(pos) | EExposes::IndentListStart(pos) => {
+            to_unhandled_parse_error_report(
+                alloc,
+                lines,
+                filename,
+                format!("{:?}", parse_problem),
+                pos,
+                start,
+            )
+        }
     }
 }
 
@@ -4218,7 +4306,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4245,7 +4333,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4268,13 +4356,13 @@ fn to_requires_report<'a>(
                     alloc.reflow("I am expecting a list of rigids like "),
                     alloc.keyword("{}"),
                     alloc.reflow(" or "),
-                    alloc.keyword("{model=>Model}"),
+                    alloc.keyword("{ Model }"),
                     alloc.reflow(" next. A full "),
                     alloc.keyword("requires"),
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 
@@ -4303,7 +4391,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 

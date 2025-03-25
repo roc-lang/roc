@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/build/*",
+    "crates/check/*",
     "crates/compiler/*",
     "crates/vendor/*",
     "crates/fs",
@@ -31,6 +33,7 @@ members = [
     "crates/wasm_module",
     "crates/wasm_interp",
     "crates/language_server",
+    "crates/copy_zig_glue",
     "crates/roc_std_heap",
 ]
 
@@ -55,30 +58,12 @@ repository = "https://github.com/roc-lang/roc"
 version = "0.0.1"
 
 [workspace.dependencies]
-object = { version = "0.32.2", default-features = false, features = [
+object = { version = "0.36.7", default-features = false, features = [
     "read",
     "write",
 ] }
-# NOTE: roc-lang/inkwell is a fork of TheDan64/inkwell which does not change anything.
-#
-# The reason for this fork is that the way Inkwell is designed, you have to use
-# a particular branch (e.g. "llvm8-0") in Cargo.toml. That would be fine, except that
-# breaking changes get pushed directly to that branch, which breaks our build
-# without warning.
-#
-# We tried referencing a specific rev on TheDan64/inkwell directly (instead of branch),
-# but although that worked locally, it did not work on GitHub Actions. (After a few
-# hours of investigation, gave up trying to figure out why.) So this is the workaround:
-# having an immutable tag on the roc-lang/inkwell fork which points to
-# a particular "release" of Inkwell.
-#
-# When we want to update Inkwell, we can sync up roc-lang/inkwell to the latest
-# commit of TheDan64/inkwell, push a new tag which points to the latest commit,
-# change the tag value in this Cargo.toml to point to that tag, and `cargo update`.
-# This way, GitHub Actions works and nobody's builds get broken.
-# TODO: Switch this back to roc-lang/inkwell once it is updated
-inkwell = { git = "https://github.com/roc-lang/inkwell", branch = "inkwell-llvm-16", features = [
-    "llvm16-0",
+inkwell = { git = "https://github.com/TheDan64/inkwell", rev = "89e06af", features = [
+    "llvm18-0",
 ] }
 arrayvec = "0.7.2"
 base64-url = "1.4.13"
@@ -100,10 +85,7 @@ clap = { version = "4.2.7", default-features = false, features = [
 ] }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
-    "html_reports",
-], rev = "30ea0c5" }
-criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events", rev = "0f38c3e" }
+criterion = { version = "0.5.1", features = ["html_reports"]}
 crossbeam = "0.8.2"
 dircpy = "0.3.14"
 distance = "0.4.0"
@@ -183,12 +165,14 @@ wyhash = "0.5.0"
 
 # INTERNAL DEPENDENCIES
 cli_test_utils = { path = "crates/cli_test_utils" }
+copy_zig_glue = { path = "crates/copy_zig_glue" }
 roc_alias_analysis = { path = "crates/compiler/alias_analysis" }
 roc_bitcode = { path = "crates/compiler/builtins/bitcode" }
 roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
 roc_build = { path = "crates/compiler/build" }
 roc_builtins = { path = "crates/compiler/builtins" }
 roc_can = { path = "crates/compiler/can" }
+roc_can_solo = { path = "crates/check/can_solo" }
 roc_checkmate = { path = "crates/compiler/checkmate" }
 roc_checkmate_schema = { path = "crates/compiler/checkmate_schema" }
 roc_cli = { path = "crates/cli" }
@@ -228,7 +212,7 @@ roc_serialize = { path = "crates/compiler/serialize" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_schema = { path = "crates/compiler/solve_schema" }
 roc_solve_problem = { path = "crates/compiler/solve_problem" }
-roc_specialize_types = { path = "crates/compiler/specialize_types" }
+roc_specialize_types = { path = "crates/build/specialize_types" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_test_utils = { path = "crates/test_utils" }

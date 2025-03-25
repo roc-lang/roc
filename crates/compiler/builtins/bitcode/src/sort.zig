@@ -61,7 +61,7 @@ pub fn fluxsort(
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
-            var arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+            const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
             defer utils.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
@@ -552,7 +552,7 @@ fn flux_default_partition(
 ) usize {
     var arr_ptr = array;
     var swap_ptr = swap;
-    var pivot_ptr = pivot;
+    const pivot_ptr = pivot;
     var x_ptr = x;
 
     // len guaranteed compares
@@ -621,7 +621,7 @@ fn flux_reverse_partition(
 ) void {
     var arr_ptr = array;
     var swap_ptr = swap;
-    var pivot_ptr = pivot;
+    const pivot_ptr = pivot;
     var x_ptr = x;
 
     // len guaranteed compares
@@ -661,9 +661,9 @@ test "flux_default_partition" {
     var pivot: i64 = 0;
 
     var arr: [32]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [32]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [32]i64{
         1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
@@ -748,9 +748,9 @@ test "flux_reverse_partition" {
     var pivot: i64 = 0;
 
     var arr: [32]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [32]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [32]i64{
         1, 3, 5, 7, 9,  11, 13, 15, 17, 17, 17, 17, 17, 17, 17, 17,
@@ -809,7 +809,7 @@ fn median_of_cube_root(
 
     // Using a pointer to div as an int is to get a random offset from 0 to div.
     var arr_ptr = x_ptr + (@intFromPtr(&div) / 16 % div) * element_width;
-    var swap_ptr = if (x_ptr == array) swap else array;
+    const swap_ptr = if (x_ptr == array) swap else array;
 
     for (0..cbrt) |cnt| {
         copy(swap_ptr + cnt * element_width, arr_ptr);
@@ -953,7 +953,7 @@ fn binary_median(
             ptr_b += len * element_width;
         }
     }
-    var from = if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) == GT) ptr_a else ptr_b;
+    const from = if (compare(cmp, cmp_data, ptr_a, ptr_b, indirect) == GT) ptr_a else ptr_b;
     copy(out, from);
 }
 
@@ -963,10 +963,10 @@ test "median_of_cube_root" {
     var generic = false;
 
     var swap: [32]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
     {
         var arr: [32]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [32]i64{
             1, 3, 5, 7, 9,  11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31,
@@ -1001,7 +1001,7 @@ test "median_of_nine" {
 
     {
         var arr: [9]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
         median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
@@ -1030,7 +1030,7 @@ test "trim_four" {
     var test_count: i64 = 0;
 
     var arr: [4]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
     arr = [4]i64{ 1, 2, 3, 4 };
     trim_four(arr_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -1054,7 +1054,7 @@ test "binary_median" {
 
     {
         var arr: [10]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
         binary_median(arr_ptr, arr_ptr + 5 * @sizeOf(i64), 5, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
@@ -1068,7 +1068,7 @@ test "binary_median" {
     }
     {
         var arr: [16]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [16]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16 };
         binary_median(arr_ptr, arr_ptr + 8 * @sizeOf(i64), 8, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
@@ -1141,7 +1141,7 @@ pub fn quadsort(
     } else {
         if (utils.alloc(len * @sizeOf(usize), @alignOf(usize))) |alloc_ptr| {
             // Build list of pointers to sort.
-            var arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
+            const arr_ptr = @as([*]Opaque, @ptrCast(@alignCast(alloc_ptr)));
             defer utils.dealloc(alloc_ptr, @alignOf(usize));
             for (0..len) |i| {
                 arr_ptr[i] = array + i * element_width;
@@ -1184,7 +1184,7 @@ fn quadsort_direct(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) void {
-    var arr_ptr = array;
+    const arr_ptr = array;
     if (len < 32) {
         // TODO: This is a solid amount of stack space. Is that ok?
         // That said, it only ever allocates once (not recursive).
@@ -1194,7 +1194,7 @@ fn quadsort_direct(
         const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
         tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
     } else if (quad_swap(arr_ptr, len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect) != .sorted) {
-        var swap_len = len;
+        const swap_len = len;
 
         // This is optional, for about 5% perf hit, lower memory usage on large arrays.
         // if (len > 4194304) {
@@ -1253,7 +1253,7 @@ fn rotate_merge(
     inc_n_data: IncN,
     comptime indirect: bool,
 ) void {
-    var end_ptr = array + len * element_width;
+    const end_ptr = array + len * element_width;
 
     if (len <= block_len * 2 and len -% block_len <= swap_len) {
         partial_backwards_merge(array, len, swap, swap_len, block_len, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
@@ -1301,10 +1301,10 @@ fn rotate_merge_block(
         return;
     }
 
-    var right_block = left_block / 2;
+    const right_block = left_block / 2;
     left_block -= right_block;
 
-    var left = monobound_binary_first(array + (left_block + right_block) * element_width, right, array + left_block * element_width, cmp, cmp_data, element_width, data_is_owned, inc_n_data, indirect);
+    const left = monobound_binary_first(array + (left_block + right_block) * element_width, right, array + left_block * element_width, cmp, cmp_data, element_width, data_is_owned, inc_n_data, indirect);
     right -= left;
 
     if (left != 0) {
@@ -1473,7 +1473,7 @@ fn trinity_rotation(
             var bridge = left_len - right_len;
             if (bridge <= swap_len and bridge > 3) {
                 var c_ptr = a_ptr + right_len * element_width;
-                var d_ptr = c_ptr + left_len * element_width;
+                const d_ptr = c_ptr + left_len * element_width;
 
                 @memcpy(swap[0..(bridge * element_width)], c_ptr[0..(bridge * element_width)]);
 
@@ -1543,9 +1543,9 @@ test "rotate_merge" {
     var test_count: i64 = 0;
 
     var arr: [10]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [10]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
     rotate_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -1573,9 +1573,9 @@ test "monobound_binary_first" {
     var test_count: i64 = 0;
 
     var arr = [25]i64{ 1, 3, 5, 7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27, 29, 31, 33, 35, 37, 39, 41, 43, 45, 47, 49 };
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var value: i64 = undefined;
-    var value_ptr = @as([*]u8, @ptrCast(&value));
+    const value_ptr = @as([*]u8, @ptrCast(&value));
 
     value = 7;
     var res = monobound_binary_first(arr_ptr, 25, value_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), true, &test_inc_n_data, false);
@@ -1606,9 +1606,9 @@ test "monobound_binary_first" {
 test "trinity_rotation" {
     {
         var arr: [10]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         var swap: [10]i64 = undefined;
-        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         // Even.
         arr = [10]i64{ 6, 7, 8, 9, 10, 1, 2, 3, 4, 5 };
@@ -1637,9 +1637,9 @@ test "trinity_rotation" {
     }
     {
         var arr: [16]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         var swap: [5]i64 = undefined;
-        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         // left larger, bridge in swap.
         arr = [16]i64{ 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 1, 2, 3, 4, 5, 6 };
@@ -1781,8 +1781,8 @@ fn partial_backwards_merge(
                     inc_n_data(cmp_data, 2);
                 }
                 const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != GT;
-                var x = if (lte) element_width else 0;
-                var not_x = if (!lte) element_width else 0;
+                const x = if (lte) element_width else 0;
+                const not_x = if (!lte) element_width else 0;
                 dest_tail -= element_width;
                 copy(dest_tail + x, right_tail);
                 right_tail -= element_width;
@@ -1816,8 +1816,8 @@ fn partial_backwards_merge(
         }
         // Couldn't move two elements, do a cross swap and continue.
         const lte = compare(cmp, cmp_data, left_tail, right_tail, indirect) != GT;
-        var x = if (lte) element_width else 0;
-        var not_x = if (!lte) element_width else 0;
+        const x = if (lte) element_width else 0;
+        const not_x = if (!lte) element_width else 0;
         dest_tail -= element_width;
         copy(dest_tail + x, right_tail);
         right_tail -= element_width;
@@ -1983,8 +1983,8 @@ fn partial_forward_merge(
         }
         // Couldn't move two elements, do a cross swap and continue.
         const lte = compare(cmp, cmp_data, left_head, right_head, indirect) != GT;
-        var x = if (lte) element_width else 0;
-        var not_x = if (!lte) element_width else 0;
+        const x = if (lte) element_width else 0;
+        const not_x = if (!lte) element_width else 0;
         copy(dest_head + x, right_head);
         right_head += element_width;
         copy(dest_head + not_x, left_head);
@@ -2096,9 +2096,9 @@ test "tail_merge" {
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [10]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
     tail_merge(arr_ptr, 10, swap_ptr, 10, 2, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -2122,9 +2122,9 @@ test "partial_backwards_merge" {
         const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
         var arr: [10]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         var swap: [10]i64 = undefined;
-        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
         partial_backwards_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -2154,9 +2154,9 @@ test "partial_backwards_merge" {
         }
 
         var arr: [64]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         var swap: [64]i64 = undefined;
-        var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+        const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
         // chunks
         for (0..16) |i| {
@@ -2202,9 +2202,9 @@ test "partial_forward_merge" {
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [10]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [10]i64{ 3, 4, 5, 6, 7, 8, 1, 2, 9, 10 };
     partial_forward_merge(arr_ptr, 10, swap_ptr, 10, 6, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -2461,9 +2461,9 @@ test "quad_merge" {
     const expected = [10]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9, 10 };
 
     var arr: [10]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [10]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
     var size: usize = undefined;
 
     arr = [10]i64{ 7, 8, 5, 6, 3, 4, 1, 2, 9, 10 };
@@ -2503,9 +2503,9 @@ test "quad_merge_block" {
     const expected = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
 
     var arr: [8]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
     var swap: [8]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     // case 0 - totally unsorted
     arr = [8]i64{ 7, 8, 5, 6, 3, 4, 1, 2 };
@@ -2547,8 +2547,8 @@ test "cross_merge" {
 
     var src: [64]i64 = undefined;
     var dest: [64]i64 = undefined;
-    var src_ptr = @as([*]u8, @ptrCast(&src[0]));
-    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+    const src_ptr = @as([*]u8, @ptrCast(&src[0]));
+    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
     // Opitimal case, ordered but swapped
     for (0..32) |i| {
@@ -2941,7 +2941,7 @@ fn quad_reversal(
 test "quad_swap" {
     var test_count: i64 = 0;
     var arr: [75]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
     arr = [75]i64{
         // multiple ordered chunks
@@ -2997,8 +2997,8 @@ test "quad_swap" {
 test "quad_swap_merge" {
     var arr: [8]i64 = undefined;
     var swap: [8]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     arr = [8]i64{ 5, 6, 7, 8, 1, 2, 3, 4 };
     swap = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -3019,15 +3019,15 @@ test "quad_swap_merge" {
 test "quad_reversal" {
     {
         var arr = [8]i64{ 8, 7, 6, 5, 4, 3, 2, 1 };
-        var start_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var end_ptr = @as([*]u8, @ptrCast(&arr[7]));
+        const start_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const end_ptr = @as([*]u8, @ptrCast(&arr[7]));
         quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 });
     }
     {
         var arr = [9]i64{ 9, 8, 7, 6, 5, 4, 3, 2, 1 };
-        var start_ptr = @as([*]u8, @ptrCast(&arr[0]));
-        var end_ptr = @as([*]u8, @ptrCast(&arr[8]));
+        const start_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const end_ptr = @as([*]u8, @ptrCast(&arr[8]));
         quad_reversal(start_ptr, end_ptr, @sizeOf(i64), &test_i64_copy);
         try testing.expectEqual(arr, [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 });
     }
@@ -3130,7 +3130,7 @@ fn parity_merge(
 test "tail_swap" {
     var test_count: i64 = 0;
     var swap: [31]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     var arr: [31]i64 = undefined;
     var expected: [31]i64 = undefined;
@@ -3138,7 +3138,7 @@ test "tail_swap" {
         arr[i] = @intCast(i + 1);
         expected[i] = @intCast(i + 1);
     }
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
     for (0..10) |seed| {
         var rng = std.rand.DefaultPrng.init(seed);
@@ -3154,10 +3154,10 @@ test "parity_merge" {
     var test_count: i64 = 0;
     {
         var dest: [8]i64 = undefined;
-        var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+        const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
         var arr: [8]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [8]i64{ 1, 3, 5, 7, 2, 4, 6, 8 };
         dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -3173,10 +3173,10 @@ test "parity_merge" {
     }
     {
         var dest: [9]i64 = undefined;
-        var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+        const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
         var arr: [9]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [9]i64{ 1, 3, 5, 8, 2, 4, 6, 7, 9 };
         dest = [9]i64{ 0, 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -3395,8 +3395,8 @@ fn parity_swap_six(
     }
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == GT;
-        var x = if (gt) element_width else 0;
-        var not_x = if (!gt) element_width else 0;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
         copy(swap, arr_ptr + x);
         copy(swap + element_width, arr_ptr + not_x);
         copy(swap + 2 * element_width, arr_ptr + 2 * element_width);
@@ -3404,8 +3404,8 @@ fn parity_swap_six(
     }
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == GT;
-        var x = if (gt) element_width else 0;
-        var not_x = if (!gt) element_width else 0;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
         copy(swap + 4 * element_width, arr_ptr + x);
         copy(swap + 5 * element_width, arr_ptr + not_x);
         copy(swap + 3 * element_width, arr_ptr - element_width);
@@ -3472,8 +3472,8 @@ fn parity_swap_seven(
 
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == GT;
-        var x = if (gt) element_width else 0;
-        var not_x = if (!gt) element_width else 0;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
         copy(swap, arr_ptr + x);
         copy(swap + element_width, arr_ptr + not_x);
         copy(swap + 2 * element_width, arr_ptr + 2 * element_width);
@@ -3481,16 +3481,16 @@ fn parity_swap_seven(
     }
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == GT;
-        var x = if (gt) element_width else 0;
-        var not_x = if (!gt) element_width else 0;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
         copy(swap + 3 * element_width, arr_ptr + x);
         copy(swap + 4 * element_width, arr_ptr + not_x);
         arr_ptr += 2 * element_width;
     }
     {
         const gt = compare(cmp, cmp_data, arr_ptr, arr_ptr + element_width, indirect) == GT;
-        var x = if (gt) element_width else 0;
-        var not_x = if (!gt) element_width else 0;
+        const x = if (gt) element_width else 0;
+        const not_x = if (!gt) element_width else 0;
         copy(swap + 5 * element_width, arr_ptr + x);
         copy(swap + 6 * element_width, arr_ptr + not_x);
     }
@@ -3518,11 +3518,11 @@ fn parity_swap_seven(
 test "tiny_sort" {
     var test_count: i64 = 0;
     var swap: [7]i64 = undefined;
-    var swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
+    const swap_ptr = @as([*]u8, @ptrCast(&swap[0]));
 
     {
         var arr: [7]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [7]i64{ 3, 1, 2, 5, 4, 7, 6 };
         tiny_sort(arr_ptr, 7, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -3536,7 +3536,7 @@ test "tiny_sort" {
     }
     {
         var arr: [6]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [6]i64{ 3, 1, 2, 6, 4, 5 };
         tiny_sort(arr_ptr, 6, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -3550,7 +3550,7 @@ test "tiny_sort" {
     }
     {
         var arr: [5]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [5]i64{ 2, 1, 4, 3, 5 };
         tiny_sort(arr_ptr, 5, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -3564,7 +3564,7 @@ test "tiny_sort" {
     }
     {
         var arr: [4]i64 = undefined;
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
         arr = [4]i64{ 4, 2, 1, 3 };
         tiny_sort(arr_ptr, 4, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
@@ -3578,14 +3578,14 @@ test "tiny_sort" {
     }
     {
         var arr = [3]i64{ 2, 3, 1 };
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         tiny_sort(arr_ptr, 3, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
         try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [3]i64{ 1, 2, 3 });
     }
     {
         var arr = [2]i64{ 2, 1 };
-        var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+        const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
         tiny_sort(arr_ptr, 2, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);
         try testing.expectEqual(test_count, 0);
         try testing.expectEqual(arr, [2]i64{ 1, 2 });
@@ -3734,7 +3734,7 @@ inline fn swap_branchless_return_gt(
 ) u8 {
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const gt = compare(cmp, cmp_data, ptr, ptr + element_width, indirect) == GT;
-    var x = if (gt) element_width else 0;
+    const x = if (gt) element_width else 0;
     const from = if (gt) ptr else ptr + element_width;
     copy(tmp, from);
     copy(ptr, ptr + x);
@@ -3783,8 +3783,8 @@ inline fn compare_inc(
 test "parity_merge_four" {
     var arr: [8]i64 = undefined;
     var dest: [8]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
     arr = [8]i64{ 1, 2, 3, 4, 5, 6, 7, 8 };
     dest = [8]i64{ 0, 0, 0, 0, 0, 0, 0, 0 };
@@ -3805,8 +3805,8 @@ test "parity_merge_four" {
 test "parity_merge_two" {
     var arr: [4]i64 = undefined;
     var dest: [4]i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const dest_ptr = @as([*]u8, @ptrCast(&dest[0]));
 
     arr = [4]i64{ 1, 2, 3, 4 };
     dest = [4]i64{ 0, 0, 0, 0 };
@@ -3873,8 +3873,8 @@ test "tail_branchless_merge" {
 test "swap" {
     var arr: [2]i64 = undefined;
     var tmp: i64 = undefined;
-    var arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
-    var tmp_ptr = @as([*]u8, @ptrCast(&tmp));
+    const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
+    const tmp_ptr = @as([*]u8, @ptrCast(&tmp));
 
     arr = [2]i64{ 10, 20 };
     swap_branchless(arr_ptr, tmp_ptr, &test_i64_compare, null, @sizeOf(i64), &test_i64_copy, false);

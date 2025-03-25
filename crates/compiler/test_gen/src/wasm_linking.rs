@@ -66,7 +66,7 @@ fn build_app_mono<'a>(
 
     let or1_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([js_call_result, host_call_result]),
@@ -74,7 +74,7 @@ fn build_app_mono<'a>(
 
     let or2_expr = Expr::Call(Call {
         call_type: CallType::LowLevel {
-            op: LowLevel::Or,
+            op: LowLevel::NumBitwiseOr,
             update_mode: UpdateModeId::BACKEND_DUMMY,
         },
         arguments: arena.alloc([or1, bitflag]),
@@ -293,17 +293,20 @@ fn test_help(
         fs::write(dump_filename, &buffer).unwrap();
     }
 
-    let linked_import_names = Vec::from_iter(linked_module.import.imports.iter().map(|i| i.name));
+    let mut linked_import_names =
+        Vec::from_iter(linked_module.import.imports.iter().map(|i| i.name));
+    linked_import_names.sort();
     assert_eq!(&linked_import_names, expected_linked_import_names);
 
     // eliminated imports appear after the non-eliminated ones in the name section
     let import_count = linked_import_names.len();
     let eliminated_count = expected_eliminated_names.len();
-    let eliminated_names = Vec::from_iter(
+    let mut eliminated_names = Vec::from_iter(
         linked_module.names.function_names[import_count..][..eliminated_count]
             .iter()
             .map(|(_, name)| *name),
     );
+    eliminated_names.sort();
     assert_eq!(&eliminated_names, expected_eliminated_names);
 
     let wasm_result = execute_wasm_module(&arena, linked_module).unwrap();

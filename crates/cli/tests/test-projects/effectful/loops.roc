@@ -5,12 +5,12 @@ import pf.Effect
 main! : {} => {}
 main! = \{} ->
     friends = ["Lu", "Marce", "Joaquin", "Chloé", "Mati", "Pedro"]
-    printAll! friends
+    print_all!(friends)
 
-printAll! : List Str => {}
-printAll! = \friends ->
+print_all! : List Str => {}
+print_all! = \friends ->
     when friends is
         [] -> {}
         [first, .. as remaining] ->
-            Effect.putLine! first
-            printAll! remaining
+            Effect.put_line!(first)
+            print_all!(remaining)

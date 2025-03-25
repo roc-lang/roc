@@ -1,5 +1,5 @@
 on:
-  #pull_request:
+#  pull_request:
   workflow_dispatch:
 
 # this cancels workflows currently in progress if you start a new one
@@ -7,14 +7,17 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
-  RELEASE_TAG: 0.8.0
+  RELEASE_TAG: 0.12.0
 
 jobs:
   fetch-releases:
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v4
 
@@ -23,19 +26,14 @@ jobs:
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-latest.tar.gz
       - run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-latest.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_arm64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_x86_64-TESTING.tar.gz
-      #- run: curl -fOL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-macos_apple_silicon-TESTING.tar.gz
-
 
       - name: Save roc_nightly archives
         uses: actions/upload-artifact@v4
         with:
-          path:  roc_nightly-*
+          path: roc_nightly-*
 
   build-linux-x86_64-files:
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v4
@@ -57,7 +55,6 @@ jobs:
             basic-webserver/platform/linux-x64.rh
             basic-webserver/platform/linux-x64.a
 
-
   build-linux-arm64-files:
     runs-on: [self-hosted, Linux, ARM64]
     needs: [fetch-releases]
@@ -70,8 +67,8 @@ jobs:
       - name: build basic-webserver
         env:
           CARGO_BUILD_TARGET: aarch64-unknown-linux-musl
-          CC_aarch64_unknown_linux_musl: clang-16
-          AR_aarch64_unknown_linux_musl: llvm-ar-16
+          CC_aarch64_unknown_linux_musl: clang-18
+          AR_aarch64_unknown_linux_musl: llvm-ar-18
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS: "-Clink-self-contained=yes -Clinker=rust-lld"
         run: ./ci/build_basic_webserver.sh linux_arm64
 
@@ -83,7 +80,7 @@ jobs:
             basic-webserver/platform/linux-arm64.a
 
   build-macos-x86_64-files:
-    runs-on: [macos-12] # I expect the generated files to work on macOS 12 and up
+    runs-on: [macos-13] # I expect the generated files to work on macOS 13 and up
     needs: [fetch-releases]
     steps:
       - uses: actions/checkout@v4
@@ -120,9 +117,15 @@ jobs:
             basic-webserver/platform/macos-arm64.a
 
   create-release-archive:
-    needs: [build-linux-x86_64-files, build-linux-arm64-files, build-macos-x86_64-files, build-macos-apple-silicon-files]
+    needs:
+      [
+        build-linux-x86_64-files,
+        build-linux-arm64-files,
+        build-macos-x86_64-files,
+        build-macos-apple-silicon-files,
+      ]
     name: create release archive
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     steps:
       - uses: actions/checkout@v4
 
@@ -168,3 +171,17 @@ jobs:
           name: basic-webserver-platform
           path: |
             ${{ env.TAR_FILENAME }}
+
+      - name: build basic-webserver docs
+        env:
+          ROC_DOCS_URL_ROOT: /basic-webserver/${{ env.RELEASE_TAG }}
+        run: |
+          ./roc_nightly/roc docs ./basic-webserver/platform/main.roc
+          tar -czvf docs.tar.gz generated-docs/
+
+      - name: Upload docs archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-docs
+          path: |
+            docs.tar.gz

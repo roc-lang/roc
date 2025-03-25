@@ -179,21 +179,17 @@ pub const RocList = extern struct {
     }
 
     pub fn isUnique(self: RocList) bool {
-        return self.refcountMachine() == utils.REFCOUNT_ONE;
+        return utils.rcUnique(@bitCast(self.refcount()));
     }
 
-    fn refcountMachine(self: RocList) usize {
+    fn refcount(self: RocList) usize {
         if (self.getCapacity() == 0 and !self.isSeamlessSlice()) {
             // the zero-capacity is Clone, copying it will not leak memory
-            return utils.REFCOUNT_ONE;
+            return 1;
         }
 
         const ptr: [*]usize = @as([*]usize, @ptrCast(@alignCast(self.getAllocationDataPtr())));
         return (ptr - 1)[0];
-    }
-
-    fn refcountHuman(self: RocList) usize {
-        return self.refcountMachine() - utils.REFCOUNT_ONE + 1;
     }
 
     pub fn makeUniqueExtra(self: RocList, alignment: u32, element_width: usize, elements_refcounted: bool, dec: Dec, update_mode: UpdateMode) RocList {
@@ -931,7 +927,7 @@ inline fn listReplaceInPlaceHelp(
     copy: CopyFn,
 ) RocList {
     // the element we will replace
-    var element_at_index = (list.bytes orelse unreachable) + (index * element_width);
+    const element_at_index = (list.bytes orelse unreachable) + (index * element_width);
 
     // copy out the old element
     copy((out_element orelse unreachable), element_at_index);

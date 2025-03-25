@@ -1,12 +1,12 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.282 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.282;
+    let Num.284 : I64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.284;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.281 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : I64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.283;
 
-procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
+procedure Test.1 (Bool.21, Bool.22):
     joinpoint Test.7 Test.2 Test.3:
         let Test.13 : I64 = 0i64;
         let Test.14 : Int1 = lowlevel Eq Test.13 Test.2;
@@ -18,7 +18,7 @@ procedure Test.1 (#Derived_gen.0, #Derived_gen.1):
             let Test.11 : I64 = CallByName Num.21 Test.2 Test.3;
             jump Test.7 Test.10 Test.11;
     in
-    jump Test.7 #Derived_gen.0 #Derived_gen.1;
+    jump Test.7 Bool.21 Bool.22;
 
 procedure Test.0 ():
     let Test.5 : I64 = 10i64;

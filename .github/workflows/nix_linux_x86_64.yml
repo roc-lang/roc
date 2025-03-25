@@ -6,6 +6,9 @@ name: Nix linux x86_64 cargo test
 env:
   RUST_BACKTRACE: 1
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
   nix-linux-x86:
     name: nix-linux-x86
@@ -18,22 +21,22 @@ jobs:
         run: nix-build
 
       - name: execute tests with --release
-        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
         run: nix develop -c cargo test --locked --release -- --skip glue_cli_tests
 
       - name: glue_cli_tests
-        # single threaded due to difficult bug when multithreading
+        # single threaded due to difficult bug when multithreading, see #7476
         run: nix develop -c cargo test --locked --release glue_cli_tests -- --test-threads=1
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
 
       - name: test wasm32 cli_tests
-        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step
+        # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" -- --skip glue_cli_tests
 
       - name: wasm32 glue_cli_tests
-        # single threaded due to difficult bug when multithreading
+        # single threaded due to difficult bug when multithreading, see #7476
         run: nix develop -c cargo test --locked --release --features="wasm32-cli-run" glue_cli_tests -- --test-threads=1
 
       - name: test the dev backend # these tests require an explicit feature flag

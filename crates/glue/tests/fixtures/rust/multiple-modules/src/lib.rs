@@ -7,7 +7,9 @@ pub extern "C" fn rust_main() {
     use std::cmp::Ordering;
     use std::collections::hash_set::HashSet;
 
-    let tag_union = roc_app::mainForHost();
+    init();
+
+    let tag_union = roc_app::main_for_host();
 
     // Verify that it has all the expected traits.
 
@@ -82,4 +84,51 @@ pub unsafe extern "C" fn roc_dbg(loc: *mut RocStr, msg: *mut RocStr, src: *mut R
 #[no_mangle]
 pub unsafe extern "C" fn roc_memset(dst: *mut c_void, c: i32, n: usize) -> *mut c_void {
     libc::memset(dst, c, n)
+}
+
+pub fn init() {
+    if cfg!(unix) {
+        let unix_funcs: &[*const extern "C" fn()] =
+            &[roc_getppid as _, roc_mmap as _, roc_shm_open as _];
+        #[allow(forgetting_references)]
+        std::mem::forget(std::hint::black_box(unix_funcs));
+    }
+}
+
+/// # Safety
+///
+/// This function is unsafe.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_getppid() -> libc::pid_t {
+    libc::getppid()
+}
+
+/// # Safety
+///
+/// This function should be called with a valid addr pointer.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_mmap(
+    addr: *mut libc::c_void,
+    len: libc::size_t,
+    prot: libc::c_int,
+    flags: libc::c_int,
+    fd: libc::c_int,
+    offset: libc::off_t,
+) -> *mut libc::c_void {
+    libc::mmap(addr, len, prot, flags, fd, offset)
+}
+
+/// # Safety
+///
+/// This function should be called with a valid name pointer.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn roc_shm_open(
+    name: *const libc::c_char,
+    oflag: libc::c_int,
+    mode: libc::mode_t,
+) -> libc::c_int {
+    libc::shm_open(name, oflag, mode as libc::c_uint)
 }

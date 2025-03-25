@@ -1,13 +1,12 @@
 on:
-  pull_request:
+  workflow_call:
   schedule:
     - cron: '0 9 * * *' # 9=9am utc+0
 
-name: Check Markdown links
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
 
-concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+name: Check Markdown links
 
 jobs:
   markdown-link-check:

@@ -2,32 +2,32 @@
 source: crates/cli/tests/cli_tests.rs
 expression: cli_dev_out.normalize_stdout_and_stderr()
 ---
-App1.baseUrl: https://api.example.com/one
-App2.baseUrl: http://api.example.com/two
-App3.baseUrl: https://api.example.com/three
-App1.getUser 1: https://api.example.com/one/users/1
-App2.getUser 2: http://api.example.com/two/users/2
-App3.getUser 3: https://api.example.com/three/users/3
-App1.getPost 1: https://api.example.com/one/posts/1
-App2.getPost 2: http://api.example.com/two/posts/2
-App3.getPost 3: https://api.example.com/three/posts/3
-App1.getPosts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
-App2.getPosts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
-App2.getPosts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
-App1.getPostComments 1: https://api.example.com/one/posts/1/comments
-App2.getPostComments 2: http://api.example.com/two/posts/2/comments
-App2.getPostComments 3: http://api.example.com/two/posts/3/comments
-App1.getCompanies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
-App2.getCompanies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
-App2.getCompanies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
-App1.getPostAliased 1: https://api.example.com/one/posts/1
-App2.getPostAliased 2: http://api.example.com/two/posts/2
-App3.getPostAliased 3: https://api.example.com/three/posts/3
-App1.baseUrlAliased: https://api.example.com/one
-App2.baseUrlAliased: http://api.example.com/two
-App3.baseUrlAliased: https://api.example.com/three
-App1.getUserSafe 1: https://api.example.com/one/users/1
-Prod.getUserSafe 2: http://api.example.com/prod_1/users/2?safe=true
-usersApp1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
-getUserApp3Nested 3: https://api.example.com/three/users/3
-usersApp3Passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]
+App1.base_url: https://api.example.com/one
+App2.base_url: http://api.example.com/two
+App3.base_url: https://api.example.com/three
+App1.get_user 1: https://api.example.com/one/users/1
+App2.get_user 2: http://api.example.com/two/users/2
+App3.get_user 3: https://api.example.com/three/users/3
+App1.get_post 1: https://api.example.com/one/posts/1
+App2.get_post 2: http://api.example.com/two/posts/2
+App3.get_post 3: https://api.example.com/three/posts/3
+App1.get_posts [1, 2]: ["https://api.example.com/one/posts/1", "https://api.example.com/one/posts/2"]
+App2.get_posts [3, 4]: ["http://api.example.com/two/posts/3", "http://api.example.com/two/posts/4"]
+App2.get_posts [5, 6]: ["http://api.example.com/two/posts/5", "http://api.example.com/two/posts/6"]
+App1.get_post_comments 1: https://api.example.com/one/posts/1/comments
+App2.get_post_comments 2: http://api.example.com/two/posts/2/comments
+App2.get_post_comments 3: http://api.example.com/two/posts/3/comments
+App1.get_companies [1, 2]: ["https://api.example.com/one/companies/1", "https://api.example.com/one/companies/2"]
+App2.get_companies [3, 4]: ["http://api.example.com/two/companies/3", "http://api.example.com/two/companies/4"]
+App2.get_companies [5, 6]: ["http://api.example.com/two/companies/5", "http://api.example.com/two/companies/6"]
+App1.get_post_aliased 1: https://api.example.com/one/posts/1
+App2.get_post_aliased 2: http://api.example.com/two/posts/2
+App3.get_post_aliased 3: https://api.example.com/three/posts/3
+App1.base_url_aliased: https://api.example.com/one
+App2.base_url_aliased: http://api.example.com/two
+App3.base_url_aliased: https://api.example.com/three
+App1.get_user_safe 1: https://api.example.com/one/users/1
+Prod.get_user_safe 2: http://api.example.com/prod_1/users/2?safe=true
+users_app1: ["https://api.example.com/one/users/1", "https://api.example.com/one/users/2", "https://api.example.com/one/users/3"]
+get_user_app3_nested 3: https://api.example.com/three/users/3
+users_app3_passed: ["https://api.example.com/three/users/1", "https://api.example.com/three/users/2", "https://api.example.com/three/users/3"]

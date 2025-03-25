@@ -19,7 +19,7 @@ pub fn add_default_roc_externs(env: &Env<'_, '_, '_>) {
     let builder = env.builder;
 
     let usize_type = env.ptr_int();
-    let i8_ptr_type = ctx.i8_type().ptr_type(AddressSpace::default());
+    let i8_ptr_type = env.context.ptr_type(AddressSpace::default());
 
     match env.mode {
         super::build::LlvmBackendMode::CliTest => {
@@ -331,7 +331,7 @@ pub fn build_longjmp_call(env: &Env) {
         // Call the LLVM-intrinsic longjmp: `void @llvm.eh.sjlj.longjmp(i8* %setjmp_buf)`
         let jmp_buf_i8p = env.builder.new_build_pointer_cast(
             jmp_buf,
-            env.context.i8_type().ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "jmp_buf i8*",
         );
         let _call = env.build_intrinsic_call(LLVM_LONGJMP, &[jmp_buf_i8p.into()]);

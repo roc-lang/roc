@@ -254,7 +254,6 @@ impl IterTokens for AppHeader<'_> {
 
         (provides.iter_tokens(arena).into_iter())
             .chain(packages.value.iter_tokens(arena))
-            .chain(provides.iter_tokens(arena))
             .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
@@ -300,15 +299,13 @@ impl IterTokens for PlatformHeader<'_> {
 impl IterTokens for HostedHeader<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
         let Self {
-            before_name: _,
-            name,
+            before_exposes: _,
             exposes,
-            imports,
+            old_imports,
         } = self;
 
-        (name.iter_tokens(arena).into_iter())
-            .chain(exposes.item.iter_tokens(arena))
-            .chain(imports.item.iter_tokens(arena))
+        (exposes.iter_tokens(arena).into_iter())
+            .chain(old_imports.iter().flat_map(|i| i.item.iter_tokens(arena)))
             .collect_in(arena)
     }
 }
@@ -535,12 +532,7 @@ impl IterTokens for Loc<ImplementsAbilities<'_>> {
 
 impl IterTokens for ImplementsAbilities<'_> {
     fn iter_tokens<'a>(&self, arena: &'a Bump) -> BumpVec<'a, Loc<Token>> {
-        match self {
-            ImplementsAbilities::Implements(impls) => impls.iter_tokens(arena),
-            ImplementsAbilities::SpaceBefore(i, _) | ImplementsAbilities::SpaceAfter(i, _) => {
-                i.iter_tokens(arena)
-            }
-        }
+        self.item.value.iter_tokens(arena)
     }
 }
 
@@ -661,7 +653,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::AccessorFunction(accessor) => Loc::at(region, accessor).iter_tokens(arena),
             Expr::RecordUpdater(updater) => Loc::at(region, updater).iter_tokens(arena),
             Expr::TupleAccess(tup, _field) => Loc::at(region, *tup).iter_tokens(arena),
-            Expr::TrySuffix { expr: inner, .. } => Loc::at(region, *inner).iter_tokens(arena),
+            Expr::TrySuffix(inner) => Loc::at(region, *inner).iter_tokens(arena),
             Expr::List(lst) => lst.iter_tokens(arena),
             Expr::RecordUpdate { update, fields } => (update.iter_tokens(arena).into_iter())
                 .chain(fields.iter().flat_map(|f| f.iter_tokens(arena)))
@@ -682,15 +674,12 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Defs(defs, exprs) => (defs.iter_tokens(arena).into_iter())
                 .chain(exprs.iter_tokens(arena))
                 .collect_in(arena),
-            Expr::Backpassing(patterns, e1, e2) => (patterns.iter_tokens(arena).into_iter())
-                .chain(e1.iter_tokens(arena))
-                .chain(e2.iter_tokens(arena))
-                .collect_in(arena),
             Expr::Dbg => onetoken(Token::Keyword, region, arena),
             Expr::DbgStmt {
                 first,
                 extra_args,
                 continuation,
+                pnc_style: _,
             } => (first.iter_tokens(arena).into_iter())
                 .chain(extra_args.iter_tokens(arena))
                 .chain(continuation.iter_tokens(arena))
@@ -701,6 +690,9 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::Try => onetoken(Token::Keyword, region, arena),
             Expr::LowLevelTry(e1, _) => e1.iter_tokens(arena),
             Expr::Apply(e1, e2, _called_via) => (e1.iter_tokens(arena).into_iter())
+                .chain(e2.iter_tokens(arena))
+                .collect_in(arena),
+            Expr::PncApply(e1, e2) => (e1.iter_tokens(arena).into_iter())
                 .chain(e2.iter_tokens(arena))
                 .collect_in(arena),
             Expr::BinOps(e1, e2) => (e1.iter_tokens(arena).into_iter())
@@ -731,9 +723,7 @@ impl IterTokens for Loc<Expr<'_>> {
             Expr::EmptyRecordBuilder(e) => e.iter_tokens(arena),
             Expr::SingleFieldRecordBuilder(e) => e.iter_tokens(arena),
             Expr::OptionalFieldInRecordBuilder(_name, e) => e.iter_tokens(arena),
-            Expr::MalformedIdent(_, _)
-            | Expr::PrecedenceConflict(_)
-            | Expr::MalformedSuffixed(_) => {
+            Expr::MalformedIdent(_, _) | Expr::PrecedenceConflict(_) => {
                 bumpvec![in arena;]
             }
         }
@@ -774,6 +764,9 @@ impl IterTokens for Loc<Pattern<'_>> {
             Pattern::Apply(p1, p2) => (p1.iter_tokens(arena).into_iter())
                 .chain(p2.iter_tokens(arena))
                 .collect_in(arena),
+            Pattern::PncApply(p1, p2) => (p1.iter_tokens(arena).into_iter())
+                .chain(p2.iter_tokens(arena))
+                .collect_in(arena),
             Pattern::RecordDestructure(ps) => ps.iter_tokens(arena),
             Pattern::RequiredField(_field, p) => p.iter_tokens(arena),
             Pattern::OptionalField(_field, p) => p.iter_tokens(arena),
@@ -794,7 +787,9 @@ impl IterTokens for Loc<Pattern<'_>> {
                 Loc::at(region, *p).iter_tokens(arena)
             }
             Pattern::QualifiedIdentifier { .. } => onetoken(Token::Variable, region, arena),
-            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => bumpvec![in arena;],
+            Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => {
+                bumpvec![in arena;]
+            }
         }
     }
 }

@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("glue").str;
+const str = @import("glue/str.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -9,7 +9,7 @@ const expect = testing.expect;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed(input: RocList) callconv(.C) RocList;
+extern fn roc__main_for_host_1_exposed(input: RocList) callconv(.C) RocList;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -22,7 +22,7 @@ const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
-        var ptr = malloc(size);
+        const ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
@@ -94,13 +94,13 @@ fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_
 
 comptime {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
-        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
     }
 
     if (builtin.os.tag == .windows) {
-        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
     }
 }
 
@@ -117,7 +117,7 @@ pub export fn main() u8 {
     var raw_numbers: [NUM_NUMS + 1]i64 = undefined;
 
     // set refcount to one
-    raw_numbers[0] = -9223372036854775808;
+    raw_numbers[0] = 1;
 
     var numbers = raw_numbers[1..];
 
@@ -125,14 +125,14 @@ pub export fn main() u8 {
         numbers[i] = @mod(@as(i64, @intCast(i)), 12);
     }
 
-    var roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
+    const roc_list = RocList{ .elements = numbers, .length = NUM_NUMS, .capacity = NUM_NUMS };
 
     // actually call roc to populate the callresult
-    const callresult: RocList = roc__mainForHost_1_exposed(roc_list);
+    const callresult: RocList = roc__main_for_host_1_exposed(roc_list);
 
     // stdout the result
     const length = @min(20, callresult.length);
-    var result = callresult.elements[0..length];
+    const result = callresult.elements[0..length];
 
     for (result, 0..) |x, i| {
         if (i == 0) {

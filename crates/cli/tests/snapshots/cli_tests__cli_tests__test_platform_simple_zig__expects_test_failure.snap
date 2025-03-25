@@ -1,6 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_test_out.normalize_stdout_and_stderr()
+snapshot_kind: text
 ---
 ── EXPECT FAILED in tests/test-projects/expects/expects.roc ────────────────────
 
@@ -31,7 +32,7 @@ a = 1
 This expectation failed:
 
 11│>  expect
-12│>      a = makeA
+12│>      a = make_a
 13│>      b = 2i64
 14│>
 15│>      a == b

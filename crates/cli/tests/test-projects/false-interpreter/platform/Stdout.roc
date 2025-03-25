@@ -1,13 +1,11 @@
-module [line, raw]
+module [line!, raw!]
 
-import pf.PlatformTasks
+import pf.Host
 
-line : Str -> Task {} *
-line = \text ->
-    PlatformTasks.putLine text
-    |> Task.mapErr \_ -> crash "unreachable Stdout.line"
+line! : Str => {}
+line! = \text ->
+    Host.put_line!(text)
 
-raw : Str -> Task {} *
-raw = \text ->
-    PlatformTasks.putRaw text
-    |> Task.mapErr \_ -> crash "unreachable Stdout.raw"
+raw! : Str => {}
+raw! = \text ->
+    Host.put_raw!(text)

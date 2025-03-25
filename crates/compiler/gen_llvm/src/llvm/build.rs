@@ -23,7 +23,7 @@ use inkwell::debug_info::{
 };
 use inkwell::memory_buffer::MemoryBuffer;
 use inkwell::module::{Linkage, Module};
-use inkwell::passes::{PassManager, PassManagerBuilder};
+use inkwell::passes::PassManager;
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FloatMathType, FunctionType,
     IntMathType, IntType, PointerMathType, StructType,
@@ -33,8 +33,8 @@ use inkwell::values::{
     FunctionValue, InstructionOpcode, InstructionValue, IntMathValue, IntValue, PhiValue,
     PointerMathValue, PointerValue, StructValue,
 };
+use inkwell::FloatPredicate;
 use inkwell::{AddressSpace, IntPredicate};
-use inkwell::{FloatPredicate, OptimizationLevel};
 use morphic_lib::{
     CalleeSpecVar, FuncName, FuncSpec, FuncSpecSolutions, ModSolutions, UpdateMode, UpdateModeVar,
 };
@@ -370,7 +370,7 @@ impl<'ctx> BuilderExt<'ctx> for Builder<'ctx> {
         T: BasicType<'ctx>,
         V: BasicValue<'ctx>,
     {
-        self.build_bitcast(val, ty, name).unwrap()
+        self.build_bit_cast(val, ty, name).unwrap()
     }
 
     fn new_build_pointer_cast<T: PointerMathValue<'ctx>>(
@@ -685,7 +685,7 @@ macro_rules! debug_info_init {
 pub enum LlvmBackendMode {
     /// Assumes primitives (roc_alloc, roc_panic, etc) are provided by the host
     Binary,
-    BinaryDev,
+    BinaryWithExpect,
     /// Creates a test wrapper around the main roc function to catch and report panics.
     /// Provides a testing implementation of primitives (roc_alloc, roc_panic, etc)
     BinaryGlue,
@@ -698,7 +698,7 @@ impl LlvmBackendMode {
     pub(crate) fn has_host(self) -> bool {
         match self {
             LlvmBackendMode::Binary => true,
-            LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryWithExpect => true,
             LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => true,
@@ -710,7 +710,7 @@ impl LlvmBackendMode {
     fn returns_roc_result(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
-            LlvmBackendMode::BinaryDev => false,
+            LlvmBackendMode::BinaryWithExpect => false,
             LlvmBackendMode::BinaryGlue => true,
             LlvmBackendMode::GenTest => true,
             LlvmBackendMode::WasmGenTest => true,
@@ -721,7 +721,7 @@ impl LlvmBackendMode {
     pub(crate) fn runs_expects(self) -> bool {
         match self {
             LlvmBackendMode::Binary => false,
-            LlvmBackendMode::BinaryDev => true,
+            LlvmBackendMode::BinaryWithExpect => true,
             LlvmBackendMode::BinaryGlue => false,
             LlvmBackendMode::GenTest => false,
             LlvmBackendMode::WasmGenTest => false,
@@ -1065,6 +1065,7 @@ pub fn module_from_builtins<'ctx>(
         "__modti3",
         "__muloti4",
         "__udivti3",
+        "__umodti3",
         // Roc special functions
         "__roc_force_longjmp",
         "__roc_force_setjmp",
@@ -1083,7 +1084,7 @@ pub fn module_from_builtins<'ctx>(
 
     // Note, running DCE here is faster then waiting until full app DCE.
     let mpm = PassManager::create(());
-    mpm.add_global_dce_pass();
+
     mpm.run_on(&module);
 
     // Now that the unused compiler-rt functions have been removed,
@@ -1099,80 +1100,6 @@ pub fn module_from_builtins<'ctx>(
     add_intrinsics(ctx, &module);
 
     module
-}
-
-pub fn construct_optimization_passes<'a>(
-    module: &'a Module,
-    opt_level: OptLevel,
-) -> (PassManager<Module<'a>>, PassManager<FunctionValue<'a>>) {
-    let mpm = PassManager::create(());
-    let fpm = PassManager::create(module);
-
-    // remove unused global values (e.g. those defined by zig, but unused in user code)
-    mpm.add_global_dce_pass();
-
-    mpm.add_always_inliner_pass();
-
-    // tail-call elimination is always on
-    fpm.add_instruction_combining_pass();
-    fpm.add_tail_call_elimination_pass();
-
-    let pmb = PassManagerBuilder::create();
-    match opt_level {
-        OptLevel::Development | OptLevel::Normal => {
-            pmb.set_optimization_level(OptimizationLevel::None);
-        }
-        OptLevel::Size => {
-            pmb.set_optimization_level(OptimizationLevel::Default);
-            // 2 is equivalent to `-Oz`.
-            pmb.set_size_level(2);
-
-            // TODO: For some usecase, like embedded, it is useful to expose this and tune it.
-            // This really depends on if inlining causes enough simplifications to reduce code size.
-            pmb.set_inliner_with_threshold(50);
-        }
-        OptLevel::Optimize => {
-            pmb.set_optimization_level(OptimizationLevel::Aggressive);
-            // this threshold seems to do what we want
-            pmb.set_inliner_with_threshold(750);
-        }
-    }
-
-    // Add extra optimization passes for Optimize.
-    if matches!(opt_level, OptLevel::Optimize) {
-        // TODO: figure out which of these actually help.
-        // Note, llvm probably already runs all of these as part of Aggressive.
-
-        // function passes
-
-        fpm.add_cfg_simplification_pass();
-        mpm.add_cfg_simplification_pass();
-
-        fpm.add_jump_threading_pass();
-        mpm.add_jump_threading_pass();
-
-        fpm.add_memcpy_optimize_pass(); // this one is very important
-
-        fpm.add_licm_pass();
-
-        // turn invoke into call
-        // TODO: is this pass needed. It theoretically prunes unused exception handling info.
-        // This seems unrelated to the comment above. It also seems to be missing in llvm-16.
-        // mpm.add_prune_eh_pass();
-
-        // remove unused global values (often the `_wrapper` can be removed)
-        mpm.add_global_dce_pass();
-
-        mpm.add_function_inlining_pass();
-    }
-
-    pmb.populate_module_pass_manager(&mpm);
-    pmb.populate_function_pass_manager(&fpm);
-
-    fpm.initialize();
-
-    // For now, we have just one of each
-    (mpm, fpm)
 }
 
 fn promote_to_main_function<'a, 'ctx>(
@@ -1247,8 +1174,8 @@ fn promote_to_wasm_test_wrapper<'a, 'ctx>(
     let roc_main_fn = function_value_by_func_spec(env, FuncBorrowSpec::Some(*func_spec), symbol);
 
     let output_type = match roc_main_fn.get_type().get_return_type() {
-        Some(return_type) => {
-            let output_type = return_type.ptr_type(AddressSpace::default());
+        Some(..) => {
+            let output_type = env.context.ptr_type(AddressSpace::default());
             output_type.into()
         }
         None => {
@@ -1441,7 +1368,7 @@ fn small_str_ptr_width_8<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> Po
     let cap = env.ptr_int().const_int(word3, false);
 
     let address_space = AddressSpace::default();
-    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr_type = env.context.ptr_type(address_space);
     let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
     const_str_alloca_ptr(env, ptr, len, cap)
@@ -1465,7 +1392,7 @@ fn small_str_ptr_width_4<'ctx>(env: &Env<'_, 'ctx, '_>, str_literal: &str) -> St
     let cap = env.ptr_int().const_int(word3 as u64, false);
 
     let address_space = AddressSpace::default();
-    let ptr_type = env.context.i8_type().ptr_type(address_space);
+    let ptr_type = env.context.ptr_type(address_space);
     let ptr = env.builder.new_build_int_to_ptr(ptr, ptr_type, "to_u8_ptr");
 
     struct_from_fields(
@@ -1604,7 +1531,7 @@ fn struct_pointer_from_fields<'a, 'ctx, 'env, I>(
         .builder
         .new_build_bitcast(
             input_pointer,
-            struct_type.ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "struct_ptr",
         )
         .into_pointer_value();
@@ -1941,7 +1868,7 @@ pub(crate) fn build_exp_expr<'a, 'ctx>(
 
                     let data_ptr = env.builder.new_build_pointer_cast(
                         opaque_data_ptr,
-                        struct_type.ptr_type(AddressSpace::default()),
+                        env.context.ptr_type(AddressSpace::default()),
                         "to_data_pointer",
                     );
 
@@ -2295,7 +2222,7 @@ fn build_tag_field_value<'a, 'ctx>(
         env.builder
             .new_build_pointer_cast(
                 value.into_pointer_value(),
-                env.context.i64_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "cast_recursive_pointer",
             )
             .into()
@@ -2468,7 +2395,7 @@ fn build_tag<'a, 'ctx>(
                 RocUnion::untagged_from_slices(layout_interner, env.context, &[other_fields]);
 
             if tag_id == *nullable_id as u16 {
-                let output_type = roc_union.struct_type().ptr_type(AddressSpace::default());
+                let output_type = env.context.ptr_type(AddressSpace::default());
 
                 return output_type.const_null().into();
             }
@@ -2518,7 +2445,7 @@ fn tag_pointer_set_tag_id<'ctx>(
 
     let cast_pointer = env.builder.new_build_pointer_cast(
         pointer,
-        env.context.i8_type().ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "cast_to_i8_ptr",
     );
 
@@ -2577,7 +2504,7 @@ pub fn tag_pointer_clear_tag_id<'ctx>(
 
     let cast_pointer = env.builder.new_build_pointer_cast(
         pointer,
-        env.context.i8_type().ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "cast_to_i8_ptr",
     );
 
@@ -2791,7 +2718,7 @@ fn union_field_ptr_at_index_help<'a, 'ctx>(
 
     let data_ptr = env.builder.new_build_pointer_cast(
         value,
-        struct_type.ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "cast_lookup_at_index_ptr",
     );
 
@@ -2842,17 +2769,11 @@ fn reserve_with_refcount_union_as_block_of_memory<'a, 'ctx>(
         RocUnion::untagged_from_slices(layout_interner, env.context, fields)
     };
 
-    reserve_union_with_refcount_help(
-        env,
-        roc_union.struct_type(),
-        roc_union.tag_width(),
-        roc_union.tag_alignment(),
-    )
+    reserve_union_with_refcount_help(env, roc_union.tag_width(), roc_union.tag_alignment())
 }
 
-fn reserve_union_with_refcount_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    basic_type: impl BasicType<'ctx>,
+fn reserve_union_with_refcount_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     stack_size: u32,
     alignment_bytes: u32,
 ) -> PointerValue<'ctx> {
@@ -2862,18 +2783,11 @@ fn reserve_union_with_refcount_help<'a, 'ctx, 'env>(
 
     // elem_refcounted does not apply to unions, only lists.
     let elem_refcounted = env.context.bool_type().const_zero().into();
-    allocate_with_refcount_help(
-        env,
-        basic_type,
-        alignment_bytes,
-        value_bytes_intvalue,
-        elem_refcounted,
-    )
+    allocate_with_refcount_help(env, alignment_bytes, value_bytes_intvalue, elem_refcounted)
 }
 
-pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
-    env: &Env<'a, 'ctx, 'env>,
-    value_type: impl BasicType<'ctx>,
+pub fn allocate_with_refcount_help<'ctx>(
+    env: &Env<'_, 'ctx, '_>,
     alignment_bytes: u32,
     number_of_data_bytes: IntValue<'ctx>,
     elem_refcounted: BasicValueEnum<'ctx>,
@@ -2889,7 +2803,7 @@ pub fn allocate_with_refcount_help<'a, 'ctx, 'env>(
     )
     .into_pointer_value();
 
-    let ptr_type = value_type.ptr_type(AddressSpace::default());
+    let ptr_type = env.context.ptr_type(AddressSpace::default());
 
     env.builder
         .new_build_pointer_cast(ptr, ptr_type, "alloc_cast_to_desired")
@@ -3094,9 +3008,7 @@ pub fn store_roc_value_opaque<'a, 'ctx>(
     opaque_destination: PointerValue<'ctx>,
     value: BasicValueEnum<'ctx>,
 ) {
-    let target_type =
-        basic_type_from_layout(env, layout_interner, layout_interner.get_repr(layout))
-            .ptr_type(AddressSpace::default());
+    let target_type = env.context.ptr_type(AddressSpace::default());
     let destination = env.builder.new_build_pointer_cast(
         opaque_destination,
         target_type,
@@ -3559,12 +3471,10 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
             variable: _,
             remainder,
         } => {
-            if env.mode.runs_expects() {
-                let location = build_string_literal(env, source_location);
-                let source = build_string_literal(env, source);
-                let message = scope.load_symbol(symbol);
-                env.call_dbg(env, location, source, message);
-            }
+            let location = build_string_literal(env, source_location);
+            let source = build_string_literal(env, source);
+            let message = scope.load_symbol(symbol);
+            env.call_dbg(env, location, source, message);
 
             build_exp_stmt(
                 env,
@@ -3620,7 +3530,7 @@ pub(crate) fn build_exp_stmt<'a, 'ctx>(
                             variables,
                         );
 
-                        if let LlvmBackendMode::BinaryDev = env.mode {
+                        if let LlvmBackendMode::BinaryWithExpect = env.mode {
                             crate::llvm::expect::notify_parent_expect(env, &shared_memory);
                         }
 
@@ -3912,7 +3822,7 @@ fn complex_bitcast_from_bigger_than_to<'ctx>(
     // then read it back as a different type
     let to_type_pointer = builder.new_build_pointer_cast(
         argument_pointer,
-        to_type.ptr_type(inkwell::AddressSpace::default()),
+        env.context.ptr_type(inkwell::AddressSpace::default()),
         name,
     );
 
@@ -3934,9 +3844,7 @@ fn complex_bitcast_to_bigger_than_from<'ctx>(
     // then cast the pointer to our desired type
     let from_type_pointer = builder.new_build_pointer_cast(
         storage,
-        from_value
-            .get_type()
-            .ptr_type(inkwell::AddressSpace::default()),
+        env.context.ptr_type(inkwell::AddressSpace::default()),
         name,
     );
 
@@ -4303,8 +4211,8 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
             let output_type = roc_function.get_type().get_param_types().pop().unwrap();
             argument_types.insert(0, output_type);
         }
-        Some(return_type) => {
-            let output_type = return_type.ptr_type(AddressSpace::default());
+        Some(..) => {
+            let output_type = env.context.ptr_type(AddressSpace::default());
             argument_types.insert(0, output_type.into());
         }
     }
@@ -4356,7 +4264,7 @@ fn expose_function_to_host_help_c_abi_generic<'a, 'ctx>(
                 // bitcast the ptr
                 let fastcc_ptr = env.builder.new_build_pointer_cast(
                     arg.into_pointer_value(),
-                    fastcc_type.ptr_type(AddressSpace::default()),
+                    env.context.ptr_type(AddressSpace::default()),
                     "bitcast_arg",
                 );
 
@@ -4497,7 +4405,7 @@ fn expose_function_to_host_help_c_abi_gen_test<'a, 'ctx>(
     let return_type = wrapper_return_type;
 
     let c_function_spec = {
-        let output_type = return_type.ptr_type(AddressSpace::default());
+        let output_type = env.context.ptr_type(AddressSpace::default());
         argument_types.push(output_type.into());
         FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types)
     };
@@ -4673,10 +4581,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
 
     let c_abi_roc_str_type = env.context.struct_type(
         &[
-            env.context
-                .i8_type()
-                .ptr_type(AddressSpace::default())
-                .into(),
+            env.context.ptr_type(AddressSpace::default()).into(),
             env.ptr_int().into(),
             env.ptr_int().into(),
         ],
@@ -4817,7 +4722,7 @@ fn expose_function_to_host_help_c_abi_v2<'a, 'ctx>(
                     // bitcast the ptr
                     let fastcc_ptr = env.builder.new_build_pointer_cast(
                         arg.into_pointer_value(),
-                        fastcc_type.ptr_type(AddressSpace::default()),
+                        env.context.ptr_type(AddressSpace::default()),
                         "bitcast_arg",
                     );
 
@@ -4903,7 +4808,9 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
             )
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {}
+        LlvmBackendMode::Binary
+        | LlvmBackendMode::BinaryWithExpect
+        | LlvmBackendMode::BinaryGlue => {}
     }
 
     // a generic version that writes the result into a passed *u8 pointer
@@ -4956,13 +4863,13 @@ fn expose_function_to_host_help_c_abi<'a, 'ctx>(
             roc_call_result_type(env, roc_function.get_type().get_return_type().unwrap()).into()
         }
 
-        LlvmBackendMode::Binary | LlvmBackendMode::BinaryDev | LlvmBackendMode::BinaryGlue => {
-            basic_type_from_layout(
-                env,
-                layout_interner,
-                layout_interner.get_repr(return_layout),
-            )
-        }
+        LlvmBackendMode::Binary
+        | LlvmBackendMode::BinaryWithExpect
+        | LlvmBackendMode::BinaryGlue => basic_type_from_layout(
+            env,
+            layout_interner,
+            layout_interner.get_repr(return_layout),
+        ),
     };
 
     let size: BasicValueEnum = return_type.size_of().unwrap().into();
@@ -5007,7 +4914,7 @@ pub fn get_sjlj_buffer<'ctx>(env: &Env<'_, 'ctx, '_>) -> PointerValue<'ctx> {
 
     env.builder.new_build_pointer_cast(
         global.as_pointer_value(),
-        env.context.i32_type().ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "cast_sjlj_buffer",
     )
 }
@@ -5024,15 +4931,11 @@ pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> 
         // Anywhere else, use the LLVM intrinsic.
         // https://llvm.org/docs/ExceptionHandling.html#llvm-eh-sjlj-setjmp
 
-        let buf_type = env
-            .context
-            .i8_type()
-            .ptr_type(AddressSpace::default())
-            .array_type(5);
+        let buf_type = env.context.ptr_type(AddressSpace::default()).array_type(5);
 
         let jmp_buf_i8p_arr = env.builder.new_build_pointer_cast(
             jmp_buf,
-            buf_type.ptr_type(AddressSpace::default()),
+            env.context.ptr_type(AddressSpace::default()),
             "jmp_buf [5 x i8*]",
         );
 
@@ -5073,7 +4976,7 @@ pub fn build_setjmp_call<'ctx>(env: &Env<'_, 'ctx, '_>) -> BasicValueEnum<'ctx> 
             .builder
             .new_build_pointer_cast(
                 jmp_buf,
-                env.context.i8_type().ptr_type(AddressSpace::default()),
+                env.context.ptr_type(AddressSpace::default()),
                 "jmp_buf i8*",
             )
             .into();
@@ -5245,7 +5148,7 @@ fn roc_call_result_type<'ctx>(
     env.context.struct_type(
         &[
             env.context.i64_type().into(),
-            zig_str_type(env).ptr_type(AddressSpace::default()).into(),
+            env.context.ptr_type(AddressSpace::default()).into(),
             return_type,
         ],
         false,
@@ -5698,8 +5601,6 @@ fn build_procedures_help<'a>(
         &mut layout_ids,
     );
 
-    let (_, function_pass) = construct_optimization_passes(env.module, opt_level);
-
     for (proc, fn_vals) in headers {
         for (func_spec_solutions, fn_val) in fn_vals {
             let mut current_scope = scope.clone();
@@ -5722,9 +5623,7 @@ fn build_procedures_help<'a>(
             // call finalize() before any code generation/verification
             env.dibuilder.finalize();
 
-            if fn_val.verify(true) {
-                function_pass.run_on(&fn_val);
-            } else {
+            if !fn_val.verify(true) {
                 let mode = "NON-OPTIMIZED";
 
                 eprintln!(
@@ -5759,7 +5658,7 @@ fn build_procedures_help<'a>(
     use LlvmBackendMode::*;
     match env.mode {
         GenTest | WasmGenTest | CliTest => { /* no host, or exposing types is not supported */ }
-        Binary | BinaryDev | BinaryGlue => {
+        Binary | BinaryWithExpect | BinaryGlue => {
             for (proc_name, alias_name, hels) in host_exposed_lambda_sets.iter() {
                 let ident_string = proc_name.name().as_unsuffixed_str(&env.interns);
                 let fn_name: String = format!("{}_{}", ident_string, hels.id.0);
@@ -5900,8 +5799,8 @@ fn expose_alias_to_host<'a>(
         RawFunctionLayout::Function(arguments, closure, result) => {
             // define closure size and return value size, e.g.
             //
-            // * roc__mainForHost_1_Update_size() -> i64
-            // * roc__mainForHost_1_Update_result_size() -> i64
+            // * roc__main_for_host_1_Update_size() -> i64
+            // * roc__main_for_host_1_Update_result_size() -> i64
 
             let it = hels.proc_layout.arguments.iter().copied();
             let bytes = roc_alias_analysis::func_name_bytes_help(
@@ -5948,7 +5847,7 @@ fn expose_alias_to_host<'a>(
         RawFunctionLayout::ZeroArgumentThunk(result) => {
             // Define only the return value size, since this is a thunk
             //
-            // * roc__mainForHost_1_Update_result_size() -> i64
+            // * roc__main_for_host_1_Update_result_size() -> i64
 
             let result_type =
                 basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
@@ -5977,23 +5876,11 @@ fn build_closure_caller<'a, 'ctx>(
 ) {
     let mut argument_types = Vec::with_capacity_in(arguments.len() + 3, env.arena);
 
-    for layout in arguments {
-        let arg_type =
-            basic_type_from_layout(env, layout_interner, layout_interner.get_repr(*layout));
-        let arg_ptr_type = arg_type.ptr_type(AddressSpace::default());
-
-        argument_types.push(arg_ptr_type.into());
+    for _ in arguments {
+        argument_types.push(env.context.ptr_type(AddressSpace::default()).into());
     }
 
-    let closure_argument_type = {
-        let basic_type = basic_type_from_layout(
-            env,
-            layout_interner,
-            layout_interner.get_repr(lambda_set.runtime_representation()),
-        );
-
-        basic_type.ptr_type(AddressSpace::default())
-    };
+    let closure_argument_type = env.context.ptr_type(AddressSpace::default());
     argument_types.push(closure_argument_type.into());
 
     let context = &env.context;
@@ -6002,12 +5889,12 @@ fn build_closure_caller<'a, 'ctx>(
     let result_type =
         basic_type_from_layout(env, layout_interner, layout_interner.get_repr(result));
 
-    let output_type = { result_type.ptr_type(AddressSpace::default()) };
+    let output_type = { env.context.ptr_type(AddressSpace::default()) };
     argument_types.push(output_type.into());
 
     // STEP 1: build function header
 
-    // e.g. `roc__mainForHost_0_caller` (def_name is `mainForHost_0`)
+    // e.g. `roc__main_for_host_0_caller` (def_name is `main_for_host_0`)
     let function_name = format!("roc__{def_name}_caller");
 
     let function_spec = FunctionSpec::cconv(env, CCReturn::Void, None, &argument_types);
@@ -6251,7 +6138,7 @@ fn roc_call_erased_with_args<'a, 'ctx>(
 ) -> BasicValueEnum<'ctx> {
     let function_type =
         fn_ptr::function_type(env, layout_interner, argument_layouts, result_layout);
-    let function_ptr_type = function_type.ptr_type(AddressSpace::default());
+    let function_ptr_type = env.context.ptr_type(AddressSpace::default());
 
     let function_pointer = fn_ptr::cast_to_function_ptr_type(env, pointer, function_ptr_type);
 
@@ -6473,7 +6360,7 @@ fn to_cc_type<'a, 'ctx>(
             let stack_type = basic_type_from_layout(env, layout_interner, layout_repr);
 
             if layout_repr.is_passed_by_reference(layout_interner) {
-                stack_type.ptr_type(AddressSpace::default()).into()
+                env.context.ptr_type(AddressSpace::default()).into()
             } else {
                 stack_type
             }
@@ -6493,18 +6380,7 @@ fn to_cc_type_builtin<'a, 'ctx>(
         Builtin::Int(_) | Builtin::Float(_) | Builtin::Bool | Builtin::Decimal => {
             basic_type_from_builtin(env, builtin)
         }
-        Builtin::Str | Builtin::List(_) => {
-            let address_space = AddressSpace::default();
-            let field_types: [BasicTypeEnum; 3] = [
-                env.context.i8_type().ptr_type(address_space).into(),
-                env.ptr_int().into(),
-                env.ptr_int().into(),
-            ];
-
-            let struct_type = env.context.struct_type(&field_types, false);
-
-            struct_type.ptr_type(address_space).into()
-        }
+        Builtin::Str | Builtin::List(_) => env.context.ptr_type(AddressSpace::default()).into(),
     }
 }
 
@@ -6584,7 +6460,7 @@ impl<'ctx> FunctionSpec<'ctx> {
         let (typ, opt_sret_parameter) = match cc_return {
             CCReturn::ByPointer => {
                 // turn the output type into a pointer type. Make it the first argument to the function
-                let output_type = return_type.unwrap().ptr_type(AddressSpace::default());
+                let output_type = env.context.ptr_type(AddressSpace::default());
 
                 let mut arguments: Vec<'_, BasicTypeEnum> =
                     bumpalo::vec![in env.arena; output_type.into()];
@@ -6628,7 +6504,7 @@ impl<'ctx> FunctionSpec<'ctx> {
                 return_type.fn_type(&function_arguments(env, &argument_types), false)
             }
             RocReturn::ByPointer => {
-                argument_types.push(return_type.ptr_type(AddressSpace::default()).into());
+                argument_types.push(env.context.ptr_type(AddressSpace::default()).into());
                 env.context
                     .void_type()
                     .fn_type(&function_arguments(env, &argument_types), false)
@@ -6888,7 +6764,7 @@ fn define_global_str_literal_ptr<'ctx>(
 
     let ptr = env.builder.new_build_pointer_cast(
         global.as_pointer_value(),
-        env.context.i8_type().ptr_type(AddressSpace::default()),
+        env.context.ptr_type(AddressSpace::default()),
         "to_opaque",
     );
 

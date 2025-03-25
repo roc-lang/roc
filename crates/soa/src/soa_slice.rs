@@ -274,3 +274,41 @@ impl<T> IntoIterator for NonEmptySlice<T> {
         self.inner.into_iter()
     }
 }
+
+/// Like `Slice`, but for pairs of `T`
+#[derive(PartialEq, Eq, PartialOrd, Ord, Debug, Copy, Clone)]
+pub struct PairSlice<T>(Slice<T>);
+
+impl<T> PairSlice<T> {
+    pub const fn start(self) -> u32 {
+        self.0.start()
+    }
+
+    pub const fn empty() -> Self {
+        Self(Slice::empty())
+    }
+
+    pub const fn len(&self) -> usize {
+        self.0.len() / 2
+    }
+
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    pub fn indices_iter(&self) -> impl Iterator<Item = (usize, usize)> {
+        (self.0.start as usize..(self.0.start as usize + self.0.length as usize))
+            .step_by(2)
+            .map(|i| (i, i + 1))
+    }
+
+    pub const fn new(start: u32, length: u16) -> Self {
+        Self(Slice::new(start, length * 2))
+    }
+}
+
+impl<T> Default for PairSlice<T> {
+    fn default() -> Self {
+        Self(Slice::default())
+    }
+}

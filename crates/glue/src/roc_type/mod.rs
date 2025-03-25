@@ -65,7 +65,7 @@ pub struct Types {
     pub entrypoints: roc_std::RocList<Tuple1>,
     pub sizes: roc_std::RocList<u32>,
     pub types: roc_std::RocList<RocType>,
-    pub typesByName: roc_std::RocList<Tuple1>,
+    pub types_by_name: roc_std::RocList<Tuple1>,
     pub target: Target,
 }
 
@@ -76,7 +76,7 @@ impl RocRefcounted for Types {
         self.entrypoints.inc();
         self.sizes.inc();
         self.types.inc();
-        self.typesByName.inc();
+        self.types_by_name.inc();
         self.target.inc();
     }
 
@@ -86,7 +86,7 @@ impl RocRefcounted for Types {
         self.entrypoints.dec();
         self.sizes.dec();
         self.types.dec();
-        self.typesByName.dec();
+        self.types_by_name.dec();
         self.target.dec();
     }
 
@@ -242,7 +242,7 @@ pub struct Tuple2 {
 #[repr(C)]
 pub struct Target {
     pub architecture: Architecture,
-    pub operatingSystem: OperatingSystem,
+    pub operating_system: OperatingSystem,
 }
 roc_refcounted_noop_impl!(Target);
 
@@ -364,20 +364,20 @@ pub union RocTagUnion {
 pub struct R14 {
     pub name: roc_std::RocStr,
     pub payload: RocSingleTagPayload,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 impl RocRefcounted for R14 {
     fn inc(&mut self) {
         self.name.inc();
         self.payload.inc();
-        self.tagName.inc();
+        self.tag_name.inc();
     }
 
     fn dec(&mut self) {
         self.name.dec();
         self.payload.dec();
-        self.tagName.dec();
+        self.tag_name.dec();
     }
 
     fn is_refcounted() -> bool {
@@ -454,11 +454,11 @@ impl RocRefcounted for RocSingleTagPayload {
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R10 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub indexOfNullTag: u16,
+    pub index_of_null_tag: u16,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -466,10 +466,10 @@ pub struct R10 {
 #[repr(C)]
 pub struct R9 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u32,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u32,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
 }
 
 #[cfg(any(
@@ -499,8 +499,8 @@ impl core::fmt::Debug for U2 {
 #[derive(Clone, Debug, Eq, Ord, Hash, PartialEq, PartialOrd)]
 #[repr(C)]
 pub struct R7 {
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
 }
@@ -541,7 +541,7 @@ pub union U1 {
 pub struct R6 {
     pub name: roc_std::RocStr,
     pub payload: u32,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 #[cfg(any(target_arch = "arm", target_arch = "wasm32", target_arch = "x86"))]
@@ -730,9 +730,9 @@ impl core::fmt::Debug for RocNum {
 #[repr(C)]
 pub struct RocFn {
     pub args: roc_std::RocList<u32>,
-    pub externName: roc_std::RocStr,
-    pub functionName: roc_std::RocStr,
-    pub lambdaSet: u32,
+    pub extern_name: roc_std::RocStr,
+    pub function_name: roc_std::RocStr,
+    pub lambda_set: u32,
     pub ret: u32,
     pub is_toplevel: bool,
 }
@@ -967,9 +967,9 @@ impl RocRefcounted for RocTagUnion {
 pub struct R10 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
-    pub indexOfNullTag: u16,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
+    pub index_of_null_tag: u16,
 }
 
 impl RocRefcounted for R10 {
@@ -993,23 +993,23 @@ impl RocRefcounted for R10 {
 #[repr(C)]
 pub struct R9 {
     pub name: roc_std::RocStr,
-    pub nonNullPayload: u64,
-    pub nonNullTag: roc_std::RocStr,
-    pub nullTag: roc_std::RocStr,
-    pub whichTagIsNull: U2,
+    pub non_null_payload: u64,
+    pub non_null_tag: roc_std::RocStr,
+    pub null_tag: roc_std::RocStr,
+    pub which_tag_is_null: U2,
 }
 
 impl RocRefcounted for R9 {
     fn inc(&mut self) {
         self.name.inc();
-        self.nonNullTag.inc();
-        self.nullTag.inc();
+        self.non_null_tag.inc();
+        self.null_tag.inc();
     }
 
     fn dec(&mut self) {
         self.name.dec();
-        self.nonNullTag.dec();
-        self.nullTag.dec();
+        self.non_null_tag.dec();
+        self.null_tag.dec();
     }
 
     fn is_refcounted() -> bool {
@@ -1023,8 +1023,8 @@ impl RocRefcounted for R9 {
 pub struct R7 {
     pub name: roc_std::RocStr,
     pub tags: roc_std::RocList<R8>,
-    pub discriminantOffset: u32,
-    pub discriminantSize: u32,
+    pub discriminant_offset: u32,
+    pub discriminant_size: u32,
 }
 
 impl RocRefcounted for R7 {
@@ -1056,18 +1056,18 @@ pub union U1 {
 pub struct R6 {
     pub name: roc_std::RocStr,
     pub payload: u64,
-    pub tagName: roc_std::RocStr,
+    pub tag_name: roc_std::RocStr,
 }
 
 impl RocRefcounted for R6 {
     fn inc(&mut self) {
         self.name.inc();
-        self.tagName.inc();
+        self.tag_name.inc();
     }
 
     fn dec(&mut self) {
         self.name.dec();
-        self.tagName.dec();
+        self.tag_name.dec();
     }
 
     fn is_refcounted() -> bool {
@@ -1114,24 +1114,24 @@ roc_refcounted_noop_impl!(RocType_RocDict);
 #[repr(C)]
 pub struct RocFn {
     pub args: roc_std::RocList<u64>,
-    pub externName: roc_std::RocStr,
-    pub functionName: roc_std::RocStr,
-    pub lambdaSet: u64,
+    pub extern_name: roc_std::RocStr,
+    pub function_name: roc_std::RocStr,
+    pub lambda_set: u64,
     pub ret: u64,
-    pub isToplevel: bool,
+    pub is_toplevel: bool,
 }
 
 impl RocRefcounted for RocFn {
     fn inc(&mut self) {
         self.args.inc();
-        self.externName.inc();
-        self.functionName.inc();
+        self.extern_name.inc();
+        self.function_name.inc();
     }
 
     fn dec(&mut self) {
         self.args.dec();
-        self.externName.dec();
-        self.functionName.dec();
+        self.extern_name.dec();
+        self.function_name.dec();
     }
 
     fn is_refcounted() -> bool {

@@ -1,9 +1,9 @@
 platform "false-interpreter"
-    requires {} { main : Str -> Task {} [] }
+    requires {} { main! : Str => {} }
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host!]
 
-mainForHost : Str -> Task {} []
-mainForHost = \file -> main file
+main_for_host! : Str => {}
+main_for_host! = \file -> main!(file)

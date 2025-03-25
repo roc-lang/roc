@@ -1,6 +1,6 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const str = @import("glue").str;
+const str = @import("glue/str.zig");
 const RocStr = str.RocStr;
 const testing = std.testing;
 const expectEqual = testing.expectEqual;
@@ -10,8 +10,8 @@ const maxInt = std.math.maxInt;
 const mem = std.mem;
 const Allocator = mem.Allocator;
 
-extern fn roc__mainForHost_1_exposed_generic([*]u8) void;
-extern fn roc__mainForHost_1_exposed_size() i64;
+extern fn roc__main_for_host_1_exposed_generic([*]u8) void;
+extern fn roc__main_for_host_1_exposed_size() i64;
 
 const Align = 2 * @alignOf(usize);
 extern fn malloc(size: usize) callconv(.C) ?*align(Align) anyopaque;
@@ -28,7 +28,7 @@ const DEBUG: bool = false;
 
 export fn roc_alloc(size: usize, alignment: u32) callconv(.C) ?*anyopaque {
     if (DEBUG) {
-        var ptr = malloc(size);
+        const ptr = malloc(size);
         const stdout = std.io.getStdOut().writer();
         stdout.print("alloc:   {d} (alignment {d}, size {d})\n", .{ ptr, alignment, size }) catch unreachable;
         return ptr;
@@ -95,13 +95,13 @@ fn roc_mmap(addr: ?*anyopaque, length: c_uint, prot: c_int, flags: c_int, fd: c_
 
 comptime {
     if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .Strong });
-        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .Strong });
-        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .Strong });
+        @export(roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+        @export(roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+        @export(roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
     }
 
     if (builtin.os.tag == .windows) {
-        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .Strong });
+        @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
     }
 }
 
@@ -111,24 +111,24 @@ pub export fn main() u8 {
     const allocator = std.heap.page_allocator;
 
     // NOTE the return size can be zero, which will segfault. Always allocate at least 8 bytes
-    const size = @max(8, @as(usize, @intCast(roc__mainForHost_1_exposed_size())));
+    const size = @max(8, @as(usize, @intCast(roc__main_for_host_1_exposed_size())));
     const raw_output = allocator.alignedAlloc(u8, @alignOf(u64), @as(usize, @intCast(size))) catch unreachable;
-    var output = @as([*]u8, @ptrCast(raw_output));
+    const output = @as([*]u8, @ptrCast(raw_output));
 
     defer {
         allocator.free(raw_output);
     }
 
-    roc__mainForHost_1_exposed_generic(output);
+    roc__main_for_host_1_exposed_generic(output);
 
     return 0;
 }
 
-pub export fn roc_fx_getLine() str.RocStr {
-    return roc_fx_getLine_help() catch return str.RocStr.empty();
+pub export fn roc_fx_get_line() str.RocStr {
+    return roc_fx_get_line_help() catch return str.RocStr.empty();
 }
 
-fn roc_fx_getLine_help() !RocStr {
+fn roc_fx_get_line_help() !RocStr {
     const stdin = std.io.getStdIn().reader();
     var buf: [400]u8 = undefined;
 
@@ -137,7 +137,7 @@ fn roc_fx_getLine_help() !RocStr {
     return str.RocStr.init(@as([*]const u8, @ptrCast(line)), line.len);
 }
 
-pub export fn roc_fx_putLine(rocPath: *str.RocStr) i64 {
+pub export fn roc_fx_put_line(rocPath: *str.RocStr) i64 {
     const stdout = std.io.getStdOut().writer();
 
     for (rocPath.asSlice()) |char| {
@@ -155,8 +155,8 @@ const GetInt = extern struct {
     is_error: bool,
 };
 
-pub export fn roc_fx_getInt() GetInt {
-    if (roc_fx_getInt_help()) |value| {
+pub export fn roc_fx_get_int() GetInt {
+    if (roc_fx_get_int_help()) |value| {
         const get_int = GetInt{ .is_error = false, .value = value, .error_code = 0 };
         return get_int;
     } else |err| switch (err) {
@@ -171,7 +171,7 @@ pub export fn roc_fx_getInt() GetInt {
     return 0;
 }
 
-fn roc_fx_getInt_help() !i64 {
+fn roc_fx_get_int_help() !i64 {
     const stdin = std.io.getStdIn().reader();
     var buf: [40]u8 = undefined;
 

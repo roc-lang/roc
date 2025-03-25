@@ -1,6 +1,4 @@
-interface IngestedFile
-    exposes [str, nested]
-    imports []
+module [str, nested]
 
 import "IngestedFile.roc" as foo : Str
 

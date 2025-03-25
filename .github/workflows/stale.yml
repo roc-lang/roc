@@ -1,7 +1,11 @@
 name: 'Close stale PRs'
+
 on:
   schedule:
     - cron: '30 1 * * *'
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
 
 jobs:
   stale:

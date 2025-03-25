@@ -315,13 +315,11 @@ where
                 rc_ptr += 4
             }
 
-            // Dereference the RC pointer and decode its value from the negative number format
-            let rc_encoded = read_i32(&inst.memory, rc_ptr);
+            let rc = read_i32(&inst.memory, rc_ptr);
 
-            if rc_encoded == 0 {
+            if rc == 0 {
                 RefCount::Constant
             } else {
-                let rc = rc_encoded - i32::MIN + 1;
                 RefCount::Live(rc as u32)
             }
         };

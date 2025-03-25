@@ -42,7 +42,7 @@ impl ToRegion for Range {
             },
             end: LineColumn {
                 line: self.end.line,
-                column: self.end.line,
+                column: self.end.character,
             },
         };
 
@@ -77,7 +77,7 @@ pub(crate) mod diag {
 
     use roc_problem::Severity;
     use roc_reporting::report::RocDocAllocator;
-    use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity, Position, Range};
+    use tower_lsp::lsp_types::{Diagnostic, DiagnosticSeverity};
 
     use super::ToRange;
 
@@ -102,19 +102,16 @@ pub(crate) mod diag {
     }
 
     impl IntoLspDiagnostic<'_> for &LoadingProblem<'_> {
-        type Feed = ();
+        type Feed = LineInfo;
 
-        fn into_lsp_diagnostic(self, _feed: &()) -> Option<Diagnostic> {
-            let range = Range {
-                start: Position {
-                    line: 0,
-                    character: 0,
-                },
-                end: Position {
-                    line: 0,
-                    character: 1,
-                },
-            };
+        fn into_lsp_diagnostic(self, line_info: &LineInfo) -> Option<Diagnostic> {
+            let range = self
+                .get_region()
+                .unwrap_or(Region::new(
+                    roc_region::all::Position::new(0),
+                    roc_region::all::Position::new(10_000_000),
+                ))
+                .to_range(line_info);
 
             let msg = match self {
                 LoadingProblem::FileProblem { filename, error } => {
@@ -152,7 +149,7 @@ pub(crate) mod diag {
                 LoadingProblem::TriedToImportAppModule => {
                     "Attempted to import app module".to_string()
                 }
-                LoadingProblem::FormattedReport(report) => report.clone(),
+                LoadingProblem::FormattedReport(report, _region) => report.clone(),
                 LoadingProblem::ImportCycle(_, _) => {
                     "Circular dependency between modules".to_string()
                 }
@@ -194,7 +191,10 @@ pub(crate) mod diag {
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
             let range = self
                 .region()
-                .unwrap_or_else(Region::zero)
+                .unwrap_or(Region::new(
+                    roc_region::all::Position::new(0),
+                    roc_region::all::Position::new(10000000),
+                ))
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::can_problem(
@@ -228,7 +228,10 @@ pub(crate) mod diag {
         fn into_lsp_diagnostic(self, fmt: &'a ProblemFmt<'a>) -> Option<Diagnostic> {
             let range = self
                 .region()
-                .unwrap_or_else(Region::zero)
+                .unwrap_or(Region::new(
+                    roc_region::all::Position::new(0),
+                    roc_region::all::Position::new(10000000),
+                ))
                 .to_range(fmt.line_info);
 
             let report = roc_reporting::report::type_problem(

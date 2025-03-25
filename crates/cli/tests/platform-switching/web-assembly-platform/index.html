@@ -1,0 +1,14 @@
+<html>
+
+<body>
+  <div id="output"></div>
+  <script src="./host.js"></script>
+  <script>
+    const elem = document.getElementById("output");
+    roc_web_platform_run("./roc_loves_web_assembly.wasm", (string_from_roc) => {
+      elem.textContent = string_from_roc;
+    });
+  </script>
+</body>
+
+</html>

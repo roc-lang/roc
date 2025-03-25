@@ -1,0 +1,64 @@
+@0-14 SpaceAfter(
+    Defs(
+        Defs {
+            tags: [
+                EitherIndex(2147483648),
+            ],
+            regions: [
+                @0-12,
+            ],
+            space_before: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            space_after: [
+                Slice<roc_parse::ast::CommentOrNewline> { start: 0, length: 0 },
+            ],
+            spaces: [],
+            type_defs: [],
+            value_defs: [
+                Annotation(
+                    @0-1 NumLiteral(
+                        "1",
+                    ),
+                    @2-12 TagUnion {
+                        ext: None,
+                        tags: [
+                            @3-11 Apply {
+                                name: @3-4 "N",
+                                args: [
+                                    @5-10 Apply(
+                                        "",
+                                        "H",
+                                        [
+                                            @7-8 SpaceAfter(
+                                                Apply(
+                                                    "",
+                                                    "S",
+                                                    [],
+                                                ),
+                                                [
+                                                    Newline,
+                                                ],
+                                            ),
+                                        ],
+                                    ),
+                                ],
+                            },
+                        ],
+                    },
+                ),
+            ],
+        },
+        @13-14 SpaceBefore(
+            Underscore(
+                "",
+            ),
+            [
+                Newline,
+            ],
+        ),
+    ),
+    [
+        Newline,
+    ],
+)

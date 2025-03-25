@@ -1,6 +1,6 @@
 procedure Bool.2 ():
-    let Bool.23 : Int1 = true;
-    ret Bool.23;
+    let Bool.21 : Int1 = true;
+    ret Bool.21;
 
 procedure Test.0 (Test.4):
     let Test.7 : Int1 = CallByName Bool.2;

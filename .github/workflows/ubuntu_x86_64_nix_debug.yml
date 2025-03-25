@@ -3,6 +3,9 @@ on:
   
 name: cargo test debug nix
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
     RUST_BACKTRACE: 1
 
@@ -22,6 +25,10 @@ jobs:
         - name: Check if debug flag files are in sync
           run: ./ci/check_debug_vars.sh
 
-        # for skipped tests; see #6946, #6947
         - name: cargo test without --release
-          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test'
+          # skipping glue tests due to difficult multithreading bug, we run them single threaded in the next step, see #7476
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test --locked -- --skip glue_cli_tests'
+
+        - name: glue_cli_tests
+          # single threaded due to difficult bug when multithreading, see #7476
+          run: nix develop -c sh -c 'export ROC_CHECK_MONO_IR=1 && cargo test --locked glue_cli_tests -- --test-threads=1'

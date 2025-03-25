@@ -1,6 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_check_out.normalize_stdout_and_stderr()
+snapshot_kind: text
 ---
 
 ── TYPE MISMATCH in tests/test-projects/known_bad/TypeError.roc ────────────────
@@ -25,4 +26,5 @@ this out.
 
 ────────────────────────────────────────────────────────────────────────────────
 
-1 error and 0 warning found in <ignored for test> ms
+1 error and 0 warnings found in <ignored for test> ms.
+

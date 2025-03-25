@@ -671,6 +671,10 @@ fn specialize_drops_stmt<'a, 'i>(
                 // Meaning we can pass the incremented_symbols from the remainder to the body.
                 (Some(jump_info), None) if !jump_info.is_empty() => {
                     // Update body with incremented symbols from remainder
+                    let mut body_environment = environment.clone();
+                    for param in parameters.iter() {
+                        body_environment.add_symbol_layout(param.symbol, param.layout);
+                    }
                     body_environment.incremented_symbols = jump_info.clone();
 
                     let newer_body = specialize_drops_stmt(
@@ -873,7 +877,7 @@ fn specialize_union<'a, 'i>(
 
         // We know the tag, we can specialize the decrement for the tag.
         UnionFieldLayouts::Found { field_layouts, tag } => {
-            match environment.union_children.get(symbol) {
+            match environment.union_children.get(&(*symbol, tag)) {
                 None => keep_original_decrement!(),
                 Some(children) => {
                     // TODO perhaps this allocation can be avoided.
@@ -884,13 +888,11 @@ fn specialize_union<'a, 'i>(
                     let mut index_symbols = MutMap::default();
 
                     for (index, _layout) in field_layouts.iter().enumerate() {
-                        for (child, t, _i) in children_clone
+                        for (child, _i) in children_clone
                             .iter()
                             .rev()
-                            .filter(|(_child, _t, i)| *i == index as u64)
+                            .filter(|(_child, i)| *i == index as u64)
                         {
-                            debug_assert_eq!(tag, *t);
-
                             let removed = incremented_children.pop(child);
                             index_symbols.entry(index).or_insert((*child, removed));
 
@@ -1392,7 +1394,7 @@ struct DropSpecializationEnvironment<'a> {
     struct_children: MutMap<Parent, Vec<'a, (Child, Index)>>,
 
     // Keeps track of which parent symbol is indexed by which child symbol for unions
-    union_children: MutMap<Parent, Vec<'a, (Child, Tag, Index)>>,
+    union_children: MutMap<(Parent, Tag), Vec<'a, (Child, Index)>>,
 
     // Keeps track of which parent symbol is indexed by which child symbol for boxes
     box_children: MutMap<Parent, Vec<'a, Child>>,
@@ -1469,9 +1471,9 @@ impl<'a> DropSpecializationEnvironment<'a> {
 
     fn add_union_child(&mut self, parent: Parent, child: Child, tag: u16, index: Index) {
         self.union_children
-            .entry(parent)
+            .entry((parent, tag))
             .or_insert_with(|| Vec::new_in(self.arena))
-            .push((child, tag, index));
+            .push((child, index));
     }
 
     fn add_list_child(&mut self, parent: Parent, child: Child, index: u64) {
@@ -1494,9 +1496,12 @@ impl<'a> DropSpecializationEnvironment<'a> {
             res.extend(children.iter().rev().map(|(child, _)| child));
         }
 
-        if let Some(children) = self.union_children.get(parent) {
-            res.extend(children.iter().rev().map(|(child, _, _)| child));
-        }
+        let children = self
+            .union_children
+            .iter()
+            .filter(|(k, _v)| k.0 == *parent)
+            .flat_map(|(_k, v)| v.iter().rev());
+        res.extend(children.map(|(child, _)| child));
 
         if let Some(children) = self.box_children.get(parent) {
             res.extend(children.iter().rev());
@@ -1548,6 +1553,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,
         ListSortWith => RC::Rc,
+        StrWithAsciiLowercased => RC::Rc,
+        StrWithAsciiUppercased => RC::Rc,
+        StrCaselessAsciiEquals => RC::NoRc,
 
         ListAppendUnsafe
         | ListReserve
@@ -1561,7 +1569,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
         Eq | NotEq => RC::NoRc,
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
         | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
@@ -1602,6 +1610,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,
+        StrFromUtf8Lossy => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
         StrFromInt | StrFromFloat => RC::NoRc,

@@ -5,8 +5,8 @@ main =
 
     map : { f1: (I64 -> I64) } -> List I64
     map = \{ f1 } -> List.concat [f1 1] (map { f1 })
-#                                        ^^^ { f1 : I64 -[[]]-> I64 } -[[map(2)]]-> List I64
-#   ^^^ { f1 : I64 -[[]]-> I64 } -[[map(2)]]-> List I64
+#                                        ^^^ { f1 : I64 -[[f(1)]]-> I64 } -[[map(2)]]-> List I64
+#   ^^^ { f1 : I64 -[[f(1)]]-> I64 } -[[map(2)]]-> List I64
 
 
     map { f1: f }

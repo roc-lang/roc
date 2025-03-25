@@ -1,0 +1,67 @@
+on:
+#  pull_request:
+  workflow_dispatch:
+
+name: Test latest alpha releases for macOS and Linux
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+jobs:
+  test-alpha:
+    name: test alpha macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v1
+        with:
+          version: 0.13.0
+
+      - name: Get latest release info
+        id: get_release
+        run: |
+          RELEASE_INFO=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" https://api.github.com/repos/roc-lang/roc/releases/latest)
+          echo "tag_name=$(echo "$RELEASE_INFO" | jq -r .tag_name)" >> $GITHUB_OUTPUT
+          echo "assets_url=$(echo "$RELEASE_INFO" | jq -r .assets_url)" >> $GITHUB_OUTPUT
+
+      - name: Delete everything except ci folder to test the release like a real user would
+        run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
+
+      - name: get the latest release archive for linux (x86_64)
+        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-linux_x86_64-") and (contains("old") | not)) | .browser_download_url')
+          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
+
+      - name: get the latest release archive for linux (arm64)
+        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-linux_arm64-") and (contains("old") | not)) | .browser_download_url')
+          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
+
+      - name: get the latest release archive for macos 13 (x86_64)
+        if: matrix.os == 'macos-13'
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-macos_x86_64-")) | .browser_download_url')
+          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
+
+      - name: get the latest release archive for macos 14 (aarch64)
+        if: matrix.os == 'macos-14'
+        run: |
+          ASSETS_URL="${{ steps.get_release.outputs.assets_url }}"
+          DOWNLOAD_URL=$(curl -sH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$ASSETS_URL" | jq -r '.[] | select(.name | startswith("roc-macos_apple_silicon-")) | .browser_download_url')
+          curl -fLH "Authorization: token ${{ secrets.GITHUB_TOKEN }}" "$DOWNLOAD_URL" -o roc_release.tar.gz
+
+      - run: zig version
+
+      - name: prep and run basic tests
+        run: |
+          ./ci/basic_release_test.sh roc_release.tar.gz

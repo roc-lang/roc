@@ -4,6 +4,9 @@ on:
       - cron:  '0 5 * * *'
   
 name: Clean up nix on mac mini m1
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
     
 jobs:
     clean-mac-mini-arm64:

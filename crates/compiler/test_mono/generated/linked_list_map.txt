@@ -1,45 +1,45 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.281 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.281;
+    let Num.283 : I64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.283;
 
 procedure Test.10 (Test.11):
     let Test.28 : I64 = 1i64;
     let Test.27 : I64 = CallByName Num.19 Test.11 Test.28;
     ret Test.27;
 
-procedure Test.2 (#Derived_gen.0, #Derived_gen.1):
-    let #Derived_gen.3 : [<rnu><null>, C I64 *self] = NullPointer;
-    let #Derived_gen.2 : Ptr([<rnu><null>, C I64 *self]) = Alloca #Derived_gen.3;
-    joinpoint #Derived_gen.4 Test.4 Test.5 #Derived_gen.5 #Derived_gen.6:
+procedure Test.2 (Bool.21, Bool.22):
+    let Bool.24 : [<rnu><null>, C I64 *self] = NullPointer;
+    let Bool.23 : Ptr([<rnu><null>, C I64 *self]) = Alloca Bool.24;
+    joinpoint Bool.25 Test.4 Test.5 Bool.26 Bool.27:
         let Test.22 : U8 = 1i64;
         let Test.23 : U8 = GetTagId Test.5;
         let Test.24 : Int1 = lowlevel Eq Test.22 Test.23;
         if Test.24 then
             let Test.18 : [<rnu><null>, C I64 *self] = TagId(1) ;
-            let #Derived_gen.8 : {} = lowlevel PtrStore #Derived_gen.5 Test.18;
-            let #Derived_gen.7 : [<rnu><null>, C I64 *self] = lowlevel PtrLoad #Derived_gen.6;
-            ret #Derived_gen.7;
+            let Bool.29 : {} = lowlevel PtrStore Bool.26 Test.18;
+            let Bool.28 : [<rnu><null>, C I64 *self] = lowlevel PtrLoad Bool.27;
+            ret Bool.28;
         else
             let Test.7 : I64 = UnionAtIndex (Id 0) (Index 0) Test.5;
             let Test.8 : [<rnu><null>, C I64 *self] = UnionAtIndex (Id 0) (Index 1) Test.5;
-            joinpoint #Derived_gen.12 #Derived_gen.14:
+            joinpoint Bool.33 Bool.35:
                 let Test.20 : I64 = CallByName Test.10 Test.7;
-                let #Derived_gen.9 : [<rnu><null>, C I64 *self] = NullPointer;
-                let Test.19 : [<rnu><null>, C I64 *self] = Reuse #Derived_gen.14 UpdateModeId { id: 1 } TagId(0) Test.20 #Derived_gen.9;
-                let #Derived_gen.10 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.19;
-                let #Derived_gen.11 : {} = lowlevel PtrStore #Derived_gen.5 Test.19;
-                jump #Derived_gen.4 Test.4 Test.8 #Derived_gen.10 #Derived_gen.6;
+                let Bool.30 : [<rnu><null>, C I64 *self] = NullPointer;
+                let Test.19 : [<rnu><null>, C I64 *self] = Reuse Bool.35 UpdateModeId { id: 1 } TagId(0) Test.20 Bool.30;
+                let Bool.31 : Ptr([<rnu><null>, C I64 *self]) = GetElementPointer (Indices [0, 1]) Test.19;
+                let Bool.32 : {} = lowlevel PtrStore Bool.26 Test.19;
+                jump Bool.25 Test.4 Test.8 Bool.31 Bool.27;
             in
-            let #Derived_gen.13 : Int1 = lowlevel RefCountIsUnique Test.5;
-            if #Derived_gen.13 then
-                jump #Derived_gen.12 Test.5;
+            let Bool.34 : Int1 = lowlevel RefCountIsUnique Test.5;
+            if Bool.34 then
+                jump Bool.33 Test.5;
             else
                 inc Test.8;
                 decref Test.5;
-                let #Derived_gen.15 : [<rnu><null>, C I64 *self] = NullPointer;
-                jump #Derived_gen.12 #Derived_gen.15;
+                let Bool.36 : [<rnu><null>, C I64 *self] = NullPointer;
+                jump Bool.33 Bool.36;
     in
-    jump #Derived_gen.4 #Derived_gen.0 #Derived_gen.1 #Derived_gen.2 #Derived_gen.2;
+    jump Bool.25 Bool.21 Bool.22 Bool.23 Bool.23;
 
 procedure Test.0 ():
     let Test.15 : {} = Struct {};

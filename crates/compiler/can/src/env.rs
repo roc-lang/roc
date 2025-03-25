@@ -11,6 +11,7 @@ use roc_region::all::{LineInfo, Loc, Region};
 use roc_types::subs::Variable;
 
 /// The canonicalization environment for a particular module.
+#[derive(Debug)]
 pub struct Env<'a> {
     /// The module's path. Opaques and unqualified references to identifiers
     /// are assumed to be relative to this path.
@@ -42,8 +43,6 @@ pub struct Env<'a> {
 
     pub opt_shorthand: Option<&'a str>,
 
-    pub fx_mode: FxMode,
-
     pub src: &'a str,
 
     /// Lazily calculated line info. This data is only needed if the code contains calls to `dbg`,
@@ -54,6 +53,36 @@ pub struct Env<'a> {
 
 impl<'a> Env<'a> {
     #[allow(clippy::too_many_arguments)]
+    pub fn from_solo_can(
+        arena: &'a Bump,
+        module_path: &'a Path,
+        home: ModuleId,
+        dep_idents: &'a IdentIdsByModule,
+        qualified_module_ids: &'a PackageModuleIds<'a>,
+        problems: Vec<Problem>,
+        opt_shorthand: Option<&'a str>,
+        src: &'a str,
+        line_info: &'a mut Option<LineInfo>,
+    ) -> Self {
+        Env {
+            arena,
+            src,
+            home,
+            module_path,
+            dep_idents,
+            qualified_module_ids,
+            problems,
+            closures: MutMap::default(),
+            qualified_value_lookups: Default::default(),
+            tailcallable_symbol: None,
+            top_level_symbols: Default::default(),
+            home_params_record: None,
+            opt_shorthand,
+            line_info,
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         arena: &'a Bump,
         src: &'a str,
@@ -62,7 +91,6 @@ impl<'a> Env<'a> {
         dep_idents: &'a IdentIdsByModule,
         qualified_module_ids: &'a PackageModuleIds<'a>,
         opt_shorthand: Option<&'a str>,
-        fx_mode: FxMode,
     ) -> Env<'a> {
         Env {
             arena,
@@ -79,7 +107,6 @@ impl<'a> Env<'a> {
             home_params_record: None,
             opt_shorthand,
             line_info: arena.alloc(None),
-            fx_mode,
         }
     }
 
@@ -233,10 +260,4 @@ impl<'a> Env<'a> {
         }
         self.line_info.as_ref().unwrap()
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq)]
-pub enum FxMode {
-    PurityInference,
-    Task,
 }

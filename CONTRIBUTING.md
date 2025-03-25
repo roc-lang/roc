@@ -2,7 +2,7 @@
 
 ## Code of Conduct
 
-We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](CODE_OF_CONDUCT.md) for details.
+We are committed to providing a friendly, safe and welcoming environment for all. See our [Code of Conduct](code_of_conduct.md) for details.
 
 ## How to contribute
 
@@ -67,6 +67,8 @@ programs.gnupg.agent = {
 
 <details>
 <summary>Forgot to sign commits?</summary>
+
+:exclamation: Make sure [to set up signing on your device](devtools/signing.md) first, then continue below.
 
 You can view your commits on github, those without the "Verified" badge still need to be signed.
 If any of those is a merge commit, follow [these steps](https://stackoverflow.com/a/9958215/4200103) instead of the ones below.
