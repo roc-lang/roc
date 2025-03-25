@@ -25,23 +25,23 @@ jobs:
         run: nix develop -c cargo fmt --all -- --check
 
       - name: check code style with clippy
-        run: nix develop -c cargo clippy --workspace --tests -- --deny warnings
+        run: nix develop -c cargo clippy -j 2 --workspace --tests -- --deny warnings
 
       - name: check code style with clippy --release
-        run: nix develop -c cargo clippy --workspace --tests --release -- --deny warnings
+        run: nix develop -c cargo clippy -j 2 --workspace --tests --release -- --deny warnings
 
       - name: test building default.nix
         run: nix-build
 
       # for skipped tests: see issue 6274
       - name: execute tests with --release
-        run: nix develop -c cargo test --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
+        run: nix develop -c cargo test -j 1 --locked --release -- --skip cli_tests::inspect_gui --skip cli_tests::hello_gui
 
       - name: roc test all builtins
         run: nix develop -c ./ci/roc_test_builtins.sh
 
       - name: test aarch64 dev backend
-        run: nix develop -c cargo nextest-gen-dev --locked --release --no-fail-fast
+        run: nix develop -c cargo nextest-gen-dev -j 2 --locked --release --no-fail-fast
 
       # we run the llvm wasm tests only on this machine because it is fast and wasm should be cross-target
       - name: execute llvm wasm tests with --release
