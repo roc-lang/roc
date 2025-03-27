@@ -31,6 +31,7 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
+/// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *IR, region: Region) bool {
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
