@@ -568,6 +568,9 @@ const Formatter = struct {
             .int => |i| {
                 try fmt.pushTokenText(i.token);
             },
+            .float => |f| {
+                try fmt.pushTokenText(f.token);
+            },
             .list => |l| {
                 try fmt.formatCollection(region, .square, IR.NodeStore.ExprIdx, fmt.ast.store.exprSlice(l.items), Formatter.formatExpr);
             },

@@ -63,6 +63,7 @@ pub fn regionInfo(self: *IR, region: Region, line_starts: std.ArrayList(u32)) ba
 pub fn deinit(self: *IR) void {
     defer self.tokens.deinit();
     defer self.store.deinit();
+    self.store.gpa.free(self.errors);
 }
 
 /// Diagnostics related to parsing
@@ -1252,6 +1253,12 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid header tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1378,6 +1385,12 @@ pub const NodeStore = struct {
                     .anno = .{ .id = node.data.rhs },
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1463,6 +1476,12 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid pattern tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1474,6 +1493,12 @@ pub const NodeStore = struct {
         switch (node.tag) {
             .int => {
                 return .{ .int = .{
+                    .token = node.main_token,
+                    .region = node.region,
+                } };
+            },
+            .float => {
+                return .{ .float = .{
                     .token = node.main_token,
                     .region = node.region,
                 } };
@@ -1625,6 +1650,12 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid expr tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1745,6 +1776,12 @@ pub const NodeStore = struct {
                 return .{ .parens = .{
                     .region = node.region,
                     .anno = .{ .id = node.data.lhs },
+                } };
+            },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
                 } };
             },
             else => {
