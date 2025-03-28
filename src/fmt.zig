@@ -980,6 +980,11 @@ const Formatter = struct {
                 try fmt.formatCollection(m.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(m.exposes), Formatter.formatExposedItem);
                 return .something_formatted;
             },
+            .hosted => |h| {
+                try fmt.pushAll("hosted ");
+                try fmt.formatCollection(h.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(h.exposes), Formatter.formatExposedItem);
+                return .something_formatted;
+            },
             .malformed => {
                 // Output nothing for a malformed node
                 return .nothing_formatted;
@@ -1470,7 +1475,37 @@ test "Plain module" {
         \\world = "World"
     );
 }
-//
+
+test "Hosted - empty" {
+    try moduleFmtsSame(
+        \\hosted []
+    );
+}
+
+test "Hosted - nonempty singleline" {
+    try moduleFmtsSame(
+        \\hosted [something, SomeType]
+    );
+}
+
+test "Hosted - nonempty multiline" {
+    try moduleFmtsSame(
+        \\hosted [
+        \\    something,
+        \\    SomeType,
+        \\]
+    );
+
+    try moduleFmtsTo(
+        \\hosted [something, SomeType,]
+    ,
+        \\hosted [
+        \\    something,
+        \\    SomeType,
+        \\]
+    );
+}
+
 test "Syntax grab bag" {
     try moduleFmtsSame(
         \\# This is a module comment!

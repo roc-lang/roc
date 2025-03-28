@@ -169,6 +169,9 @@ pub const Node = struct {
         /// * rhs - extra data pointer
         app_header,
         module_header,
+        hosted_header,
+        package_header,
+        platform_header,
 
         // Statements
 
@@ -662,6 +665,12 @@ pub const NodeStore = struct {
                 node.data.lhs = mod.exposes.span.start;
                 node.data.rhs = mod.exposes.span.len;
                 node.region = mod.region;
+            },
+            .hosted => |hosted| {
+                node.tag = .hosted_header;
+                node.data.lhs = hosted.exposes.span.start;
+                node.data.rhs = hosted.exposes.span.len;
+                node.region = hosted.region;
             },
             .malformed => {
                 @panic("Use addMalformed instead");
@@ -1247,6 +1256,15 @@ pub const NodeStore = struct {
             },
             .module_header => {
                 return .{ .module = .{
+                    .exposes = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
+                    .region = node.region,
+                } };
+            },
+            .hosted_header => {
+                return .{ .hosted = .{
                     .exposes = .{ .span = .{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
@@ -1866,7 +1884,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         hosted: struct {
-            // TODO: complete this
+            exposes: ExposedItemSpan,
             region: Region,
         },
         malformed: struct {

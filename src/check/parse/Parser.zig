@@ -205,11 +205,43 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
             return self.parseModuleHeader();
         },
         // .KwPackage => {},
-        // .KwHosted => {},
+        .KwHosted => {
+            return self.parseHostedHeader();
+        },
         else => {
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .missing_header, self.pos);
         },
     }
+}
+
+fn parseHostedHeader(self: *Parser) IR.NodeStore.HeaderIdx {
+    std.debug.assert(self.peek() == .KwHosted);
+
+    const start = self.pos;
+
+    self.advance(); // Advance past KwModule
+
+    // Get exposes
+    self.expect(.OpenSquare) catch {
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_square, self.pos);
+    };
+    const scratch_top = self.store.scratchExposedItemTop();
+    const end = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            self.advance();
+        }
+        self.expect(.CloseSquare) catch {
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_close_square, start);
+        };
+        self.store.clearScratchExposedItemsFrom(scratch_top);
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close, start);
+    };
+    const exposes = self.store.exposedItemSpanFrom(scratch_top);
+
+    return self.store.addHeader(.{ .hosted = .{
+        .region = .{ .start = start, .end = end },
+        .exposes = exposes,
+    } });
 }
 
 fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
