@@ -899,7 +899,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
             // TODO: Parenthesized expressions
             const scratch_top = self.store.scratchExprTop();
             const end = self.parseCollectionSpan(IR.NodeStore.ExprIdx, .CloseRound, IR.NodeStore.addScratchExpr, parseExpr) catch {
-                while (self.peek() != .CloseRound) {
+                while (self.peek() != .CloseRound and self.peek() != .EndOfFile) {
                     self.advance();
                 }
                 self.store.clearScratchExprsFrom(scratch_top);
