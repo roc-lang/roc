@@ -1,4 +1,4 @@
 launchTheNukes! = |{}|
 boom
 
-launchTheNukes!({},)
+launchTheNukes!({})

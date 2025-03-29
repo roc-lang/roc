@@ -8,6 +8,6 @@
     # after 2
 
     # before 3
-    3,
+    3
     # after 3
 )

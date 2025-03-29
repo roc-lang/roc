@@ -1,7 +1,7 @@
-when f
-{
+match f
+ {
 
-    s if |t| when 0
-    {
+    s if |t| match 0
+     {
         z->f(
-        z,)}->m}
+        z)}->m}

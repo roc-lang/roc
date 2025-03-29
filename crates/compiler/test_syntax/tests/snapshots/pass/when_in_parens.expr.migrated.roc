@@ -1,4 +1,4 @@
-when x{
+match x {
 
     Ok->
     3}

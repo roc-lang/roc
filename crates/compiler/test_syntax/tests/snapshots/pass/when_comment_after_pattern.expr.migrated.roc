@@ -1,4 +1,4 @@
-when nns{
+match nns {
 
     O #
 ->r}

@@ -1,1 +1,1 @@
-{Foo.Bar.baz&x: 5y: 0}
+{Foo.Bar.baz&x: 5, y: 0}

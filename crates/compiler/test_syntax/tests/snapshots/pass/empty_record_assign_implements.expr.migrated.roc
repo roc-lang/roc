@@ -1,2 +1,2 @@
-O({},implements,)
+O({}, implements)
 a

@@ -1,4 +1,4 @@
-when x{
+match x {
 
     _->
     1

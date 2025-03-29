@@ -1,4 +1,4 @@
-L() : (l where
+L : (l where
     e
-     implements Z,..I)
+     implements Z, ..I)
 s

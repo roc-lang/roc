@@ -21,13 +21,11 @@ LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-
 ~~~PARSE
 (file
     (module (1:1-1:10))
-    (type_anno (3:1-4:4)
-        "foo"
-        (tag (3:7-3:10) "U64"))
+    (type_anno (3:1-4:4) "foo" (ty "U64"))
     (type_anno (4:1-5:4)
         "bar"
-        (tag (4:7-4:21)
-            "Thing"
+        (apply (4:7-4:21)
+            (ty "Thing")
             (ty_var (4:13-4:14) "a")
             (ty_var (4:16-4:17) "b")
             (_)))
@@ -40,19 +38,19 @@ LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-
     (type_anno (6:1-7:6)
         "add_one"
         (fn (6:12-6:26)
-            (tag (6:23-6:26) "U32")
-            (tag (6:12-6:14) "U8")
-            (tag (6:16-6:19) "U16")))
+            (ty "U32")
+            (ty "U8")
+            (ty "U16")))
     (type_anno (7:1-7:38)
         "main!"
         (fn (7:9-7:38)
-            (tag (7:25-7:38)
-                "Result"
+            (apply (7:25-7:38)
+                (ty "Result")
                 (record (7:32-7:34))
                 (_))
-            (tag (7:9-7:21)
-                "List"
-                (tag (7:14-7:20) "String")))))
+            (apply (7:9-7:21)
+                (ty "List")
+                (ty "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
