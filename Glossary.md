@@ -11,10 +11,25 @@ Command Line Interface. The entrypoint of the compiler that brings together all
 functionality in the Roc toolset and makes it accessible to the user through the
 terminal, e.g. `roc build main.roc`.
 
-[Implementation (new compiler)](src/main.zig)
-[Implementation (old compiler)](crates/cli/src/main.rs)
+- new compiler: [src/main.zig](src/main.zig)
+- old compiler: [crates/cli/src/main.rs](crates/cli/src/main.rs)
 
 ## Module
+
+A .roc file forms one module.
+
+Types of modules:
+- app [(example)](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc): Applications are combined with a platform and compiled into an executable.
+- module [(example)](https://github.com/roc-lang/examples/blob/main/examples/MultipleRocFiles/Hello.roc): Provide types and functions which can be imported into other modules.
+- package [(example)](https://github.com/lukewilliamboswell/roc-json/blob/main/package/main.roc): Organises modules to share functionality across applications and platforms.
+- platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
+- hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
+
+- new compiler:
+  - [processing of modules](src/coordinate.zig)
+  - [folder with lots of module related things](src/base)
+- old compiler:
+  - [module folder](crates/compiler/module)
 
 ## Identifier
 
