@@ -25,6 +25,7 @@ Types of modules:
 - platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
 - hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
 
+Implementation:
 - new compiler:
   - [processing of modules](src/coordinate.zig)
   - [folder with lots of module related things](src/base)
@@ -33,7 +34,44 @@ Types of modules:
 
 ## Identifier
 
+## Compiler Phase
+
+## Tokenizer
+
 ## AST
+
+(Abstract Syntax Tree)
+
+An AST organizes and represents the source code as a tree-like structure.
+So for the code below:
+```roc
+module []
+
+foo : U64
+```
+
+The AST is:
+```
+(file
+    (module (1:1-1:10))
+    (type_anno (3:1-4:4)
+        "foo"
+        (tag (3:7-3:10) "U64")))
+```
+
+It captures the meaning of the code, while ignoring purely syntactic details like parentheses, commas, semicolons,... .
+Compared to raw source code, this structured format is much easier to analyze and manipulate programmatically by the next compiler phase.
+
+The AST is created by the [parser](#parser).
+
+New compiler:
+- See the `Node` struct in [this file](src/check/parse/IR.zig).
+- You can see examples of ASTs in the .txt files in [this folder](src/snapshots).
+
+Old compiler:
+- See `FullAst` [here](crates/compiler/parse/src/ast.rs)
+- [Some tests](crates/compiler/parse/tests/test_parse.rs)
+- [Many snapshot tests](crates/compiler/test_syntax/tests/snapshots)
 
 ## Parser
 
