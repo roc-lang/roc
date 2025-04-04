@@ -36,7 +36,11 @@ Implementation:
 
 ## Compiler Phase
 
-## Tokenizer
+A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](tokenization), [parsing](parsing), [code generation](code-gen),... .
+
+## Compiler Pass
+
+## Tokenization
 
 ## AST
 
@@ -62,7 +66,7 @@ The AST is:
 It captures the meaning of the code, while ignoring purely syntactic details like parentheses, commas, semicolons,... .
 Compared to raw source code, this structured format is much easier to analyze and manipulate programmatically by the next compiler phase.
 
-The AST is created by the [parser](#parser).
+The AST is created by the [parser](#parsing).
 
 New compiler:
 - See the `Node` struct in [this file](src/check/parse/IR.zig).
@@ -73,7 +77,7 @@ Old compiler:
 - [Some tests](crates/compiler/parse/tests/test_parse.rs)
 - [Many snapshot tests](crates/compiler/test_syntax/tests/snapshots)
 
-## Parser
+## Parsing
 
 ## Symbol
 
