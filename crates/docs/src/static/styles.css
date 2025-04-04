@@ -206,6 +206,7 @@ main {
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
   scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
+  align-content: start;
 }
 
 main > * {
