@@ -714,19 +714,8 @@ pre>samp {
   line-height: 1.3em;
 }
 
-.module-header-container {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 48px;
-}
-
-.llm-prompt-link {
-  flex-shrink: 0;
-}
-
-.module-name {
-    flex-grow: 1;
+.ai-docs-link {
+  margin-bottom: 10px;
 }
 
 @media (prefers-color-scheme: dark) {

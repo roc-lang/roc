@@ -24,9 +24,9 @@
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
-## [LLM Docs](#llm-docs) {#llm-docs}
+## [AI Docs](#ai-docs) {#ai-docs}
 
-We have experimental LLM-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite LLM to answer your questions about Roc!
+We have experimental AI-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite large language model to answer your questions about Roc!
 
 ## [REPL](#repl) {#repl}
 
