@@ -1,2 +1,2 @@
 "123"
-|> try(Str.toU64,)
+.(try)(Str.toU64)

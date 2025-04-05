@@ -1,7 +1,11 @@
-importpf.Menu{echoread}
-importMenu{echo
+import pf.Menu{echo read}
+
+import Menu{echo
     read}
-importMenu{echo
+
+import Menu{echo
     read}as
-importMenu{echoread}asexposing[main,
-    credits,]
+
+import Menu{echo read}as exposing [main,
+    credits]
+

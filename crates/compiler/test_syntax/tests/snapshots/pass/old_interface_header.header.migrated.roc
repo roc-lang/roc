@@ -1,1 +1,1 @@
-module [Foo,foo,bar,]
+module [Foo, foo, bar]

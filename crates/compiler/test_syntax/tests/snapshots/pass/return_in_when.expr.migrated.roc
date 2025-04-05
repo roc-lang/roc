@@ -1,7 +1,7 @@
 maybeEarlyReturn = |x|
 {
     y =
-    when x{
+    match x {
 
         5->
         return
@@ -9,7 +9,7 @@ maybeEarlyReturn = |x|
 
         _->x + 2}
 
-    Num.to_str(y,)
+    Num.to_str(y)
 }
 
-maybeEarlyRetun(3,)
+maybeEarlyRetun(3)

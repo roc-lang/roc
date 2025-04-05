@@ -1,3 +1,3 @@
-when 0{
+match 0 {
 
     _ as n->n}
