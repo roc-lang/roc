@@ -481,6 +481,13 @@ pub const Node = struct {
         /// * lhs - Pattern index
         /// * rhs - Body index
         branch,
+
+        /// Collections
+        /// Collection of exposed items
+        collection_exposed,
+
+        /// Collection of packages fields
+        collection_packages,
     };
 };
 
@@ -573,6 +580,27 @@ pub const NodeStore = struct {
         store.scratch_exposed_items.shrinkRetainingCapacity(0);
     }
 
+    pub fn debug(store: *NodeStore) void {
+        std.debug.print("\n==> IR.NodeStore DEBUG <==\n", .{});
+        std.debug.print("Nodes:\n", .{});
+        var nodes_iter = store.nodes.iterIndices();
+        while (nodes_iter.next()) |idx| {
+            std.debug.print("{d}: {any}\n", .{ @intFromEnum(idx), store.nodes.get(idx) });
+        }
+        std.debug.print("Extra Data: {any}\n", .{store.extra_data.items});
+        std.debug.print("Scratch statements: {any}\n", .{store.scratch_statements.items});
+        std.debug.print("Scratch tokens: {any}\n", .{store.scratch_tokens.items});
+        std.debug.print("Scratch exprs: {any}\n", .{store.scratch_exprs.items});
+        std.debug.print("Scratch patterns: {any}\n", .{store.scratch_patterns.items});
+        std.debug.print("Scratch record fields: {any}\n", .{store.scratch_record_fields.items});
+        std.debug.print("Scratch pattern record fields: {any}\n", .{store.scratch_pattern_record_fields.items});
+        std.debug.print("Scratch when branches: {any}\n", .{store.scratch_when_branches.items});
+        std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
+        std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
+        std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
+        std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
+    }
+
     // Node Type Idx types
 
     /// An index for a Body node. Should not be constructed externally.
@@ -601,6 +629,8 @@ pub const NodeStore = struct {
     pub const TypeAnnoIdx = struct { id: u32 };
     /// An index for a AnnoRecordField node. Should not be constructed externally.
     pub const AnnoRecordFieldIdx = struct { id: u32 };
+    /// An index for a Collection node.  Should not be constructed externally.
+    pub const CollectionIdx = struct { id: u32 };
 
     // ------------------------------------------------------------------------
     // Creation API - All nodes should be added using these functions
@@ -630,6 +660,19 @@ pub const NodeStore = struct {
         });
     }
 
+    pub fn addCollection(store: *NodeStore, tag: Node.Tag, collection: Collection) CollectionIdx {
+        const nid = store.nodes.append(store.gpa, Node{
+            .tag = tag,
+            .main_token = 0,
+            .data = .{
+                .lhs = collection.span.start,
+                .rhs = collection.span.len,
+            },
+            .region = collection.region,
+        });
+        return .{ .id = @intFromEnum(nid) };
+    }
+
     pub fn addHeader(store: *NodeStore, header: Header) HeaderIdx {
         var node = Node{
             .tag = .statement,
@@ -642,35 +685,30 @@ pub const NodeStore = struct {
         };
         switch (header) {
             .app => |app| {
-                // struct {
-                //    provides: TokenSpan, // This should probably be a Interned Ident token
-                //    platform: TokenIdx,
-                //    platform_name: TokenIdx,
-                //    packages: RecordFieldSpan,
-                //    region: Region,
-                // }
                 node.tag = .app_header;
-                node.main_token = app.platform_name;
-                node.data.lhs = app.provides.span.start;
-                node.data.rhs = @as(u32, @bitCast(Header.AppHeaderRhs{
-                    .num_packages = @as(u10, @intCast(app.packages.span.len)),
-                    .num_provides = @as(u22, @intCast(app.provides.span.len)),
-                }));
+                node.main_token = app.platform_idx.id;
+                // Store provides collection
+                node.data.lhs = app.provides.id;
+                node.data.rhs = app.packages.id;
                 node.region = app.region;
 
-                store.extra_data.append(store.gpa, app.platform.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, app.platform_idx.id) catch |err| exitOnOom(err);
             },
             .module => |mod| {
                 node.tag = .module_header;
-                node.data.lhs = mod.exposes.span.start;
-                node.data.rhs = mod.exposes.span.len;
+                node.data.lhs = mod.exposes.id;
                 node.region = mod.region;
             },
             .hosted => |hosted| {
                 node.tag = .hosted_header;
-                node.data.lhs = hosted.exposes.span.start;
-                node.data.rhs = hosted.exposes.span.len;
+                node.data.lhs = hosted.exposes.id;
                 node.region = hosted.region;
+            },
+            .package => |package| {
+                node.tag = .package_header;
+                node.data.lhs = package.exposes.id;
+                node.data.rhs = package.packages.id;
+                node.region = package.region;
             },
             .malformed => {
                 @panic("Use addMalformed instead");
@@ -1227,48 +1265,45 @@ pub const NodeStore = struct {
             .region = node.region,
         };
     }
+
+    pub fn getCollection(store: *NodeStore, idx: CollectionIdx) Collection {
+        const node = store.nodes.get(@enumFromInt(idx.id));
+        return .{
+            .span = .{
+                .start = node.data.lhs,
+                .len = node.data.rhs,
+            },
+            .region = node.region,
+        };
+    }
+
     pub fn getHeader(store: *NodeStore, header: HeaderIdx) Header {
         const node = store.nodes.get(@enumFromInt(header.id));
         switch (node.tag) {
             .app_header => {
-                const extra_data_start = node.data.lhs;
-                const rhs = @as(Header.AppHeaderRhs, @bitCast(node.data.rhs));
-                var platform_idx = @as(usize, @intCast(extra_data_start + rhs.num_packages + rhs.num_provides)) + 1;
-                if (platform_idx < extra_data_start) {
-                    platform_idx = @intCast(extra_data_start);
-                }
-                const platform = store.extra_data.items[platform_idx];
-                return .{
-                    .app = .{
-                        .platform = .{ .id = platform },
-                        .platform_name = node.main_token,
-                        .packages = .{ .span = .{
-                            .start = extra_data_start + rhs.num_provides,
-                            .len = rhs.num_packages,
-                        } },
-                        .provides = .{ .span = .{
-                            .start = extra_data_start,
-                            .len = rhs.num_provides,
-                        } },
-                        .region = node.region,
-                    },
-                };
+                return .{ .app = .{
+                    .platform_idx = RecordFieldIdx{ .id = node.main_token },
+                    .provides = .{ .id = node.data.lhs },
+                    .packages = .{ .id = node.data.rhs },
+                    .region = node.region,
+                } };
             },
             .module_header => {
                 return .{ .module = .{
-                    .exposes = .{ .span = .{
-                        .start = node.data.lhs,
-                        .len = node.data.rhs,
-                    } },
+                    .exposes = .{ .id = node.data.lhs },
                     .region = node.region,
                 } };
             },
             .hosted_header => {
                 return .{ .hosted = .{
-                    .exposes = .{ .span = .{
-                        .start = node.data.lhs,
-                        .len = node.data.rhs,
-                    } },
+                    .exposes = .{ .id = node.data.lhs },
+                    .region = node.region,
+                } };
+            },
+            .package_header => {
+                return .{ .package = .{
+                    .exposes = .{ .id = node.data.lhs },
+                    .packages = .{ .id = node.data.rhs },
                     .region = node.region,
                 } };
             },
@@ -1686,6 +1721,7 @@ pub const NodeStore = struct {
         const name = node.main_token;
         const value = if (node.data.lhs > 0) ExprIdx{ .id = node.data.lhs } else null;
         const optional = node.data.rhs == 1;
+
         return .{
             .name = name,
             .value = value,
@@ -1816,6 +1852,12 @@ pub const NodeStore = struct {
     // Node types - these are the constituent types used in the Node Store API
     // ------------------------------------------------------------------------
 
+    /// Represents a delimited collection of other nodes
+    pub const Collection = struct {
+        span: DataSpan,
+        region: Region,
+    };
+
     /// Represents a Roc file.
     pub const File = struct {
         header: HeaderIdx,
@@ -1864,19 +1906,18 @@ pub const NodeStore = struct {
     /// Represents a module header.
     pub const Header = union(enum) {
         app: struct {
-            provides: ExposedItemSpan, // This should probably be a Interned Ident token
-            platform: ExprIdx,
-            platform_name: TokenIdx,
-            packages: RecordFieldSpan,
+            provides: CollectionIdx,
+            platform_idx: RecordFieldIdx,
+            packages: CollectionIdx,
             region: Region,
         },
         module: struct {
-            exposes: ExposedItemSpan,
+            exposes: CollectionIdx,
             region: Region,
         },
         package: struct {
-            provides: ExposedItemSpan,
-            packages: RecordFieldSpan,
+            exposes: CollectionIdx,
+            packages: CollectionIdx,
             region: Region,
         },
         platform: struct {
@@ -1884,7 +1925,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         hosted: struct {
-            exposes: ExposedItemSpan,
+            exposes: CollectionIdx,
             region: Region,
         },
         malformed: struct {
@@ -1905,7 +1946,8 @@ pub const NodeStore = struct {
                 .module => |module| {
                     var node = sexpr.Expr.init(env.gpa, "module");
                     node.appendRegionChild(env.gpa, ir.regionInfo(module.region, line_starts));
-                    for (ir.store.exposedItemSlice(module.exposes)) |exposed| {
+                    const exposes = ir.store.getCollection(module.exposes);
+                    for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
                         const item = ir.store.getExposedItem(exposed);
                         var item_node = item.toSExpr(env, ir, line_starts);
                         node.appendNodeChild(env.gpa, &item_node);

@@ -946,43 +946,162 @@ const Formatter = struct {
 
     fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !FormattedOutput {
         const header = fmt.ast.store.getHeader(hi);
+        const start_indent = fmt.curr_indent;
+        defer {
+            fmt.curr_indent = start_indent;
+        }
         switch (header) {
             .app => |a| {
-                try fmt.pushAll("app ");
-                const provides = fmt.ast.store.exposedItemSlice(a.provides);
-                const provides_region = fmt.regionInSlice(IR.NodeStore.ExposedItemIdx, provides);
-                try fmt.formatCollection(provides_region, .square, IR.NodeStore.ExposedItemIdx, provides, Formatter.formatExposedItem);
-                try fmt.pushAll(" { ");
-                try fmt.pushTokenText(a.platform_name);
-                try fmt.pushAll(": platform ");
-                _ = try fmt.formatExpr(a.platform);
-                if (a.packages.span.len > 0) {
-                    try fmt.push(',');
+                const multiline = fmt.ast.regionIsMultiline(a.region);
+                const provides = fmt.ast.store.getCollection(a.provides);
+                try fmt.pushAll("app");
+                if (multiline and try fmt.flushCommentsAfter(a.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
                 }
+
+                try fmt.formatCollection(provides.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = provides.span }), Formatter.formatExposedItem);
+
+                if (multiline and try fmt.flushCommentsAfter(provides.region.end)) {
+                    if (fmt.curr_indent == start_indent) {
+                        fmt.curr_indent += 1;
+                    }
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                const packages = fmt.ast.store.getCollection(a.packages);
+                const packages_multiline = fmt.ast.regionIsMultiline(packages.region);
+                try fmt.push('{');
+                if (packages_multiline) {
+                    fmt.curr_indent += 1;
+                } else {
+                    try fmt.push(' ');
+                }
+
+                var platform_field: ?IR.NodeStore.RecordFieldIdx = null;
+                var package_fields_list = try std.ArrayListUnmanaged(IR.NodeStore.RecordFieldIdx).initCapacity(fmt.ast.store.gpa, 10);
                 var i: usize = 0;
-                for (fmt.ast.store.recordFieldSlice(a.packages)) |package| {
-                    const field = fmt.ast.store.getRecordField(package);
+                const packages_slice = fmt.ast.store.recordFieldSlice(.{ .span = packages.span });
+                for (packages_slice) |package| {
+                    if (package.id == a.platform_idx.id) {
+                        platform_field = package;
+                        continue;
+                    }
+                    try package_fields_list.append(fmt.ast.store.gpa, package);
+                }
+                i = 0;
+                const package_fields = try package_fields_list.toOwnedSlice(fmt.ast.store.gpa);
+                defer fmt.ast.store.gpa.free(package_fields);
+
+                if (platform_field) |field_idx| {
+                    const field = fmt.ast.store.getRecordField(field_idx);
+                    if (packages_multiline and try fmt.flushCommentsBefore(field.region.start)) {
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    } else if (packages_multiline) {
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    }
                     try fmt.pushTokenText(field.name);
                     if (field.value) |v| {
-                        try fmt.pushAll(": ");
+                        try fmt.push(':');
+                        try fmt.push(' ');
+                        try fmt.pushAll("platform");
+                        try fmt.push(' ');
                         _ = try fmt.formatExpr(v);
                     }
-                    if (i < a.packages.span.len) {
+                    if (!packages_multiline and package_fields.len > 0) {
                         try fmt.pushAll(", ");
                     }
-                    i += 1;
+                    if (packages_multiline) {
+                        try fmt.push(',');
+                    }
                 }
-                try fmt.pushAll(" }");
+                for (package_fields) |field_idx| {
+                    const item_region = fmt.nodeRegion(field_idx.id);
+                    if (packages_multiline and try fmt.flushCommentsBefore(item_region.start)) {
+                        try fmt.ensureNewline();
+                        try fmt.pushIndent();
+                    } else if (packages_multiline) {
+                        try fmt.newline();
+                        try fmt.pushIndent();
+                    }
+                    _ = try fmt.formatRecordField(field_idx);
+                    if (!packages_multiline and i < package_fields.len - 1) {
+                        try fmt.pushAll(", ");
+                    } else if (packages_multiline) {
+                        try fmt.push(',');
+                    }
+                }
+                if (packages_multiline) {
+                    _ = try fmt.flushCommentsBefore(packages.region.end);
+                    fmt.curr_indent -= 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+
+                try fmt.push('}');
+
                 return .something_formatted;
             },
             .module => |m| {
-                try fmt.pushAll("module ");
-                try fmt.formatCollection(m.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(m.exposes), Formatter.formatExposedItem);
+                try fmt.pushAll("module");
+                const multiline = fmt.ast.regionIsMultiline(m.region);
+                const exposes = fmt.ast.store.getCollection(m.exposes);
+                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
                 return .something_formatted;
             },
             .hosted => |h| {
-                try fmt.pushAll("hosted ");
-                try fmt.formatCollection(h.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(h.exposes), Formatter.formatExposedItem);
+                try fmt.pushAll("hosted");
+                const multiline = fmt.ast.regionIsMultiline(h.region);
+                const exposes = fmt.ast.store.getCollection(h.exposes);
+                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
+                return .something_formatted;
+            },
+            .package => |p| {
+                try fmt.pushAll("package");
+                defer {
+                    fmt.curr_indent = 0;
+                }
+                const multiline = fmt.ast.regionIsMultiline(p.region);
+                if (multiline) {
+                    _ = try fmt.flushCommentsAfter(p.region.start);
+                    try fmt.ensureNewline();
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                const exposes = fmt.ast.store.getCollection(p.exposes);
+                // TODO: This needs to be extended to the next CloseSquare
+                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
+                if (multiline) {
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                const packages = fmt.ast.store.getCollection(p.packages);
+                try fmt.formatCollection(packages.region, .curly, IR.NodeStore.RecordFieldIdx, fmt.ast.store.recordFieldSlice(.{ .span = packages.span }), Formatter.formatRecordField);
                 return .something_formatted;
             },
             .malformed => {
@@ -1476,6 +1595,51 @@ test "Plain module" {
     );
 }
 
+test "Module - empty" {
+    try moduleFmtsSame(
+        \\module []
+    );
+}
+
+test "Module - nonempty singleline" {
+    try moduleFmtsSame(
+        \\module [something, SomeType]
+    );
+}
+
+test "Module - nonempty multiline" {
+    try moduleFmtsSame(
+        \\module [
+        \\    something,
+        \\    SomeType,
+        \\]
+    );
+
+    try moduleFmtsSame(
+        \\module [ # Comment After exposes open
+        \\    something, # Comment after exposed item
+        \\    SomeType, # Comment after final exposed item
+        \\]
+    );
+
+    try moduleFmtsSame(
+        \\module # Comment after module keyword
+        \\    [ # Comment After exposes open
+        \\        something, # Comment after exposed item
+        \\        SomeType, # Comment after final exposed item
+        \\    ]
+    );
+
+    try moduleFmtsTo(
+        \\module [something, SomeType,]
+    ,
+        \\module [
+        \\    something,
+        \\    SomeType,
+        \\]
+    );
+}
+
 test "Hosted - empty" {
     try moduleFmtsSame(
         \\hosted []
@@ -1496,6 +1660,21 @@ test "Hosted - nonempty multiline" {
         \\]
     );
 
+    try moduleFmtsSame(
+        \\hosted [ # Comment After exposes open
+        \\    something, # Comment after exposed item
+        \\    SomeType, # Comment after final exposed item
+        \\]
+    );
+
+    try moduleFmtsSame(
+        \\hosted # Comment after hosted keyword
+        \\    [ # Comment After exposes open
+        \\        something, # Comment after exposed item
+        \\        SomeType, # Comment after final exposed item
+        \\    ]
+    );
+
     try moduleFmtsTo(
         \\hosted [something, SomeType,]
     ,
@@ -1503,6 +1682,139 @@ test "Hosted - nonempty multiline" {
         \\    something,
         \\    SomeType,
         \\]
+    );
+}
+
+test "Package Header - empty" {
+    try moduleFmtsSame(
+        \\package [] {}
+    );
+}
+
+test "App Header - nonempty singleline" {
+    try moduleFmtsSame(
+        \\app [main!] { pf: platform "../main.roc", other: "../../other/main.roc" }
+    );
+}
+
+test "App Header - nonempty multiline" {
+    try moduleFmtsSame(
+        \\app # This comment is here
+        \\    [main!]
+        \\    { pf: platform "../main.roc", somePkg: "../main.roc" }
+    );
+    try moduleFmtsTo(
+        \\app
+        \\    [main!,]
+        \\    { pf: platform "../main.roc", somePkg: "../main.roc", }
+    ,
+        \\app
+        \\    [
+        \\        main!,
+        \\    ]
+        \\    {
+        \\        pf: platform "../main.roc",
+        \\        somePkg: "../main.roc",
+        \\    }
+    );
+    try moduleFmtsSame(
+        \\app # Comment after keyword
+        \\    [ # Comment after provides open
+        \\        main!, # Comment after exposed item
+        \\    ]
+        \\    { # Comment after packages open
+        \\        pf: platform "../main.roc", # Comment after platform
+        \\        other: "../../other/main.roc", # Comment after last package
+        \\    }
+    );
+}
+
+test "App Header - platform not first" {
+    try moduleFmtsTo(
+        \\app
+        \\    [main!,]
+        \\    { somePkg: "../main.roc", pf: platform "../main.roc", }
+    ,
+        \\app
+        \\    [
+        \\        main!,
+        \\    ]
+        \\    {
+        \\        pf: platform "../main.roc",
+        \\        somePkg: "../main.roc",
+        \\    }
+    );
+}
+
+test "App Header - provides singleline, packages multiline" {
+    try moduleFmtsTo(
+        \\app [main!] {
+        \\    pf: platform "../main.roc",
+        \\    somePkg: "../main.roc"
+        \\}
+    ,
+        \\app [main!] {
+        \\    pf: platform "../main.roc",
+        \\    somePkg: "../main.roc",
+        \\}
+    );
+    try moduleFmtsTo(
+        \\app [main!] {
+        \\    somePkg: "../main.roc",
+        \\    pf: platform "../main.roc"
+        \\}
+    ,
+        \\app [main!] {
+        \\    pf: platform "../main.roc",
+        \\    somePkg: "../main.roc",
+        \\}
+    );
+    try moduleFmtsTo(
+        \\app [main!] {somePkg: "../main.roc",pf: platform "../main.roc",}
+    ,
+        \\app [main!] {
+        \\    pf: platform "../main.roc",
+        \\    somePkg: "../main.roc",
+        \\}
+    );
+}
+
+test "Package Header - nonempty singleline" {
+    try moduleFmtsSame(
+        \\package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
+    );
+}
+
+test "Package Header - nonempty multiline" {
+    try moduleFmtsSame(
+        \\package # This comment is here
+        \\    [something, SomeType]
+        \\    { somePkg: "../main.roc" }
+    );
+    try moduleFmtsTo(
+        \\package
+        \\    [something, SomeType,]
+        \\    { somePkg: "../main.roc", }
+    ,
+        \\package
+        \\    [
+        \\        something,
+        \\        SomeType,
+        \\    ]
+        \\    {
+        \\        somePkg: "../main.roc",
+        \\    }
+    );
+    try moduleFmtsSame(
+        \\package # Comment after keyword
+        \\    [ # Comment after exposes open
+        \\        something, # Comment after exposed item
+        \\        SomeType, # Comment after last exposed item
+        \\    ]
+        \\    { # Comment after packages open
+        \\        somePkg: "../main.roc", # Comment after package
+        \\        other: "../../other/main.roc", # Comment after last package
+        \\    }
     );
 }
 
@@ -1735,7 +2047,6 @@ test "Multiline BinOp" {
 }
 
 test "Multiline list formatting" {
-    std.debug.print("\n\nMultiline list formatting\n\n", .{});
     const expr = "[1,2,3,]";
     const expected =
         \\[

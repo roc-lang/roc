@@ -208,12 +208,82 @@ pub fn parseHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         .KwHosted => {
             return self.parseHostedHeader();
         },
+        .KwPackage => {
+            return self.parsePackageHeader();
+        },
         else => {
             return self.pushMalformed(IR.NodeStore.HeaderIdx, .missing_header, self.pos);
         },
     }
 }
 
+/// parse an `.roc` package header
+///
+/// e.g. `package [ foo ] { something: "package/path/main.roc" }`
+pub fn parsePackageHeader(self: *Parser) IR.NodeStore.HeaderIdx {
+    const start = self.pos;
+
+    std.debug.assert(self.peek() == .KwPackage);
+    self.advance(); // Advance past KwApp
+
+    // Get Exposes
+    const exposes_start = self.pos;
+    self.expect(.OpenSquare) catch {
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides_open_square, start);
+    };
+    const scratch_top = self.store.scratchExposedItemTop();
+    const exposes_end = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+        while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
+            self.advance();
+        }
+        self.expect(.CloseSquare) catch {
+            return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_close_square, start);
+        };
+        self.store.clearScratchExposedItemsFrom(scratch_top);
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close, start);
+    };
+    const exposes_span = self.store.exposedItemSpanFrom(scratch_top);
+    const exposes = self.store.addCollection(.collection_exposed, .{
+        .span = exposes_span.span,
+        .region = .{
+            .start = exposes_start,
+            .end = exposes_end,
+        },
+    });
+
+    // Get Packages
+    const packages_start = self.pos;
+    self.expect(.OpenCurly) catch {
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_open_curly, start);
+    };
+    const fields_scratch_top = self.store.scratchRecordFieldTop();
+    const end = self.parseCollectionSpan(IR.NodeStore.RecordFieldIdx, .CloseCurly, IR.NodeStore.addScratchRecordField, Parser.parseRecordField) catch {
+        self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+        return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_close_curly, start);
+    };
+    const packages_span = self.store.recordFieldSpanFrom(fields_scratch_top);
+    const packages = self.store.addCollection(.collection_packages, .{
+        .span = packages_span.span,
+        .region = .{
+            .start = packages_start,
+            .end = end,
+        },
+    });
+
+    self.advance();
+
+    const header = IR.NodeStore.Header{ .package = .{
+        .exposes = exposes,
+        .packages = packages,
+        .region = .{ .start = start, .end = end },
+    } };
+    const idx = self.store.addHeader(header);
+    return idx;
+}
+
+/// Parse a Roc Hosted header
+///
+/// e.g. `hosted [foo]`
 fn parseHostedHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     std.debug.assert(self.peek() == .KwHosted);
 
@@ -222,6 +292,7 @@ fn parseHostedHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     self.advance(); // Advance past KwModule
 
     // Get exposes
+    const exposes_start = self.pos;
     self.expect(.OpenSquare) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_square, self.pos);
     };
@@ -236,7 +307,14 @@ fn parseHostedHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         self.store.clearScratchExposedItemsFrom(scratch_top);
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close, start);
     };
-    const exposes = self.store.exposedItemSpanFrom(scratch_top);
+    const exposes_span = self.store.exposedItemSpanFrom(scratch_top);
+    const exposes = self.store.addCollection(.collection_exposed, .{
+        .span = exposes_span.span,
+        .region = .{
+            .start = exposes_start,
+            .end = end,
+        },
+    });
 
     return self.store.addHeader(.{ .hosted = .{
         .region = .{ .start = start, .end = end },
@@ -244,6 +322,9 @@ fn parseHostedHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     } });
 }
 
+/// parse a Roc module header
+///
+/// e.g. `module [foo]`
 fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     std.debug.assert(self.peek() == .KwModule);
 
@@ -252,6 +333,7 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     self.advance(); // Advance past KwModule
 
     // Get exposes
+    const exposes_start = self.pos;
     self.expect(.OpenSquare) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .header_expected_open_square, self.pos);
     };
@@ -266,7 +348,14 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         self.store.clearScratchExposedItemsFrom(scratch_top);
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close, start);
     };
-    const exposes = self.store.exposedItemSpanFrom(scratch_top);
+    const exposes_span = self.store.exposedItemSpanFrom(scratch_top);
+    const exposes = self.store.addCollection(.collection_exposed, .{
+        .span = exposes_span.span,
+        .region = .{
+            .start = exposes_start,
+            .end = end,
+        },
+    });
 
     return self.store.addHeader(.{ .module = .{
         .region = .{ .start = start, .end = end },
@@ -276,10 +365,9 @@ fn parseModuleHeader(self: *Parser) IR.NodeStore.HeaderIdx {
 
 /// parse an `.roc` application header
 ///
-/// e.g. `module [ foo ]`
+/// e.g. `app [main!] { pf: "../some-platform.roc" }`
 pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
-    var platform: ?IR.NodeStore.ExprIdx = null;
-    var platform_name: ?TokenIdx = null;
+    var platform: ?IR.NodeStore.RecordFieldIdx = null;
     const start = self.pos;
 
     std.debug.assert(self.peek() == .KwApp);
@@ -289,8 +377,9 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
     self.expect(.OpenSquare) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_provides_open_square, start);
     };
+    const provides_start = self.pos;
     const scratch_top = self.store.scratchExposedItemTop();
-    _ = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
+    const provides_end = self.parseCollectionSpan(IR.NodeStore.ExposedItemIdx, .CloseSquare, IR.NodeStore.addScratchExposedItem, Parser.parseExposedItem) catch {
         while (self.peek() != .CloseSquare and self.peek() != .EndOfFile) {
             self.advance();
         }
@@ -300,13 +389,17 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
         self.store.clearScratchExposedItemsFrom(scratch_top);
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .import_exposing_no_close, start);
     };
-    const provides = self.store.exposedItemSpanFrom(scratch_top);
+    const provides_span = self.store.exposedItemSpanFrom(scratch_top);
+    const provides_region = IR.Region{ .start = provides_start, .end = provides_end };
+    const provides = self.store.addCollection(.collection_exposed, .{ .span = provides_span.span, .region = provides_region });
 
     // Get platform and packages
     const fields_scratch_top = self.store.scratchRecordFieldTop();
+    const packages_start = self.pos;
     self.expect(.OpenCurly) catch {
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_open_curly, start);
     };
+    var i: usize = 0;
 
     while (self.peek() != .CloseCurly and self.peek() != .EndOfFile) {
         const entry_start = self.pos;
@@ -331,8 +424,15 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
                 self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
                 return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_platform_string, start);
             }
-            platform = self.parseStringExpr();
-            platform_name = name_tok;
+            const value = self.parseStringExpr();
+            const pidx = self.store.addRecordField(.{
+                .name = name_tok,
+                .value = value,
+                .optional = false,
+                .region = .{ .start = entry_start, .end = self.pos },
+            });
+            self.store.addScratchRecordField(pidx);
+            platform = pidx;
         } else {
             if (self.peek() != .StringStart) {
                 self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
@@ -346,35 +446,42 @@ pub fn parseAppHeader(self: *Parser) IR.NodeStore.HeaderIdx {
                 .region = .{ .start = entry_start, .end = self.pos },
             }));
         }
-        if (self.peek() != .Comma) {
-            break;
-        } else {
-            self.advance();
+        while (self.peek() == .Newline) {
+            self.advanceOne();
         }
+        self.expect(.Comma) catch {
+            break;
+        };
+        i = i + 1;
     }
+    const packages_end = self.pos;
     if (self.peek() != .CloseCurly) {
         self.store.clearScratchRecordFieldsFrom(fields_scratch_top);
+        std.debug.print("Tokens: {any}\n", .{self.tok_buf.tokens.items(.tag)[start..self.pos]});
         return self.pushMalformed(IR.NodeStore.HeaderIdx, .expected_package_platform_close_curly, start);
     }
     self.advanceOne(); // Advance past CloseCurly
-    const end = self.pos;
-    const packages = self.store.recordFieldSpanFrom(fields_scratch_top);
+    const packages_span = self.store.recordFieldSpanFrom(fields_scratch_top);
+    const packages = self.store.addCollection(.collection_packages, .{
+        .span = packages_span.span,
+        .region = .{
+            .start = packages_start,
+            .end = packages_end,
+        },
+    });
     self.advance();
 
-    if (platform) |p| {
-        if (platform_name) |pn| {
-            const header = IR.NodeStore.Header{
-                .app = .{
-                    .platform = p,
-                    .platform_name = pn,
-                    .provides = provides,
-                    .packages = packages,
-                    .region = .{ .start = start, .end = end },
-                },
-            };
-            const idx = self.store.addHeader(header);
-            return idx;
-        }
+    if (platform) |pidx| {
+        const header = IR.NodeStore.Header{
+            .app = .{
+                .platform_idx = pidx,
+                .provides = provides,
+                .packages = packages,
+                .region = .{ .start = start, .end = packages_end },
+            },
+        };
+        const idx = self.store.addHeader(header);
+        return idx;
     }
     return self.pushMalformed(IR.NodeStore.HeaderIdx, .no_platform, start);
 }
@@ -1182,7 +1289,7 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
         switch (self.peek()) {
             .StringEnd => {
                 string_end = self.pos;
-                self.advanceOne();
+                self.advanceOne(); // Advance past ONLY the StringEnd
                 break;
             },
             .StringPart => {
@@ -1190,20 +1297,20 @@ pub fn parseStringExpr(self: *Parser) IR.NodeStore.ExprIdx {
                     .token = self.pos,
                     .region = .{ .start = self.pos, .end = self.pos },
                 } });
-                self.advanceOne();
+                self.advanceOne(); // Advance past ONLY the StringPart
                 self.store.addScratchExpr(index);
             },
             .OpenStringInterpolation => {
-                self.advance();
+                self.advance(); // Advance past OpenStringInterpolation
                 const ex = self.parseExpr();
                 self.store.addScratchExpr(ex);
                 while (self.peek() == .Newline) {
-                    self.advanceOne();
+                    self.advanceOne(); // Advance ONLY past the Newline
                 }
                 if (self.peek() != .CloseStringInterpolation) {
                     return self.pushMalformed(IR.NodeStore.ExprIdx, .string_expected_close_interpolation, start);
                 }
-                self.advanceOne();
+                self.advanceOne(); // Advance ONLY past the CloseString Interpolation
             },
             else => {
                 // Something is broken in the tokenizer if we get here!

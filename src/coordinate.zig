@@ -492,12 +492,12 @@ fn parseDependenciesFromPackageRoot(
     const header = parse_ast.store.getHeader(file.header);
 
     const package_list = switch (header) {
-        .app => |app| app.packages,
+        .app => |app| parse.IR.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(app.packages).span },
         .module => parse.IR.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
             .len = 0,
         } },
-        .package => |pkg| pkg.packages,
+        .package => |pkg| parse.IR.NodeStore.RecordFieldSpan{ .span = parse_ast.store.getCollection(pkg.packages).span },
         // TODO: get packages for hosted/platform modules once their headers are being parsed.
         .platform => |_| parse.IR.NodeStore.RecordFieldSpan{ .span = .{
             .start = 0,
