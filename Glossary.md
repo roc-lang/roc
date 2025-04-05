@@ -34,13 +34,41 @@ Implementation:
 
 ## Identifier
 
+## Keyword
+
+## Operator
+
+## Syntax
+
 ## Compiler Phase
 
-A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](tokenization), [parsing](parsing), [code generation](code-gen),... .
+A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
 
 ## Compiler Pass
 
 ## Tokenization
+
+The process of breaking down source code into smaller units called tokens. These tokens are the basic building blocks of a programming language, such as [keywords](#Keyword), [identifiers](#identifier), [operators](#operator), and [symbols](#symbol). The input code is scanned character by character and is grouped into meaningful sequences based on the language's syntax rules.
+This step makes [parsing](#parsing) simpler.
+
+Example source code:
+```roc
+module []
+
+foo : U64
+```
+Corresponding tokens:
+```
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
+```
+
+New compiler:
+- [tokenize.zig](src/check/parse/tokenize.zig)
+
+Old compiler:
+- We did not do a separate tokenization step, everything happened in the [parser](crates/compiler/parse/src/parser.rs).
 
 ## AST
 
