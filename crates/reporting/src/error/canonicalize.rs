@@ -63,11 +63,11 @@ const ABILITY_IMPLEMENTATION_NOT_IDENTIFIER: &str = "ABILITY IMPLEMENTATION NOT 
 const DUPLICATE_IMPLEMENTATION: &str = "DUPLICATE IMPLEMENTATION";
 const UNNECESSARY_IMPLEMENTATIONS: &str = "UNNECESSARY IMPLEMENTATIONS";
 const INCOMPLETE_ABILITY_IMPLEMENTATION: &str = "INCOMPLETE ABILITY IMPLEMENTATION";
-const STATEMENT_AFTER_EXPRESSION: &str = "STATEMENT AFTER EXPRESSION";
 const MISSING_EXCLAMATION: &str = "MISSING EXCLAMATION";
 const UNNECESSARY_EXCLAMATION: &str = "UNNECESSARY EXCLAMATION";
 const EMPTY_TUPLE_TYPE: &str = "EMPTY TUPLE TYPE";
 const UNBOUND_TYPE_VARS_IN_AS: &str = "UNBOUND TYPE VARIABLES IN AS";
+const INTERPOLATED_STRING_NOT_ALLOWED: &str = "INTERPOLATED STRING NOT ALLOWED";
 
 pub fn can_problem<'b>(
     alloc: &'b RocDocAllocator<'b>,
@@ -621,6 +621,20 @@ pub fn can_problem<'b>(
             record_region,
         } => {
             return to_invalid_optional_value_report(
+                alloc,
+                lines,
+                filename,
+                field_name,
+                field_region,
+                record_region,
+            );
+        }
+        Problem::InvalidIgnoredValue {
+            field_name,
+            field_region,
+            record_region,
+        } => {
+            return to_invalid_ignored_value_report(
                 alloc,
                 lines,
                 filename,
@@ -1325,6 +1339,21 @@ pub fn can_problem<'b>(
             ]);
             title = "OVERAPPLIED DBG".to_string();
         }
+        Problem::UnderAppliedTry { region } => {
+            doc = alloc.stack([
+                alloc.concat([
+                    alloc.reflow("This "),
+                    alloc.keyword("try"),
+                    alloc.reflow(" has too few values given to it:"),
+                ]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.concat([
+                    alloc.keyword("try"),
+                    alloc.reflow(" must be given exactly one value to try."),
+                ]),
+            ]);
+            title = "UNDERAPPLIED TRY".to_string();
+        }
         Problem::FileProblem { filename, error } => {
             let report = to_file_problem_report(alloc, filename, error);
             doc = report.doc;
@@ -1392,32 +1421,6 @@ pub fn can_problem<'b>(
             title = "UNNECESSARY RETURN".to_string();
         }
 
-        Problem::StmtAfterExpr(region) => {
-            doc = alloc.stack([
-                alloc
-                    .reflow(r"I just finished parsing an expression with a series of definitions,"),
-                alloc.reflow(
-                    r"and this line is indented as if it's intended to be part of that expression:",
-                ),
-                alloc.region(lines.convert_region(region), severity),
-                alloc.concat([alloc.reflow(
-                    "However, I already saw the final expression in that series of definitions.",
-                )]),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "An expression like `4`, `\"hello\"`, or `functionCall MyThing` is like `return 4` in other programming languages. To me, it seems like you did `return 4` followed by more code in the lines after, that code would never be executed!"
-                    )
-                ),
-                alloc.tip().append(
-                    alloc.reflow(
-                        "If you are working with `Task`, this error can happen if you forgot a `!` somewhere."
-                    )
-                )
-            ]);
-
-            title = STATEMENT_AFTER_EXPRESSION.to_string();
-        }
-
         Problem::UnsuffixedEffectfulRecordField(region) => {
             doc = alloc.stack([
                 alloc.reflow(
@@ -1426,7 +1429,7 @@ pub fn can_problem<'b>(
                 alloc.region(lines.convert_region(region), severity),
                 alloc.reflow("Add an exclamation mark at the end, like:"),
                 alloc
-                    .parser_suggestion("{ readFile!: Str => Str }")
+                    .parser_suggestion("{ read_file!: Str => Str }")
                     .indent(4),
                 alloc.reflow("This will help readers identify it as a source of effects."),
             ]);
@@ -1475,6 +1478,15 @@ pub fn can_problem<'b>(
             ]);
 
             title = UNBOUND_TYPE_VARS_IN_AS.to_string();
+        }
+        Problem::InterpolatedStringNotAllowed(region) => {
+            doc = alloc.stack([
+                alloc.reflow("Interpolated strings are not allowed here:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow(r#"Only plain strings like "foo" or "foo\n" are allowed."#),
+            ]);
+
+            title = INTERPOLATED_STRING_NOT_ALLOWED.to_string();
         }
     };
 
@@ -1541,6 +1553,51 @@ fn to_invalid_optional_value_report_help<'b>(
         alloc.reflow(r"You can only use optional values in record destructuring, like:"),
         alloc
             .reflow(r"{ answer ? 42, otherField } = myRecord")
+            .indent(4),
+    ])
+}
+
+fn to_invalid_ignored_value_report<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
+    filename: PathBuf,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> Report<'b> {
+    let doc =
+        to_invalid_ignored_value_report_help(alloc, lines, field_name, field_region, record_region);
+
+    Report {
+        title: "BAD IGNORED VALUE".to_string(),
+        filename,
+        doc,
+        severity: Severity::RuntimeError,
+    }
+}
+
+fn to_invalid_ignored_value_report_help<'b>(
+    alloc: &'b RocDocAllocator<'b>,
+    lines: &LineInfo,
+    field_name: Lowercase,
+    field_region: Region,
+    record_region: Region,
+) -> RocDocBuilder<'b> {
+    alloc.stack([
+        alloc.concat([
+            alloc.reflow("This record uses an ignored value for the "),
+            alloc.record_field(field_name),
+            alloc.reflow(" field in an incorrect context!"),
+        ]),
+        alloc.region_all_the_things(
+            lines.convert_region(record_region),
+            lines.convert_region(field_region),
+            lines.convert_region(field_region),
+            Annotation::Error,
+        ),
+        alloc.reflow(r"You can only use ignored values in record builders, like:"),
+        alloc
+            .reflow(r"{ Foo.Bar.baz <- x: 5, y: 0, _z: 3, _: 2 }")
             .indent(4),
     ])
 }
@@ -2202,6 +2259,14 @@ fn pretty_runtime_error<'b>(
             doc = report.doc;
             title = INGESTED_FILE_ERROR;
         }
+        RuntimeError::IngestedFilePathError(region) => {
+            doc = alloc.stack([
+                alloc.reflow(r"I tried to read this file, but something about the path is wrong:"),
+                alloc.region(lines.convert_region(region), severity),
+            ]);
+
+            title = INGESTED_FILE_ERROR;
+        }
         RuntimeError::InvalidPrecedence(_, _) => {
             // do nothing, reported with PrecedenceProblem
             unreachable!();
@@ -2226,9 +2291,6 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = SYNTAX_PROBLEM;
-        }
-        RuntimeError::MalformedSuffixed(_) => {
-            todo!("error for malformed suffix");
         }
         RuntimeError::InvalidFloat(sign @ FloatErrorKind::PositiveInfinity, region, _raw_str)
         | RuntimeError::InvalidFloat(sign @ FloatErrorKind::NegativeInfinity, region, _raw_str) => {
@@ -2451,12 +2513,41 @@ fn pretty_runtime_error<'b>(
 
             title = NUMBER_UNDERFLOWS_SUFFIX;
         }
+        RuntimeError::InvalidTupleIndex(region) => {
+            doc = alloc.stack([
+                alloc.concat([alloc
+                    .reflow("This tuple accessor index is invalid:")]),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.tip().append(alloc.concat([
+                    alloc.reflow("Note that .2 in Roc is a function that extracts the tuple element at index 2 from its argument."),
+                    alloc.reflow("If you mean to create a floating point number, make sure it starts with a digit like 0.2"),
+                    alloc.reflow("."),
+                ])),
+            ]);
+
+            title = NUMBER_UNDERFLOWS_SUFFIX;
+        }
         RuntimeError::InvalidOptionalValue {
             field_name,
             field_region,
             record_region,
         } => {
             doc = to_invalid_optional_value_report_help(
+                alloc,
+                lines,
+                field_name,
+                field_region,
+                record_region,
+            );
+
+            title = SYNTAX_PROBLEM;
+        }
+        RuntimeError::InvalidIgnoredValue {
+            field_name,
+            field_region,
+            record_region,
+        } => {
+            doc = to_invalid_ignored_value_report_help(
                 alloc,
                 lines,
                 field_name,
@@ -2670,6 +2761,15 @@ fn pretty_runtime_error<'b>(
             ]);
 
             title = "OPTIONAL FIELD IN RECORD BUILDER";
+        }
+        RuntimeError::NonFunctionHostedAnnotation(region) => {
+            doc = alloc.stack([
+                alloc.reflow("This hosted annotation is not for a function:"),
+                alloc.region(lines.convert_region(region), severity),
+                alloc.reflow("Only functions can be configured for FFI with the host."),
+            ]);
+
+            title = "NON-FUNCTION HOSTED ANNOTATION";
         }
     }
 

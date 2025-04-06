@@ -98,6 +98,8 @@ mod test_snapshots {
                     for file in list(&res_dir) {
                         let test = if let Some(test) = file.strip_suffix(".formatted.roc") {
                             test
+                        } else if let Some(test) = file.strip_suffix(".migrated.roc") {
+                            test
                         } else if let Some(test) = file.strip_suffix(".roc") {
                             test
                         } else if let Some(test) = file.strip_suffix(".result-ast") {
@@ -190,6 +192,7 @@ mod test_snapshots {
         fail/ability_first_demand_not_indented_enough.expr,
         fail/ability_non_signature_expression.expr,
         fail/alias_or_opaque_fail.expr,
+        fail/all_the_bangs.expr,
         fail/bound_variable.expr,
         fail/comment_with_tab.expr,
         fail/d_assign_return_bang.expr,
@@ -280,10 +283,20 @@ mod test_snapshots {
         fail/wherem_implementsf.expr,
         fail/wild_case_arrow.expr,
         malformed/bad_opaque_ref.expr,
+        malformed/if_in_record_field_opt_pat.expr,
+        malformed/implements_after_comment_with_newline.expr,
+        malformed/looks_like_implements.expr,
         malformed/malformed_pattern_field_access.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/malformed_pattern_module_name.expr, // See https://github.com/roc-lang/roc/issues/399
         malformed/module_dot_tuple.expr,
+        malformed/negative_number_in_pattern.expr,
+        malformed/opaque_in_ann_apply_arg.expr,
+        malformed/parens_comment_in_ty_annotation.expr,
+        malformed/parens_in_type_def_apply.expr,
+        malformed/pattern_opt_field_bonanza.expr,
         malformed/qualified_tag.expr,
+        malformed/quotes_in_parens_in_pat.expr,
+        malformed/repr_7346.expr,
         pass/ability_demand_signature_is_multiline.expr,
         pass/ability_multi_line.expr,
         pass/ability_single_line.expr,
@@ -295,16 +308,17 @@ mod test_snapshots {
         pass/alias_comment_after_head.expr,
         pass/alias_parens_comment.expr,
         pass/alias_parens_comment_indent.expr,
-        pass/all_the_bangs.expr,
         pass/ann_apply_record_with_newlines.expr,
         pass/ann_closed_union.expr,
         pass/ann_effectful_fn.expr,
+        pass/ann_extra_indented_implements.expr,
         pass/ann_open_union.expr,
         pass/ann_parens_comments.expr,
         pass/ann_parens_where_implements_func.expr,
         pass/ann_pattern_comment_before_body.expr,
         pass/ann_record_pat_with_comment.expr,
         pass/ann_tag_union_newline_comment.expr,
+        pass/ann_where_e_newline_implements.expr,
         pass/annotate_tuple_func.expr,
         pass/annotated_empty_record_destructure.expr,
         pass/annotated_record_destructure.expr,
@@ -338,6 +352,8 @@ mod test_snapshots {
         pass/apply_unary_not.expr,
         pass/arg_pattern_as.expr,
         pass/as_in_func_type_args.expr,
+        pass/assign_parens_item_newline_comment.expr,
+        pass/backslash_closure_last_expr.expr,
         pass/bang_newline_double_accessor.expr,
         pass/bangs_and_tuple_accessors.expr,
         pass/basic_apply.expr,
@@ -355,6 +371,7 @@ mod test_snapshots {
         pass/body_with_unneeded_parens.expr,
         pass/call_bang.expr,
         pass/call_bang_no_space.expr,
+        pass/can_ignored_field_in_import.expr,
         pass/capture_body_parens_comment.expr,
         pass/closure_arg_parens_then_comment.expr,
         pass/closure_complex_pattern_indent_issue.expr,
@@ -390,6 +407,7 @@ mod test_snapshots {
         pass/crazy_annotation_left.expr,
         pass/crazy_annotation_left2.expr,
         pass/crazy_implements_bangs.expr,
+        pass/crazy_parens_multiline_str_question_etc.expr,
         pass/crazy_pat_ann.expr,
         pass/curried_function_type.expr,
         pass/dbg.expr,
@@ -397,6 +415,9 @@ mod test_snapshots {
         pass/dbg_double_newline.expr,
         pass/dbg_extra_parens.expr,
         pass/dbg_newline_apply.expr,
+        pass/dbg_pnc_a_over_a.expr,
+        pass/dbg_pnc_in_double_parens.expr,
+        pass/dbg_pnc_zero_args.expr,
         pass/dbg_stmt.expr,
         pass/dbg_stmt_in_parens.expr,
         pass/dbg_stmt_multiline.expr,
@@ -417,6 +438,7 @@ mod test_snapshots {
         pass/empty_hosted_header.header,
         pass/empty_list.expr,
         pass/empty_module_header.header,
+        pass/empty_old_hosted_header.header,
         pass/empty_package_header.header,
         pass/empty_platform_header.header,
         pass/empty_record.expr,
@@ -430,6 +452,7 @@ mod test_snapshots {
         pass/empty_record_newline_assign.expr,
         pass/empty_record_update.expr,
         pass/empty_string.expr,
+        pass/empty_try_pnc.expr,
         pass/equals.expr,
         pass/equals_with_spaces.expr,
         pass/expect.expr,
@@ -452,19 +475,20 @@ mod test_snapshots {
         pass/highest_float.expr,
         pass/highest_int.expr,
         pass/i_over_not_g.expr,
+        pass/if_bang_then_bang_indented_else.expr,
         pass/if_bang_then_else_one_line.expr,
         pass/if_def.expr,
-        pass/if_in_record_field_opt_pat.expr,
         pass/if_newline_then_negate_else_recordupdater.expr,
         pass/if_then_weird_indent.expr,
-        pass/implements_after_comment_with_newline.expr,
         pass/implements_annotation_comment.expr,
         pass/implements_in_pat_after_comment.expr,
+        pass/implements_in_pnc_pattern.expr,
         pass/implements_newline_in_fn_ty.expr,
         pass/implements_newlines_comments.expr,
         pass/implements_not_keyword.expr,
         pass/implements_record_destructure.expr,
         pass/import.moduledefs,
+        pass/import_backslash_as_m.expr,
         pass/import_from_package.moduledefs,
         pass/import_in_closure_with_curlies_after.expr,
         pass/import_with_alias.moduledefs,
@@ -478,6 +502,7 @@ mod test_snapshots {
         pass/int_with_underscore.expr,
         pass/lambda_in_chain.expr,
         pass/lambda_indent.expr,
+        pass/large_tuple_index.expr,
         pass/list_closing_indent_not_enough.expr,
         pass/list_closing_same_indent_no_trailing_comma.expr,
         pass/list_closing_same_indent_with_trailing_comma.expr,
@@ -489,7 +514,6 @@ mod test_snapshots {
         pass/list_pattern_weird_indent.expr,
         pass/list_patterns.expr,
         pass/long_complex_application_with_pnc.expr,
-        pass/looks_like_implements.expr,
         pass/lowest_float.expr,
         pass/lowest_int.expr,
         pass/mega_parens_pat.expr,
@@ -519,9 +543,12 @@ mod test_snapshots {
         pass/multiline_str_and_str_in_alias.expr,
         pass/multiline_str_apply_in_parens_pat.expr,
         pass/multiline_str_crazyness.expr,
+        pass/multiline_str_in_closure_in_when_guard_wtf.expr,
         pass/multiline_str_in_pat.expr,
         pass/multiline_str_interpolation_records.expr,
         pass/multiline_str_opt_field.expr,
+        pass/multiline_str_pnc_apply_in_assignment_newline.expr,
+        pass/multiline_str_pnc_apply_in_assignment_record_access_newline.expr,
         pass/multiline_string.expr,
         pass/multiline_string_in_apply.expr,
         pass/multiline_tuple_with_comments.expr,
@@ -529,6 +556,7 @@ mod test_snapshots {
         pass/multiline_type_signature_with_comment.expr,
         pass/multiple_fields.expr,
         pass/multiple_operators.expr,
+        pass/neg_float_literal_pnc_apply_pat.expr,
         pass/neg_inf_float.expr,
         pass/neg_nested_parens.expr,
         pass/neg_newline_four.expr,
@@ -538,13 +566,14 @@ mod test_snapshots {
         pass/negative_float.expr,
         pass/negative_in_apply_def.expr,
         pass/negative_int.expr,
-        pass/negative_number_in_pattern.expr,
         pass/negative_single_quote.expr,
         pass/nested_def_annotation.moduledefs,
         pass/nested_if.expr,
+        pass/nested_if_unindented.expr,
         pass/nested_list_comment_in_closure_arg.expr,
         pass/nested_parens_in_pattern.expr,
         pass/nested_when_comment_in_pat.expr,
+        pass/new_lambda_as_second_statement.moduledefs,
         pass/newline_after_equals.expr, // Regression test for https://github.com/roc-lang/roc/issues/51
         pass/newline_after_import_str_as.expr,
         pass/newline_after_mul.expr,
@@ -563,6 +592,7 @@ mod test_snapshots {
         pass/newline_singleton_list.expr,
         pass/no_newline_after_implements.expr,
         pass/nonempty_hosted_header.header,
+        pass/nonempty_old_hosted_header.header,
         pass/nonempty_package_header.header,
         pass/nonempty_platform_header.header,
         pass/not_double_parens.expr,
@@ -581,7 +611,6 @@ mod test_snapshots {
         pass/opaque_comment_after_head.expr,
         pass/opaque_destructure_first_item_in_body.expr,
         pass/opaque_has_abilities.expr,
-        pass/opaque_in_ann_apply_arg.expr,
         pass/opaque_reference_expr.expr,
         pass/opaque_reference_expr_with_arguments.expr,
         pass/opaque_reference_pattern.expr,
@@ -602,11 +631,9 @@ mod test_snapshots {
         pass/parens_apply_newline.expr,
         pass/parens_apply_not_parens.expr,
         pass/parens_comment_in_str_interpolation.expr,
-        pass/parens_comment_in_ty_annotation.expr,
         pass/parens_comment_tuple.expr,
         pass/parens_empty_record_apply.expr,
         pass/parens_func_apply_type.expr,
-        pass/parens_in_type_def_apply.expr,
         pass/parens_newline_in_func_type.expr,
         pass/parens_newlines_before_as.expr,
         pass/parens_record_updater.expr,
@@ -618,12 +645,12 @@ mod test_snapshots {
         pass/parenthetical_var.expr,
         pass/parse_alias.expr,
         pass/parse_as_ann.expr,
+        pass/pat_parens_newline_before_pipe_when.expr,
         pass/pat_space_after_comma.expr,
         pass/pattern_as.expr,
         pass/pattern_as_list_rest.expr,
         pass/pattern_as_spaces.expr,
         pass/pattern_comma_newlines.expr,
-        pass/pattern_opt_field_bonanza.expr,
         pass/pattern_record_apply_comment.expr,
         pass/pattern_with_as_parens.expr,
         pass/pattern_with_space_in_parens.expr, // https://github.com/roc-lang/roc/issues/929
@@ -631,13 +658,16 @@ mod test_snapshots {
         pass/pizza_question.moduledefs,
         pass/plus_if.expr,
         pass/plus_when.expr,
+        pass/pnc_apply_comment_after_newline.expr,
+        pass/pnc_apply_neg_pattern.expr,
+        pass/pnc_dbg_parens_comment.expr,
+        pass/pnc_parens_apply_etc.expr,
         pass/pos_inf_float.expr,
         pass/positive_float.expr,
         pass/positive_int.expr,
         pass/provides_type.header,
         pass/qualified_field.expr,
         pass/qualified_var.expr,
-        pass/quotes_in_parens_in_pat.expr,
         pass/record_access_after_tuple.expr,
         pass/record_builder.expr,
         pass/record_builder_ignored_fields.expr,
@@ -649,6 +679,7 @@ mod test_snapshots {
         pass/record_literal_field_bang.expr,
         pass/record_type_with_function.expr,
         pass/record_update.expr,
+        pass/record_update_apply_closure_comments.expr,
         pass/record_update_comment_before_ampersand.expr,
         pass/record_updater_closure_weirdness.expr,
         pass/record_updater_literal_apply.expr,
@@ -656,9 +687,9 @@ mod test_snapshots {
         pass/record_with_if.expr,
         pass/record_with_lots_of_newlines.expr,
         pass/repr_7342.expr,
-        pass/repr_7346.expr,
         pass/requires_type.header,
         pass/return_apply_newline.expr,
+        pass/return_empty_assign.expr,
         pass/return_field_access_in_parens.expr,
         pass/return_in_apply_func.expr,
         pass/return_in_if.expr,
@@ -671,11 +702,16 @@ mod test_snapshots {
         pass/return_record_update_comment_empty_fields.expr,
         pass/return_then_nested_parens.expr,
         pass/return_with_after.expr,
+        pass/sep_annotation.expr,
         pass/separate_defs.moduledefs,
         pass/single_arg_closure.expr,
         pass/single_arg_with_underscore_closure.expr,
+        pass/single_question_binop_closure.expr,
+        pass/single_question_binop_tag.expr,
         pass/single_underscore_closure.expr,
+        pass/sneaky_and_expr.expr,
         pass/sneaky_implements_in_opaque_fn_type.expr,
+        pass/space_after_opt_field_pat.expr,
         pass/space_before_colon.full,
         pass/space_before_parens_space_after.expr,
         pass/space_only_after_minus.expr,
@@ -685,6 +721,7 @@ mod test_snapshots {
         pass/stmt_parens_minus.expr,
         pass/stmts_in_empty_record_assignment.expr,
         pass/str_block_multiple_newlines.expr,
+        pass/str_minus_pnc_call_multiline_str.expr,
         pass/string_without_escape.expr,
         pass/sub_var_with_spaces.expr,
         pass/sub_with_spaces.expr,
@@ -747,12 +784,16 @@ mod test_snapshots {
         pass/when_comment_bbefore_if.expr,
         pass/when_if_guard.expr,
         pass/when_in_assignment.expr,
+        pass/when_in_binop_in_assign_with_sneaky_newline.expr,
+        pass/when_in_binop_in_closure_in_when_guard_wow_fuzzer.expr,
         pass/when_in_binops.expr,
+        pass/when_in_closure_in_when_guard_wtf.expr,
         pass/when_in_function.expr,
         pass/when_in_function_python_style_indent.expr,
         pass/when_in_list.expr,
         pass/when_in_parens.expr,
         pass/when_in_parens_indented.expr,
+        pass/when_in_when_guard_wtf.expr,
         pass/when_newline_after_condition.expr,
         pass/when_newline_before_is_and_in_branch_parens.expr,
         pass/when_result_list.expr,
@@ -771,8 +812,11 @@ mod test_snapshots {
         pass/where_clause_non_function.expr,
         pass/where_clause_on_newline.expr,
         pass/where_ident.expr,
+        pass/where_implements_lots_of_newlines.expr,
+        pass/where_in_parens.expr,
         pass/where_in_tuple_after_comment.expr,
         pass/where_in_tuple_plain.expr,
+        pass/where_newline_p_implements.expr,
         pass/zero_float.expr,
         pass/zero_int.expr,
         // END SNAPSHOTS (for automatic test detection via `env ROC_SNAPSHOT_TEST_OVERWRITE=1 cargo test`)
@@ -780,15 +824,12 @@ mod test_snapshots {
 
     /// Does the given test name expect the canonicalization process to panic?
     fn expect_canonicalize_panics(test_name: &str) -> bool {
+        #[allow(clippy::match_single_binding)]
         match test_name {
             // This is the current list as of writing.
             // We should be driving these down to zero over time.
             // Adding this protection in now to avoid accidentally adding more.
-            "all_the_bangs" | "bangs_and_tuple_accessors" => {
-                // both of these result in:
-                // "a Expr::TrySuffix expression was not completely removed in desugar_value_def_suffixed"
-                true
-            }
+            // NOTHING FOR NOW!
 
             // When adding new snapshot tests, strongly prefer fixing any canonicalization panics
             // they may run into rather than adding them to this list.
@@ -850,6 +891,7 @@ mod test_snapshots {
         let input_path = parent.join(format!("{name}.{ty}.roc"));
         let result_path = parent.join(format!("{name}.{ty}.result-ast"));
         let formatted_path = parent.join(format!("{name}.{ty}.formatted.roc"));
+        let migrated_path = parent.join(format!("{name}.{ty}.migrated.roc"));
 
         let source = std::fs::read_to_string(&input_path).unwrap_or_else(|err| {
             panic!("Could not find a snapshot test result at {input_path:?} - {err:?}")
@@ -894,6 +936,23 @@ mod test_snapshots {
                 true,
                 Some(expect_canonicalize_panics(name)),
             );
+
+            let arena = Bump::new();
+
+            let actual = input.parse_in(&arena).unwrap_or_else(|err| {
+                panic!("Unexpected parse failure when parsing this for formatting:\n\n{}\n\nParse error was:\n\n{:#?}\n\n", input.as_str(), err);
+            });
+
+            let output = actual.migrate();
+
+            match output {
+                Ok(output) => {
+                    compare_snapshots(&migrated_path, Some(output.as_ref().as_str()));
+                }
+                Err(err) => {
+                    println!("Skipping migration test for {name}.{ty}.roc: {err:?}");
+                }
+            }
         }
     }
 
@@ -1035,7 +1094,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_middle() {
-        assert_segments(r#""Hi, $(name)!""#, |arena| {
+        assert_segments(r#""Hi, ${name}!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1051,7 +1110,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_front() {
-        assert_segments(r#""$(name), hi!""#, |arena| {
+        assert_segments(r#""${name}, hi!""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1066,7 +1125,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_interpolation_in_back() {
-        assert_segments(r#""Hello $(name)""#, |arena| {
+        assert_segments(r#""Hello ${name}""#, |arena| {
             let expr = arena.alloc(Var {
                 module_name: "",
                 ident: "name",
@@ -1081,7 +1140,7 @@ mod test_snapshots {
 
     #[test]
     fn string_with_multiple_interpolations() {
-        assert_segments(r#""Hi, $(name)! How is $(project) going?""#, |arena| {
+        assert_segments(r#""Hi, ${name}! How is ${project} going?""#, |arena| {
             let expr1 = arena.alloc(Var {
                 module_name: "",
                 ident: "name",

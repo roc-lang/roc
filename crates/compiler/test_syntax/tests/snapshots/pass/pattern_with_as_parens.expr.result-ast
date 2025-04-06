@@ -23,7 +23,6 @@
                                     },
                                 ),
                             ],
-                            Whitespace,
                         ),
                         [
                             Newline,

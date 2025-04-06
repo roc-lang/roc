@@ -20,6 +20,8 @@ bash ./www/build-dev-local.sh
 
 Open http://0.0.0.0:8080 in your browser.
 
+If you want to build the repl as well, check out crates/repl_wasm/README.md.
+
 ## After you've made a change locally
 
 In the terminal where the web server is running:

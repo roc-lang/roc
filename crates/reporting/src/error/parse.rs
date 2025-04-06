@@ -247,8 +247,6 @@ fn to_expr_report<'a>(
             let suggestion = match *op {
                 "|" => vec![
                     alloc.reflow("Maybe you want "),
-                    alloc.parser_suggestion("||"),
-                    alloc.reflow(" or "),
                     alloc.parser_suggestion("|>"),
                     alloc.reflow(" instead?"),
                 ],
@@ -779,6 +777,26 @@ fn to_lambda_report<'a>(
     let severity = Severity::RuntimeError;
 
     match *parse_problem {
+        EClosure::Bar(pos) => {
+            let region = LineColumnRegion::from_pos(lines.convert_pos(pos));
+
+            let doc = alloc.stack([
+                alloc.reflow(r"I was trying to parse the arguments list for a function, but I got stuck here:"),
+                alloc.region(region, severity),
+                alloc.concat([
+                    alloc.reflow("I was expecting to find a "),
+                    alloc.parser_suggestion("|"),
+                    alloc.reflow(" next."),
+                ]),
+            ]);
+
+            Report {
+                filename,
+                doc,
+                title: "MALFORMED ARGS LIST".to_string(),
+                severity,
+            }
+        }
         EClosure::Arrow(pos) => match what_is_next(alloc.src_lines, lines.convert_pos(pos)) {
             Next::Token("=>") => {
                 let surroundings = Region::new(start, pos);
@@ -1098,7 +1116,7 @@ fn to_str_report<'a>(
                 alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
                 alloc.concat([
                     alloc.reflow(r"You could change it to something like "),
-                    alloc.parser_suggestion("\"The count is $(count)\""),
+                    alloc.parser_suggestion("\"The count is ${count}\""),
                     alloc.reflow("."),
                 ]),
             ]);
@@ -1176,7 +1194,7 @@ fn to_str_report<'a>(
                     alloc.stack([
                         alloc.concat([
                             alloc.reflow("I am part way through parsing this single-quote literal, "),
-                            alloc.reflow("but I encountered a string interpolation like \"$(this)\","),
+                            alloc.reflow("but I encountered a string interpolation like \"${this}\","),
                             alloc.reflow("which is not allowed in single-quote literals."),
                         ]),
                         alloc.region_with_subregion(lines.convert_region(surroundings), region, severity),
@@ -4288,7 +4306,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4315,7 +4333,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" keyword next, like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { main : Task I64 Str }")
+                    .parser_suggestion("requires { main! : {} => Result I64 Str }")
                     .indent(4),
             ]);
 
@@ -4338,13 +4356,13 @@ fn to_requires_report<'a>(
                     alloc.reflow("I am expecting a list of rigids like "),
                     alloc.keyword("{}"),
                     alloc.reflow(" or "),
-                    alloc.keyword("{model=>Model}"),
+                    alloc.keyword("{ Model }"),
                     alloc.reflow(" next. A full "),
                     alloc.keyword("requires"),
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires {model=>Model, msg=>Msg} {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 
@@ -4373,7 +4391,7 @@ fn to_requires_report<'a>(
                     alloc.reflow(" definition looks like"),
                 ]),
                 alloc
-                    .parser_suggestion("requires { Model, Msg } {main : Task {} []}")
+                    .parser_suggestion("requires { Model, Msg } { main! : {} => Result {} [] }")
                     .indent(4),
             ]);
 

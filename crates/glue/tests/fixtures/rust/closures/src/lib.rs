@@ -3,7 +3,7 @@ use roc_std::RocStr;
 
 #[no_mangle]
 pub extern "C" fn rust_main() {
-    let closure = roc_app::mainForHost(42i64);
+    let closure = roc_app::main_for_host(42i64);
 
     init();
 

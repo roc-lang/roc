@@ -27,7 +27,6 @@
                             ident: "inner",
                         },
                     ],
-                    Whitespace,
                 ),
                 PatternAs {
                     spaces_before: [],

@@ -1,5 +1,5 @@
 @0-44 SpaceAfter(
-    Apply(
+    PncApply(
         @0-2 Tag(
             "PP",
         ),
@@ -10,7 +10,7 @@
                         "P",
                     ),
                     [
-                        @4-42 Apply(
+                        @4-42 PncApply(
                             @4-6 OpaqueRef(
                                 "@P",
                             ),
@@ -22,13 +22,13 @@
                                         ),
                                         [
                                             @9-24 SpaceBefore(
-                                                Apply(
+                                                PncApply(
                                                     @9-10 Tag(
                                                         "P",
                                                     ),
                                                     [
                                                         @11-22 SpaceAfter(
-                                                            Apply(
+                                                            PncApply(
                                                                 @11-14 Tag(
                                                                     "PPP",
                                                                 ),
@@ -55,21 +55,19 @@
                                                                         ],
                                                                     ),
                                                                 ],
-                                                                ParensAndCommas,
                                                             ),
                                                             [
                                                                 Newline,
                                                             ],
                                                         ),
                                                     ],
-                                                    ParensAndCommas,
                                                 ),
                                                 [
                                                     Newline,
                                                 ],
                                             ),
                                             @25-40 SpaceBefore(
-                                                Apply(
+                                                PncApply(
                                                     @25-27 Tag(
                                                         "PP",
                                                     ),
@@ -86,7 +84,6 @@
                                                             ],
                                                         ),
                                                     ],
-                                                    ParensAndCommas,
                                                 ),
                                                 [
                                                     Newline,
@@ -100,7 +97,6 @@
                                     ],
                                 ),
                             ],
-                            ParensAndCommas,
                         ),
                     ],
                     Space,
@@ -110,7 +106,6 @@
                 ],
             ),
         ],
-        ParensAndCommas,
     ),
     [
         Newline,

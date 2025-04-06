@@ -16,7 +16,7 @@ from_bytes = \bytes ->
 # base 64 encoding from a string
 from_str : Str -> Result Str [InvalidInput]
 from_str = \str ->
-    from_bytes(Str.toUtf8(str))
+    from_bytes(Str.to_utf8(str))
 
 # base64-encode bytes to the original
 to_bytes : Str -> Result (List U8) [InvalidInput]
@@ -27,7 +27,7 @@ to_str : Str -> Result Str [InvalidInput]
 to_str = \str ->
     when to_bytes(str) is
         Ok(bytes) ->
-            when Str.fromUtf8(bytes) is
+            when Str.from_utf8(bytes) is
                 Ok(v) ->
                     Ok(v)
 

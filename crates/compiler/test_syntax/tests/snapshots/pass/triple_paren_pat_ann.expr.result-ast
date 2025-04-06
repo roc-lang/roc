@@ -18,12 +18,12 @@
             value_defs: [
                 Annotation(
                     @0-10 Apply(
-                        @0-10 Apply(
+                        @0-10 PncApply(
                             @0-1 NumLiteral(
                                 "1",
                             ),
                             [
-                                @2-9 Apply(
+                                @2-9 PncApply(
                                     @3-4 NumLiteral(
                                         "0",
                                     ),
@@ -37,17 +37,14 @@
                                             ],
                                         ),
                                     ],
-                                    ParensAndCommas,
                                 ),
                             ],
-                            ParensAndCommas,
                         ),
                         [
                             @10-11 Identifier {
                                 ident: "f",
                             },
                         ],
-                        Whitespace,
                     ),
                     @12-13 BoundVariable(
                         "f",

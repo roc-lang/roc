@@ -50,7 +50,7 @@ comptime {
     exportDecFn(dec.toF64, "to_f64");
     exportDecFn(dec.toI128, "to_i128");
     exportDecFn(dec.fromI128, "from_i128");
-    exportDecFn(dec.toStr, "to_str");
+    exportDecFn(dec.to_str, "to_str");
 
     for (INTEGERS) |T| {
         dec.exportFromInt(T, ROC_BUILTINS ++ ".dec.from_int.");
@@ -203,6 +203,7 @@ comptime {
     exportStrFn(str.reserveC, "reserve");
     exportStrFn(str.strToUtf8C, "to_utf8");
     exportStrFn(str.fromUtf8C, "from_utf8");
+    exportStrFn(str.fromUtf8Lossy, "from_utf8_lossy");
     exportStrFn(str.repeatC, "repeat");
     exportStrFn(str.strTrim, "trim");
     exportStrFn(str.strTrimStart, "trim_start");
@@ -211,6 +212,9 @@ comptime {
     exportStrFn(str.withCapacityC, "with_capacity");
     exportStrFn(str.strAllocationPtr, "allocation_ptr");
     exportStrFn(str.strReleaseExcessCapacity, "release_excess_capacity");
+    exportStrFn(str.strWithAsciiLowercased, "with_ascii_lowercased");
+    exportStrFn(str.strWithAsciiUppercased, "with_ascii_uppercased");
+    exportStrFn(str.strCaselessAsciiEquals, "caseless_ascii_equals");
 
     for (INTEGERS) |T| {
         str.exportFromInt(T, ROC_BUILTINS ++ "." ++ STR ++ ".from_int.");

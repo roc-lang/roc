@@ -1,6 +1,4 @@
-interface ImportAlias
-    exposes [unit]
-    imports []
+module [unit]
 
 import Dep1
 

@@ -16,7 +16,6 @@
                     ],
                 ),
             ],
-            Whitespace,
         ),
     ],
     @8-10 UnaryOp(

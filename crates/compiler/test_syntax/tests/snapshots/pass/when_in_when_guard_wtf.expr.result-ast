@@ -1,0 +1,74 @@
+@0-35 SpaceAfter(
+    When(
+        @5-6 SpaceAfter(
+            Var {
+                module_name: "",
+                ident: "f",
+            },
+            [
+                Newline,
+            ],
+        ),
+        [
+            WhenBranch {
+                patterns: [
+                    @10-11 SpaceBefore(
+                        Identifier {
+                            ident: "s",
+                        },
+                        [
+                            Newline,
+                        ],
+                    ),
+                ],
+                value: @34-35 Var {
+                    module_name: "",
+                    ident: "m",
+                },
+                guard: Some(
+                    @15-32 When(
+                        @20-21 SpaceAfter(
+                            Num(
+                                "0",
+                            ),
+                            [
+                                Newline,
+                            ],
+                        ),
+                        [
+                            WhenBranch {
+                                patterns: [
+                                    @25-26 Identifier {
+                                        ident: "z",
+                                    },
+                                ],
+                                value: @28-32 Apply(
+                                    @28-29 Var {
+                                        module_name: "",
+                                        ident: "f",
+                                    },
+                                    [
+                                        @31-32 SpaceBefore(
+                                            Var {
+                                                module_name: "",
+                                                ident: "z",
+                                            },
+                                            [
+                                                Newline,
+                                            ],
+                                        ),
+                                    ],
+                                    Space,
+                                ),
+                                guard: None,
+                            },
+                        ],
+                    ),
+                ),
+            },
+        ],
+    ),
+    [
+        Newline,
+    ],
+)

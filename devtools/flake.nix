@@ -55,7 +55,6 @@
           # env vars
           NIX_GLIBC_PATH = rocShell.NIX_GLIBC_PATH;
           LD_LIBRARY_PATH = rocShell.LD_LIBRARY_PATH;
-          NIXPKGS_ALLOW_UNFREE = rocShell.NIXPKGS_ALLOW_UNFREE;
 
           # to set the LLVM_SYS_<VERSION>_PREFIX
           shellHook = rocShell.shellHook;

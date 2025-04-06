@@ -33,7 +33,6 @@
                                 ],
                             ),
                         ],
-                        Whitespace,
                     ),
                     @15-16 BoundVariable(
                         "s",

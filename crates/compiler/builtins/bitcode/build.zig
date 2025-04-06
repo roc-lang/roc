@@ -119,9 +119,9 @@ fn generateObjectFile(
 
     const suffix =
         if (target.result.os.tag == std.Target.Os.Tag.windows)
-        "obj"
-    else
-        "o";
+            "obj"
+        else
+            "o";
     const install = b.addInstallFile(obj_file, b.fmt("{s}.{s}", .{ object_name, suffix }));
 
     const obj_step = b.step(step_name, "Build object file for linking");

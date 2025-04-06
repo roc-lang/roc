@@ -103,7 +103,7 @@ pub fn header<'a>() -> impl Parser<'a, SpacesBefore<'a, Header<'a>>, EHeader<'a>
             map(
                 skip_first(
                     keyword("hosted", EHeader::Start),
-                    increment_min_indent(hosted_header())
+                    increment_min_indent(one_of![hosted_header(), old_hosted_header()])
                 ),
                 Header::Hosted
             ),
@@ -184,13 +184,36 @@ fn imports_none_if_empty(value: ImportsKeywordItem<'_>) -> Option<ImportsKeyword
 
 #[inline(always)]
 fn hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
-    record!(HostedHeader {
-        before_name: space0_e(EHeader::IndentStart),
-        name: loc(module_name_help(EHeader::ModuleName)),
-        exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
-        imports: specialize_err(EHeader::Imports, imports()),
-    })
+    map(
+        and(
+            backtrackable(space0_e(EHeader::IndentStart)),
+            specialize_err(EHeader::Exposes, exposes_list()),
+        ),
+        |(before_exposes, exposes)| HostedHeader {
+            before_exposes,
+            exposes,
+            old_imports: None,
+        },
+    )
     .trace("hosted_header")
+}
+
+#[inline(always)]
+fn old_hosted_header<'a>() -> impl Parser<'a, HostedHeader<'a>, EHeader<'a>> {
+    map(
+        record!(OldHostedHeader {
+            before_name: space0_e(EHeader::IndentStart),
+            name: loc(module_name_help(EHeader::ModuleName)),
+            exposes: specialize_err(EHeader::Exposes, exposes_values_kw()),
+            imports: specialize_err(EHeader::Imports, imports()),
+        }),
+        |old_hosted| HostedHeader {
+            before_exposes: old_hosted.before_name,
+            exposes: old_hosted.exposes.item,
+            old_imports: Some(old_hosted.imports),
+        },
+    )
+    .trace("old_hosted_header")
 }
 
 fn chomp_module_name(buffer: &[u8]) -> Result<&str, Progress> {
@@ -857,10 +880,10 @@ fn imports_entry<'a>() -> impl Parser<'a, Spaced<'a, ImportsEntry<'a>>, EImports
                         shortname(),
                         byte(b'.', EImports::ShorthandDot)
                     ))),
-                    // e.g. `Task`
+                    // e.g. `List`
                     module_name_help(EImports::ModuleName)
                 ),
-                // e.g. `.{ Task, after}`
+                // e.g. `.{ List, after }`
                 optional(skip_first(
                     byte(b'.', EImports::ExposingDot),
                     collection_trailing_sep_e(
@@ -927,7 +950,7 @@ impl<'a> HeaderType<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum HeaderType<'a> {
     App {
         provides: &'a [Loc<ExposedName<'a>>],
@@ -1196,6 +1219,15 @@ pub type ImportsCollection<'a> = Collection<'a, Loc<Spaced<'a, ImportsEntry<'a>>
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct HostedHeader<'a> {
+    pub before_exposes: &'a [CommentOrNewline<'a>],
+    pub exposes: Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>,
+
+    // Keeping this so we can format old interface header into module headers
+    pub old_imports: Option<KeywordItem<'a, ImportsKeyword, ImportsCollection<'a>>>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OldHostedHeader<'a> {
     pub before_name: &'a [CommentOrNewline<'a>],
     pub name: Loc<ModuleName<'a>>,
     pub exposes: KeywordItem<'a, ExposesKeyword, Collection<'a, Loc<Spaced<'a, ExposedName<'a>>>>>,

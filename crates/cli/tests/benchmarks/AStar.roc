@@ -23,8 +23,8 @@ initial_model = \start -> {
 cheapest_open : (position -> F64), Model position -> Result position {} where position implements Hash & Eq
 cheapest_open = \cost_fn, model ->
     model.open_set
-    |> Set.toList
-    |> List.keepOks(
+    |> Set.to_list
+    |> List.keep_oks(
         \position ->
             when Dict.get(model.costs, position) is
                 Err(_) -> Err({})
@@ -32,8 +32,8 @@ cheapest_open = \cost_fn, model ->
     )
     |> Quicksort.sort_by(.cost)
     |> List.first
-    |> Result.map(.position)
-    |> Result.mapErr(\_ -> {})
+    |> Result.map_ok(.position)
+    |> Result.map_err(\_ -> {})
 
 reconstruct_path : Dict position position, position -> List position where position implements Hash & Eq
 reconstruct_path = \came_from, goal ->
@@ -52,7 +52,7 @@ update_cost = \current, neighbor, model ->
     distance_to =
         reconstruct_path(new_came_from, neighbor)
         |> List.len
-        |> Num.toFrac
+        |> Num.to_frac
 
     new_model =
         { model &
@@ -90,12 +90,12 @@ astar = \cost_fn, move_fn, goal, model ->
                 new_neighbors =
                     Set.difference(neighbors, model_popped.evaluated)
 
-                model_with_neighbors : Model position
+                model_with_neighbors : Model _
                 model_with_neighbors =
                     model_popped
                     |> &open_set(Set.union(model_popped.open_set, new_neighbors))
 
-                walker : Model position, position -> Model position
+                walker : Model _, _ -> Model _
                 walker = \amodel, n -> update_cost(current, n, amodel)
 
                 model_with_costs =
@@ -103,21 +103,21 @@ astar = \cost_fn, move_fn, goal, model ->
 
                 astar(cost_fn, move_fn, goal, model_with_costs)
 
-# takeStep = \moveFn, _goal, model, current ->
-#     modelPopped =
+# take_step = \move_fn, _goal, model, current ->
+#     model_popped =
 #         { model &
-#             openSet: Set.remove model.openSet current,
+#             open_set: Set.remove model.open_set current,
 #             evaluated: Set.insert model.evaluated current,
 #         }
 #
-#     neighbors = moveFn current
+#     neighbors = move_fn current
 #
-#     newNeighbors = Set.difference neighbors modelPopped.evaluated
+#     new_neighbors = Set.difference neighbors model_popped.evaluated
 #
-#     modelWithNeighbors = { modelPopped & openSet: Set.union modelPopped.openSet newNeighbors }
+#     model_with_neighbors = { model_popped & open_set: Set.union model_popped.open_set new_neighbors }
 #
 #     # a lot goes wrong here
-#     modelWithCosts =
-#         Set.walk newNeighbors modelWithNeighbors (\n, m -> updateCost current n m)
+#     model_with_costs =
+#         Set.walk new_neighbors model_with_neighbors (\n, m -> update_cost current n m)
 #
-#     modelWithCosts
+#     model_with_costs

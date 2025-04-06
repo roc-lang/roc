@@ -747,6 +747,7 @@ impl<'a> EInParens<'a> {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EClosure<'a> {
+    Bar(Position),
     Space(BadInputError, Position),
     Start(Position),
     Arrow(Position),
@@ -768,7 +769,8 @@ impl<'a> EClosure<'a> {
             EClosure::Body(expr, _) => expr.get_region(),
 
             // Cases with Position values
-            EClosure::Space(_, p)
+            EClosure::Bar(p)
+            | EClosure::Space(_, p)
             | EClosure::Start(p)
             | EClosure::Arrow(p)
             | EClosure::Comma(p)
@@ -2712,7 +2714,7 @@ where
     }
 }
 
-/// Matches an entire `str` and moves the state's position forward if it succeeds.
+/// Matches an entire `str` at the beginning of the state's bytes and moves the state's position forward if it succeeds.
 ///
 /// # Example
 ///
@@ -2737,6 +2739,10 @@ where
 ///
 /// // Error case
 /// let (progress, problem) = parser.parse(&arena, State::new("bye, world".as_bytes()), 0).unwrap_err();
+/// assert_eq!(progress, Progress::NoProgress);
+/// assert_eq!(problem, Problem::NotFound(Position::zero()));
+///
+/// let (progress, problem) = parser.parse(&arena, State::new("world, hello".as_bytes()), 0).unwrap_err();
 /// assert_eq!(progress, Progress::NoProgress);
 /// assert_eq!(problem, Problem::NotFound(Position::zero()));
 /// ```

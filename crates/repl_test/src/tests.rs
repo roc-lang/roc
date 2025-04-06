@@ -69,14 +69,14 @@ fn num_rem() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_division() {
-    expect_success("Num.divTrunc 4 3", "1 : Int *");
+    expect_success("Num.div_trunc 4 3", "1 : Int *");
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_floor_checked_division_success() {
     expect_success(
-        "Num.divTruncChecked 4 3",
+        "Num.div_trunc_checked 4 3",
         "Ok 1 : Result (Int *) [DivByZero]",
     );
 }
@@ -85,7 +85,7 @@ fn num_floor_checked_division_success() {
 #[test]
 fn num_floor_checked_division_divby_zero() {
     expect_success(
-        "Num.divTruncChecked 4 0",
+        "Num.div_trunc_checked 4 0",
         "Err DivByZero : Result (Int *) [DivByZero]",
     );
 }
@@ -93,27 +93,27 @@ fn num_floor_checked_division_divby_zero() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_ceil_division() {
-    expect_success("Num.divCeil 4 3", "2 : Int *")
+    expect_success("Num.div_ceil 4 3", "2 : Int *")
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_ceil_checked_division_success() {
     expect_success(
-        "Num.divCeilChecked 4 3",
+        "Num.div_ceil_checked 4 3",
         "Ok 2 : Result (Int *) [DivByZero]",
     )
 }
 
 #[test]
 fn float_division_by_zero() {
-    expect_success("1f64 / 0", "Num.infinityF64 : F64");
-    expect_success("-1f64 / 0", "-Num.infinityF64 : F64");
-    expect_success("0f64 / 0", "Num.nanF64 : F64");
+    expect_success("1f64 / 0", "Num.infinity_f64 : F64");
+    expect_success("-1f64 / 0", "-Num.infinity_f64 : F64");
+    expect_success("0f64 / 0", "Num.nan_f64 : F64");
 
-    expect_success("1f32 / 0", "Num.infinityF32 : F32");
-    expect_success("-1f32 / 0", "-Num.infinityF32 : F32");
-    expect_success("0f32 / 0", "Num.nanF32 : F32");
+    expect_success("1f32 / 0", "Num.infinity_f32 : F32");
+    expect_success("-1f32 / 0", "-Num.infinity_f32 : F32");
+    expect_success("0f32 / 0", "Num.nan_f32 : F32");
 }
 
 #[test]
@@ -349,50 +349,53 @@ fn nested_float_list() {
 
 #[test]
 fn num_bitwise_and() {
-    expect_success("Num.bitwiseAnd 20 20", "20 : Int *");
+    expect_success("Num.bitwise_and 20 20", "20 : Int *");
 
-    expect_success("Num.bitwiseAnd 25 10", "8 : Int *");
+    expect_success("Num.bitwise_and 25 10", "8 : Int *");
 
-    expect_success("Num.bitwiseAnd 200 0", "0 : Int *")
+    expect_success("Num.bitwise_and 200 0", "0 : Int *")
 }
 
 #[test]
 fn num_bitwise_xor() {
-    expect_success("Num.bitwiseXor 20 20", "0 : Int *");
+    expect_success("Num.bitwise_xor 20 20", "0 : Int *");
 
-    expect_success("Num.bitwiseXor 15 14", "1 : Int *");
+    expect_success("Num.bitwise_xor 15 14", "1 : Int *");
 
-    expect_success("Num.bitwiseXor 7 15", "8 : Int *");
+    expect_success("Num.bitwise_xor 7 15", "8 : Int *");
 
-    expect_success("Num.bitwiseXor 200 0", "200 : Int *")
+    expect_success("Num.bitwise_xor 200 0", "200 : Int *")
 }
 
 #[test]
 fn num_add_wrap() {
-    expect_success("Num.addWrap Num.maxI64 1", "-9223372036854775808 : I64");
+    expect_success("Num.add_wrap Num.max_i64 1", "-9223372036854775808 : I64");
 }
 
 #[test]
 fn num_sub_wrap() {
-    expect_success("Num.subWrap Num.minI64 1", "9223372036854775807 : I64");
+    expect_success("Num.sub_wrap Num.min_i64 1", "9223372036854775807 : I64");
 }
 
 #[test]
 fn num_mul_wrap() {
-    expect_success("Num.mulWrap Num.maxI64 2", "-2 : I64");
+    expect_success("Num.mul_wrap Num.max_i64 2", "-2 : I64");
 }
 
 #[test]
 fn num_mul_saturated() {
-    expect_success("Num.mulSaturated Num.maxI64 2", "9223372036854775807 : I64");
+    expect_success(
+        "Num.mul_saturated Num.max_i64 2",
+        "9223372036854775807 : I64",
+    );
 }
 
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_add_checked() {
-    expect_success("Num.addChecked 1 1", "Ok 2 : Result (Num *) [Overflow]");
+    expect_success("Num.add_checked 1 1", "Ok 2 : Result (Num *) [Overflow]");
     expect_success(
-        "Num.addChecked Num.maxI64 1",
+        "Num.add_checked Num.max_i64 1",
         "Err Overflow : Result I64 [Overflow]",
     );
 }
@@ -400,9 +403,9 @@ fn num_add_checked() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_sub_checked() {
-    expect_success("Num.subChecked 1 1", "Ok 0 : Result (Num *) [Overflow]");
+    expect_success("Num.sub_checked 1 1", "Ok 0 : Result (Num *) [Overflow]");
     expect_success(
-        "Num.subChecked Num.minI64 1",
+        "Num.sub_checked Num.min_i64 1",
         "Err Overflow : Result I64 [Overflow]",
     );
 }
@@ -410,9 +413,9 @@ fn num_sub_checked() {
 #[cfg(not(feature = "wasm"))]
 #[test]
 fn num_mul_checked() {
-    expect_success("Num.mulChecked 20 2", "Ok 40 : Result (Num *) [Overflow]");
+    expect_success("Num.mul_checked 20 2", "Ok 40 : Result (Num *) [Overflow]");
     expect_success(
-        "Num.mulChecked Num.maxI64 2",
+        "Num.mul_checked Num.max_i64 2",
         "Err Overflow : Result I64 [Overflow]",
     );
 }
@@ -752,14 +755,14 @@ fn type_problem_unary_operator() {
 #[test]
 fn type_problem_string_interpolation() {
     expect_failure(
-        "\"This is not a string -> $(1)\"",
+        "\"This is not a string -> ${1}\"",
         indoc!(
             r#"
                 ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
                 This argument to this string interpolation has an unexpected type:
 
-                4│      "This is not a string -> $(1)"
+                4│      "This is not a string -> ${1}"
                                                    ^
 
                 The argument is a number of type:
@@ -778,21 +781,21 @@ fn type_problem_string_interpolation() {
 #[test]
 fn list_drop_at_negative_index() {
     expect_failure(
-        "List.dropAt [1, 2, 3] -1",
+        "List.drop_at [1, 2, 3] -1",
         indoc!(
             r#"
             ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
-            This 2nd argument to dropAt has an unexpected type:
+            This 2nd argument to drop_at has an unexpected type:
 
-            4│      List.dropAt [1, 2, 3] -1
-                                          ^^
+            4│      List.drop_at [1, 2, 3] -1
+                                           ^^
 
             The argument is a number of type:
 
                 I8, I16, F32, I32, F64, I64, I128, or Dec
 
-            But dropAt needs its 2nd argument to be:
+            But drop_at needs its 2nd argument to be:
 
                 U64
             "#
@@ -830,14 +833,14 @@ fn list_get_negative_index() {
 #[test]
 fn invalid_string_interpolation() {
     expect_failure(
-        "\"$(123)\"",
+        "\"${123}\"",
         indoc!(
             r#"
             ── TYPE MISMATCH ───────────────────────────────────────────────────────────────
 
             This argument to this string interpolation has an unexpected type:
 
-            4│      "$(123)"
+            4│      "${123}"
                        ^^^
 
             The argument is a number of type:
@@ -854,13 +857,13 @@ fn invalid_string_interpolation() {
 
 #[test]
 fn issue_2149_i8_ok() {
-    expect_success(r#"Str.toI8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
+    expect_success(r#"Str.to_i8 "127""#, "Ok 127 : Result I8 [InvalidNumStr]");
 }
 
 #[test]
 fn issue_2149_i8_err() {
     expect_success(
-        r#"Str.toI8 "128""#,
+        r#"Str.to_i8 "128""#,
         "Err InvalidNumStr : Result I8 [InvalidNumStr]",
     );
 }
@@ -868,7 +871,7 @@ fn issue_2149_i8_err() {
 #[test]
 fn issue_2149_i16_ok() {
     expect_success(
-        r#"Str.toI16 "32767""#,
+        r#"Str.to_i16 "32767""#,
         "Ok 32767 : Result I16 [InvalidNumStr]",
     );
 }
@@ -876,7 +879,7 @@ fn issue_2149_i16_ok() {
 #[test]
 fn issue_2149_i16_err() {
     expect_success(
-        r#"Str.toI16 "32768""#,
+        r#"Str.to_i16 "32768""#,
         "Err InvalidNumStr : Result I16 [InvalidNumStr]",
     );
 }
@@ -1136,9 +1139,9 @@ fn parse_problem() {
 
                 I am partway through parsing a definition, but I got stuck here:
 
-                1│  app "app" provides [replOutput] to "./platform"
+                1│  app "app" provides [repl_output] to "./platform"
                 2│
-                3│  replOutput =
+                3│  repl_output =
                 4│      add m n = m + n
                             ^^^
 
@@ -1330,9 +1333,9 @@ fn box_box_type_alias() {
         indoc!(
             r#"
             HeapStr : Box Str
-            helloHeap : HeapStr
-            helloHeap = Box.box "bye stacks"
-            helloHeap"#
+            hello_heap : HeapStr
+            hello_heap = Box.box "bye stacks"
+            hello_heap"#
         ),
         r#"Box.box "bye stacks" : HeapStr"#,
     )
@@ -1480,7 +1483,7 @@ fn str_to_dec() {
     expect_success(
         indoc!(
             r#"
-            Str.toDec "1234.1234"
+            Str.to_dec "1234.1234"
             "#
         ),
         r"Ok 1234.1234 : Result Dec [InvalidNumStr]",
@@ -1534,7 +1537,7 @@ fn interpolation_with_nested_strings() {
     expect_success(
         indoc!(
             r#"
-            "foo $(Str.joinWith ["a", "b", "c"] ", ") bar"
+            "foo ${Str.join_with ["a", "b", "c"] ", "} bar"
             "#
         ),
         r#""foo a, b, c bar" : Str"#,
@@ -1546,7 +1549,7 @@ fn interpolation_with_num_to_str() {
     expect_success(
         indoc!(
             r#"
-            "foo $(Num.toStr Num.maxI8) bar"
+            "foo ${Num.to_str Num.max_i8} bar"
             "#
         ),
         r#""foo 127 bar" : Str"#,
@@ -1558,7 +1561,7 @@ fn interpolation_with_operator_desugaring() {
     expect_success(
         indoc!(
             r#"
-            "foo $(Num.toStr (1 + 2)) bar"
+            "foo ${Num.to_str (1 + 2)} bar"
             "#
         ),
         r#""foo 3 bar" : Str"#,
@@ -1573,7 +1576,7 @@ fn interpolation_with_nested_interpolation() {
     expect_failure(
         indoc!(
             r#"
-            "foo $(Str.joinWith ["a$(Num.toStr 5)", "b"] "c")"
+            "foo ${Str.join_with ["a${Num.to_str 5}", "b"] "c"}"
             "#
         ),
         indoc!(
@@ -1582,8 +1585,8 @@ fn interpolation_with_nested_interpolation() {
 
                 This string interpolation is invalid:
 
-                4│      "foo $(Str.joinWith ["a$(Num.toStr 5)", "b"] "c")"
-                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                4│      "foo ${Str.join_with ["a${Num.to_str 5}", "b"] "c"}"
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
 
                 String interpolations cannot contain newlines or other interpolations.
 

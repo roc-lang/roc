@@ -261,7 +261,7 @@ fn tag_one_label_newtype() {
 #[test]
 fn tag_two_labels() {
     derive_test(Hash, v!([A v!(U8) v!(STR) v!(U16), B v!(STR)]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A U8 Str U16, B Str]
         # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash, a3 implements Hash
         # a, [A a1 a2 a3, B a3] -[[hash_[A 3,B 1](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash, a3 implements Hash
@@ -272,10 +272,10 @@ fn tag_two_labels() {
             when #Derived.union is
               A #Derived.3 #Derived.4 #Derived.5 ->
                 hash
-                  (hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4)
+                  (hash (hash (add_u8 #Derived.hasher 0) #Derived.3) #Derived.4)
                   #Derived.5
-              B #Derived.6 -> hash (addU8 #Derived.hasher 1) #Derived.6
-        "###
+              B #Derived.6 -> hash (add_u8 #Derived.hasher 1) #Derived.6
+        "
         )
     })
 }
@@ -283,7 +283,7 @@ fn tag_two_labels() {
 #[test]
 fn tag_two_labels_no_payloads() {
     derive_test(Hash, v!([A, B]), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [A, B]
         # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a where a implements Hasher
         # a, [A, B] -[[hash_[A 0,B 0](0)]]-> a where a implements Hasher
@@ -292,9 +292,9 @@ fn tag_two_labels_no_payloads() {
         #Derived.hash_[A 0,B 0] =
           \#Derived.hasher, #Derived.union ->
             when #Derived.union is
-              A -> addU8 #Derived.hasher 0
-              B -> addU8 #Derived.hasher 1
-        "###
+              A -> add_u8 #Derived.hasher 0
+              B -> add_u8 #Derived.hasher 1
+        "
         )
     })
 }
@@ -302,7 +302,7 @@ fn tag_two_labels_no_payloads() {
 #[test]
 fn recursive_tag_union() {
     derive_test(Hash, v!([Nil, Cons v!(U8) v!(^lst) ] as lst), |golden| {
-        assert_snapshot!(golden, @r###"
+        assert_snapshot!(golden, @r"
         # derived for [Cons U8 $rec, Nil] as $rec
         # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash
         # a, [Cons a1 a2, Nil] -[[hash_[Cons 2,Nil 0](0)]]-> a where a implements Hasher, a1 implements Hash, a2 implements Hash
@@ -312,9 +312,9 @@ fn recursive_tag_union() {
           \#Derived.hasher, #Derived.union ->
             when #Derived.union is
               Cons #Derived.3 #Derived.4 ->
-                hash (hash (addU8 #Derived.hasher 0) #Derived.3) #Derived.4
-              Nil -> addU8 #Derived.hasher 1
-        "###
+                hash (hash (add_u8 #Derived.hasher 0) #Derived.3) #Derived.4
+              Nil -> add_u8 #Derived.hasher 1
+        "
         )
     })
 }

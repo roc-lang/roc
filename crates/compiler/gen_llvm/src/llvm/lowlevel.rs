@@ -37,9 +37,9 @@ use crate::llvm::{
     build_list::{
         list_append_unsafe, list_clone, list_concat, list_drop_at, list_get_unsafe, list_len_usize,
         list_prepend, list_release_excess_capacity, list_replace_unsafe, list_reserve,
-        list_sort_with, list_sublist, list_swap, list_symbol_to_c_abi, list_with_capacity,
-        pass_update_mode,
+        list_sort_with, list_sublist, list_swap, list_with_capacity, pass_update_mode,
     },
+    build_str::call_str_from_utf_bitcode_fn,
     compare::{generic_eq, generic_neq},
     convert::{
         self, argument_type_from_layout, basic_type_from_layout, zig_num_parse_result_type,
@@ -396,46 +396,15 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             )
         }
         StrFromUtf8 => {
-            let result_type = env.module.get_struct_type("str.FromUtf8Result").unwrap();
-            let result_ptr =
-                create_entry_block_alloca(env, result_type, "alloca_utf8_validate_bytes_result");
-
-            use roc_target::Architecture::*;
-            match env.target.architecture() {
-                Aarch32 | X86_32 => {
-                    arguments!(list);
-                    let (a, b) = pass_list_or_string_to_zig_32bit(env, list.into_struct_value());
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            result_ptr.into(),
-                            a.into(),
-                            b.into(),
-                            pass_update_mode(env, update_mode),
-                        ],
-                        bitcode::STR_FROM_UTF8,
-                    );
-                }
-                Aarch64 | X86_64 | Wasm32 => {
-                    arguments!(_list);
-
-                    // we use the symbol here instead
-                    let list = args[0];
-
-                    call_void_bitcode_fn(
-                        env,
-                        &[
-                            result_ptr.into(),
-                            list_symbol_to_c_abi(env, scope, list).into(),
-                            pass_update_mode(env, update_mode),
-                        ],
-                        bitcode::STR_FROM_UTF8,
-                    );
-                }
-            }
-
-            crate::llvm::build_str::decode_from_utf8_result(env, layout_interner, result_ptr)
+            // Str.from_utf8_lowlevel : List U8 -> FromUtf8Result
+            arguments!(list);
+            call_str_from_utf_bitcode_fn(
+                env,
+                layout_interner,
+                &[list, pass_update_mode(env, update_mode)],
+                "str.FromUtf8Result",
+                bitcode::STR_FROM_UTF8,
+            )
         }
         StrToUtf8 => {
             // Str.fromInt : Str -> List U8
@@ -447,6 +416,16 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 &[],
                 BitcodeReturns::List,
                 bitcode::STR_TO_UTF8,
+            )
+        }
+        StrFromUtf8Lossy => {
+            arguments!(list);
+            call_list_bitcode_fn(
+                env,
+                &[list.into_struct_value()],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_FROM_UTF8_LOSSY,
             )
         }
         StrRepeat => {
@@ -593,6 +572,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 bitcode::STR_WITH_CAPACITY,
             )
         }
+
         ListLenU64 => {
             // List.len : List * -> U64
             arguments!(list);
@@ -633,6 +613,39 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 layout_ids,
                 list_len.into_int_value(),
                 list_element_layout!(layout_interner, result_layout),
+            )
+        }
+        StrWithAsciiLowercased => {
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_ASCII_LOWERCASED,
+            )
+        }
+        StrWithAsciiUppercased => {
+            arguments!(string);
+
+            call_str_bitcode_fn(
+                env,
+                &[string],
+                &[],
+                BitcodeReturns::Str,
+                bitcode::STR_WITH_ASCII_UPPERCASED,
+            )
+        }
+        StrCaselessAsciiEquals => {
+            arguments!(string1, string2);
+
+            call_str_bitcode_fn(
+                env,
+                &[string1, string2],
+                &[],
+                BitcodeReturns::Basic,
+                bitcode::STR_CASELESS_ASCII_EQUALS,
             )
         }
         ListConcat => {
@@ -871,7 +884,7 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             }
         }
         NumToStr => {
-            // Num.toStr : Num a -> Str
+            // Num.to_str : Num a -> Str
             arguments_with_layouts!((num, num_layout));
 
             match layout_interner.get_repr(num_layout) {
@@ -1283,30 +1296,6 @@ pub(crate) fn run_low_level<'a, 'ctx>(
                 lhs_layout,
                 rhs_layout,
             )
-        }
-        And => {
-            // The (&&) operator
-            arguments!(lhs_arg, rhs_arg);
-
-            let bool_val = env.builder.new_build_and(
-                lhs_arg.into_int_value(),
-                rhs_arg.into_int_value(),
-                "bool_and",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
-        }
-        Or => {
-            // The (||) operator
-            arguments!(lhs_arg, rhs_arg);
-
-            let bool_val = env.builder.new_build_or(
-                lhs_arg.into_int_value(),
-                rhs_arg.into_int_value(),
-                "bool_or",
-            );
-
-            BasicValueEnum::IntValue(bool_val)
         }
         Not => {
             // The (!) operator

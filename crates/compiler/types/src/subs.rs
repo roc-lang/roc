@@ -4,6 +4,7 @@ use crate::types::{
     Polarity, RecordField, RecordFieldsError, TupleElemsError, TypeExt, Uls,
 };
 use crate::unification_table::{self, UnificationTable};
+use bitflags::bitflags;
 use roc_collections::all::{FnvMap, ImMap, ImSet, MutSet, SendMap};
 use roc_collections::{VecMap, VecSet};
 use roc_error_macros::internal_error;
@@ -50,10 +51,23 @@ impl fmt::Debug for Mark {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum ErrorTypeContext {
-    None,
-    ExpandRanges,
+bitflags! {
+    pub struct ErrorTypeContext : u8 {
+        /// List all number types that satisfy number range constraints.
+        const EXPAND_RANGES = 1 << 0;
+        /// Re-write non-generalized types like to inference variables.
+        const NON_GENERALIZED_AS_INFERRED = 1 << 1;
+    }
+}
+
+impl ErrorTypeContext {
+    fn expand_ranges(&self) -> bool {
+        self.contains(Self::EXPAND_RANGES)
+    }
+
+    fn non_generalized_as_inferred(&self) -> bool {
+        self.contains(Self::NON_GENERALIZED_AS_INFERRED)
+    }
 }
 
 struct ErrorTypeState {
@@ -2055,7 +2069,7 @@ impl Subs {
     }
 
     pub fn var_to_error_type(&mut self, var: Variable, observed_pol: Polarity) -> ErrorType {
-        self.var_to_error_type_contextual(var, ErrorTypeContext::None, observed_pol)
+        self.var_to_error_type_contextual(var, ErrorTypeContext::empty(), observed_pol)
     }
 
     pub fn var_to_error_type_contextual(
@@ -2182,6 +2196,98 @@ impl Subs {
                 self[*index].as_str().starts_with('#')
             }
             _ => false,
+        }
+    }
+
+    pub fn var_contains_error(&self, var: Variable) -> bool {
+        match &self.get_content_without_compacting(var).clone() {
+            Content::Error => true,
+            Content::FlexVar(Some(index)) => {
+                // Generated names for errors start with `#`
+                self[*index].as_str().starts_with('#')
+            }
+            Content::FlexVar(..)
+            | Content::RigidVar(..)
+            | Content::FlexAbleVar(..)
+            | Content::RigidAbleVar(..)
+            | Content::ErasedLambda
+            | Content::RangedNumber(..)
+            | Content::Pure
+            | Content::Effectful
+            | Content::Structure(FlatType::EmptyRecord)
+            | Content::Structure(FlatType::EmptyTagUnion)
+            | Content::Structure(FlatType::EffectfulFunc) => false,
+            Content::RecursionVar { structure, .. } => self.var_contains_error(*structure),
+            Content::LambdaSet(LambdaSet {
+                solved,
+                recursion_var,
+                unspecialized,
+                ..
+            }) => {
+                if let Some(rec_var) = recursion_var.into_variable() {
+                    if self.var_contains_error(rec_var) {
+                        return true;
+                    }
+                }
+                unspecialized
+                    .into_iter()
+                    .any(|uls_index| self.var_contains_error(self[uls_index].0))
+                    || solved.variables().into_iter().any(|slice_index| {
+                        self[slice_index]
+                            .into_iter()
+                            .any(|var_index| self.var_contains_error(self[var_index]))
+                    })
+            }
+            Content::Alias(_symbol, args, actual, _kind) => {
+                self.var_contains_error(*actual)
+                    || args
+                        .into_iter()
+                        .take(args.len())
+                        .any(|index| self.var_contains_error(self[index]))
+            }
+            Content::Structure(FlatType::Apply(_, args)) => args
+                .into_iter()
+                .any(|index| self.var_contains_error(self[index])),
+            Content::Structure(FlatType::Func(arg_vars, closure_var, ret_var, fx_var)) => {
+                self.var_contains_error(*closure_var)
+                    || self.var_contains_error(*ret_var)
+                    || self.var_contains_error(*fx_var)
+                    || arg_vars
+                        .into_iter()
+                        .any(|index| self.var_contains_error(self[index]))
+            }
+            Content::Structure(FlatType::Record(sorted_fields, ext_var)) => {
+                self.var_contains_error(*ext_var)
+                    || sorted_fields
+                        .iter_variables()
+                        .any(|index| self.var_contains_error(self[index]))
+            }
+            Content::Structure(FlatType::Tuple(elems, ext_var)) => {
+                self.var_contains_error(*ext_var)
+                    || elems
+                        .iter_variables()
+                        .any(|index| self.var_contains_error(self[index]))
+            }
+            Content::Structure(FlatType::TagUnion(tags, ext_var)) => {
+                self.var_contains_error(ext_var.var())
+                    || tags.variables().into_iter().any(|slice_index| {
+                        self[slice_index]
+                            .into_iter()
+                            .any(|var_index| self.var_contains_error(self[var_index]))
+                    })
+            }
+            Content::Structure(FlatType::FunctionOrTagUnion(_, _, ext_var)) => {
+                self.var_contains_error(ext_var.var())
+            }
+            Content::Structure(FlatType::RecursiveTagUnion(rec_var, tags, ext_var)) => {
+                self.var_contains_error(ext_var.var())
+                    || self.var_contains_error(*rec_var)
+                    || tags.variables().into_iter().any(|slice_index| {
+                        self[slice_index]
+                            .into_iter()
+                            .any(|var_index| self.var_contains_error(self[var_index]))
+                    })
+            }
         }
     }
 }
@@ -4020,6 +4126,13 @@ fn content_to_err_type(
     match content {
         Structure(flat_type) => flat_type_to_err_type(subs, state, flat_type, pol),
 
+        RigidVar(..) | RigidAbleVar(..)
+            if state.context.non_generalized_as_inferred()
+                && subs.get_rank(var) != Rank::GENERALIZED =>
+        {
+            ErrorType::InferenceVar
+        }
+
         FlexVar(opt_name) => {
             let name = match opt_name {
                 Some(name_index) => subs.field_names[name_index.index()].clone(),
@@ -4123,7 +4236,7 @@ fn content_to_err_type(
         }
 
         RangedNumber(range) => {
-            if state.context == ErrorTypeContext::ExpandRanges {
+            if state.context.expand_ranges() {
                 let mut types = Vec::new();
                 for var in range.variable_slice() {
                     types.push(var_to_err_type(subs, state, *var, pol));

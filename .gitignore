@@ -8,9 +8,9 @@
 
 # Specifically keep these files with no extension
 !Earthfile
-!AUTHORS
+!authors
 !LICENSE*
-!LEGAL*
+!legal*
 !Dockerfile
 # .reuse/dep5 see https://reuse.software/
 !dep5
@@ -24,9 +24,6 @@
 # Ignore the following directories and file extensions
 target
 generated-docs
-
-# todo remove after upgrade to zig 0.13.0
-zig-cache
 
 zig-out
 .zig-cache
@@ -129,3 +126,11 @@ crates/glue/tests/fixtures/*/test_glue/
 **/*platform/glue/*
 crates/cli/tests/test-projects/test-platform-effects-zig/glue
 crates/cli/tests/test-projects/test-platform-simple-zig/glue
+
+src/fuzz-corpus/
+
+# Profiling data
+perf.data
+perf.data.old
+profile.json
+flamegraph.svg

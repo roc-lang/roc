@@ -48,13 +48,13 @@ fn hash_specialization_multiple_add() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            Id := U64 implements [ MHash {hash: hashId} ]
+            Id := U64 implements [ MHash {hash: hash_id} ]
 
-            hashId = \@Id n -> n
+            hash_id = \@Id n -> n
 
-            One := {} implements [ MHash {hash: hashOne} ]
+            One := {} implements [ MHash {hash: hash_one} ]
 
-            hashOne = \@One _ -> 1
+            hash_one = \@One _ -> 1
 
             main = hash (@Id 1234) + hash (@One {})
             "#
@@ -80,8 +80,8 @@ fn alias_member_specialization() {
             hash = \@Id n -> n
 
             main =
-                aliasedMHash = hash
-                aliasedMHash (@Id 1234)
+                aliased_m_hash = hash
+                aliased_m_hash (@Id 1234)
             "#
         ),
         1234,
@@ -100,13 +100,13 @@ fn ability_constrained_in_non_member_usage() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, a -> U64 where a implements MHash
-            mulMHashes = \x, y -> hash x * hash y
+            mul_m_hashes : a, a -> U64 where a implements MHash
+            mul_m_hashes = \x, y -> hash x * hash y
 
             Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulMHashes (@Id 5) (@Id 7)
+            result = mul_m_hashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -125,12 +125,12 @@ fn ability_constrained_in_non_member_usage_inferred() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            mulMHashes = \x, y -> hash x * hash y
+            mul_m_hashes = \x, y -> hash x * hash y
 
             Id := U64 implements [MHash {hash}]
             hash = \@Id n -> n
 
-            result = mulMHashes (@Id 5) (@Id 7)
+            result = mul_m_hashes (@Id 5) (@Id 7)
             "#
         ),
         35,
@@ -149,16 +149,16 @@ fn ability_constrained_in_non_member_multiple_specializations() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            mulMHashes : a, b -> U64 where a implements MHash, b implements MHash
-            mulMHashes = \x, y -> hash x * hash y
+            mul_m_hashes : a, b -> U64 where a implements MHash, b implements MHash
+            mul_m_hashes = \x, y -> hash x * hash y
 
-            Id := U64 implements [MHash { hash: hashId }]
-            hashId = \@Id n -> n
+            Id := U64 implements [MHash { hash: hash_id }]
+            hash_id = \@Id n -> n
 
-            Three := {} implements [MHash { hash: hashThree }]
-            hashThree = \@Three _ -> 3
+            Three := {} implements [MHash { hash: hash_three }]
+            hash_three = \@Three _ -> 3
 
-            result = mulMHashes (@Id 100) (@Three {})
+            result = mul_m_hashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -177,15 +177,15 @@ fn ability_constrained_in_non_member_multiple_specializations_inferred() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            mulMHashes = \x, y -> hash x * hash y
+            mul_m_hashes = \x, y -> hash x * hash y
 
-            Id := U64 implements [MHash { hash: hashId }]
-            hashId = \@Id n -> n
+            Id := U64 implements [MHash { hash: hash_id }]
+            hash_id = \@Id n -> n
 
-            Three := {} implements [MHash { hash: hashThree }]
-            hashThree = \@Three _ -> 3
+            Three := {} implements [MHash { hash: hash_three }]
+            hash_three = \@Three _ -> 3
 
-            result = mulMHashes (@Id 100) (@Three {})
+            result = mul_m_hashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -204,16 +204,16 @@ fn ability_used_as_type_still_compiles() {
             MHash implements
                 hash : a -> U64 where a implements MHash
 
-            mulMHashes : MHash, MHash -> U64
-            mulMHashes = \x, y -> hash x * hash y
+            mul_m_hashes : MHash, MHash -> U64
+            mul_m_hashes = \x, y -> hash x * hash y
 
-            Id := U64 implements [MHash { hash: hashId }]
-            hashId = \@Id n -> n
+            Id := U64 implements [MHash { hash: hash_id }]
+            hash_id = \@Id n -> n
 
-            Three := {} implements [MHash { hash: hashThree }]
-            hashThree = \@Three _ -> 3
+            Three := {} implements [MHash { hash: hash_three }]
+            hash_three = \@Three _ -> 3
 
-            result = mulMHashes (@Id 100) (@Three {})
+            result = mul_m_hashes (@Id 100) (@Three {})
             "#
         ),
         300,
@@ -232,10 +232,10 @@ fn bounds_to_multiple_abilities() {
             Idempot implements idempot : a -> a where a implements Idempot
             Consume implements consume : a -> Str where a implements Consume
 
-            Hello := Str implements [Idempot { idempot: idempotHello }, Consume { consume: consumeHello }]
+            Hello := Str implements [Idempot { idempot: idempot_hello }, Consume { consume: consume_hello }]
 
-            idempotHello = \@Hello msg -> @Hello msg
-            consumeHello = \@Hello msg -> msg
+            idempot_hello = \@Hello msg -> @Hello msg
+            consume_hello = \@Hello msg -> msg
 
             lifecycle : a -> Str where a implements Idempot & Consume
             lifecycle = \x -> idempot x |> consume
@@ -254,37 +254,37 @@ fn encode() {
     assert_evals_to!(
         indoc!(
             r#"
-            app "test" provides [myU8Bytes] to "./platform"
+            app "test" provides [my_u8_bytes] to "./platform"
 
             MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
             MEncoding implements
-              toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
+              to_encoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
             Format implements
               u8 : U8 -> MEncoder fmt where fmt implements Format
 
-            appendWith : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format
-            appendWith = \lst, (@MEncoder doFormat), fmt -> doFormat lst fmt
+            append_with : List U8, MEncoder fmt, fmt -> List U8 where fmt implements Format
+            append_with = \lst, (@MEncoder do_format), fmt -> do_format lst fmt
 
-            toBytes : val, fmt -> List U8 where val implements MEncoding, fmt implements Format
-            toBytes = \val, fmt -> appendWith [] (toEncoder val) fmt
+            to_bytes : val, fmt -> List U8 where val implements MEncoding, fmt implements Format
+            to_bytes = \val, fmt -> append_with [] (to_encoder val) fmt
 
 
             Linear := {} implements [Format {u8}]
 
             u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-            Rgba := { r : U8, g : U8, b : U8, a : U8 } implements [MEncoding {toEncoder}]
+            Rgba := { r : U8, g : U8, b : U8, a : U8 } implements [MEncoding {to_encoder}]
 
-            toEncoder = \@Rgba {r, g, b, a} ->
+            to_encoder = \@Rgba {r, g, b, a} ->
                 @MEncoder \lst, fmt -> lst
-                    |> appendWith (u8 r) fmt
-                    |> appendWith (u8 g) fmt
-                    |> appendWith (u8 b) fmt
-                    |> appendWith (u8 a) fmt
+                    |> append_with (u8 r) fmt
+                    |> append_with (u8 g) fmt
+                    |> append_with (u8 b) fmt
+                    |> append_with (u8 a) fmt
 
-            myU8Bytes = toBytes (@Rgba { r: 106, g: 90, b: 205, a: 255 }) (@Linear {})
+            my_u8_bytes = to_bytes (@Rgba { r: 106, g: 90, b: 205, a: 255 }) (@Linear {})
             "#
         ),
         RocList::from_slice(&[106, 90, 205, 255]),
@@ -311,16 +311,16 @@ fn decode() {
             MDecoderFormatting implements
                 u8 : MDecoder U8 fmt where fmt implements MDecoderFormatting
 
-            decodeWith : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
-            decodeWith = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
+            decode_with : List U8, MDecoder val fmt, fmt -> { result: Result val MDecodeError, rest: List U8 } where fmt implements MDecoderFormatting
+            decode_with = \lst, (@MDecoder doDecode), fmt -> doDecode lst fmt
 
-            fromBytes : List U8, fmt -> Result val MDecodeError
+            from_bytes : List U8, fmt -> Result val MDecodeError
                         where fmt implements MDecoderFormatting, val implements MDecoding
-            fromBytes = \lst, fmt ->
-                when decodeWith lst decoder fmt is
+            from_bytes = \lst, fmt ->
+                when decode_with lst decoder fmt is
                     { result, rest } ->
                         Result.try result \val ->
-                            if List.isEmpty rest
+                            if List.is_empty rest
                             then Ok val
                             else Err (Leftover rest)
 
@@ -329,18 +329,18 @@ fn decode() {
 
             u8 = @MDecoder \lst, @Linear {} ->
                     when List.first lst is
-                        Ok n -> { result: Ok n, rest: List.dropFirst lst 1 }
+                        Ok n -> { result: Ok n, rest: List.drop_first lst 1 }
                         Err _ -> { result: Err TooShort, rest: [] }
 
             MyU8 := U8 implements [MDecoding {decoder}]
 
             # impl MDecoding for MyU8
             decoder = @MDecoder \lst, fmt ->
-                { result, rest } = decodeWith lst u8 fmt
-                { result: Result.map result (\n -> @MyU8 n), rest }
+                { result, rest } = decode_with lst u8 fmt
+                { result: Result.map_ok result (\n -> @MyU8 n), rest }
 
             myU8 =
-                when fromBytes [15] (@Linear {}) is
+                when from_bytes [15] (@Linear {}) is
                     Ok (@MyU8 n) -> n
                     _ -> 27u8
             "#
@@ -360,14 +360,14 @@ fn encode_use_stdlib() {
 
             {TAG_LEN_ENCODER_FMT}
 
-            HelloWorld := {{}} implements [Encoding {{toEncoder}}]
-            toEncoder = \@HelloWorld {{}} ->
+            HelloWorld := {{}} implements [Encoding {{to_encoder}}]
+            to_encoder = \@HelloWorld {{}} ->
                 Encode.custom \bytes, fmt ->
                     bytes
-                        |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+                        |> Encode.append_with (Encode.string "Hello, World!\n") fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes (@HelloWorld {{}}) tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -388,11 +388,11 @@ fn encode_use_stdlib_without_wrapping_custom() {
 
             {TAG_LEN_ENCODER_FMT}
 
-            HelloWorld := {{}} implements [Encoding {{toEncoder}}]
-            toEncoder = \@HelloWorld {{}} -> Encode.string "Hello, World!\n"
+            HelloWorld := {{}} implements [Encoding {{to_encoder}}]
+            to_encoder = \@HelloWorld {{}} -> Encode.string "Hello, World!\n"
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes (@HelloWorld {{}}) tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -417,7 +417,7 @@ fn encode_derive_to_encoder_for_opaque() {
             HelloWorld := {{ a: Str }} implements [Encoding]
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{ a: "Hello, World!" }}) tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes (@HelloWorld {{ a: "Hello, World!" }}) tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -438,14 +438,14 @@ fn to_encoder_encode_custom_has_capture() {
 
             {TAG_LEN_ENCODER_FMT}
 
-            HelloWorld := Str implements [Encoding {{toEncoder}}]
-            toEncoder = \@HelloWorld s1 ->
+            HelloWorld := Str implements [Encoding {{to_encoder}}]
+            to_encoder = \@HelloWorld s1 ->
                 Encode.custom \bytes, fmt ->
                     bytes
-                        |> Encode.appendWith (Encode.string s1) fmt
+                        |> Encode.append_with (Encode.string s1) fmt
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes (@HelloWorld "Hello, World!\n") tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes (@HelloWorld "Hello, World!\n") tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -482,7 +482,7 @@ mod encode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes "foo" tagLenFmt) is
+                    when Str.from_utf8 (Encode.to_bytes "foo" tag_len_fmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -503,7 +503,7 @@ mod encode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes [1, 2, 3] tagLenFmt) is
+                    when Str.from_utf8 (Encode.to_bytes [1, 2, 3] tag_len_fmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -524,7 +524,7 @@ mod encode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes Bool.false tagLenFmt) is
+                    when Str.from_utf8 (Encode.to_bytes Bool.false tag_len_fmt) is
                         Ok s -> s
                         _ -> "<bad>"
                 "#
@@ -547,7 +547,7 @@ mod encode_immediate {
                         {TAG_LEN_ENCODER_FMT}
 
                         main =
-                            when Str.fromUtf8 (Encode.toBytes {}{} tagLenFmt) is
+                            when Str.from_utf8 (Encode.to_bytes {}{} tag_len_fmt) is
                                 Ok s -> s
                                 _ -> "<bad>"
                         "#, $num, stringify!($typ)),
@@ -587,7 +587,7 @@ fn encode_derived_record_one_field_string() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes {{a: "foo"}} tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes {{a: "foo"}} tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -611,7 +611,7 @@ fn encode_derived_record_two_fields_strings() {
 
             main =
                 rcd = {{a: "foo", b: "bar"}}
-                result = Str.fromUtf8 (Encode.toBytes rcd tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes rcd tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -635,8 +635,8 @@ fn encode_derived_nested_record_string() {
 
             main =
                 rcd = {{a: {{b: "bar"}}}}
-                encoded = Encode.toBytes rcd tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes rcd tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -659,7 +659,7 @@ fn encode_derived_tag_one_payload_string() {
 
             main =
                 x = A "foo"
-                result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes x tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -682,7 +682,7 @@ fn encode_derived_tag_two_payloads_string() {
 
             main =
                 x = A "foo" "bar"
-                result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes x tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -705,8 +705,8 @@ fn encode_derived_nested_tag_string() {
 
             main =
                 x = A (B "foo" "bar")
-                encoded = Encode.toBytes x tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes x tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -730,8 +730,8 @@ fn encode_derived_nested_record_tag_record() {
 
             main =
                 x = {{a: (B ({{c: "foo"}}))}}
-                encoded = Encode.toBytes x tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes x tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -754,8 +754,8 @@ fn encode_derived_list_string() {
 
             main =
                 lst = ["foo", "bar", "baz"]
-                encoded = Encode.toBytes lst tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes lst tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -779,8 +779,8 @@ fn encode_derived_list_of_records() {
 
             main =
                 lst = [{{a: "foo"}}, {{a: "bar"}}, {{a: "baz"}}]
-                encoded = Encode.toBytes lst tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes lst tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -803,8 +803,8 @@ fn encode_derived_list_of_lists_of_strings() {
 
             main =
                 lst = [["a", "b"], ["c", "d", "e"], ["f"]]
-                encoded = Encode.toBytes lst tagLenFmt
-                result = Str.fromUtf8 encoded
+                encoded = Encode.to_bytes lst tag_len_fmt
+                result = Str.from_utf8 encoded
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -830,7 +830,7 @@ fn encode_derived_record_with_many_types() {
                 fresh : [Fresh Str, Rotten Str]
                 fresh = Fresh "tomatoes"
                 rcd = {{actors: ["Idris Elba", "Mila Kunis"], year: 2004u16, rating: {{average: 7u8, min: 1u8, max: 10u8, sentiment: fresh}}}}
-                result = Str.fromUtf8 (Encode.toBytes rcd tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes rcd tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -855,7 +855,7 @@ fn encode_derived_tuple_two_fields() {
 
             main =
                 tup = ("foo", 10u8)
-                result = Str.fromUtf8 (Encode.toBytes tup tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes tup tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -878,7 +878,7 @@ fn encode_derived_tuple_of_tuples() {
 
             main =
                 tup = ( ("foo", 10u8), (23u8, "bar", 15u8) )
-                result = Str.fromUtf8 (Encode.toBytes tup tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes tup tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -905,7 +905,7 @@ fn encode_derived_generic_record_with_different_field_types() {
             q = @Q {{a: 10u32, b: "fieldb"}}
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes q tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -932,7 +932,7 @@ fn encode_derived_generic_tag_with_different_field_types() {
             q = @Q (B 67)
 
             main =
-                result = Str.fromUtf8 (Encode.toBytes q tagLenFmt)
+                result = Str.from_utf8 (Encode.to_bytes q tag_len_fmt)
                 when result is
                     Ok s -> s
                     _ -> "<bad>"
@@ -955,8 +955,8 @@ fn specialize_unique_newtype_records() {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.fromUtf8 (Encode.toBytes {{a: Bool.true}} tagLenFmt) is
-                        Ok s -> when Str.fromUtf8 (Encode.toBytes {{b: Bool.true}} tagLenFmt) is
+                    when Str.from_utf8 (Encode.to_bytes {{a: Bool.true}} tag_len_fmt) is
+                        Ok s -> when Str.from_utf8 (Encode.to_bytes {{b: Bool.true}} tag_len_fmt) is
                             Ok t -> "$(s)$(t)"
                             _ -> "<bad>"
                         _ -> "<bad>"
@@ -982,14 +982,14 @@ fn decode_use_stdlib() {
 
             myDecoder =
                 Decode.custom \bytes, fmt ->
-                    when Decode.decodeWith bytes Decode.u8 fmt is
+                    when Decode.decode_with bytes Decode.u8 fmt is
                         {{result, rest}} ->
                             when result is
                                 Ok n -> {{result: Ok (@MyNum n), rest}}
                                 Err e -> {{result: Err e, rest}}
 
             main =
-                when Decode.fromBytes [110, 49, 53, 32] tagLenFmt is
+                when Decode.from_bytes [110, 49, 53, 32] tag_len_fmt is
                     Ok (@MyNum n) -> n
                     _ -> 101
             "#
@@ -1015,7 +1015,7 @@ fn decode_derive_decoder_for_opaque() {
             HelloWorld := {{ a: Str }} implements [Decoding]
 
             main =
-                when Str.toUtf8 "r1 s1 a s13 Hello, World! " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r1 s1 a s13 Hello, World! " |> Decode.from_bytes tag_len_fmt is
                     Ok (@HelloWorld {{a}}) -> a
                     _ -> "FAIL"
             "#
@@ -1037,13 +1037,13 @@ fn decode_use_stdlib_custom_list() {
             MyNumList := List U8 implements [Decoding {{decoder: myDecoder}}]
             myDecoder =
                 Decode.custom \bytes, fmt ->
-                    when Decode.decodeWith bytes (Decode.list Decode.u8) fmt is
+                    when Decode.decode_with bytes (Decode.list Decode.u8) fmt is
                         {{result, rest}} ->
                             when result is
                                 Ok lst -> {{result: Ok (@MyNumList lst), rest}}
                                 Err e -> {{result: Err e, rest}}
             main =
-                when Str.toUtf8 "l3 n1 n2 n3 " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "l3 n1 n2 n3 " |> Decode.from_bytes tag_len_fmt is
                     Ok (@MyNumList lst) -> lst
                     _ -> []
             "#
@@ -1080,7 +1080,7 @@ mod decode_immediate {
                     {TAG_LEN_ENCODER_FMT}
 
                     main =
-                        when Str.toUtf8 "s3 foo " |> Decode.fromBytes tagLenFmt is
+                        when Str.to_utf8 "s3 foo " |> Decode.from_bytes tag_len_fmt is
                             Ok s -> s
                             _ -> "<bad>"
                     "#
@@ -1102,10 +1102,10 @@ mod decode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    input = Str.toUtf8 "l3 n1 n2 n3 "
+                    input = Str.to_utf8 "l3 n1 n2 n3 "
                     expected = [1,2,3]
 
-                    actual = Decode.fromBytes input tagLenFmt |> Result.withDefault []
+                    actual = Decode.from_bytes input tag_len_fmt |> Result.with_default []
 
                     actual == expected
                 "#
@@ -1126,7 +1126,7 @@ mod decode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.toUtf8 "n0 " |> Decode.fromBytes tagLenFmt is
+                    when Str.to_utf8 "n0 " |> Decode.from_bytes tag_len_fmt is
                         Ok s -> s
                         _ -> Bool.true
                 "#
@@ -1149,7 +1149,7 @@ mod decode_immediate {
                         {TAG_LEN_ENCODER_FMT}
 
                         main =
-                            when Str.toUtf8 "n{} " |> Decode.fromBytes tagLenFmt is
+                            when Str.to_utf8 "n{} " |> Decode.from_bytes tag_len_fmt is
                                 Ok n -> n
                                 _ -> 101{}
                         "#,
@@ -1189,7 +1189,7 @@ mod decode_immediate {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.toUtf8 "n17.23 " |> Decode.fromBytes tagLenFmt is
+                    when Str.to_utf8 "n17.23 " |> Decode.from_bytes tag_len_fmt is
                         Ok n -> n
                         _ -> 101dec
                 "#
@@ -1212,8 +1212,8 @@ fn decode_list_of_strings() {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Str.toUtf8 "l3 s1 a s1 b s1 c " |> Decode.fromBytes tagLenFmt is
-                        Ok l -> Str.joinWith l ","
+                    when Str.to_utf8 "l3 s1 a s1 b s1 c " |> Decode.from_bytes tag_len_fmt is
+                        Ok l -> Str.join_with l ","
                         _ -> "<bad>"
                 "#
             ),
@@ -1235,8 +1235,8 @@ fn encode_then_decode_list_of_strings() {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Encode.toBytes ["a", "b", "c"] tagLenFmt |> Decode.fromBytes tagLenFmt is
-                        Ok l -> Str.joinWith l ","
+                    when Encode.to_bytes ["a", "b", "c"] tag_len_fmt |> Decode.from_bytes tag_len_fmt is
+                        Ok l -> Str.join_with l ","
                         _ -> "something went wrong"
                 "#
             ),
@@ -1258,8 +1258,8 @@ fn encode_then_decode_list_of_lists_of_strings() {
                 {TAG_LEN_ENCODER_FMT}
 
                 main =
-                    when Encode.toBytes [["a", "b"], ["c", "d", "e"], ["f"]] tagLenFmt |> Decode.fromBytes tagLenFmt is
-                        Ok list -> (List.map list \inner -> Str.joinWith inner ",") |> Str.joinWith ";"
+                    when Encode.to_bytes [["a", "b"], ["c", "d", "e"], ["f"]] tag_len_fmt |> Decode.from_bytes tag_len_fmt is
+                        Ok list -> (List.map list \inner -> Str.join_with inner ",") |> Str.join_with ";"
                         _ -> "something went wrong"
                 "#
             ),
@@ -1283,7 +1283,7 @@ fn decode_record_two_fields() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "r2 s6 second s2 cd s5 first s2 ab " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r2 s6 second s2 cd s5 first s2 ab " |> Decode.from_bytes tag_len_fmt is
                     Ok {{first: "ab", second: "cd"}} -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1307,7 +1307,7 @@ fn decode_record_two_fields_string_and_int() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "r2 s5 first s2 ab s6 second n10 " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r2 s5 first s2 ab s6 second n10 " |> Decode.from_bytes tag_len_fmt is
                     Ok {{first: "ab", second: 10u8}} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1331,7 +1331,7 @@ fn decode_record_two_fields_string_and_string_infer() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.from_bytes tag_len_fmt is
                     Ok {{first, second}} -> Str.concat first second
                     _ -> "something went wrong"
             "#
@@ -1355,7 +1355,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                decoded = Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt
+                decoded = Str.to_utf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.from_bytes tag_len_fmt
                 when decoded is
                     Ok rcd -> Str.concat rcd.first rcd.second
                     _ -> "something went wrong"
@@ -1380,7 +1380,7 @@ fn decode_record_two_fields_string_and_string_infer_local_var_destructured() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                decoded = Str.toUtf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.fromBytes tagLenFmt
+                decoded = Str.to_utf8 "r2 s5 first s2 ab s6 second s2 cd " |> Decode.from_bytes tag_len_fmt
                 when decoded is
                     Ok {{first, second}} -> Str.concat first second
                     _ -> "something went wrong"
@@ -1402,7 +1402,7 @@ fn decode_empty_record() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "r0 " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r0 " |> Decode.from_bytes tag_len_fmt is
                     Ok {{}} -> "empty"
                     _ -> "something went wrong"
             "#
@@ -1427,7 +1427,7 @@ fn decode_record_of_record() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "r2 s5 other r2 s3 one s1 b s3 two n10 s5 outer r1 s5 inner s1 a " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "r2 s5 other r2 s3 one s1 b s3 two n10 s5 outer r1 s5 inner s1 a " |> Decode.from_bytes tag_len_fmt is
                     Ok {{outer: {{inner: "a"}}, other: {{one: "b", two: 10u8}}}} -> "ab10"
                     _ -> "something went wrong"
             "#
@@ -1451,7 +1451,7 @@ fn decode_tuple_two_elements() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "l2 s2 ab n10 " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "l2 s2 ab n10 " |> Decode.from_bytes tag_len_fmt is
                     Ok ("ab", 10u8) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1475,7 +1475,7 @@ fn decode_tuple_of_tuples() {
             {TAG_LEN_ENCODER_FMT}
 
             main =
-                when Str.toUtf8 "l2 l2 s2 ab n10 l2 s2 cd n25 " |> Decode.fromBytes tagLenFmt is
+                when Str.to_utf8 "l2 l2 s2 ab n10 l2 s2 cd n25 " |> Decode.from_bytes tag_len_fmt is
                     Ok ( ("ab", 10u8), ("cd", 25u8) ) -> "abcd"
                     _ -> "something went wrong"
             "#
@@ -1498,53 +1498,53 @@ mod hash {
     const TEST_HASHER: &str = indoc!(
         r"
         THasher := List U8 implements [Hasher {
-            addBytes: tAddBytes,
-            addU8: tAddU8,
-            addU16: tAddU16,
-            addU32: tAddU32,
-            addU64: tAddU64,
-            addU128: tAddU128,
-            complete: tComplete,
+            add_bytes: t_add_bytes,
+            add_u8: t_add_u8,
+            add_u16: t_add_u16,
+            add_u32: t_add_u32,
+            add_u64: t_add_u64,
+            add_u128: t_add_u128,
+            complete: t_complete,
         }]
 
         # ignores endian-ness
-        byteAt = \n, shift ->
-            Num.bitwiseAnd (Num.shiftRightBy n (shift * 8)) 0xFF
-            |> Num.toU8
+        byte_at = \n, shift ->
+            Num.bitwise_and (Num.shift_right_by n (shift * 8)) 0xFF
+            |> Num.to_u8
 
         do8 = \total, n ->
             total
-            |> List.append (byteAt n 0)
+            |> List.append (byte_at n 0)
 
         do16 = \total, n ->
             total
-            |> do8 (n |> Num.toU8)
-            |> do8 (Num.shiftRightBy n 8 |> Num.toU8)
+            |> do8 (n |> Num.to_u8)
+            |> do8 (Num.shift_right_by n 8 |> Num.to_u8)
 
         do32 = \total, n ->
             total
-            |> do16 (n |> Num.toU16)
-            |> do16 (Num.shiftRightBy n 16 |> Num.toU16)
+            |> do16 (n |> Num.to_u16)
+            |> do16 (Num.shift_right_by n 16 |> Num.to_u16)
 
         do64 = \total, n ->
             total
-            |> do32 (n |> Num.toU32)
-            |> do32 (Num.shiftRightBy n 32 |> Num.toU32)
+            |> do32 (n |> Num.to_u32)
+            |> do32 (Num.shift_right_by n 32 |> Num.to_u32)
 
         do128 = \total, n ->
             total
-            |> do64 (n |> Num.toU64)
-            |> do64 (Num.shiftRightBy n 64 |> Num.toU64)
+            |> do64 (n |> Num.to_u64)
+            |> do64 (Num.shift_right_by n 64 |> Num.to_u64)
 
-        tAddBytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
-        tAddU8 = \@THasher total, n -> @THasher (do8 total n)
-        tAddU16 = \@THasher total, n -> @THasher (do16 total n)
-        tAddU32 = \@THasher total, n -> @THasher (do32 total n)
-        tAddU64 = \@THasher total, n -> @THasher (do64 total n)
-        tAddU128 = \@THasher total, n -> @THasher (do128 total n)
-        tComplete = \@THasher _ -> Num.maxU64
+        t_add_bytes = \@THasher total, bytes -> @THasher (List.concat total bytes)
+        t_add_u8 = \@THasher total, n -> @THasher (do8 total n)
+        t_add_u16 = \@THasher total, n -> @THasher (do16 total n)
+        t_add_u32 = \@THasher total, n -> @THasher (do32 total n)
+        t_add_u64 = \@THasher total, n -> @THasher (do64 total n)
+        t_add_u128 = \@THasher total, n -> @THasher (do128 total n)
+        t_complete = \@THasher _ -> Num.max_u64
 
-        tRead = \@THasher bytes -> bytes
+        t_read = \@THasher bytes -> bytes
         "
     );
 
@@ -1559,7 +1559,7 @@ mod hash {
                 main =
                     @THasher []
                     |> Hash.hash ({})
-                    |> tRead
+                    |> t_read
                 "#
             ),
             TEST_HASHER, input,
@@ -1618,7 +1618,7 @@ mod hash {
         #[test]
         fn u16() {
             assert_evals_to!(
-                &build_test("Num.maxU16 - 1"),
+                &build_test("Num.max_u16 - 1"),
                 RocList::from_slice(&[254, 255]),
                 RocList<u8>
             )
@@ -1636,7 +1636,7 @@ mod hash {
         #[test]
         fn u32() {
             assert_evals_to!(
-                &build_test("Num.maxU32 - 1"),
+                &build_test("Num.max_u32 - 1"),
                 RocList::from_slice(&[254, 255, 255, 255]),
                 RocList<u8>
             )
@@ -1654,7 +1654,7 @@ mod hash {
         #[test]
         fn u64() {
             assert_evals_to!(
-                &build_test("Num.maxU64 - 1"),
+                &build_test("Num.max_u64 - 1"),
                 RocList::from_slice(&[254, 255, 255, 255, 255, 255, 255, 255]),
                 RocList<u8>
             )
@@ -1676,7 +1676,7 @@ mod hash {
         #[cfg(not(feature = "gen-wasm"))] // shr not implemented for U128
         fn u128() {
             assert_evals_to!(
-                &build_test("Num.maxU128 - 1"),
+                &build_test("Num.max_u128 - 1"),
                 RocList::from_slice(&[
                     254, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255, 255
                 ]),
@@ -1818,7 +1818,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash a
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -1850,7 +1850,7 @@ mod hash {
                             @THasher []
                             |> Hash.hash a
                             |> Hash.hash b
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -1879,7 +1879,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash l
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -1914,7 +1914,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash a
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -1943,7 +1943,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash a
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -1981,7 +1981,7 @@ mod hash {
                             |> Hash.hash a
                             |> Hash.hash b
                             |> Hash.hash c
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -2016,7 +2016,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash c
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -2047,7 +2047,7 @@ mod hash {
                         main =
                             @THasher []
                             |> Hash.hash q
-                            |> tRead
+                            |> t_read
                         "#
                     ),
                     TEST_HASHER,
@@ -2093,15 +2093,15 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                LyingEq := U8 implements [Eq {isEq}]
+                LyingEq := U8 implements [Eq {is_eq}]
 
-                isEq = \@LyingEq m, @LyingEq n -> m != n
+                is_eq = \@LyingEq(m), @LyingEq(n) -> m != n
 
                 main =
-                    a = @LyingEq 10
-                    b = @LyingEq 5
-                    c = @LyingEq 5
-                    if Bool.isEq a b && !(Bool.isEq b c) then
+                    a = @LyingEq(10)
+                    b = @LyingEq(5)
+                    c = @LyingEq(5)
+                    if Bool.is_eq(a, b) and !(Bool.is_eq(b, c)) then
                         "okay"
                     else
                         "fail"
@@ -2119,11 +2119,11 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {is_eq: is_eq_q}]
 
-                isEqQ = \@Q _, @Q _ -> Bool.true
+                is_eq_q = \@Q _, @Q _ -> Bool.true
 
-                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                main = is_eq_q (@Q \{} -> "a") (@Q \{} -> "a")
                 "#
             ),
             true,
@@ -2139,11 +2139,11 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                Q := ({} -> Str) implements [Eq {isEq: isEqQ}]
+                Q := ({} -> Str) implements [Eq {is_eq: is_eq_q}]
 
-                isEqQ = \@Q f1, @Q f2 -> (f1 {} == f2 {})
+                is_eq_q = \@Q f1, @Q f2 -> (f1 {} == f2 {})
 
-                main = isEqQ (@Q \{} -> "a") (@Q \{} -> "a")
+                main = is_eq_q (@Q \{} -> "a") (@Q \{} -> "a")
                 "#
             ),
             true,
@@ -2158,7 +2158,7 @@ mod eq {
                 r#"
                 app "test" provides [main] to "./platform"
 
-                main = Bool.isEq 10u8 10u8
+                main = Bool.is_eq 10u8 10u8
                 "#
             ),
             true,
@@ -2195,12 +2195,12 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
                 {TAG_LEN_ENCODER_FMT}
 
-                getNumber =
-                    {{ result, rest }} = Decode.fromBytesPartial (Str.toUtf8 "s4 1234 ") tagLenFmt
+                get_number =
+                    {{ result, rest }} = Decode.from_bytes_partial (Str.to_utf8 "s4 1234 ") tag_len_fmt
 
                     when result is
                         Ok val ->
-                            when Str.toI64 val is
+                            when Str.to_i64 val is
                                 Ok number ->
                                     Ok {{ val : number, input : rest }}
                                 Err InvalidNumStr ->
@@ -2210,7 +2210,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
                             Err (ParsingFailure "not a number")
 
                 main =
-                    getNumber |> Result.map .val |> Result.withDefault 0
+                    get_number |> Result.map_ok .val |> Result.with_default 0
                 "#
             ),
             1234i64,
@@ -2241,9 +2241,9 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.toStr Bool.true,
-                Inspect.toStr Bool.false,
-            ] |> Str.joinWith ", "
+                Inspect.to_str Bool.true,
+                Inspect.to_str Bool.false,
+            ] |> Str.join_with ", "
             "#
             ),
             RocStr::from("Bool.true, Bool.false"),
@@ -2260,22 +2260,22 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.toStr 0,              # Num a
-                Inspect.toStr 1u8,            # U8
-                Inspect.toStr 2i8,            # I8
-                Inspect.toStr 3u16,           # U16
-                Inspect.toStr 4i16,           # I16
-                Inspect.toStr 5u32,           # U32
-                Inspect.toStr 6i32,           # I32
-                Inspect.toStr 7u64,           # U64
-                Inspect.toStr 8i64,           # I64
-                Inspect.toStr 9u128,          # U128
-                Inspect.toStr 10i128,         # I128
-                Inspect.toStr 0.5,            # Frac a
-                Inspect.toStr 1.5f32,         # F32
-                Inspect.toStr 2.2f64,         # F64
-                Inspect.toStr (1.1dec + 2.2), # Dec
-            ] |> Str.joinWith ", "
+                Inspect.to_str 0,              # Num a
+                Inspect.to_str 1u8,            # U8
+                Inspect.to_str 2i8,            # I8
+                Inspect.to_str 3u16,           # U16
+                Inspect.to_str 4i16,           # I16
+                Inspect.to_str 5u32,           # U32
+                Inspect.to_str 6i32,           # I32
+                Inspect.to_str 7u64,           # U64
+                Inspect.to_str 8i64,           # I64
+                Inspect.to_str 9u128,          # U128
+                Inspect.to_str 10i128,         # I128
+                Inspect.to_str 0.5,            # Frac a
+                Inspect.to_str 1.5f32,         # F32
+                Inspect.to_str 2.2f64,         # F64
+                Inspect.to_str (1.1dec + 2.2), # Dec
+            ] |> Str.join_with ", "
             "#
             ),
             RocStr::from("0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 0.5, 1.5, 2.2, 3.3"),
@@ -2292,12 +2292,12 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.toStr [0, 1, 2],        # List (Num *)
-                Inspect.toStr [1, 0x2, 3],      # List (Int *)
-                Inspect.toStr [0.1 + 0.2, 0.4], # List (Frac *)
-                Inspect.toStr [1u8, 2u8],       # List U8
-                Inspect.toStr ["foo"],          # List Str
-            ] |> Str.joinWith ", "
+                Inspect.to_str [0, 1, 2],        # List (Num *)
+                Inspect.to_str [1, 0x2, 3],      # List (Int *)
+                Inspect.to_str [0.1 + 0.2, 0.4], # List (Frac *)
+                Inspect.to_str [1u8, 2u8],       # List U8
+                Inspect.to_str ["foo"],          # List Str
+            ] |> Str.join_with ", "
             "#
             ),
             RocStr::from("[0, 1, 2], [1, 2, 3], [0.3, 0.4], [1, 2], [\"foo\"]"),
@@ -2314,10 +2314,10 @@ mod inspect {
             app "test" provides [main] to "./platform"
 
             main = [
-                Inspect.toStr "",
-                Inspect.toStr "a small string",
-                Inspect.toStr "an extraordinarily long string - so long it's on the heap!",
-            ] |> Str.joinWith ", "
+                Inspect.to_str "",
+                Inspect.to_str "a small string",
+                Inspect.to_str "an extraordinarily long string - so long it's on the heap!",
+            ] |> Str.join_with ", "
             "#
             ),
             RocStr::from(
@@ -2337,7 +2337,7 @@ mod inspect {
 
             Op := {}
 
-            main = Inspect.toStr (@Op {})
+            main = Inspect.to_str (@Op {})
             "#
             ),
             RocStr::from(r"<opaque>"),
@@ -2355,7 +2355,7 @@ mod inspect {
 
             Op := {}
 
-            late = \a -> Inspect.toStr a
+            late = \a -> Inspect.to_str a
 
             main = late (@Op {})
             "#

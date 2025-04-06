@@ -1,11 +1,11 @@
 use crate::{
     collection::{fmt_collection, Braces},
-    expr::merge_spaces_conservative,
+    expr::{expr_lift_spaces, expr_lift_spaces_after, expr_prec, merge_spaces_conservative},
     node::{
         parens_around_node, DelimitedItem, Item, Node, NodeInfo, NodeSequenceBuilder, Nodify, Prec,
         Sp,
     },
-    pattern::{pattern_lift_spaces_after, snakify_camel_ident},
+    pattern::snakify_camel_ident,
     spaces::{fmt_comments_only, fmt_spaces, NewlineAt, INDENT},
     Buf, MigrationFlags,
 };
@@ -13,7 +13,6 @@ use bumpalo::{
     collections::{String, Vec},
     Bump,
 };
-use roc_parse::{ast::Spaced, ident::UppercaseIdent};
 use roc_parse::{
     ast::{
         AbilityImpls, AssignedField, Collection, CommentOrNewline, Expr, ExtractSpaces,
@@ -21,6 +20,10 @@ use roc_parse::{
         SpacesAfter, SpacesBefore, Tag, TypeAnnotation, TypeHeader,
     },
     expr::merge_spaces,
+};
+use roc_parse::{
+    ast::{Spaced, TypeVar},
+    ident::UppercaseIdent,
 };
 use roc_region::all::Loc;
 
@@ -56,6 +59,7 @@ pub enum Parens {
     InAsPattern,
     InApplyLastArg,
     InClosurePattern,
+    InPncApplyFunc,
 }
 
 /// In an AST node, do we show newlines around it
@@ -965,7 +969,7 @@ pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
 ) -> SpacesAfter<'a, TypeHeader<'a>> {
     let new_vars = arena.alloc_slice_copy(header.vars);
     let after = if let Some(last) = new_vars.last_mut() {
-        let lifted = pattern_lift_spaces_after(arena, &last.value);
+        let lifted = type_var_lift_spaces_after(arena, last.value);
         last.value = lifted.item;
         lifted.after
     } else {
@@ -977,6 +981,135 @@ pub fn type_head_lift_spaces_after<'a, 'b: 'a>(
             vars: new_vars,
         },
         after,
+    }
+}
+
+fn type_var_lift_spaces_after<'a, 'b: 'a>(
+    arena: &'a Bump,
+    var: TypeVar<'b>,
+) -> SpacesAfter<'a, TypeVar<'a>> {
+    match var {
+        item @ TypeVar::Identifier(_) => SpacesAfter { item, after: &[] },
+        TypeVar::Malformed(expr) => {
+            let lifted = expr_lift_spaces_after(Parens::NotNeeded, arena, expr);
+            SpacesAfter {
+                item: TypeVar::Malformed(arena.alloc(lifted.item)),
+                after: lifted.after,
+            }
+        }
+        TypeVar::SpaceBefore(inner, spaces) => {
+            let lifted = type_var_lift_spaces_after(arena, *inner);
+            SpacesAfter {
+                item: TypeVar::SpaceBefore(arena.alloc(lifted.item), spaces),
+                after: lifted.after,
+            }
+        }
+        TypeVar::SpaceAfter(inner, spaces) => {
+            let mut lifted = type_var_lift_spaces_after(arena, *inner);
+            lifted.after = merge_spaces_conservative(arena, lifted.after, spaces);
+            lifted
+        }
+    }
+}
+
+impl<'a> Formattable for TypeHeader<'a> {
+    fn is_multiline(&self) -> bool {
+        self.vars.iter().any(|v| v.is_multiline())
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let node = self.to_node(buf.text.bump(), buf.flags());
+        node.format(buf, indent);
+    }
+}
+
+impl<'a> Formattable for TypeVar<'a> {
+    fn is_multiline(&self) -> bool {
+        match self {
+            TypeVar::Identifier(_) => false,
+            TypeVar::Malformed(expr) => expr.is_multiline(),
+            TypeVar::SpaceBefore(inner, spaces) | TypeVar::SpaceAfter(inner, spaces) => {
+                inner.is_multiline() || !spaces.is_empty()
+            }
+        }
+    }
+
+    fn format_with_options(
+        &self,
+        buf: &mut Buf,
+        _parens: Parens,
+        _newlines: Newlines,
+        indent: u16,
+    ) {
+        let node = self.to_node(buf.text.bump(), buf.flags());
+        node.format(buf, indent);
+    }
+}
+
+impl<'a> Nodify<'a> for TypeHeader<'a> {
+    fn to_node<'b>(&'a self, arena: &'b Bump, flags: MigrationFlags) -> NodeInfo<'b>
+    where
+        'a: 'b,
+    {
+        NodeInfo::apply(
+            arena,
+            NodeInfo::item(Node::Literal(self.name.value)),
+            self.vars.iter().map(|v| v.value.to_node(arena, flags)),
+        )
+    }
+}
+
+impl<'a> Nodify<'a> for TypeVar<'a> {
+    fn to_node<'b>(&'a self, arena: &'b Bump, flags: MigrationFlags) -> NodeInfo<'b>
+    where
+        'a: 'b,
+    {
+        match self {
+            TypeVar::SpaceBefore(inner, spaces) => {
+                let mut inner = inner.to_node(arena, flags);
+                inner.before = merge_spaces_conservative(arena, spaces, inner.before);
+                inner
+            }
+            TypeVar::SpaceAfter(inner, spaces) => {
+                let mut inner = inner.to_node(arena, flags);
+                inner.after = merge_spaces_conservative(arena, inner.after, spaces);
+                inner
+            }
+            TypeVar::Identifier(text) => {
+                let var_name = if flags.snakify {
+                    let mut buf = Buf::new_in(arena, flags);
+                    buf.indent(0); // Take out of beginning of line
+                    snakify_camel_ident(&mut buf, text);
+                    let s: &str = arena.alloc_str(buf.as_str());
+                    s
+                } else {
+                    text
+                };
+                let item = NodeInfo::item(Node::Literal(var_name));
+
+                if *text == "implements" {
+                    parens_around_node(arena, item, false)
+                } else {
+                    item
+                }
+            }
+            TypeVar::Malformed(expr) => {
+                let lifted = expr_lift_spaces(Parens::InApply, arena, expr);
+                NodeInfo {
+                    before: lifted.before,
+                    node: Node::Expr(lifted.item),
+                    after: lifted.after,
+                    needs_indent: true,
+                    prec: expr_prec(**expr),
+                }
+            }
+        }
     }
 }
 
@@ -1073,7 +1206,6 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     before: first_node.before,
                     node: Node::CommaSequence {
                         allow_blank_lines: false,
-                        allow_newlines: true,
                         indent_rest: false,
                         first: arena.alloc(first_node.node),
                         rest: rest_nodes.into_bump_slice(),
@@ -1180,11 +1312,12 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                     .to_node(arena, flags)
                     .add_parens(arena, Parens::NotNeeded);
 
-                let mut needs_indent = annot.needs_indent || !annot.after.is_empty();
+                let before = filter_newlines(arena, annot.after);
+                let mut needs_indent = annot.needs_indent || !before.is_empty();
 
                 items.push(Item {
                     comma_before: false,
-                    before: annot.after,
+                    before,
                     newline: false,
                     space: true,
                     node: Node::Literal(roc_parse::keyword::WHERE),
@@ -1194,7 +1327,8 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
 
                 for (i, clause) in implements_clauses.iter().enumerate() {
                     let node = clause.value.to_node(arena, flags);
-                    let before = merge_spaces_conservative(arena, last_after, node.before);
+                    let before =
+                        filter_newlines(arena, merge_spaces(arena, last_after, node.before));
                     last_after = node.after;
                     items.push(Item {
                         before,
@@ -1213,8 +1347,7 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                         first: arena.alloc(annot.node),
                         rest: arena.alloc_slice_copy(&items),
                         allow_blank_lines: false,
-                        allow_newlines: false,
-                        indent_rest: false,
+                        indent_rest: true,
                     },
                     after: last_after,
                     needs_indent,
@@ -1222,6 +1355,24 @@ impl<'a> Nodify<'a> for TypeAnnotation<'a> {
                 }
             }
         }
+    }
+}
+
+fn filter_newlines<'a, 'b: 'a>(
+    arena: &'a Bump,
+    items: &'b [CommentOrNewline<'b>],
+) -> &'a [CommentOrNewline<'a>] {
+    let count = items.iter().filter(|i| i.is_newline()).count();
+    if count > 0 {
+        let mut new_items = Vec::with_capacity_in(items.len() - count, arena);
+        for item in items {
+            if !item.is_newline() {
+                new_items.push(*item);
+            }
+        }
+        arena.alloc_slice_copy(&new_items)
+    } else {
+        items
     }
 }
 
@@ -1318,7 +1469,6 @@ impl<'a> Nodify<'a> for ImplementsClause<'a> {
                 first: arena.alloc(var.node),
                 rest: arena.alloc_slice_copy(&items),
                 allow_blank_lines: false,
-                allow_newlines: true,
                 indent_rest: false,
             },
             after: last_after,

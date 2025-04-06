@@ -1,5 +1,7 @@
 [workspace]
 members = [
+    "crates/build/*",
+    "crates/check/*",
     "crates/compiler/*",
     "crates/vendor/*",
     "crates/fs",
@@ -83,10 +85,7 @@ clap = { version = "4.2.7", default-features = false, features = [
 ] }
 console_error_panic_hook = "0.1.7"
 const_format = { version = "0.2.30", features = ["const_generics"] }
-criterion = { git = "https://github.com/Anton-4/criterion.rs", features = [
-    "html_reports",
-], rev = "30ea0c5" }
-criterion-perf-events = { git = "https://github.com/Anton-4/criterion-perf-events", rev = "0f38c3e" }
+criterion = { version = "0.5.1", features = ["html_reports"]}
 crossbeam = "0.8.2"
 dircpy = "0.3.14"
 distance = "0.4.0"
@@ -173,6 +172,7 @@ roc_bitcode_bc = { path = "crates/compiler/builtins/bitcode/bc" }
 roc_build = { path = "crates/compiler/build" }
 roc_builtins = { path = "crates/compiler/builtins" }
 roc_can = { path = "crates/compiler/can" }
+roc_can_solo = { path = "crates/check/can_solo" }
 roc_checkmate = { path = "crates/compiler/checkmate" }
 roc_checkmate_schema = { path = "crates/compiler/checkmate_schema" }
 roc_cli = { path = "crates/cli" }
@@ -212,7 +212,7 @@ roc_serialize = { path = "crates/compiler/serialize" }
 roc_solve = { path = "crates/compiler/solve" }
 roc_solve_schema = { path = "crates/compiler/solve_schema" }
 roc_solve_problem = { path = "crates/compiler/solve_problem" }
-roc_specialize_types = { path = "crates/compiler/specialize_types" }
+roc_specialize_types = { path = "crates/build/specialize_types" }
 roc_std = { path = "crates/roc_std" }
 roc_target = { path = "crates/compiler/roc_target" }
 roc_test_utils = { path = "crates/test_utils" }

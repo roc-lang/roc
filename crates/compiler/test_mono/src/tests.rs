@@ -33,47 +33,47 @@ const TARGET: roc_target::Target = roc_target::Target::LinuxX64;
 pub const ERR_DECODER_FMT: &str = r#"
 ErrDecoder := {} implements [
         DecoderFormatting {
-            u8: decodeU8,
-            u16: decodeU16,
-            u32: decodeU32,
-            u64: decodeU64,
-            u128: decodeU128,
-            i8: decodeI8,
-            i16: decodeI16,
-            i32: decodeI32,
-            i64: decodeI64,
-            i128: decodeI128,
-            f32: decodeF32,
-            f64: decodeF64,
-            dec: decodeDec,
-            bool: decodeBool,
-            string: decodeString,
-            list: decodeList,
-            record: decodeRecord,
-            tuple: decodeTuple,
+            u8: decode_u8,
+            u16: decode_u16,
+            u32: decode_u32,
+            u64: decode_u64,
+            u128: decode_u128,
+            i8: decode_i8,
+            i16: decode_i16,
+            i32: decode_i32,
+            i64: decode_i64,
+            i128: decode_i128,
+            f32: decode_f32,
+            f64: decode_f64,
+            dec: decode_dec,
+            bool: decode_bool,
+            string: decode_string,
+            list: decode_list,
+            record: decode_record,
+            tuple: decode_tuple,
         },
     ]
-decodeU8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeU16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeU32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeU64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeU128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeI8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeI16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeI32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeI64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeI128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeF32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeF64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeDec = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeBool = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeString = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeList : Decoder elem ErrDecoder -> Decoder (List elem) ErrDecoder
-decodeList = \_ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeRecord : state, (state, Str -> [Keep (Decoder state ErrDecoder), Skip]), (state, ErrDecoder -> Result val DecodeError) -> Decoder val ErrDecoder
-decodeRecord = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
-decodeTuple : state, (state, U64 -> [Next (Decoder state ErrDecoder), TooLong]), (state -> Result val DecodeError) -> Decoder val ErrDecoder
-decodeTuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_u128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_i8 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_i16 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_i32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_i64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_i128 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_f32 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_f64 = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_dec = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_bool = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_string = Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_list : Decoder elem ErrDecoder -> Decoder (List elem) ErrDecoder
+decode_list = \_ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_record : state, (state, Str -> [Keep (Decoder state ErrDecoder), Skip]), (state, ErrDecoder -> Result val DecodeError) -> Decoder val ErrDecoder
+decode_record = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
+decode_tuple : state, (state, U64 -> [Next (Decoder state ErrDecoder), TooLong]), (state -> Result val DecodeError) -> Decoder val ErrDecoder
+decode_tuple = \_, _, _ -> Decode.custom \rest, @ErrDecoder {} -> { result: Err TooShort, rest }
 "#;
 
 /// Without this, some tests pass in `cargo test --release` but fail without
@@ -367,7 +367,7 @@ fn ir_round() {
 #[mono_test]
 fn ir_when_idiv() {
     r"
-    when Num.divTruncChecked 1000 10 is
+    when Num.div_trunc_checked 1000 10 is
         Ok val -> val
         Err _ -> -1
     "
@@ -458,9 +458,9 @@ fn dict() {
 #[mono_test]
 fn list_append_closure() {
     r"
-    myFunction = \l -> List.append l 42
+    my_function = \l -> List.append l 42
 
-    myFunction [1, 2]
+    my_function [1, 2]
     "
 }
 
@@ -687,18 +687,18 @@ fn opaque_as_pattern_in_closure_arg() {
 fn quicksort_help() {
     // do we still need with_larger_debug_stack?
     r"
-    quicksortHelp : List (Num a), I64, I64 -> List (Num a)
-    quicksortHelp = \list, low, high ->
+    quicksort_help : List (Num a), I64, I64 -> List (Num a)
+    quicksort_help = \list, low, high ->
         if low < high then
-            (Pair partitionIndex partitioned) = Pair 0 []
+            (Pair partition_index partitioned) = Pair 0 []
 
             partitioned
-            |> quicksortHelp low (partitionIndex - 1)
-            |> quicksortHelp (partitionIndex + 1) high
+            |> quicksort_help low (partition_index - 1)
+            |> quicksort_help (partition_index + 1) high
         else
             list
 
-    quicksortHelp [] 0 0
+    quicksort_help [] 0 0
     "
 }
 
@@ -710,10 +710,10 @@ fn quicksort_swap() {
 
         swap = \list ->
             when Pair (List.get list 0) (List.get list 0) is
-                Pair (Ok atI) (Ok atJ) ->
+                Pair (Ok at_i) (Ok at_j) ->
                     list
-                    |> List.set 0 atJ
-                    |> List.set 0 atI
+                    |> List.set 0 at_j
+                    |> List.set 0 at_i
 
                 _ ->
                     []
@@ -731,15 +731,15 @@ fn quicksort_swap() {
 //         r#"
 //         app "test" provides [main] to "./platform"
 
-//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
-//         partitionHelp = \i, j, list, high, pivot ->
+//         partition_help : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
+//         partition_help = \i, j, list, high, pivot ->
 //             if j < high then
 //                 when List.get list j is
 //                     Ok value ->
 //                         if value <= pivot then
-//                             partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+//                             partition_help (i + 1) (j + 1) (swap (i + 1) j list) high pivot
 //                         else
-//                             partitionHelp i (j + 1) list high pivot
+//                             partition_help i (j + 1) list high pivot
 
 //                     Err _ ->
 //                         Pair i list
@@ -747,7 +747,7 @@ fn quicksort_swap() {
 //                 Pair i list
 
 //         main =
-//             partitionHelp 0 0 [] 0 0
+//             partition_help 0 0 [] 0 0
 //         "#
 //     )
 // }
@@ -759,57 +759,57 @@ fn quicksort_swap() {
 //         r#"
 //         app "test" provides [main] to "./platform"
 
-//         quicksortHelp : List (Num a), I64, I64 -> List (Num a)
-//         quicksortHelp = \list, low, high ->
+//         quicksort_help : List (Num a), I64, I64 -> List (Num a)
+//         quicksort_help = \list, low, high ->
 //             if low < high then
-//                 (Pair partitionIndex partitioned) = partition low high list
+//                 (Pair partition_index partitioned) = partition low high list
 
 //                 partitioned
-//                     |> quicksortHelp low (partitionIndex - 1)
-//                     |> quicksortHelp (partitionIndex + 1) high
+//                     |> quicksort_help low (partition_index - 1)
+//                     |> quicksort_help (partition_index + 1) high
 //             else
 //                 list
 
 //         swap : I64, I64, List a -> List a
 //         swap = \i, j, list ->
 //             when Pair (List.get list i) (List.get list j) is
-//                 Pair (Ok atI) (Ok atJ) ->
+//                 Pair (Ok at_i) (Ok at_j) ->
 //                     list
-//                         |> List.set i atJ
-//                         |> List.set j atI
+//                         |> List.set i at_j
+//                         |> List.set j at_i
 
 //                 _ ->
 //                     []
 
 //         partition : I64, I64, List (Num a) -> [Pair I64 (List (Num a))]
-//         partition = \low, high, initialList ->
-//             when List.get initialList high is
+//         partition = \low, high, initial_list ->
+//             when List.get initial_list high is
 //                 Ok pivot ->
-//                     when partitionHelp (low - 1) low initialList high pivot is
-//                         Pair newI newList ->
-//                             Pair (newI + 1) (swap (newI + 1) high newList)
+//                     when partition_help (low - 1) low initial_list high pivot is
+//                         Pair new_i newList ->
+//                             Pair (new_i + 1) (swap (new_i + 1) high newList)
 
 //                 Err _ ->
-//                     Pair (low - 1) initialList
+//                     Pair (low - 1) initial_list
 
-//         partitionHelp : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
-//         partitionHelp = \i, j, list, high, pivot ->
+//         partition_help : I64, I64, List (Num a), I64, (Num a) -> [Pair I64 (List (Num a))]
+//         partition_help = \i, j, list, high, pivot ->
 //             if j < high then
 //                 when List.get list j is
 //                     Ok value ->
 //                         if value <= pivot then
-//                             partitionHelp (i + 1) (j + 1) (swap (i + 1) j list) high pivot
+//                             partition_help (i + 1) (j + 1) (swap (i + 1) j list) high pivot
 //                         else
-//                             partitionHelp i (j + 1) list high pivot
+//                             partition_help i (j + 1) list high pivot
 
 //                     Err _ ->
 //                         Pair i list
 //             else
 //                 Pair i list
 
-//         quicksort = \originalList ->
-//             n = List.len originalList
-//             quicksortHelp originalList 0 (n - 1)
+//         quicksort = \original_list ->
+//             n = List.len original_list
+//             quicksort_help original_list 0 (n - 1)
 
 //         main =
 //             quicksort [1,2,3]
@@ -837,13 +837,13 @@ fn is_nil() {
     r"
     ConsList a : [Cons a (ConsList a), Nil]
 
-    isNil : ConsList a -> Bool
-    isNil = \list ->
+    is_nil : ConsList a -> Bool
+    is_nil = \list ->
         when list is
             Nil -> Bool.true
             Cons _ _ -> Bool.false
 
-    isNil (Cons 0x2 Nil)
+    is_nil (Cons 0x2 Nil)
     "
 }
 
@@ -854,14 +854,14 @@ fn has_none() {
     Maybe a : [Just a, Nothing]
     ConsList a : [Cons a (ConsList a), Nil]
 
-    hasNone : ConsList (Maybe a) -> Bool
-    hasNone = \list ->
+    has_none : ConsList (Maybe a) -> Bool
+    has_none = \list ->
         when list is
             Nil -> Bool.false
             Cons Nothing _ -> Bool.true
-            Cons (Just _) xs -> hasNone xs
+            Cons (Just _) xs -> has_none xs
 
-    hasNone (Cons (Just 3) Nil)
+    has_none (Cons (Just 3) Nil)
     "
 }
 
@@ -871,10 +871,10 @@ fn mk_pair_of() {
         r#"
         app "test" provides [main] to "./platform"
 
-        mkPairOf = \x -> Pair x x
+        mk_pair_of = \x -> Pair x x
 
         main =
-            mkPairOf [1,2,3]
+            mk_pair_of [1,2,3]
         "#
     )
 }
@@ -1052,12 +1052,12 @@ fn rigids() {
         swap : U64, U64, List a -> List a
         swap = \i, j, list ->
             when Pair (List.get list i) (List.get list j) is
-                Pair (Ok atI) (Ok atJ) ->
-                    foo = atJ
+                Pair (Ok at_i) (Ok at_j) ->
+                    foo = at_j
 
                     list
                         |> List.set i foo
-                        |> List.set j atI
+                        |> List.set j at_i
 
                 _ ->
                     []
@@ -1236,17 +1236,17 @@ fn empty_list_of_function_type() {
          app "test" provides [main] to "./platform"
 
          main =
-            myList : List (Str -> Str)
-            myList = []
+            my_list : List (Str -> Str)
+            my_list = []
 
-            myClosure : Str -> Str
-            myClosure = \_ -> "bar"
+            my_closure : Str -> Str
+            my_closure = \_ -> "bar"
 
             choose =
                 if Bool.false then
-                    myList
+                    my_list
                 else
-                    [myClosure]
+                    [my_closure]
 
             when List.get choose 0 is
                 Ok f -> f "foo"
@@ -1417,8 +1417,8 @@ fn issue_2725_alias_polymorphic_lambda() {
     indoc!(
         r"
         wrap = \value -> Tag value
-        wrapIt = wrap
-        wrapIt 42
+        wrap_it = wrap
+        wrap_it 42
         "
     )
 }
@@ -1427,7 +1427,7 @@ fn issue_2725_alias_polymorphic_lambda() {
 fn issue_2583_specialize_errors_behind_unified_branches() {
     indoc!(
         r#"
-        if Bool.true then List.first [] else Str.toI64 ""
+        if Bool.true then List.first [] else Str.to_i64 ""
         "#
     )
 }
@@ -1487,11 +1487,11 @@ fn opaque_assign_to_symbol() {
 
         Variable := U8
 
-        fromUtf8 : U8 -> Result Variable [InvalidVariableUtf8]
-        fromUtf8 = \char ->
+        from_utf8 : U8 -> Result Variable [InvalidVariableUtf8]
+        from_utf8 = \char ->
             Ok (@Variable char)
 
-        out = fromUtf8 98
+        out = from_utf8 98
         "#
     )
 }
@@ -1500,12 +1500,12 @@ fn opaque_assign_to_symbol() {
 fn encode() {
     indoc!(
         r#"
-        app "test" provides [myU8Bytes] to "./platform"
+        app "test" provides [my_u8_bytes] to "./platform"
 
         MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
         MEncoding implements
-          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
+          to_encoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
         Format implements
           u8 : U8 -> MEncoder fmt where fmt implements Format
@@ -1515,13 +1515,13 @@ fn encode() {
 
         u8 = \n -> @MEncoder (\lst, @Linear {} -> List.append lst n)
 
-        MyU8 := U8 implements [MEncoding {toEncoder}]
+        MyU8 := U8 implements [MEncoding {to_encoder}]
 
-        toEncoder = \@MyU8 n -> u8 n
+        to_encoder = \@MyU8 n -> u8 n
 
-        myU8Bytes =
-            when toEncoder (@MyU8 15) is
-                @MEncoder doEncode -> doEncode [] (@Linear {})
+        my_u8_bytes =
+            when to_encoder (@MyU8 15) is
+                @MEncoder do_encode -> do_encode [] (@Linear {})
         "#
     )
 }
@@ -1587,7 +1587,7 @@ fn list_sort_asc() {
         r#"
         app "test" provides [out] to "./platform"
 
-        out = List.sortAsc [4, 3, 2, 1]
+        out = List.sort_asc [4, 3, 2, 1]
         "#
     )
 }
@@ -1598,19 +1598,19 @@ fn encode_custom_type() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         HelloWorld := {{}}
-        toEncoder = \@HelloWorld {{}} ->
+        to_encoder = \@HelloWorld {{}} ->
             Encode.custom \bytes, fmt ->
                 bytes
-                    |> Encode.appendWith (Encode.string "Hello, World!\n") fmt
+                    |> Encode.append_with (Encode.string "Hello, World!\n") fmt
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes (@HelloWorld {{}}) tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes (@HelloWorld {{}}) tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1623,13 +1623,13 @@ fn encode_derived_string() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes "abc" tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes "abc" tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1643,13 +1643,13 @@ fn encode_derived_record() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {{a: "a"}} tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes {{a: "a"}} tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -1666,21 +1666,21 @@ fn choose_correct_recursion_var_under_record() {
             Record (List {parser: Parser}),
         ]
 
-        printCombinatorParser : Parser -> Str
-        printCombinatorParser = \parser ->
+        print_combinator_parser : Parser -> Str
+        print_combinator_parser = \parser ->
             when parser is
                 Specialize p ->
-                    printed = printCombinatorParser p
+                    printed = print_combinator_parser p
                     if Bool.false then printed else "foo"
                 Record fields ->
                     fields
                         |> List.map \f ->
-                            printed = printCombinatorParser f.parser
+                            printed = print_combinator_parser f.parser
                             if Bool.false then printed else "foo"
                         |> List.first
                         |> Result.withDefault ("foo")
 
-        printCombinatorParser (Record [])
+        print_combinator_parser (Record [])
         "#
     )
 }
@@ -1703,9 +1703,9 @@ fn tail_call_elimination() {
 fn tail_call_with_same_layout_different_lambda_sets() {
     indoc!(
         r#"
-        chain = \in, buildLazy ->
+        chain = \in, build_lazy ->
             \{} ->
-                thunk = buildLazy in
+                thunk = build_lazy in
                 thunk {}
 
         chain 1u8 \_ -> chain 1u8 \_ -> (\{} -> "")
@@ -1717,9 +1717,9 @@ fn tail_call_with_same_layout_different_lambda_sets() {
 fn tail_call_with_different_layout() {
     indoc!(
         r#"
-        chain = \in, buildLazy ->
+        chain = \in, build_lazy ->
             \{} ->
-                thunk = buildLazy in
+                thunk = build_lazy in
                 thunk {}
 
         chain 1u8 \_ -> chain 1u16 \_ -> (\{} -> "")
@@ -1734,7 +1734,7 @@ fn lambda_capture_niche_u8_vs_u64() {
         capture : _ -> ({} -> Str)
         capture = \val ->
             \{} ->
-                Num.toStr val
+                Num.to_str val
 
         x : [True, False]
         x = True
@@ -1759,7 +1759,7 @@ fn lambda_capture_niches_with_other_lambda_capture() {
                 when val is
                     _ -> ""
 
-        capture2 = \val -> \{} -> "$(val)"
+        capture2 = \val -> \{} -> "${val}"
 
         x : [A, B, C]
         x = A
@@ -1987,13 +1987,13 @@ fn encode_derived_record_one_field_string() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {{a: "foo"}} tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes {{a: "foo"}} tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2006,13 +2006,13 @@ fn encode_derived_record_two_field_strings() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {{a: "foo", b: "bar"}} tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes {{a: "foo", b: "bar"}} tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2025,13 +2025,13 @@ fn encode_derived_nested_record_string() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
         main =
-            result = Str.fromUtf8 (Encode.toBytes {{a: {{b: "bar"}}}} tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes {{a: {{b: "bar"}}}} tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2044,7 +2044,7 @@ fn encode_derived_tag_one_field_string() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
@@ -2052,7 +2052,7 @@ fn encode_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
-            result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes x tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2070,12 +2070,12 @@ fn polymorphic_expression_unification() {
             Text Str,
             Indent (List RenderTree),
         ]
-        parseFunction : Str -> RenderTree
-        parseFunction = \name ->
-            last = Indent [Text ".trace(\"$(name)\")" ]
+        parse_function : Str -> RenderTree
+        parse_function = \name ->
+            last = Indent [Text ".trace(\"${name}\")" ]
             Indent [last]
 
-        values = parseFunction "interface_header"
+        values = parse_function "interface_header"
 
         main = values == Text ""
         "#
@@ -2087,7 +2087,7 @@ fn encode_derived_tag_two_payloads_string() {
     &formatdoc!(
         r#"
         app "test"
-            imports [Encode.{{ toEncoder }}]
+            imports [Encode.{{ to_encoder }}]
             provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
@@ -2095,7 +2095,7 @@ fn encode_derived_tag_two_payloads_string() {
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            result = Str.fromUtf8 (Encode.toBytes x tagLenFmt)
+            result = Str.from_utf8 (Encode.to_bytes x tag_len_fmt)
             when result is
                 Ok s -> s
                 _ -> "<bad>"
@@ -2176,7 +2176,7 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
         r#"
         app "test" provides [main] to "./platform"
 
-        provideThunk = \x ->
+        provide_thunk = \x ->
             when x is
                 Ok _ ->
                     t1 = \{} -> "t1"
@@ -2201,7 +2201,7 @@ fn unreachable_branch_is_eliminated_but_produces_lambda_specializations() {
             x : Result Str []
             x = Ok "abc"
 
-            thunk = provideThunk x
+            thunk = provide_thunk x
 
             thunk {}
         "#
@@ -2234,15 +2234,15 @@ fn recursive_function_and_union_with_inference_hole() {
             Element (List (Html state)),
         ]
 
-        translateStatic : Html _ -> Html _
-        translateStatic = \node ->
+        translate_static : Html _ -> Html _
+        translate_static = \node ->
             when node is
                 Element children ->
-                    newChildren = List.map children translateStatic
+                    new_children = List.map children translate_static
 
-                    Element newChildren
+                    Element new_children
 
-        main = when translateStatic (Element []) is
+        main = when translate_static (Element []) is
             _ -> ""
         "#
     )
@@ -2254,14 +2254,14 @@ fn crash() {
         r#"
         app "test" provides [main] to "./platform"
 
-        getInfallible = \result -> when result is
+        get_infallible = \result -> when result is
             Ok x -> x
             _ -> crash "turns out this was fallible"
 
         main =
             x : [Ok U64, Err Str]
             x = Ok 78
-            getInfallible x
+            get_infallible x
         "#
     )
 }
@@ -2415,16 +2415,16 @@ fn anonymous_closure_in_polymorphic_expression_issue_4717() {
         r#"
         app "test" provides [main] to "platform"
 
-        chompWhile : (List U8) -> (List U8)
-        chompWhile = \input ->
-                index = List.walkUntil input 0 \i, _ -> Break i
+        chomp_while : (List U8) -> (List U8)
+        chomp_while = \input ->
+                index = List.walk_until input 0 \i, _ -> Break i
 
                 if index == 0 then
                     input
                 else
-                    List.dropFirst input index
+                    List.drop_first input index
 
-        main = chompWhile [1u8, 2u8, 3u8]
+        main = chomp_while [1u8, 2u8, 3u8]
         "#
     )
 }
@@ -2459,10 +2459,10 @@ fn issue_4557() {
         r#"
         app "test" provides [main] to "./platform"
 
-        isEqQ = \q1, q2 -> when T q1 q2 is
-            T (U f1) (U f2) -> Bool.or (isEqQ (U f2) (U f1)) (f1 {} == f2 {})
+        is_eq_q = \q1, q2 -> when T q1 q2 is
+            T (U f1) (U f2) -> (is_eq_q (U f2) (U f1)) or (f1 {} == f2 {})
 
-        main = isEqQ (U \{} -> "a") (U \{} -> "a")
+        main = is_eq_q (U \{} -> "a") (U \{} -> "a")
         "#
     )
 }
@@ -2479,14 +2479,14 @@ fn nullable_wrapped_with_nullable_not_last_index() {
             CharLiteral,
         ]
 
-        toIdParser : Parser -> Str
-        toIdParser = \parser ->
+        to_id_parser : Parser -> Str
+        to_id_parser = \parser ->
             when parser is
                 OneOrMore _ -> "a"
                 Keyword _ -> "b"
                 CharLiteral -> "c"
 
-        main = toIdParser CharLiteral == "c"
+        main = to_id_parser CharLiteral == "c"
         "#
     )
 }
@@ -2544,11 +2544,11 @@ fn function_specialization_information_in_lambda_set_thunk() {
         r#"
         app "test" provides [main] to "./platform"
 
-        andThen = \{} ->
+        and_then = \{} ->
             x = 10
-            \newFn -> Num.add (newFn {}) x
+            \new_fn -> Num.add (new_fn {}) x
 
-        between = andThen {}
+        between = and_then {}
 
         main = between \{} -> between \{} -> 10
         "#
@@ -2563,13 +2563,13 @@ fn function_specialization_information_in_lambda_set_thunk_independent_defs() {
         r#"
         app "test" provides [main] to "./platform"
 
-        andThen = \{} ->
+        and_then = \{} ->
             x = 10u8
-            \newFn -> Num.add (newFn {}) x
+            \new_fn -> Num.add (new_fn {}) x
 
-        between1 = andThen {}
+        between1 = and_then {}
 
-        between2 = andThen {}
+        between2 = and_then {}
 
         main = between1 \{} -> between2 \{} -> 10u8
         "#
@@ -2584,12 +2584,12 @@ fn issue_4772_weakened_monomorphic_destructure() {
 
         {ERR_DECODER_FMT}
 
-        getNumber =
-            {{ result, rest }} = Decode.fromBytesPartial (Str.toUtf8 "-1234") (@ErrDecoder {{}})
+        get_number =
+            {{ result, rest }} = Decode.from_bytes_partial (Str.to_utf8 "-1234") (@ErrDecoder {{}})
 
             when result is
                 Ok val ->
-                    when Str.toI64 val is
+                    when Str.to_i64 val is
                         Ok number ->
                             Ok {{val : number, input : rest}}
                         Err InvalidNumStr ->
@@ -2599,7 +2599,7 @@ fn issue_4772_weakened_monomorphic_destructure() {
                     Err (ParsingFailure "not a number")
 
         expect
-            result = getNumber
+            result = get_number
             result == Ok {{val : -1234i64, input : []}}
         "#
     )
@@ -2616,12 +2616,12 @@ fn weakening_avoids_overspecialization() {
 
         main : (List U8) -> (List U8)
         main = \input ->
-            index = List.walkUntil input 0 \i, _ -> Break i
+            index = List.walk_until input 0 \i, _ -> Break i
 
             if index == 0 then
                 input
             else
-                List.dropFirst input index
+                List.drop_first input index
         "#
     )
 }
@@ -2636,20 +2636,20 @@ fn recursively_build_effect() {
             hi = "Hello"
             name = "World"
 
-            "$(hi), $(name)!"
+            "${hi}, ${name}!"
 
         main =
-            when nestHelp 4 is
+            when nest_help 4 is
                 _ -> greeting
 
-        nestHelp : I64 -> XEffect {}
-        nestHelp = \m ->
+        nest_help : I64 -> XEffect {}
+        nest_help = \m ->
             when m is
                 0 ->
                     always {}
 
                 _ ->
-                    always {} |> after \_ -> nestHelp (m - 1)
+                    always {} |> after \_ -> nest_help (m - 1)
 
 
         XEffect a := {} -> a
@@ -2675,9 +2675,9 @@ fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
 
         Effect : {} -> Str
 
-        after = \buildNext ->
-            afterInner = \{} -> (buildNext "foobar") {}
-            afterInner
+        after = \build_next ->
+            after_inner = \{} -> (build_next "foobar") {}
+            after_inner
 
         await : (Str -> Effect) -> Effect
         await = \cont -> after (\result -> cont result)
@@ -2691,28 +2691,28 @@ fn recursive_lambda_set_has_nested_non_recursive_lambda_sets_issue_5026() {
 fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unification() {
     // This is a regression test for the ambient lambda set specialization algorithm.
     //
-    // In the program below, monomorphization of `toEncoderQ` with the `Q` in `main` induces the
+    // In the program below, monomorphization of `to_encoder_q` with the `Q` in `main` induces the
     // resolution of `t.a` and `t.b`, and the unification of their pending unspecialization lambda
     // sets, when `t.a` and `t.b` have been resolved to concrete types, but before the
     // specialization procedure steps in to resolve the lambda sets concretely. That's because
-    // monomorphization unifies the general type of `toEncoderQ` with the concrete type, forcing
+    // monomorphization unifies the general type of `to_encoder_q` with the concrete type, forcing
     // concretization of `t`, but the specialization procedure runs only after the unification is
     // complete.
     //
-    // In this case, it's imperative that the unspecialized lambda sets of `toEncoder t.a` and
-    // `toEncoder t.b` wind up in the same lambda set, that is in
+    // In this case, it's imperative that the unspecialized lambda sets of `to_encoder t.a` and
+    // `to_encoder t.b` wind up in the same lambda set, that is in
     //
-    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder+1] -> Bytes)
     //       -[lTag]->
-    //       @MEncoder (Bytes, Linear -[[Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder:1] -> Bytes) }]] -> Bytes)
+    //       @MEncoder (Bytes, Linear -[[Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder:1] -> Bytes) }]] -> Bytes)
     //
     // rather than forcing the lambda set inside to `tag` to become disjoint, as e.g.
     //
-    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1 + @MStr:toEncoder+1] -> Bytes)
+    // tag : @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1 + @MStr:to_encoder+1] -> Bytes)
     //       -[lTag]->
     //       @MEncoder (Bytes, Linear -[[
-    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:toEncoder:1] -> Bytes) },
-    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:toEncoder:1] -> Bytes) },
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MU8:to_encoder:1] -> Bytes) },
+    //                      Linear:lTag:3 { @MEncoder (Bytes, Linear -[[] + @MStr:to_encoder:1] -> Bytes) },
     //                  ]] -> Bytes)
     indoc!(
         r#"
@@ -2721,7 +2721,7 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
         MEncoder fmt := List U8, fmt -> List U8 where fmt implements Format
 
         MEncoding implements
-          toEncoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
+          to_encoder : val -> MEncoder fmt where val implements MEncoding, fmt implements Format
 
         Format implements
           u8 : {} -> MEncoder fmt where fmt implements Format
@@ -2730,8 +2730,8 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
 
         Linear := {} implements [Format {u8: lU8, str: lStr, tag: lTag}]
 
-        MU8 := U8 implements [MEncoding {toEncoder: toEncoderU8}]
-        MStr := Str implements [MEncoding {toEncoder: toEncoderStr}]
+        MU8 := U8 implements [MEncoding {to_encoder: to_encoder_u8}]
+        MStr := Str implements [MEncoding {to_encoder: to_encoder_str}]
 
         Q a b := { a: a, b: b }
 
@@ -2742,20 +2742,20 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
             doFormat lst (@Linear {})
         )
 
-        toEncoderU8 = \@MU8 _ -> u8 {}
+        to_encoder_u8 = \@MU8 _ -> u8 {}
 
-        toEncoderStr = \@MStr _ -> str {}
+        to_encoder_str = \@MStr _ -> str {}
 
-        toEncoderQ =
+        to_encoder_q =
             \@Q t -> \fmt ->
                 @MEncoder doit = if Bool.true
-                    then tag (toEncoder t.a)
-                    else tag (toEncoder t.b)
+                    then tag (to_encoder t.a)
+                    else tag (to_encoder t.b)
 
                 doit [] fmt
 
         main =
-            fmt = toEncoderQ (@Q {a : @MStr "", b: @MU8 7})
+            fmt = to_encoder_q (@Q {a : @MStr "", b: @MU8 7})
             fmt (@Linear {})
         "#
     )
@@ -2773,30 +2773,30 @@ fn unspecialized_lambda_set_unification_keeps_all_concrete_types_without_unifica
     // `EncoderFormatting`).
     //
     // In this test, the payload types `[A]*` and `[B]*` of the encoded type `Q` are unifiable in
-    // their unspecialized lambda set representations under `toEncoderQ`; however, they must not
+    // their unspecialized lambda set representations under `to_encoder_q`; however, they must not
     // be, because they in fact represent to different specializations of needed encoders. In
-    // particular, the lambda set `[[] + [A]:toEncoder:1 + [B]:toEncoder:1]` must be preserved,
-    // rather than collapsing to `[[] + [A, B]:toEncoder:1]`.
+    // particular, the lambda set `[[] + [A]:to_encoder:1 + [B]:to_encoder:1]` must be preserved,
+    // rather than collapsing to `[[] + [A, B]:to_encoder:1]`.
     &formatdoc!(
         r#"
         app "test" imports [] provides [main] to "./platform"
 
         {TAG_LEN_ENCODER_FMT}
 
-        Q a b := {{ a: a, b: b }} implements [Encoding {{toEncoder: toEncoderQ}}]
+        Q a b := {{ a: a, b: b }} implements [Encoding {{to_encoder: to_encoder_q}}]
 
-        toEncoderQ =
+        to_encoder_q =
             \@Q t -> Encode.custom \bytes, fmt ->
                 f = if Bool.true
-                    then Encode.tag "A" [Encode.toEncoder t.a]
-                    else Encode.tag "B" [Encode.toEncoder t.b]
+                    then Encode.tag "A" [Encode.to_encoder t.a]
+                    else Encode.tag "B" [Encode.to_encoder t.b]
 
-                Encode.appendWith bytes f fmt
+                Encode.append_with bytes f fmt
 
         accessor = @Q {{a : A, b: B}}
 
         main =
-            Encode.toBytes accessor tagLenFmt
+            Encode.to_bytes accessor tag_len_fmt
         "#
     )
 }
@@ -2812,10 +2812,10 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
     // `EncoderFormatting`).
     //
     // In this test, the payload types `Str` and `Str` of the encoded type `Q` are unifiable in
-    // their unspecialized lambda set representations under `toEncoderQ`, and moreoever they are
+    // their unspecialized lambda set representations under `to_encoder_q`, and moreoever they are
     // equivalent specializations, since they both come from the same root variable `x`. In as
-    // such, the lambda set `[[] + Str:toEncoder:1]` should be produced during compaction, rather
-    // than staying as the expanded `[[] + Str:toEncoder:1 + Str:toEncoder:1]` after the types of
+    // such, the lambda set `[[] + Str:to_encoder:1]` should be produced during compaction, rather
+    // than staying as the expanded `[[] + Str:to_encoder:1 + Str:to_encoder:1]` after the types of
     // `t.a` and `t.b` are filled in.
     &formatdoc!(
         r#"
@@ -2823,22 +2823,22 @@ fn unspecialized_lambda_set_unification_does_not_duplicate_identical_concrete_ty
 
         {TAG_LEN_ENCODER_FMT}
 
-        Q a b := {{ a: a, b: b }} implements [Encoding {{toEncoder: toEncoderQ}}]
+        Q a b := {{ a: a, b: b }} implements [Encoding {{to_encoder: to_encoder_q}}]
 
-        toEncoderQ =
+        to_encoder_q =
             \@Q t -> Encode.custom \bytes, fmt ->
                 f = if Bool.true
-                    then Encode.tag "A" [Encode.toEncoder t.a]
-                    else Encode.tag "B" [Encode.toEncoder t.b]
+                    then Encode.tag "A" [Encode.to_encoder t.a]
+                    else Encode.tag "B" [Encode.to_encoder t.b]
 
-                Encode.appendWith bytes f fmt
+                Encode.append_with bytes f fmt
 
         accessor =
             x = ""
             @Q {{a : x, b: x}}
 
         main =
-            Encode.toBytes accessor tagLenFmt
+            Encode.to_bytes accessor tag_len_fmt
         "#
     )
 }
@@ -2894,14 +2894,14 @@ fn recursive_closure_with_transiently_used_capture() {
         r#"
         app "test" provides [f] to "./platform"
 
-        thenDo = \x, callback ->
+        then_do = \x, callback ->
             callback x
 
         f = \{} ->
             code = 10u16
 
             bf = \{} ->
-                thenDo code \_ -> bf {}
+                then_do code \_ -> bf {}
 
             bf {}
         "#
@@ -2932,14 +2932,14 @@ fn recursive_lambda_set_resolved_only_upon_specialization() {
         r#"
         app "test" provides [main] to "./platform"
 
-        factCPS = \n, cont ->
+        fact_cps = \n, cont ->
             if n == 0u8 then
                 cont 1u8
             else
-                factCPS (n - 1) \value -> cont (n * value)
+                fact_cps (n - 1) \value -> cont (n * value)
 
         main =
-            factCPS 5 \x -> x
+            fact_cps 5 \x -> x
         "#
     )
 }
@@ -2956,12 +2956,12 @@ fn compose_recursive_lambda_set_productive_nullable_wrapped() {
             else \x -> f (g x)
 
          identity = \x -> x
-         exclame = \s -> "$(s)!"
-         whisper = \s -> "($(s))"
+         exclaim = \s -> "${s}!"
+         whisper = \s -> "(${s})"
 
          main =
              res: Str -> Str
-             res = List.walk [ exclame, whisper ] identity (compose Bool.true)
+             res = List.walk [ exclaim, whisper ] identity (compose Bool.true)
              res "hello"
          "#
     )
@@ -3018,19 +3018,19 @@ fn issue_4770() {
         app "test" provides [main] to "./platform"
 
         main =
-            isCorrectOrder { left: IsList [IsInteger 10], right: IsList [IsInteger 20] }
+            is_correct_order { left: IsList [IsInteger 10], right: IsList [IsInteger 20] }
 
-        isCorrectOrder = \pair ->
+        is_correct_order = \pair ->
             when pair is
                 { left: IsInteger left, right: IsInteger right } -> left < right
                 { left: IsList l, right: IsList r } ->
-                    if List.map2 l r (\left, right -> { left, right }) |> List.all isCorrectOrder then
+                    if List.map2 l r (\left, right -> { left, right }) |> List.all is_correct_order then
                         List.len l < List.len r
                     else
                         Bool.false
 
-                { left: IsList _, right: IsInteger _ } -> isCorrectOrder { left: pair.left, right: IsList [pair.right] }
-                { left: IsInteger _, right: IsList _ } -> isCorrectOrder { left: IsList [pair.left], right: pair.right }
+                { left: IsList _, right: IsInteger _ } -> is_correct_order { left: pair.left, right: IsList [pair.right] }
+                { left: IsInteger _, right: IsList _ } -> is_correct_order { left: IsList [pair.left], right: pair.right }
         "#
     )
 }
@@ -3054,7 +3054,7 @@ fn binary_tree_fbip() {
 
         main =
             tree = Node (Node (Node (Node Tip Tip) Tip) (Node Tip Tip)) (Node Tip Tip)
-            checkFbip tree
+            check_fbip tree
 
         Tree : [Node Tree Tree, Tip]
 
@@ -3065,14 +3065,14 @@ fn binary_tree_fbip() {
 
         Visit : [NodeR Tree Visit, Done]
 
-        checkFbip : Tree -> Num a
-        checkFbip = \t -> checkFbipHelper t Done 0
+        check_fbip : Tree -> Num a
+        check_fbip = \t -> check_fbip_helper t Done 0
 
-        checkFbipHelper : Tree, Visit, Num a-> Num a
-        checkFbipHelper = \t, v, a -> when t is
-            Node l r -> checkFbipHelper l (NodeR r v) (a + 1)
+        check_fbip_helper : Tree, Visit, Num a-> Num a
+        check_fbip_helper = \t, v, a -> when t is
+            Node l r -> check_fbip_helper l (NodeR r v) (a + 1)
             Tip -> when v is
-                NodeR r v2 -> checkFbipHelper r v2 a
+                NodeR r v2 -> check_fbip_helper r v2 a
                 Done -> a
         "#
     )
@@ -3140,32 +3140,32 @@ fn specialize_after_match() {
         app "test" provides [main] to "./platform"
 
         main =
-            listA : LinkedList Str
-            listA = Nil
+            list_a : LinkedList Str
+            list_a = Nil
 
-            listB : LinkedList Str
-            listB = Nil
+            list_b : LinkedList Str
+            list_b = Nil
 
-            longestLinkedList listA listB
+            longest_linked_list list_a list_b
 
         LinkedList a : [Cons a (LinkedList a), Nil]
 
-        longestLinkedList : LinkedList a, LinkedList a -> U64
-        longestLinkedList = \listA, listB -> when listA is
-            Nil -> linkedListLength listB
-            Cons a aa -> when listB is
-                Nil -> linkedListLength listA
+        longest_linked_list : LinkedList a, LinkedList a -> U64
+        longest_linked_list = \list_a, list_b -> when list_a is
+            Nil -> linked_list_length list_b
+            Cons a aa -> when list_b is
+                Nil -> linked_list_length list_a
                 Cons b bb ->
-                    lengthA = (linkedListLength aa) + 1
-                    lengthB = linkedListLength listB
-                    if lengthA > lengthB
-                        then lengthA
-                        else lengthB
+                    length_a = (linked_list_length aa) + 1
+                    length_b = linked_list_length list_b
+                    if length_a > length_b
+                        then length_a
+                        else length_b
 
-        linkedListLength : LinkedList a -> U64
-        linkedListLength = \list -> when list is
+        linked_list_length : LinkedList a -> U64
+        linked_list_length = \list -> when list is
             Nil -> 0
-            Cons _ rest -> 1 + linkedListLength rest
+            Cons _ rest -> 1 + linked_list_length rest
         "#
     )
 }
@@ -3209,9 +3209,9 @@ fn drop_specialize_after_jump() {
         main =
             v = "value"
             t = { left: { left: v, right: v }, right: v }
-            tupleItem t
+            tuple_item t
 
-        tupleItem = \t ->
+        tuple_item = \t ->
             true = Bool.true
             l = t.left
             x = if true then 1 else 0
@@ -3245,9 +3245,9 @@ fn drop_specialize_before_jump() {
         main =
             v = "value"
             t = { left: v, right: v }
-            tupleItem t
+            tuple_item t
 
-        tupleItem = \t ->
+        tuple_item = \t ->
             true = Bool.true
             l = t.left
             x = if true then 1 else 0
@@ -3291,7 +3291,7 @@ fn dbg_nested_expr() {
 fn dbg_inside_string() {
     indoc!(
         r#"
-        "Hello $(dbg "world")!"
+        "Hello ${dbg "world"}!"
         "#
     )
 }
@@ -3317,13 +3317,13 @@ fn linked_list_reverse() {
         LinkedList a : [Nil, Cons a (LinkedList a)]
 
         reverse : LinkedList a -> LinkedList a
-        reverse = \list -> reverseHelp Nil list
+        reverse = \list -> reverse_help Nil list
 
-        reverseHelp : LinkedList a, LinkedList a -> LinkedList a
-        reverseHelp = \accum, list ->
+        reverse_help : LinkedList a, LinkedList a -> LinkedList a
+        reverse_help = \accum, list ->
             when list is
                 Nil -> accum
-                Cons first rest -> reverseHelp (Cons first accum) rest
+                Cons first rest -> reverse_help (Cons first accum) rest
 
         main : LinkedList I64
         main = reverse (Cons 42 Nil)
@@ -3390,32 +3390,32 @@ fn capture_void_layout_task() {
         succeed = \ok -> \{} -> Ok ok
 
         after : Fx a, (a -> Fx b) -> Fx b
-        after = \fx, toNext ->
-            afterInner = \{} ->
-                fxOut = fx {}
-                next = toNext fxOut
+        after = \fx, to_next ->
+            after_inner = \{} ->
+                fx_out = fx {}
+                next = to_next fx_out
                 next {}
 
-            afterInner
+            after_inner
 
         await : OtherTask a err, (a -> OtherTask b err) -> OtherTask b err
-        await = \fx, toNext ->
+        await = \fx, to_next ->
             inner = after fx \result ->
                 when result is
                     Ok a ->
-                        bFx = toNext a
-                        bFx
+                        b_fx = to_next a
+                        b_fx
                     Err e -> (\{} -> Err e)
             inner
 
-        forEach : List a, (a -> OtherTask {} err) -> OtherTask {} err
-        forEach = \list, fromElem ->
+        for_each : List a, (a -> OtherTask {} err) -> OtherTask {} err
+        for_each = \list, from_elem ->
             List.walk list (succeed {}) \task, elem ->
-                await task \{} -> fromElem elem
+                await task \{} -> from_elem elem
 
         main : OtherTask {} []
         main =
-            forEach [] \_ -> succeed {}
+            for_each [] \_ -> succeed {}
         "#
     )
 }
@@ -3450,10 +3450,10 @@ fn inspect_custom_type() {
             imports []
             provides [main] to "./platform"
 
-        HelloWorld := {} implements [Inspect { toInspector: myToInspector }]
+        HelloWorld := {} implements [Inspect { to_inspector: my_to_inspector }]
 
-        myToInspector : HelloWorld -> Inspector f where f implements InspectFormatter
-        myToInspector = \@HellowWorld {} ->
+        my_to_inspector : HelloWorld -> Inspector f where f implements InspectFormatter
+        my_to_inspector = \@HellowWorld {} ->
             Inspect.custom \fmt ->
                 Inspect.apply (Inspect.str "Hello, World!\n") fmt
 
@@ -3471,7 +3471,7 @@ fn inspect_derived_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr "abc"
+        main = Inspect.to_str "abc"
         "#
     )
 }
@@ -3484,7 +3484,7 @@ fn inspect_derived_record() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr {a: 7, b: 3dec}
+        main = Inspect.to_str {a: 7, b: 3dec}
         "#
     )
 }
@@ -3496,7 +3496,7 @@ fn inspect_derived_record_one_field_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr {a: "foo"}
+        main = Inspect.to_str {a: "foo"}
         "#
     )
 }
@@ -3509,7 +3509,7 @@ fn inspect_derived_record_two_field_strings() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr {a: "foo", b: "bar"}
+        main = Inspect.to_str {a: "foo", b: "bar"}
         "#
     )
 }
@@ -3522,7 +3522,7 @@ fn inspect_derived_nested_record_string() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr {a: {b: "bar"}}
+        main = Inspect.to_str {a: {b: "bar"}}
         "#
     )
 }
@@ -3538,7 +3538,7 @@ fn inspect_derived_tag_one_field_string() {
         main =
             x : [A Str]
             x = A "foo"
-            Inspect.toStr x
+            Inspect.to_str x
         "#
     )
 }
@@ -3554,7 +3554,7 @@ fn inspect_derived_tag_two_payloads_string() {
         main =
             x : [A Str Str]
             x = A "foo" "foo"
-            Inspect.toStr x
+            Inspect.to_str x
         "#
     )
 }
@@ -3567,7 +3567,7 @@ fn inspect_derived_list() {
             imports []
             provides [main] to "./platform"
 
-        main = Inspect.toStr [1, 2, 3]
+        main = Inspect.to_str [1, 2, 3]
         "#
     )
 }
@@ -3581,8 +3581,8 @@ fn inspect_derived_dict() {
             provides [main] to "./platform"
 
         main =
-            Dict.fromList [("a", 1), ("b", 2)]
-            |> Inspect.toStr
+            Dict.from_list [("a", 1), ("b", 2)]
+            |> Inspect.to_str
         "#
     )
 }
@@ -3678,21 +3678,21 @@ fn issue_6606_2() {
 fn dec_refcount_for_usage_after_early_return_in_if() {
     indoc!(
         r#"
-        displayN = \n ->
-            first = Num.toStr n
+        display_n = \n ->
+            first = Num.to_str n
             second =
                 if n == 1 then
                     return "early 1"
                 else
-                    third = Num.toStr (n + 1)
+                    third = Num.to_str (n + 1)
                     if n == 2 then
                         return "early 2"
                     else
                         third
 
-            "$(first), $(second)"
+            "${first}, ${second}"
 
-        displayN 3
+        display_n 3
         "#
     )
 }
@@ -3701,13 +3701,13 @@ fn dec_refcount_for_usage_after_early_return_in_if() {
 fn return_annotated() {
     indoc!(
         r#"
-        validateInput : Str -> Result U64 _
-        validateInput = \str ->
-            num = try Str.toU64 str
+        validate_input : Str -> Result U64 _
+        validate_input = \str ->
+            num = try Str.to_u64 str
 
             Ok num
 
-        validateInput "123"
+        validate_input "123"
         "#
     )
 }

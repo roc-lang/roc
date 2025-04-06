@@ -671,6 +671,10 @@ fn specialize_drops_stmt<'a, 'i>(
                 // Meaning we can pass the incremented_symbols from the remainder to the body.
                 (Some(jump_info), None) if !jump_info.is_empty() => {
                     // Update body with incremented symbols from remainder
+                    let mut body_environment = environment.clone();
+                    for param in parameters.iter() {
+                        body_environment.add_symbol_layout(param.symbol, param.layout);
+                    }
                     body_environment.incremented_symbols = jump_info.clone();
 
                     let newer_body = specialize_drops_stmt(
@@ -1549,6 +1553,9 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         ListPrepend => RC::Rc,
         StrJoinWith => RC::NoRc,
         ListSortWith => RC::Rc,
+        StrWithAsciiLowercased => RC::Rc,
+        StrWithAsciiUppercased => RC::Rc,
+        StrCaselessAsciiEquals => RC::NoRc,
 
         ListAppendUnsafe
         | ListReserve
@@ -1562,7 +1569,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
 
         Eq | NotEq => RC::NoRc,
 
-        And | Or | NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
+        NumAdd | NumAddWrap | NumAddChecked | NumAddSaturated | NumSub | NumSubWrap
         | NumSubChecked | NumSubSaturated | NumMul | NumMulWrap | NumMulSaturated
         | NumMulChecked | NumGt | NumGte | NumLt | NumLte | NumCompare | NumDivFrac
         | NumDivTruncUnchecked | NumDivCeilUnchecked | NumRemUnchecked | NumIsMultipleOf
@@ -1603,6 +1610,7 @@ fn low_level_no_rc(lowlevel: &LowLevel) -> RC {
         DictPseudoSeed => RC::NoRc,
         StrStartsWith | StrEndsWith => RC::NoRc,
         StrFromUtf8 => RC::Rc,
+        StrFromUtf8Lossy => RC::Rc,
         StrToUtf8 => RC::Rc,
         StrRepeat => RC::NoRc,
         StrFromInt | StrFromFloat => RC::NoRc,

@@ -31,10 +31,11 @@ Note that the addresses shown in objdump may use a different offset compared to 
 1. [Download here](https://hex-rays.com/ida-free/)
 2. Build your roc app with the legacy linker if it does not error only with the surgical linker: `roc build myApp.roc --linker=legacy`
 3. Open the produced executable with IDA free, don't change any of the suggested settings.
-4. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
-5. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
-6. Run the debugger by pressing F9
-7. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
+4. If IDA ever asks for the path for roc_app, just click cancel.
+5. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
+6. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
+7. Run the debugger by pressing F9
+8. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
 
 
 #### gdb
@@ -89,11 +90,12 @@ It can be valuable if you want to compare two compiler versions/commits and see 
 ### Getting started with uftrace
 
 1. [Install uftrace](https://github.com/namhyung/uftrace?tab=readme-ov-file#how-to-build-and-install-uftrace)
-2. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel
-3. `export RUSTFLAGS="-Awarnings -Z instrument-mcount -C passes=ee-instrument<post-inline>"`
-4. `cargo build --bin roc`
-5. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build yourFile.roc`
-6. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
+1. In the roc repo in rust-toolchain.toml, switch to the commented out nightly channel
+1. `export RUSTFLAGS="-Awarnings -Z instrument-mcount -C passes=ee-instrument<post-inline>"`
+1. set the [threads variable](https://github.com/roc-lang/roc/blob/690e690bb7c9333825157f54fc471a8a15b92aae/crates/compiler/load_internal/src/file.rs#L1555) to `Threads::Single`.
+1. `cargo build --bin roc`
+1. Example usage: `uftrace record --filter 'roc_*' ./target/debug/roc build yourFile.roc`
+1. Show the trace and drop all functions that do not start with `roc`: `uftrace replay -f none --notrace '^[^r]|^r[^o]|^ro[^c]' -D 5`. `-D 5` sets the function call depth, feel free to modify it to best suit your purpose.
 
 Depending on which functions you are interested in, you may also want to set `let threads = Threads::Single;` in the function `load` in `crates/compiler/load_internal/src/file.rs`. That avoids function calls from being obscured between multiple threads.
 

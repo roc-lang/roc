@@ -10,7 +10,6 @@
     <li><a href="#crashing">Crashing</a></li>
     <li><a href="#testing">Testing</a></li>
     <li><a href="#modules">Modules</a></li>
-    <li><a href="#tasks">Tasks</a></li>
     <li><a href="#advanced-concepts">Advanced Concepts</a></li>
     </ol>
 </nav>
@@ -25,9 +24,9 @@
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
-## [LLM Docs](#llm-docs) {#llm-docs}
+## [AI Docs](#ai-docs) {#ai-docs}
 
-We have experimental LLM-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite LLM to answer your questions about Roc!
+We have experimental AI-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite large language model to answer your questions about Roc!
 
 ## [REPL](#repl) {#repl}
 
@@ -96,40 +95,14 @@ Roc will respect [order of operations](https://en.wikipedia.org/wiki/Order_of_op
 
 Let's try calling a function:
 
-<pre><samp><span class="repl-prompt">Str.concat "Hi " "there."</span>
+<pre><samp><span class="repl-prompt">Str.concat("Hi ", "there.")</span>
 
 <span class="literal">"Hi there."</span> <span class="colon">:</span> Str
 </samp></pre>
 
 Here we're calling the `Str.concat` function and passing two arguments: the string `"Hi "` and the string `"there."`. This _concatenates_ the two strings together (that is, it puts one after the other) and returns the resulting combined string of `"Hi there."`.
 
-Note that in Roc, we don't need parentheses or commas to call functions. We don't write `Str.concat("Hi ", "there.")` but rather `Str.concat "Hi " "there."`.
-
-That said, just like in the arithmetic example above, we can use parentheses to specify how nested function calls should work. For example, we could write this:
-
-<pre><samp><span class="repl-prompt">Str.concat "Birds: " (Num.toStr 42)</span>
-
-<span class="literal">"Birds: 42"</span> <span class="colon">:</span> Str
-</samp></pre>
-
-This calls `Num.toStr` on the number `42`, which converts it into the string `"42"`, and then passes that string as the second argument to `Str.concat`.
-
-The parentheses are important here to specify how the function calls nest. Try removing them, and see what happens:
-
-<pre><samp><span class="repl-prompt">Str.concat "Birds: " Num.toStr 42</span>
-
-<span class="repl-err">&lt;error&gt;</span>
-</samp></pre>
-
-The error tells us that we've given `Str.concat` too many arguments. Indeed we have! We've passed it three arguments:
-
-1.  The string `"Birds"`
-2.  The function `Num.toStr`
-3.  The number `42`
-
-That's not what we intended to do. Putting parentheses around the `Num.toStr 42` call clarifies that we want it to be evaluated as its own expression, rather than being two arguments to `Str.concat`.
-
-Both the `Str.concat` function and the `Num.toStr` function have a dot in their names. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module. Similarly, `Num` is a module, and `toStr` is a function inside that module.
+The `Str.concat` function has a dot in its name. In `Str.concat`, `Str` is the name of a _module_, and `concat` is the name of a function inside that module.
 
 We'll get into more depth about modules later, but for now you can think of a module as a named collection of functions. Eventually we'll discuss how to use them for more than that.
 
@@ -137,17 +110,17 @@ We'll get into more depth about modules later, but for now you can think of a mo
 
 An alternative syntax for `Str.concat` is _string interpolation_, which looks like this:
 
-<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">$(</span><span class="str-interp">greeting</span><span class="str-esc">)</span> there, <span class="str-esc">$(</span><span class="str-interp">audience</span><span class="str-esc">)</span>."</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"<span class="str-esc">${</span><span class="str-interp">greeting</span><span class="str-esc">}</span> there, <span class="str-esc">${</span><span class="str-interp">audience</span><span class="str-esc">}</span>."</span></samp></pre>
 
 This is syntax sugar for calling `Str.concat` several times, like so:
 
 ```roc
-Str.concat greeting (Str.concat " there, " (Str.concat audience "."))
+Str.concat(greeting, Str.concat(" there, ", Str.concat(audience, ".")))
 ```
 
 You can put entire single-line expressions inside the parentheses in string interpolation. For example:
 
-<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">$(</span><span class="str-interp">Num.toStr (2 + 3)</span><span class="str-esc">)</span>"</span></samp></pre>
+<pre><samp class="repl-prompt"><span class="literal">"Two plus three is: <span class="str-esc">${</span><span class="str-interp">Num.to_str(2 + 3)</span><span class="str-esc">}</span>"</span></samp></pre>
 
 By the way, there are many other ways to put strings together! Check out the [documentation](https://www.roc-lang.org/builtins/Str) for the `Str` module for more.
 
@@ -158,17 +131,17 @@ Let's move out of the REPL and create our first Roc application!
 Make a file named `main.roc` and put this in it:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import pf.Stdout
 
-main =
-    Stdout.line! "Hi there, from inside a Roc app. 🎉"
+main! = |_args|
+    Stdout.line!("Hi there, from inside a Roc app. 🎉")
 ```
 
 Try running this with:
 
-<samp>roc dev</samp>
+<samp>roc main.roc</samp>
 
 You should see a message about a file being downloaded, followed by this:
 
@@ -185,27 +158,26 @@ birds = 3
 
 iguanas = 2
 
-total = Num.toStr (birds + iguanas)
+total = Num.to_str(birds + iguanas)
 
-main =
-    Stdout.line! "There are $(total) animals."
+main! = |_args|
+    Stdout.line!("There are ${total} animals.")
 ```
 
-Now run `roc dev` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
+Now run `roc main.roc` again. This time the "Downloading ..." message won't appear; the file has been cached from last time, and won't need to be downloaded again.
 
 You should see this:
 
 <samp>There are 5 animals.</samp>
 
-`main.roc` now has four definitions (_defs_ for short) `birds`, <span class="nowrap">`iguanas`,</span> `total`, and `main`.
+`main.roc` now has four definitions (_defs_ for short) `birds`, <span class="nowrap">`iguanas`,</span> `total`, and `main!`.
 
 A definition names an expression.
 
 - The first two defs assign the names `birds` and `iguanas` to the expressions `3` and `2`.
-- The next def assigns the name `total` to the expression `Num.toStr (birds + iguanas)`.
-- The last def assigns the name `main` to an expression which returns a `Task`. We'll [discuss tasks later](#tasks).
+- The next def assigns the name `total` to the expression `Num.to_str(birds + iguanas)`.
 
-Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line! "There are $(total) animals."` refers to `total`.
+Once we have a def, we can use its name in other expressions. For example, the `total` expression refers to `birds` and `iguanas`, and `Stdout.line!("There are ${total} animals.")` refers to `total`.
 
 You can name a def using any combination of letters and numbers, but they have to start with a lowercase letter.
 
@@ -218,44 +190,44 @@ birds = 2
 
 ### [Defining Functions](#defining-functions) {#defining-functions}
 
-So far we've called functions like `Num.toStr`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
+So far we've called functions like `Num.to_str`, `Str.concat`, and `Stdout.line`. Next let's try defining a function of our own.
 
 ```roc
 birds = 3
 
 iguanas = 2
 
-total = addAndStringify birds iguanas
+total = add_and_stringify(birds, iguanas)
 
-main =
-    Stdout.line! "There are $(total) animals."
+main! = |_args|
+    Stdout.line!("There are ${total} animals.")
 
-addAndStringify = \num1, num2 ->
-    Num.toStr (num1 + num2)
+add_and_stringify = |num1, num2|
+    Num.to_str(num1 + num2)
 ```
 
-This new `addAndStringify` function we've defined accepts two numbers, adds them, calls `Num.toStr` on the result, and returns that.
+This new `add_and_stringify` function we've defined accepts two numbers, adds them, calls `Num.to_str` on the result, and returns that.
 
-The `\num1, num2 ->` syntax defines a function's arguments, and the expression after the `->` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
+The `|num1, num2|` syntax defines a function's arguments, and the expression after the final `|` is the body of the function. Whenever a function gets called, its body expression gets evaluated and returned.
 
 ### [`if`-`then`-`else` expressions](#if-then-else) {#if-then-else}
 
 Let's modify this function to return an empty string if the numbers add to zero.
 
 ```roc
-addAndStringify = \num1, num2 ->
+add_and_stringify = |num1, num2|
     sum = num1 + num2
 
     if sum == 0 then
         ""
     else
-        Num.toStr sum
+        Num.to_str(sum)
 ```
 
 We did two things here:
 
-- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `addAndStringify`, it's _local_ to that scope and can't be accessed outside that function.
-- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.toStr sum` depending on whether `sum == 0`.
+- We introduced a _local def_ named `sum`, and set it equal to `num1 + num2`. Because we defined `sum` inside `add_and_stringify`, it's _local_ to that scope and can't be accessed outside that function.
+- We added an `if`\-`then`\-`else` conditional to return either `""` or `Num.to_str(sum)` depending on whether `sum == 0`.
 
 Every `if` must be accompanied by both `then` and also `else`. Having an `if` without an `else` is an error, because `if` is an expression, and all expressions must evaluate to a value. If there were ever an `if` without an `else`, that would be an expression that might not evaluate to a value!
 
@@ -264,7 +236,7 @@ Every `if` must be accompanied by both `then` and also `else`. Having an `if` wi
 We can combine `if` and `else` to get `else if`, like so:
 
 ```roc
-addAndStringify = \num1, num2 ->
+add_and_stringify = |num1, num2|
     sum = num1 + num2
 
     if sum == 0 then
@@ -272,13 +244,13 @@ addAndStringify = \num1, num2 ->
     else if sum < 0 then
         "negative"
     else
-        Num.toStr sum
+        Num.to_str(sum)
 ```
 
 Note that `else if` is not a separate language keyword! It's just an `if`/`else` where the `else` branch contains another `if`/`else`. This is easier to see with different indentation:
 
 ```roc
-addAndStringify = \num1, num2 ->
+add_and_stringify = |num1, num2|
     sum = num1 + num2
 
     if sum == 0 then
@@ -287,7 +259,7 @@ addAndStringify = \num1, num2 ->
         if sum < 0 then
             "negative"
         else
-            Num.toStr sum
+            Num.to_str(sum)
 ```
 
 This differently-indented version is equivalent to writing `else if sum < 0 then` on the same line, although the convention is to use the original version's style.
@@ -297,7 +269,7 @@ This differently-indented version is equivalent to writing `else if sum < 0 then
 This is a comment in Roc:
 
 ```roc
-# The 'name' field is unused by addAndStringify
+# The 'name' field is unused by add_and_stringify
 ```
 
 Whenever you write `#` it means that the rest of the line is a comment, and will not affect the
@@ -318,13 +290,13 @@ Like other comments, doc comments do not affect the running program.
 
 ### [Records](#records) {#records}
 
-Currently our `addAndStringify` function takes two arguments. We can instead make it take one argument like so:
+Currently our `add_and_stringify` function takes two arguments. We can instead make it take one argument like so:
 
 ```roc
-total = addAndStringify { birds: 5, iguanas: 7 }
+total = add_and_stringify({ birds: 5, iguanas: 7 })
 
-addAndStringify = \counts ->
-    Num.toStr (counts.birds + counts.iguanas)
+add_and_stringify = |counts|
+    Num.to_str(counts.birds + counts.iguanas)
 ```
 
 The function now takes a _record_, which is a group of named values. Records are not [objects](<https://en.wikipedia.org/wiki/Object_(computer_science)>); they don't have methods or inheritance, they just store information.
@@ -333,38 +305,38 @@ The expression `{ birds: 5, iguanas: 7 }` defines a record with two _fields_ (th
 
 When we write `counts.birds`, it accesses the `birds` field of the `counts` record, and when we write `counts.iguanas` it accesses the `iguanas` field.
 
-When we use [`==`](/builtins/Bool#isEq) on records, it compares all the fields in both records with [`==`](/builtins/Bool#isEq), and only considers the two records equal if all of their fields are equal. If one record has more fields than the other, or if the types associated with a given field are different between one field and the other, the Roc compiler will give an error at build time.
+When we use [`==`](/builtins/Bool#is_eq) on records, it compares all the fields in both records with [`==`](/builtins/Bool#is_eq), and only considers the two records equal if all of their fields are equal. If one record has more fields than the other, or if the types associated with a given field are different between one field and the other, the Roc compiler will give an error at build time.
 
 > **Note:** Some other languages have a concept of "identity equality" that's separate from the "structural equality" we just described. Roc does not have a concept of identity equality; this is the only way equality works!
 
 ### [Accepting extra fields](#accepting-extra-fields) {#accepting-extra-fields}
 
-The `addAndStringify` function will accept any record with at least the fields `birds` and `iguanas`, but it will also accept records with more fields. For example:
+The `add_and_stringify` function will accept any record with at least the fields `birds` and `iguanas`, but it will also accept records with more fields. For example:
 
 ```roc
-total = addAndStringify { birds: 5, iguanas: 7 }
+total = add_and_stringify({ birds: 5, iguanas: 7 })
 
-# The `note` field is unused by addAndStringify
-totalWithNote = addAndStringify { birds: 4, iguanas: 3, note: "Whee!" }
+# The `note` field is unused by add_and_stringify
+total_with_note = add_and_stringify({ birds: 4, iguanas: 3, note: "Whee!" })
 
-addAndStringify = \counts ->
-    Num.toStr (counts.birds + counts.iguanas)
+add_and_stringify = |counts|
+    Num.to_str(counts.birds + counts.iguanas)
 ```
 
-This works because `addAndStringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `addAndStringify`, then we would get an error because `total` is calling `addAndStringify` passing a record that doesn't have a `note` field.
+This works because `add_and_stringify` only uses `counts.birds` and `counts.iguanas`. If we were to use `counts.note` inside `add_and_stringify`, then we would get an error because `total` is calling `add_and_stringify` passing a record that doesn't have a `note` field.
 
 ### [Record shorthands](#record-shorthands) {#record-shorthands}
 
 Roc has a couple of shorthands you can use to express some record-related operations more concisely.
 
-Instead of writing `\record -> record.x` we can write `.x` and it will evaluate to the same thing: a function that takes a record and returns its `x` field. You can do this with any field you want. For example:
+Instead of writing `|record| record.x` we can write `.x` and it will evaluate to the same thing: a function that takes a record and returns its `x` field. You can do this with any field you want. For example:
 
 ```roc
-# returnFoo is a function that takes a record
+# return_foo is a function that takes a record
 # and returns the `foo` field of that record.
-returnFoo = .foo
+return_foo = .foo
 
-returnFoo { foo: "hi!", bar: "blah" }
+return_foo({ foo: "hi!", bar: "blah" })
 # returns "hi!"
 ```
 
@@ -381,15 +353,15 @@ In these cases, we shorten it to writing the name of the def alone—for example
 We can use _destructuring_ to avoid naming a record in a function argument, instead giving names to its individual fields:
 
 ```roc
-addAndStringify = \{ birds, iguanas } ->
-    Num.toStr (birds + iguanas)
+add_and_stringify = |{ birds, iguanas }|
+    Num.to_str(birds + iguanas)
 ```
 
 Here, we've _destructured_ the record to create a `birds` def that's assigned to its `birds` field, and an `iguanas` def that's assigned to its `iguanas` field. We can customize this if we like:
 
 ```roc
-addAndStringify = \{ birds, iguanas: lizards } ->
-    Num.toStr (birds + lizards)
+add_and_stringify = |{ birds, iguanas: lizards }|
+    Num.to_str(birds + lizards)
 ```
 
 In this version, we created a `lizards` def that's assigned to the record's `iguanas` field. (We could also do something similar with the `birds` field if we like.)
@@ -406,14 +378,14 @@ So far we've only constructed records from scratch, by specifying all of their f
 
 ```roc
 original = { birds: 5, zebras: 2, iguanas: 7, goats: 1 }
-fromScratch = { birds: 4, zebras: 2, iguanas: 3, goats: 1 }
-fromOriginal = { original & birds: 4, iguanas: 3 }
+from_scratch = { birds: 4, zebras: 2, iguanas: 3, goats: 1 }
+from_original = { original & birds: 4, iguanas: 3 }
 ```
 
-The `fromScratch` and `fromOriginal` records are equal, although they're defined in different ways.
+The `from_scratch` and `from_original` records are equal, although they're defined in different ways.
 
-- `fromScratch` was built using the same record syntax we've been using up to this point.
-- `fromOriginal` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
+- `from_scratch` was built using the same record syntax we've been using up to this point.
+- `from_original` created a new record using the contents of `original` as defaults for fields that it didn't specify after the `&`.
 
 Note that `&` can't introduce new fields to a record, or change the types of existing fields.
 (Trying to do either of these will result in an error at build time!)
@@ -423,7 +395,7 @@ Note that `&` can't introduce new fields to a record, or change the types of exi
 [Print debugging](https://en.wikipedia.org/wiki/Debugging#Techniques) is the most common debugging technique in the history of programming, and Roc has a `dbg` keyword to facilitate it. Here's an example of how to use `dbg`:
 
 ```roc
-pluralize = \singular, plural, count ->
+pluralize = |singular, plural, count|
     dbg count
 
     if count == 1 then
@@ -441,13 +413,13 @@ Here, `[pluralize.roc 6:8]` tells us that this `dbg` was written in the file `pl
 You can give `dbg` any expression you like, for example:
 
 ```roc
-dbg Str.concat singular plural
+dbg Str.concat(singular, plural)
 ```
 
 You can also use `dbg` as a function inside an expression, which will print the function argument to stderr and then return the argument to the caller. For example:
 
 ```roc
-inc = \n -> 1 + dbg n
+inc = |n| 1 + dbg n
 ```
 
 ### [Tuples](#tuples) {#tuples}
@@ -496,7 +468,7 @@ third = tuple.2 # ["list"]
 Sometimes we want to represent that something can have one of several values. For example:
 
 ```roc
-stoplightColor =
+stoplight_color =
     if something > 0 then
         Red
     else if something == 0 then
@@ -505,19 +477,19 @@ stoplightColor =
         Green
 ```
 
-Here, `stoplightColor` can have one of three values: `Red`, `Yellow`, or `Green`. The capitalization is very important! If these were lowercase (`red`, `yellow`, `green`), then they would refer to defs. However, because they are capitalized, they instead refer to _tags_.
+Here, `stoplight_color` can have one of three values: `Red`, `Yellow`, or `Green`. The capitalization is very important! If these were lowercase (`red`, `yellow`, `green`), then they would refer to defs. However, because they are capitalized, they instead refer to _tags_.
 
 ### [Tags](#tags) {#tags}
 
 A tag is a literal value just like a number or a string. Similarly to how I can write the number `42` or the string `"forty-two"` without defining them first, I can also write the tag `FortyTwo` without defining it first. Also, similarly to how `42 == 42` and `"forty-two" == "forty-two"`, it's also the case that `FortyTwo == FortyTwo`.
 
-Let's say we wanted to turn `stoplightColor` from a `Red`, `Green`, or `Yellow` into a string. Here's one way we could do that:
+Let's say we wanted to turn `stoplight_color` from a `Red`, `Green`, or `Yellow` into a string. Here's one way we could do that:
 
 ```roc
-stoplightStr =
-    if stoplightColor == Red then
+stoplight_str =
+    if stoplight_color == Red then
         "red"
-    else if stoplightColor == Green then
+    else if stoplight_color == Green then
         "green"
     else
         "yellow"
@@ -526,58 +498,58 @@ stoplightStr =
 We can express this logic more concisely using `when`/`is` instead of `if`/`then`:
 
 ```roc
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         Green -> "green"
         Yellow -> "yellow"
 ```
 
-This results in the same value for `stoplightStr`. In both the `when` version and the `if` version, we have three conditional branches, and each of them evaluates to a string. The difference is how the conditions are specified; here, we specify between `when` and `is` that we're making comparisons against `stoplightColor`, and then we specify the different things we're comparing it to: `Red`, `Green`, and `Yellow`.
+This results in the same value for `stoplight_str`. In both the `when` version and the `if` version, we have three conditional branches, and each of them evaluates to a string. The difference is how the conditions are specified; here, we specify between `when` and `is` that we're making comparisons against `stoplight_color`, and then we specify the different things we're comparing it to: `Red`, `Green`, and `Yellow`.
 
 Besides being more concise, there are other advantages to using `when` here.
 
 1.  We don't have to specify an `else` branch, so the code can be more self-documenting about exactly what all the options are.
-2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplightColor` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplightColor = if ...` definition.
+2.  We get more compiler help. If we try deleting any of these branches, we'll get a compile-time error saying that we forgot to cover a case that could come up. For example, if we delete the `Green ->` branch, the compiler will say that we didn't handle the possibility that `stoplight_color` could be `Green`. It knows this because `Green` is one of the possibilities in our `stoplight_color = if ...` definition.
 
 We can still have the equivalent of an `else` branch in our `when` if we like. Instead of writing `else`, we write `_ ->` like so:
 
 ```roc
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         _ -> "not red"
 ```
 
-This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case - for example, if we introduce the possibility of `stoplightColor` being `Orange`, the compiler can no longer tell us we forgot to handle that possibility in our `when`. After all, we are handling it - just maybe not in the way we'd decide to if the compiler had drawn our attention to it!
+This lets us more concisely handle multiple cases. However, it has the downside that if we add a new case - for example, if we introduce the possibility of `stoplight_color` being `Orange`, the compiler can no longer tell us we forgot to handle that possibility in our `when`. After all, we are handling it - just maybe not in the way we'd decide to if the compiler had drawn our attention to it!
 
 We can make this `when` _exhaustive_ (that is, covering all possibilities) without using `_ ->` by using `|` to specify multiple matching conditions for the same branch:
 
 ```roc
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         Green | Yellow -> "not red"
 ```
 
-You can read `Green | Yellow` as "either `Green` or `Yellow`". By writing it this way, if we introduce the possibility that `stoplightColor` can be `Orange`, we'll get a compiler error telling us we forgot to cover that case in this `when`, and then we can handle it however we think is best.
+You can read `Green | Yellow` as "either `Green` or `Yellow`". By writing it this way, if we introduce the possibility that `stoplight_color` can be `Orange`, we'll get a compiler error telling us we forgot to cover that case in this `when`, and then we can handle it however we think is best.
 
 We can also combine `if` and `when` to make branches more specific:
 
 ```roc
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         Green | Yellow if contrast > 75 -> "not red, but very high contrast"
         Green | Yellow if contrast > 50 -> "not red, but high contrast"
         Green | Yellow -> "not red"
 ```
 
-This will give the same answer for `stoplightStr` as if we had written the following:
+This will give the same answer for `stoplight_str` as if we had written the following:
 
 ```roc
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         Green | Yellow ->
             if contrast > 75 then
@@ -595,7 +567,7 @@ Either style can be a reasonable choice depending on the circumstances.
 Tags can have _payloads_—that is, values inside them. For example:
 
 ```roc
-stoplightColor =
+stoplight_color =
     if something > 100 then
         Red
     else if something > 0 then
@@ -603,25 +575,25 @@ stoplightColor =
     else if something == 0 then
         Green
     else
-        Custom "some other color"
+        Custom("some other color")
 
-stoplightStr =
-    when stoplightColor is
+stoplight_str =
+    when stoplight_color is
         Red -> "red"
         Green | Yellow -> "not red"
-        Custom description -> description
+        Custom(description) -> description
 ```
 
-This makes two changes to our earlier `stoplightColor` / `stoplightStr` example.
+This makes two changes to our earlier `stoplight_color` / `stoplight_str` example.
 
-1.  We sometimes chose to set `stoplightColor` to be `Custom "some other color"`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
+1.  We sometimes chose to set `stoplight_color` to be `Custom("some other color")`. When we did this, we gave the `Custom` tag a _payload_ of the string `"some other color"`.
 2.  We added a `Custom` tag in our `when`, with a payload which we named `description`. Because we did this, we were able to refer to `description` in the body of the branch (that is, the part after the `->`) just like a def or a function argument.
 
-Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom { r: 40, g: 60, b: 80 }` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom record ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom { r, g, b } ->` to _destructure_ the record, and then accessed these `r`, `g`, and `b` defs after the `->` instead.
+Any tag can be given a payload like this. A payload doesn't have to be a string; we could also have said (for example) `Custom({ r: 40, g: 60, b: 80 })` to specify an RGB color instead of a string. Then in our `when` we could have written `Custom(record) ->` and then after the `->` used `record.r`, `record.g`, and `record.b` to access the `40`, `60`, `80` values. We could also have written `Custom({ r, g, b }) ->` to _destructure_ the record, and then accessed these `r`, `g`, and `b` defs after the `->` instead.
 
-A tag can also have a payload with more than one value. Instead of `Custom { r: 40, g: 60, b: 80 }` we could write `Custom 40 60 80`. If we did that, then instead of destructuring a record with `Custom { r, g, b } ->` inside a `when`, we would write `Custom r g b ->` to destructure the values directly out of the payload.
+A tag can also have a payload with more than one value. Instead of `Custom({ r: 40, g: 60, b: 80 })` we could write `Custom(40, 60, 80)`. If we did that, then instead of destructuring a record with `Custom({ r, g, b }) ->` inside a `when`, we would write `Custom(r, g, b) ->` to destructure the values directly out of the payload.
 
-We refer to whatever comes before a `->` in a `when` expression as a _pattern_—so for example, in the `Custom description -> description` branch, `Custom description` would be a pattern. In programming, using patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to suggest making a `when` branch that begins with something like `Custom description ->`.
+We refer to whatever comes before a `->` in a `when` expression as a _pattern_—so for example, in the `Custom(description) -> description` branch, `Custom(description)` would be a pattern. In programming, using patterns in branching conditionals like `when` is known as [pattern matching](https://en.wikipedia.org/wiki/Pattern_matching). You may hear people say things like "let's pattern match on `Custom` here" as a way to suggest making a `when` branch that begins with something like `Custom(description) ->`.
 
 ### [Booleans](#booleans) {#booleans}
 
@@ -629,7 +601,7 @@ In many programming languages, `true` and `false` are special language keywords 
 
 This design is partly to keep the number of special keywords in the language smaller, but mainly to suggest how booleans are intended to be used in Roc: for [_boolean logic_](https://en.wikipedia.org/wiki/Boolean_algebra) (`&&`, `||`, and so on) as opposed to for data modeling. Tags are the preferred choice for data modeling, and having tag values be more concise than boolean values helps make this preference clear.
 
-As an example of why tags are encouraged for data modeling, in many languages it would be common to write a record like `{ name: "Richard", isAdmin: Bool.true }`, but in Roc it would be preferable to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` - some of which might also want payloads.
+As an example of why tags are encouraged for data modeling, in many languages it would be common to write a record like `{ name: "Richard", is_admin: Bool.true }`, but in Roc it would be preferable to write something like `{ name: "Richard", role: Admin }`. At first, the `role` field might only ever be set to `Admin` or `Normal`, but because the data has been modeled using tags instead of booleans, it's much easier to add other alternatives in the future, like `Guest` or `Moderator` - some of which might also want payloads.
 
 ### [Lists](#lists) {#lists}
 
@@ -642,7 +614,7 @@ names = ["Sam", "Lee", "Ari"]
 This is a list with three elements in it, all strings. We can add a fourth element using `List.append` like so:
 
 ```roc
-List.append names "Jess"
+List.append(names, "Jess")
 ```
 
 This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the original list at all. All values in Roc (including lists, but also records, strings, numbers, and so on) are immutable, meaning whenever we want to "change" them, we want to instead pass them to a function which returns some variation of what was passed in.
@@ -652,7 +624,7 @@ This returns a **new** list with `"Jess"` after `"Ari"`, and doesn't modify the 
 A common way to transform one list into another is to use `List.map`. Here's an example of how to use it:
 
 ```roc
-List.map [1, 2, 3] \num -> num * 2
+List.map([1, 2, 3], |num| num * 2)
 ```
 
 This returns `[2, 4, 6]`.
@@ -662,17 +634,17 @@ This returns `[2, 4, 6]`.
 1.  An input list
 2.  A function that will be called on each element of that list
 
-It then returns a list which it creates by calling the given function on each element in the input list. In this example, `List.map` calls the function `\num -> num * 2` on each element in `[1, 2, 3]` to get a new list of `[2, 4, 6]`.
+It then returns a list which it creates by calling the given function on each element in the input list. In this example, `List.map` calls the function `|num| num * 2` on each element in `[1, 2, 3]` to get a new list of `[2, 4, 6]`.
 
 We can also give `List.map` a named function, instead of an anonymous one:
 
 ```roc
-List.map [1, 2, 3] Num.isOdd
+List.map([1, 2, 3], Num.is_odd)
 ```
 
-This `Num.isOdd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.isOdd 5` returns `Bool.true` and `Num.isOdd 2` returns `Bool.false`.
+This `Num.is_odd` function returns `Bool.true` if it's given an odd number, and `Bool.false` otherwise. So `Num.is_odd(5)` returns `Bool.true` and `Num.is_odd(2)` returns `Bool.false`.
 
-As such, calling `List.map [1, 2, 3] Num.isOdd` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
+As such, calling `List.map([1, 2, 3], Num.is_odd)` returns a new list of `[Bool.true, Bool.false, Bool.true]`.
 
 ### [List element type compatibility](#list-element-type-compatibility) {#list-element-type-compatibility}
 
@@ -680,22 +652,22 @@ If we tried to give `List.map` a function that didn't work on the elements in th
 
 ```roc
 # working example
-List.map [-1, 2, 3, -4] Num.isNegative
+List.map([-1, 2, 3, -4], Num.is_negative)
 # returns [Bool.true, Bool.false, Bool.false, Bool.true]
 ```
 
 ```roc
 # invalid example
-List.map ["A", "B", "C"] Num.isNegative
-# error: isNegative doesn't work on strings!
+List.map(["A", "B", "C"], Num.is_negative)
+# error: is_negative doesn't work on strings!
 ```
 
-Because `Num.isNegative` works on numbers and not strings, calling `List.map` with `Num.isNegative` and a list of numbers works, but doing the same with a list of strings doesn't work.
+Because `Num.is_negative` works on numbers and not strings, calling `List.map` with `Num.is_negative` and a list of numbers works, but doing the same with a list of strings doesn't work.
 
 This wouldn't work either:
 
 ```roc
-List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
+List.map(["A", "B", "C", 1, 2, 3], Num.is_negative)
 ```
 
 Every element in a Roc list has to share the same type. For example, we can have a list of strings like `["Sam", "Lee", "Ari"]`, or a list of numbers like `[1, 2, 3, 4, 5]` but we can't have a list which mixes strings and numbers like `["Sam", 1, "Lee", 2, 3]`, that would be a compile-time error.
@@ -707,35 +679,36 @@ Ensuring that all elements in a list share a type eliminates entire categories o
 We can use tags with payloads to make a list that contains a mixture of different types. For example:
 
 ```roc
-List.map [StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3] \elem ->
+List.map([StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3], |elem|
     when elem is
-        NumElem num -> Num.isNegative num
-        StrElem str -> Str.startsWith str "A"
+        NumElem(num) -> Num.is_negative(num)
+        StrElem(str) -> Str.starts_with(str, "A")
+)
 # returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
 
 Compare this with the example from earlier, which caused a compile-time error:
 
 ```roc
-List.map ["A", "B", "C", 1, 2, 3] Num.isNegative
+List.map(["A", "B", "C", 1, 2, 3], Num.is_negative)
 ```
 
-The version that uses tags works because we aren't trying to call `Num.isNegative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.isNegative` or `Str.startsWith` depending on which type we have.
+The version that uses tags works because we aren't trying to call `Num.is_negative` on each element. Instead, we're using a `when` to tell when we've got a string or a number, and then calling either `Num.is_negative` or `Str.starts_with` depending on which type we have.
 
-We could take this as far as we like, adding more different tags (e.g. `BoolElem Bool.true`) and then adding more branches to the `when` to handle them appropriately.
+We could take this as far as we like, adding more different tags (e.g. `BoolElem(Bool.true)`) and then adding more branches to the `when` to handle them appropriately.
 
 ### [Using tags as functions](#using-tags-as-functions) {#using-tags-as-functions}
 
 Let's say I want to apply a tag to a bunch of elements in a list. For example:
 
 ```roc
-List.map ["a", "b", "c"] \str -> Foo str
+List.map(["a", "b", "c"], |str| Foo(str))
 ```
 
 This is a perfectly reasonable way to write it, but I can also write it like this:
 
 ```roc
-List.map ["a", "b", "c"] Foo
+List.map(["a", "b", "c"], Foo)
 ```
 
 These two versions compile to the same thing. As a convenience, Roc lets you specify a tag name where a function is expected; when you do this, the compiler infers that you want a function which uses all of its arguments as the payload to the given tag.
@@ -745,47 +718,47 @@ These two versions compile to the same thing. As a convenience, Roc lets you spe
 There are several functions that work like `List.map`, they walk through each element of a list and do something with it. Another is `List.any`, which returns `Bool.true` if calling the given function on any element in the list returns `Bool.true`:
 
 ```roc
-List.any [1, 2, 3] Num.isOdd
+List.any([1, 2, 3], Num.is_odd)
 # returns `Bool.true` because 1 and 3 are odd
 ```
 
 ```roc
-List.any [1, 2, 3] Num.isNegative
+List.any([1, 2, 3], Num.is_negative)
 # returns `Bool.false` because none of these is negative
 ```
 
 There's also `List.all` which only returns `Bool.true` if all the elements in the list pass the test:
 
 ```roc
-List.all [1, 2, 3] Num.isOdd
+List.all([1, 2, 3], Num.is_odd)
 # returns `Bool.false` because 2 is not odd
 ```
 
 ```roc
-List.all [1, 2, 3] Num.isPositive
+List.all([1, 2, 3], Num.is_positive)
 # returns `Bool.true` because all of these are positive
 ```
 
 ### [Removing elements from a list](#removing-elements-from-a-list) {#removing-elements-from-a-list}
 
-You can also drop elements from a list. One way is `List.dropAt` - for example:
+You can also drop elements from a list. One way is `List.drop_at` - for example:
 
 ```roc
-List.dropAt ["Sam", "Lee", "Ari"] 1
+List.drop_at(["Sam", "Lee", "Ari"], 1)
 # drops the element at offset 1 ("Lee") and returns ["Sam", "Ari"]
 ```
 
-Another way is to use `List.keepIf`, which passes each of the list's elements to the given function, and then keeps them only if that function returns `Bool.true`.
+Another way is to use `List.keep_if`, which passes each of the list's elements to the given function, and then keeps them only if that function returns `Bool.true`.
 
 ```roc
-List.keepIf [1, 2, 3, 4, 5] Num.isEven
+List.keep_if([1, 2, 3, 4, 5], Num.is_even)
 # returns [2, 4]
 ```
 
-There's also `List.dropIf`, which does the opposite:
+There's also `List.drop_if`, which does the opposite:
 
 ```roc
-List.dropIf [1, 2, 3, 4, 5] Num.isEven
+List.drop_if([1, 2, 3, 4, 5], Num.is_even)
 # returns [1, 3, 5]
 ```
 
@@ -796,58 +769,100 @@ Another thing we can do with a list is to get an individual element out of it. `
 For example, what do each of these return?
 
 ```roc
-List.get ["a", "b", "c"] 1
+List.get(["a", "b", "c"], 1)
 ```
 
 ```roc
-List.get ["a", "b", "c"] 100
+List.get(["a", "b", "c"], 100)
 ```
 
-The answer is that the first one returns `Ok "b"` and the second one returns `Err OutOfBounds`. They both return tags! This is done so that the caller becomes responsible for handling the possibility that the index is outside the bounds of that particular list.
+The answer is that the first one returns `Ok "b"` and the second one returns `Err(OutOfBounds)`. They both return tags! This is done so that the caller becomes responsible for handling the possibility that the index is outside the bounds of that particular list.
 
 Here's how calling `List.get` can look in practice:
 
 ```roc
-when List.get ["a", "b", "c"] index is
-    Ok str -> "I got this string: $(str)"
-    Err OutOfBounds -> "That index was out of bounds, sorry!"
+when List.get(["a", "b", "c"]) index is
+    Ok(str) -> "I got this string: ${str}"
+    Err(OutOfBounds) -> "That index was out of bounds, sorry!"
 ```
 
-There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err ListWasEmpty` instead of `Err OutOfBounds`, because the only way they can fail is if you pass them an empty list!
+There's also `List.first`, which always gets the first element, and `List.last` which always gets the last. They return `Err(ListWasEmpty)` instead of `Err(OutOfBounds)`, because the only way they can fail is if you pass them an empty list!
 
 ### [Error Handling](#error-handling) {#error-handling}
 
 The `List` functions such as `List.get`, `List.first`, and `List.last` demonstrate a common pattern in Roc: operations that can fail returning either an `Ok` tag with the answer (if successful), or an `Err` tag with another tag describing what went wrong (if unsuccessful). In fact, it's such a common pattern that there's a whole module called `Result` which deals with these two tags. Here are some examples of `Result` functions:
 
 ```roc
-Result.withDefault (List.get ["a", "b", "c"] 100) ""
+Result.with_default(List.get(["a", "b", "c"], 100), "")
 # returns "" because that's the default we said to use if List.get returned an Err
 ```
 
 ```roc
-Result.isOk (List.get ["a", "b", "c"] 1)
+Result.isOk(List.get(["a", "b", "c"], 1))
 # returns `Bool.true` because `List.get` returned an `Ok` tag. (The payload gets ignored.)
 
 # Note: There's a Result.isErr function that works similarly.
 ```
 
 ```roc
-# Running this will produce `Ok "c"`
-Result.try (Str.toU64 "2") listGet
+# Running this will produce `Ok("c")`
+Result.try(Str.to_u64("2"), listGet)
 
 listGet : U64 -> Result Str [OutOfBounds]
-listGet = \index ->
-    List.get ["a", "b", "c", "d"] index
+listGet = |index|
+    List.get(["a", "b", "c", "d"], index)
 
 # Notes:
-#  - `Str.toU64 "2"` parses the string "2" to the integer 2, and returns `Ok 2` (more on
+#  - `Str.to_u64("2")` parses the string "2" to the integer 2, and returns `Ok(2)` (more on
 #    integer types later)
 #  - since parsing is successful, `Result.try` passes 2 to the `listGet` function
-#  - passing "abc" or "1000" instead of "2" would have resulted in `Err InvalidNumStr`
-#    or `Err OutOfBounds` respectively
+#  - passing "abc" or "1000" instead of "2" would have resulted in `Err(InvalidNumStr)`
+#    or `Err(OutOfBounds)` respectively
 ```
 
 `Result.try` is often used to chain two functions that return `Result` (as in the example above). This prevents you from needing to add error handling code at every intermediate step.
+
+### [The `?` postfix operator](#the-question-postfix-operator) {#the-question-postfix-operator}
+
+Roc also has a `?` postfix operator, which is convenient syntax sugar for `Result.try`, but avoids a lot of noise introduced by callbacks.
+For example, consider the following `get_letter` function:
+
+```roc
+get_letter : Str -> Result Str [OutOfBounds, InvalidNumStr]
+get_letter = |index_str|
+    index = Str.to_u64(index_str)?
+    List.get(["a", "b", "c", "d"], index)
+```
+
+Here's what this does:
+
+- If the `Str.to_u64` function returns an `Ok` value, then `?` will return what's inside the `Ok`. For example:
+  - If we call `get_letter("2")`, then `Str.to_u64` returns `Ok(2)`, and the `?` unwraps to the integer 2, so `index` is set to 2 (not `Ok(2)`). Then the `List.get` function is called and returns `Ok("c")`.
+  - If the `Str.to_u64` function returns an `Err` value, then the `?` operator immediately interrupts the `get_letter` function and makes it return this error.
+  - For example, if we call `get_letter("abc")`, then the call to `Str.to_u64` returns `Err(InvalidNumStr)`, and the `?` keyword ensures that the `get_letter` function returns this error immediately, without executing the rest of the function.
+
+Thanks to the `?` postfix operator, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://www.roc-lang.org/examples/Results/README.html) for more details on error handling.
+
+### [Recovering from errors with the `??` infix operator](#recovering-from-errors) {#recovering-from-errors}
+
+Above you saw this code sample to show how to recover from errors using the
+`Result.with_default` function:
+
+```roc
+Result.with_default(List.get(["a", "b", "c"], 100), "")
+# returns "" because that's the default we said to use if List.get returned an Err
+```
+
+But this was common enough that Roc has syntax to make it easier to read and
+write:
+
+```roc
+List.get(["a", "b", "c"], 100) ?? ""
+# returns "" because that's the default we said to use if List.get returned an Err
+```
+
+All in all, Roc recognizes that handling errors is important - and makes working
+with them as values as painless as possible.
 
 Now let's get back to lists!
 
@@ -859,7 +874,7 @@ retrieve every element in the list and use it to build up the new value you want
 can work, but it has a few downsides:
 
 - Each `List.get` call returns a `Result` that must be dealt with, even though you plan to use every element in the list anyway
-- There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keepIf`.
+- There's a runtime performance overhead associated with each of these `Result`s, which you won't find in other "look at every element in the list" operations like `List.keep_if`.
 - It's more verbose than the alternative we're about to discuss
 
 The `List.walk` function gives you a way to walk over the elements in a list and build up whatever
@@ -869,11 +884,12 @@ because it's more concise, runs faster, and doesn't give you any `Result`s to de
 Here's an example:
 
 ```roc
-List.walk [1, 2, 3, 4, 5] { evens: [], odds: [] } \state, elem ->
-    if Num.isEven elem then
-        { state & evens: List.append state.evens elem }
+List.walk([1, 2, 3, 4, 5], { evens: [], odds: [] }, |state, elem|
+    if Num.is_even(elem, then)
+        { state & evens: List.append(state.evens, elem) }
     else
-        { state & odds: List.append state.odds elem }
+        { state & odds: List.append(state.odds, elem) }
+)
 
 # returns { evens: [2, 4], odds: [1, 3, 5] }
 ```
@@ -884,7 +900,7 @@ In this example, we walk over the list `[1, 2, 3, 4, 5]` and add each element to
 
 1. A list. (`[1, 2, 3, 4, 5]`)
 2. An initial `state` value. (`{ evens: [], odds: [] }`)
-3. A function which takes the current `state` and element, and returns a new `state`. (`\state, elem -> ...`)
+3. A function which takes the current `state` and element, and returns a new `state`. (`|state, elem| ...`)
 
 It then proceeds to walk over each element in the list and call that function. Each time, the state that function returns becomes the argument to the next function call. Here are the arguments the function will receive, and what it will return, as `List.walk` walks over the list `[1, 2, 3, 4, 5]`:
 
@@ -902,18 +918,23 @@ previous function call returned.
 
 Once the list has run out of elements, `List.walk` returns whatever the final function call returned—in this case, `{ evens: [2, 4], odds: [1, 3, 5] }`. (If the list was empty, the function never gets called and `List.walk` returns the initial state.)
 
-Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keepIf`, or `List.dropIf`. There are a lot of things you can do with `List.walk`!
+Note that the state doesn't have to be a record; it can be anything you want. For example, if you made it a `Bool`, you could implement `List.any` using `List.walk`. You could also make the state be a list, and implement `List.map`, `List.keep_if`, or `List.drop_if`. There are a lot of things you can do with `List.walk`!
 
-A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keepIf`, and `List.dropIf`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
+A helpful way to remember the argument order for `List.walk` is that that its arguments follow the same pattern as what we've seen with `List.map`, `List.any`, `List.keep_if`, and `List.drop_if`: the first argument is a list, and the last argument is a function. The difference here is that `List.walk` has one more argument than those other functions; the only place it could go while preserving that pattern is in the middle!
 
-> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Some languages also have operations like `forEach` or `for...in` syntax, which walk across every element and perform potentially side-effecting operations on them; `List.walk` can be used to replace these too, if you include a `Task` in the state. We'll talk about tasks, and how to use them with `List.walk`, later on.
+> **Note:** Other languages give this operation different names, such as `fold`, `reduce`, `accumulate`, `aggregate`, `compress`, and `inject`. Consider using one of the following if you would like to call an effectful function on a list of
+
+```roc
+List.for_each! : List a, (a => {}) => {}
+List.for_each_try! : List a, (a => Result {} err) => Result {} err
+```
 
 ### [Pattern Matching on Lists](#pattern-matching-on-lists) {#pattern-matching-on-lists}
 
 You can also pattern match on lists, like so:
 
 ```roc
-when myList is
+when my_list is
     [] -> 0 # the list is empty
     [Foo, ..] -> 1 # it starts with a Foo tag
     [_, ..] -> 2 # it contains at least one element, which we ignore
@@ -937,49 +958,49 @@ See the [Pattern Matching example](https://www.roc-lang.org/examples/PatternMatc
 When you have nested function calls, sometimes it can be clearer to write them in a "pipelined" style using the `|>` operator. Here are three examples of writing the same expression; they all compile to exactly the same thing, but two of them use the `|>` operator to change how the calls look.
 
 ```roc
-Result.withDefault (List.get ["a", "b", "c"] 1) ""
+Result.with_default(List.get(["a", "b", "c"], 1), "")
 ```
 
 ```roc
-List.get ["a", "b", "c"] 1
-|> Result.withDefault ""
+List.get(["a", "b", "c"], 1)
+|> Result.with_default("")
 ```
 
-The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever comes after the `|>`. So in the example above, the `|>` takes `List.get ["a", "b", "c"] 1` and passes that value as the first argument to `Result.withDefault`, making `""` the second argument to `Result.withDefault`.
+The `|>` operator takes the value that comes before the `|>` and passes it as the first argument to whatever comes after the `|>`. So in the example above, the `|>` takes `List.get(["a", "b", "c"], 1)` and passes that value as the first argument to `Result.with_default`, making `""` the second argument to `Result.with_default`.
 
 We can take this a step further like so:
 
 ```roc
 ["a", "b", "c"]
-|> List.get 1
-|> Result.withDefault ""
+|> List.get(1)
+|> Result.with_default("")
 ```
 
-This is still equivalent to the first expression. Since `|>` is known as the "pipe operator," we can read this as "start with `["a", "b", "c"]`, then pipe it to `List.get`, then pipe it to `Result.withDefault`."
+This is still equivalent to the first expression. Since `|>` is known as the "pipe operator," we can read this as "start with `["a", "b", "c"]`, then pipe it to `List.get`, then pipe it to `Result.with_default`."
 
 One reason the `|>` operator injects the value as the first argument is to make it work better with functions where argument order matters. For example, these two uses of `List.append` are equivalent:
 
 ```roc
-List.append ["a", "b", "c"] "d"
+List.append(["a", "b", "c"], "d")
 ```
 
 ```roc
 ["a", "b", "c"]
-|> List.append "d"
+|> List.append("d")
 ```
 
-Another example is `Num.div`. All three of the following do the same thing, because `a / b` in Roc is syntax sugar for `Num.div a b`:
+Another example is `Num.div`. All three of the following do the same thing, because `a / b` in Roc is syntax sugar for `Num.div(a, b)`:
 
 ```roc
 first / second
 ```
 
 ```roc
-Num.div first second
+Num.div(first, second)
 ```
 
 ```roc
-first |> Num.div second
+first |> Num.div(second)
 ```
 
 All operators in Roc are syntax sugar for normal function calls. See the [Operator Desugaring Table](https://www.roc-lang.org/tutorial#operator-desugaring-table) at the end of this tutorial for a complete list of them.
@@ -989,9 +1010,9 @@ All operators in Roc are syntax sugar for normal function calls. See the [Operat
 Sometimes you may want to document the type of a definition. For example, you might write:
 
 ```roc
-# Takes a firstName string and a lastName string, and returns a string
-fullName = \firstName, lastName ->
-    "$(firstName) $(lastName)"
+# Takes a first_name string and a last_name string, and returns a string
+full_name = |first_name, last_name|
+    "${first_name} ${last_name}"
 ```
 
 Comments can be valuable documentation, but they can also get out of date and become misleading. If someone changes this function and forgets to update the comment, it will no longer be accurate.
@@ -1001,35 +1022,35 @@ Comments can be valuable documentation, but they can also get out of date and be
 Here's another way to document this function's type, which doesn't have that problem:
 
 ```roc
-fullName : Str, Str -> Str
-fullName = \firstName, lastName ->
-    "$(firstName) $(lastName)"
+full_name : Str, Str -> Str
+full_name = |first_name, last_name|
+    "${first_name} ${last_name}"
 ```
 
-The `fullName :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
+The `full_name :` line is a _type annotation_. It's a strictly optional piece of metadata we can add above a def to describe its type. Unlike a comment, the Roc compiler will check type annotations for accuracy. If the annotation ever doesn't fit with the implementation, we'll get a compile-time error.
 
-The annotation `fullName : Str, Str -> Str` says "`fullName` is a function that takes two strings as arguments and returns a string."
+The annotation `full_name : Str, Str -> Str` says "`full_name` is a function that takes two strings as arguments and returns a string."
 
 We can give type annotations to any value, not just functions. For example:
 
 ```roc
-firstName : Str
-firstName = "Amy"
+first_name : Str
+first_name = "Amy"
 
-lastName : Str
-lastName = "Lee"
+last_name : Str
+last_name = "Lee"
 ```
 
-These annotations say that both `firstName` and `lastName` have the type `Str`.
+These annotations say that both `first_name` and `last_name` have the type `Str`.
 
-We can annotate records similarly. For example, we could move `firstName` and `lastName` into a record like so:
+We can annotate records similarly. For example, we could move `first_name` and `last_name` into a record like so:
 
 ```roc
-amy : { firstName : Str, lastName : Str }
-amy = { firstName: "Amy", lastName: "Lee" }
+amy : { first_name : Str, last_name : Str }
+amy = { first_name: "Amy", last_name: "Lee" }
 
-jen : { firstName : Str, lastName : Str }
-jen = { firstName: "Jen", lastName: "Majura" }
+jen : { first_name : Str, last_name : Str }
+jen = { first_name: "Jen", last_name: "Majura" }
 ```
 
 ### [Type Aliases](#type-aliases) {#type-aliases}
@@ -1037,16 +1058,16 @@ jen = { firstName: "Jen", lastName: "Majura" }
 When we have a recurring type annotation like this, it can be nice to give it its own name. We do this like so:
 
 ```roc
-Musician : { firstName : Str, lastName : Str }
+Musician : { first_name : Str, last_name : Str }
 
 amy : Musician
-amy = { firstName: "Amy", lastName: "Lee" }
+amy = { first_name: "Amy", last_name: "Lee" }
 
 simone : Musician
-simone = { firstName: "Simone", lastName: "Simons" }
+simone = { first_name: "Simone", last_name: "Simons" }
 ```
 
-Here, `Musician` is a _type alias_. A type alias is like a def, except it gives a name to a type instead of to a value. Just like how you can read `name : Str` as "`name` has the type `Str`," you can also read `Musician : { firstName : Str, lastName : Str }` as "`Musician` has the type `{ firstName : Str, lastName : Str }`."
+Here, `Musician` is a _type alias_. A type alias is like a def, except it gives a name to a type instead of to a value. Just like how you can read `name : Str` as "`name` has the type `Str`," you can also read `Musician : { first_name : Str, last_name : Str }` as "`Musician` has the type `{ first_name : Str, last_name : Str }`."
 
 ### [Type Parameters](#type-parameters) {#type-parameters}
 
@@ -1057,35 +1078,35 @@ names : List Str
 names = ["Amy", "Simone", "Tarja"]
 ```
 
-You can read `List Str` as "a list of strings." Here, `Str` is a _type parameter_ that tells us what type of `List` we're dealing with. `List` is a _parameterized type_, which means it's a type that requires a type parameter. There's no way to give something a type of `List` without a type parameter. You have to specify what type of list it is, such as `List Str` or `List Bool` or `List { firstName : Str, lastName : Str }`.
+You can read `List Str` as "a list of strings." Here, `Str` is a _type parameter_ that tells us what type of `List` we're dealing with. `List` is a _parameterized type_, which means it's a type that requires a type parameter. There's no way to give something a type of `List` without a type parameter. You have to specify what type of list it is, such as `List Str` or `List Bool` or `List { first_name : Str, last_name : Str }`.
 
 ### [Wildcard Types (\*)](#wildcard-type) {#wildcard-type}
 
-There are some functions that work on any list, regardless of its type parameter. For example, `List.isEmpty` has this type:
+There are some functions that work on any list, regardless of its type parameter. For example, `List.is_empty` has this type:
 
 ```roc
-isEmpty : List * -> Bool
+is_empty : List * -> Bool
 ```
 
-The `*` is a _wildcard type_; a type that's compatible with any other type. `List *` is compatible with any type of `List` like `List Str`, `List Bool`, and so on. So you can call `List.isEmpty ["I am a List Str"]` as well as `List.isEmpty [Bool.true]`, and they will both work fine.
+The `*` is a _wildcard type_; a type that's compatible with any other type. `List *` is compatible with any type of `List` like `List Str`, `List Bool`, and so on. So you can call `List.is_empty(["I am a List Str"])` as well as `List.is_empty([Bool.true])`, and they will both work fine.
 
 The wildcard type also comes up with empty lists. Suppose we have one function that takes a `List Str` and another function that takes a `List Bool`. We might reasonably expect to be able to pass an empty list (that is, `[]`) to either of these functions, and we can! This is because a `[]` value has the type `List *`. It is a "list with a wildcard type parameter", or a "list whose element type could be anything."
 
 ### [Type Variables](#type-variables) {#type-variables}
 
-`List.reverse` works similarly to `List.isEmpty`, but with an important distinction. As with `isEmpty`, we can call `List.reverse` on any list, regardless of its type parameter. However, consider these calls:
+`List.reverse` works similarly to `List.is_empty`, but with an important distinction. As with `is_empty`, we can call `List.reverse` on any list, regardless of its type parameter. However, consider these calls:
 
 ```roc
 strings : List Str
-strings = List.reverse ["a", "b"]
+strings = List.reverse(["a", "b"])
 
 bools : List Bool
-bools = List.reverse [Bool.true, Bool.false]
+bools = List.reverse([Bool.true, Bool.false])
 ```
 
 In the `strings` example, we have `List.reverse` returning a `List Str`. In the `bools` example, it's returning a `List Bool`. So what's the type of `List.reverse`?
 
-We saw that `List.isEmpty` has the type `List * -> Bool`, so we might think the type of `List.reverse` would be `reverse : List * -> List *`. However, remember that we also saw that the type of the empty list is `List *`? `List * -> List *` is actually the type of a function that always returns empty lists! That's not what we want.
+We saw that `List.is_empty` has the type `List * -> Bool`, so we might think the type of `List.reverse` would be `reverse : List * -> List *`. However, remember that we also saw that the type of the empty list is `List *`? `List * -> List *` is actually the type of a function that always returns empty lists! That's not what we want.
 
 What we want is something like one of these:
 
@@ -1114,8 +1135,8 @@ Similarly, the only way to have a function whose type is `a -> a` is if the func
 We can also annotate types that include tags:
 
 ```roc
-colorFromStr : Str -> [Red, Green, Yellow]
-colorFromStr = \string ->
+color_from_str : Str -> [Red, Green, Yellow]
+color_from_str = |string|
     when string is
         "red" -> Red
         "green" -> Green
@@ -1127,8 +1148,8 @@ You can read the type `[Red, Green, Yellow]` as "a tag union of the tags `Red`, 
 Some tag unions have only one tag in them. For example:
 
 ```roc
-redTag : [Red]
-redTag = Red
+red_tag : [Red]
+red_tag = Red
 ```
 
 ### [Accumulating Tag Types](#accumulating-tag-types) {#accumulating-tag-types}
@@ -1136,8 +1157,8 @@ redTag = Red
 Tag union types can accumulate more tags based on how they're used. Consider this `if` expression:
 
 ```roc
-\str ->
-    if Str.isEmpty str then
+|str|
+    if Str.is_empty(str) then
         Ok "it was empty"
     else
         Err ["it was not empty"]
@@ -1145,7 +1166,7 @@ Tag union types can accumulate more tags based on how they're used. Consider thi
 
 Here, Roc sees that the first branch has the type `[Ok Str]` and that the `else` branch has the type `[Err (List Str)]`, so it concludes that the whole `if` expression evaluates to the combination of those two tag unions: `[Ok Str, Err (List Str)]`.
 
-This means this entire `\str -> ...` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.withDefault`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
+This means this entire `|str| ...` function has the type `Str -> [Ok Str, Err (List Str)]`. However, it would be most common to annotate it as `Result Str (List Str)` instead, because the `Result` type (for operations like `Result.with_default`, which we saw earlier) is a type alias for a tag union with `Ok` and `Err` tags that each have one payload:
 
 ```roc
 Result ok err : [Ok ok, Err err]
@@ -1175,16 +1196,16 @@ You can create an opaque type with the `:=` operator. Let's make one called `Use
 ```roc
 Username := Str
 
-fromStr : Str -> Username
-fromStr = \str ->
-    @Username str
+from_str : Str -> Username
+from_str = |str|
+    @Username(str)
 
-toStr : Username -> Str
-toStr = \@Username str ->
+to_str : Username -> Str
+to_str = |@Username(str)|
     str
 ```
 
-The `fromStr` function turns a string into a `Username` by calling `@Username` on that string. The `toStr` function turns a `Username` back into a string by pattern matching `@Username str` to unwrap the string from the `Username` opaque type.
+The `from_str` function turns a string into a `Username` by calling `@Username` on that string. The `to_str` function turns a `Username` back into a string by pattern matching `@Username(str)` to unwrap the string from the `Username` opaque type.
 
 Now we can expose the `Username` opaque type so that other modules can use it in type annotations. However, other modules can't use the `@Username` syntax to wrap or unwrap `Username` values. That operation is only available in the same scope where `Username` itself was defined; trying to use it outside that scope will give an error.
 
@@ -1227,7 +1248,7 @@ Here are the different fixed-size integer types that Roc supports:
 | `-170_141_183_460_469_231_731_687_303_715_884_105_728` <br> `170_141_183_460_469_231_731_687_303_715_884_105_727` | `I128` |
 | `0` <br>`340_282_366_920_938_463_463_374_607_431_768_211_455` (over 340 undecillion)                              | `U128` |
 
-If any operation would result in an integer that is either too big or too small to fit in that range (e.g. calling `Int.maxI32 + 1`, which adds 1 to the highest possible 32-bit integer), then the operation will [overflow](https://en.wikipedia.org/wiki/Integer_overflow). When an overflow occurs, the program will crash.
+If any operation would result in an integer that is either too big or too small to fit in that range (e.g. calling `Int.max_i32 + 1`, which adds 1 to the highest possible 32-bit integer), then the operation will [overflow](https://en.wikipedia.org/wiki/Integer_overflow). When an overflow occurs, the program will crash.
 
 As such, it's very important to design your integer operations not to exceed these bounds!
 
@@ -1264,14 +1285,14 @@ This type says `abs` takes a number and then returns a number of the same type. 
 There's also an `Int` type which is only compatible with integers, and a `Frac` type which is only compatible with fractions. For example:
 
 ```roc
-Num.bitwiseXor : Int a, Int a -> Int a
+Num.bitwise_xor : Int a, Int a -> Int a
 ```
 
 ```roc
 Num.cos : Frac a -> Frac a
 ```
 
-When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.bitwiseXor 1 1` and also `Num.cos 1` and have them all work as expected; the number literal `1` has the type `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason, you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
+When you write a number literal in Roc, it has the type `Num *`. So you could call `Num.bitwise_xor(1, 1)` and also `Num.cos(1)` and have them all work as expected; the number literal `1` has the type `Num *`, which is compatible with the more constrained types `Int` and `Frac`. For the same reason, you can pass number literals to functions expecting even more constrained types, like `I32` or `F64`.
 
 ### [Number Literals](#number-literals) {#number-literals}
 
@@ -1292,22 +1313,22 @@ Sometimes you may want to write a function that accepts configuration options. T
 For example:
 
 ```roc
-table = \{ height, width, title ? "oak", description ? "a wooden table" } ->
+table = |{ height, width, title ?? "oak", description ?? "a wooden table" }| ...
 ```
 
 This is using _default value field destructuring_ to destructure a record while
 providing default values for any fields that the caller didn't provide. Here, the `?` operator
 essentially means "if the caller did not provide this field, default it to the following value."
 
-The type of `table` uses `?` instead of `:` to indicate which fields the caller can omit:
+The type of `table` uses `??` instead of `:` to indicate which fields the caller can omit:
 
 ```roc
 table :
     {
         height : U64,
         width : U64,
-        title ? Str,
-        description ? Str,
+        title ?? Str,
+        description ?? Str,
     }
     -> Table
 ```
@@ -1319,7 +1340,7 @@ the type `Str`. This means you can choose to omit the `title`, `description`, or
 when calling the function…but if you provide them, they must have the type `Str`.
 
 This is also the type that would have been inferred for `table` if it had no annotation.
-Roc's compiler can tell from the destructuring syntax `title ? "oak"` that `title` is a field with a default,
+Roc's compiler can tell from the destructuring syntax `title ?? "oak"` that `title` is a field with a default,
 and that it has the type `Str`.
 
 Destructuring is the only way to implement a record with default value fields! For example,
@@ -1343,14 +1364,14 @@ Crashes in Roc are not like [try/catch exceptions](https://en.wikipedia.org/wiki
 
 ### [Crashing in unreachable branches](#crashing-in-unreachable-branches) {#crashing-in-unreachable-branches}
 
-You can intentionally crash a Roc program, for example inside a conditional branch that you believe is unreachable. Suppose you're certain that a particular `List U8` contains valid UTF-8 bytes, which means when you call `Str.fromUtf8` on it, the `Result` it returns will always be `Ok`. In that scenario, you can use the `crash` keyword to handle the `Err` case like so:
+You can intentionally crash a Roc program, for example inside a conditional branch that you believe is unreachable. Suppose you're certain that a particular `List U8` contains valid UTF-8 bytes, which means when you call `Str.from_utf8` on it, the `Result` it returns will always be `Ok`. In that scenario, you can use the `crash` keyword to handle the `Err` case like so:
 
 ```roc
 answer : Str
 answer =
-    when Str.fromUtf8 definitelyValidUtf8 is
-        Ok str -> str
-        Err _ -> crash "This should never happen!"
+    when Str.from_utf8(definitely_valid_utf8) is
+        Ok(str) -> str
+        Err(_) -> crash "This should never happen!"
 ```
 
 If the unthinkable happens, and somehow the program reaches this `Err` branch even though that was thought to be impossible, then it will crash - just like if the system had run out of memory. The string passed to `crash` will be provided to the platform as context; each platform may do something different with it.
@@ -1363,7 +1384,7 @@ Another use for `crash` is as a TODO marker when you're in the middle of buildin
 
 ```roc
 if x > y then
-    transmogrify (x * 2)
+    transmogrify(x * 2)
 else
     crash "TODO handle the x <= y case"
 ```
@@ -1383,17 +1404,17 @@ Errors that are recoverable should be represented using normal Roc types (like [
 You can write automated tests for your Roc code like so:
 
 ```roc
-pluralize = \singular, plural, count ->
-    countStr = Num.toStr count
+pluralize = |singular, plural, count|
+    count_str = Num.to_str(count)
 
     if count == 1 then
-        "$(countStr) $(singular)"
+        "${count_str} ${singular}"
     else
-        "$(countStr) $(plural)"
+        "${count_str} ${plural}"
 
-expect pluralize "cactus" "cacti" 1 == "1 cactus"
+expect pluralize("cactus", "cacti", 1) == "1 cactus"
 
-expect pluralize "cactus" "cacti" 2 == "2 cacti"
+expect pluralize("cactus", "cacti", 2) == "2 cacti"
 ```
 
 If you put this in a file named `main.roc` and run `roc test`, Roc will execute the two `expect` expressions (that is, the two `pluralize` calls) and report any that returned `Bool.false`.
@@ -1402,9 +1423,9 @@ If a test fails, it will not show the actual value that differs from the expecte
 
 ```roc
 expect
-    funcOut = pluralize "cactus" "cacti" 1
+    func_out = pluralize("cactus", "cacti", 1)
 
-    funcOut == "2 cactus"
+    func_out == "2 cactus"
 ```
 
 ### [Inline Expectations](#inline-expects) {#inline-expects}
@@ -1412,15 +1433,15 @@ expect
 Expects do not have to be at the top level:
 
 ```roc
-pluralize = \singular, plural, count ->
-    countStr = Num.toStr count
+pluralize = |singular, plural, count|
+    count_str = Num.to_str(count)
 
     if count == 1 then
-        "$(countStr) $(singular)"
+        "${count_str} ${singular}"
     else
         expect count > 0
 
-        "$(countStr) $(plural)"
+        "${count_str} ${plural}"
 ```
 
 This `expect` will fail if you call `pluralize` passing a count of 0.
@@ -1437,30 +1458,29 @@ Let's clear up any confusion with an example:
 main =
     expect 1 == 2
 
-    Stdout.line! "Hi there."
+    Stdout.line!("Hi there.")
 
-double = \num ->
+double = |num|
     expect num > -1
 
     num * 2
 
-expect double 0 == 0
+expect double(0) == 0
 ```
 
 - `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hi there.`.
 - `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hi there`.
-- `roc test` will run `expect double 0 == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
+- `roc test` will run `expect double(0) == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
 ## [Modules](#modules) {#modules}
 
-Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
+Each `.roc` file is a separate module and contains Roc code for different purposes. Here are the types of modules:
 
-- **Builtins** provide functions that are automatically imported into every module.
-- **Applications** are combined with a platform and compiled into an executable.
-- **Modules** provide functions which can be imported into other modules.
-- **Packages** organise modules to share functionality across applications and platforms.
-- **Platforms** provide effects such as IO to interface with the outside world.
-- **Hosted** _note this module type is likely to be deprecated soon_.
+- app [(example)](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc): Applications are combined with a platform and compiled into an executable.
+- module [(example)](https://github.com/roc-lang/examples/blob/main/examples/MultipleRocFiles/Hello.roc): Provide types and functions which can be imported into other modules.
+- package [(example)](https://github.com/lukewilliamboswell/roc-json/blob/main/package/main.roc): Organises modules to share functionality across applications and platforms.
+- platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
+- hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
 
 ### [Builtin Modules](#builtin-modules) {#builtin-modules}
 
@@ -1478,9 +1498,8 @@ There are several modules that are built into the Roc compiler, which are import
 10. [Hash](https://www.roc-lang.org/builtins/Hash)
 11. [Box](https://www.roc-lang.org/builtins/Box)
 12. [Inspect](https://www.roc-lang.org/builtins/Inspect)
-13. [Task](https://www.roc-lang.org/builtins/Task)
 
-You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.isEven`, we were referencing functions stored in the `Str` and `Num` modules.
+You may have noticed that we already used the first five. For example, when we wrote `Str.concat` and `Num.is_even`, we were referencing functions stored in the `Str` and `Num` modules.
 
 These modules are not ordinary `.roc` files that live on your filesystem. Rather, they are built directly into the Roc compiler. That's why they're called "builtins!"
 
@@ -1494,14 +1513,14 @@ Besides being built into the compiler, the builtin modules are different from ot
 Let's take a closer look at the part of `main.roc` above the `main` def:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import pf.Stdout
 ```
 
 This is known as a _module header_. Every `.roc` file is a _module_, and there are different types of modules. We know this particular one is an _application module_ because it begins with the `app` keyword.
 
-The line `app [main]` shows that this module is a Roc application and which [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) it is built on.
+The line `app [main!]` shows that this module is a Roc application and which [platform](https://github.com/roc-lang/roc/wiki/Roc-concepts-explained#platform) it is built on.
 
 The `{ pf: platform "https://...tar.br" }` part says four things:
 
@@ -1515,14 +1534,15 @@ The `import pf.Stdout` line says that we want to import the `Stdout` module from
 This import has a direct interaction with our definition of `main`. Let's look at that again:
 
 ```roc
-main = Stdout.line! "Hi there, from inside a Roc app. 🎉"
+main! = |_args|
+    Stdout.line!("Hi there, from inside a Roc app. 🎉")
 ```
 
-Here, `main` is calling a function called `Stdout.line`. More specifically, it's calling a function named `line` which is exposed by a module named `Stdout`.
+Here, `main!` is calling a function called `Stdout.line!`. More specifically, it's calling a function named `line!` which is exposed by a module named `Stdout`.
 
 When we write `import pf.Stdout`, it specifies that the `Stdout` module comes from the package we named `pf` in the `packages { pf: ... }` section.
 
-You can find documentation for the `Stdout.line` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
+You can find documentation for the `Stdout.line!` function in the [Stdout](https://www.roc-lang.org/packages/basic-cli/Stdout#line) module documentation.
 
 If we would like to include other modules in our application, say `AdditionalModule.roc` and `AnotherModule.roc`, then they can be imported directly like this:
 
@@ -1541,10 +1561,10 @@ import uuid.Generate as Uuid
 ...and the `exposing` keyword to bring values or functions into the current scope:
 
 ```roc
-import pf.Stdout exposing [line]
+import pf.Stdout exposing [line!]
 
-main =
-    line! "Hi there, from inside a Roc app. 🎉"
+main! = |_args|
+    line!("Hi there, from inside a Roc app. 🎉")
 ```
 
 ### [Package Modules](#package-modules) {#package-modules}
@@ -1577,99 +1597,106 @@ Including the hash solves a number of problems:
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
 
-See [Html module](https://github.com/roc-lang/roc/blob/main/examples/virtual-dom-wip/platform/Html.roc) for an example.
-
 ### [Platform Modules](#platform-modules) {#platform-modules}
 
 \[This part of the tutorial has not been written yet. Coming soon!\]
-
-See [Platform Switching Rust](https://github.com/roc-lang/roc/blob/main/examples/platform-switching/rust-platform/main.roc) for an example.
 
 ### [Importing Files](#importing-files) {#importing-files}
 
 You can import files directly into your module as a `Str` or a `List U8` at compile time. This is can be useful when working with data you would like to keep in a separate file, e.g. JSON or YAML configuration.
 
 ```roc
-import "some-file" as someStr : Str
-import "some-file" as someBytes : List U8
+import "some-file" as some_str : Str
+import "some-file" as some_bytes : List U8
 ```
 
 See the [Ingest Files Example](https://www.roc-lang.org/examples/IngestFiles/README.html) for a demonstration on using this feature.
 
-## [Tasks](#tasks) {#tasks}
+## [Effectful functions](#efffectful-functions) {#efffectful-functions}
 
-Note: [Tasks will soon dissolve entirely for app developers](#purity-inference), but today they're still critical.
+There are two types of functions in roc, "pure" and "effectful". Consider these two functions:
 
-Tasks are provided in a builtin `Task` module like the `List`, `Str` modules. They're an important part of building Roc applications, so let's continue using the [basic-cli](https://github.com/roc-lang/basic-cli) platform we've been using up to this point as an example!
+```roc
+with_extension : Str -> Str
+with_extension = |filename|
+    "${filename}.roc"
 
-In the `basic-cli` platform, here are four operations we can do:
+read_file! : Str => Str
+read_file! = |path|
+    File.read_utf8!(with_extension(path)) |> Result.with_default("")
+```
+
+Notice the subtle difference in these functions' types:
+
+- Str `->` Str is the type of the pure function `with_extension`
+- Str `=>` Str is the type of the effectful function `read_file!`
+
+The arrow in the type tells you whether a function is pure or might perform effects. Pure functions use `->` and effectful functions use `=>`. Effectful functions can call either pure functions or other effectful functions, but pure functions can only call other pure functions. (The fact that pure functions can only call pure functions is part of the definition of pure functions; Roc is just reflecting that fact in the type system.)
+
+The suffix character `!` at the end of a function name marks it as effectful. This is a naming convention, and is enforced by the compiler with a warning.
+
+Let's look at some examples. In the `basic-cli` platform, here are four operations we can do:
 
 - Write a string to the terminal
 - Read a string from user input
 - Write a string to a file
 - Read a string from a file
 
-We'll use these four operations to learn about tasks.
+We'll use these four operations to learn about effects.
 
 Let's revisit that first application.
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import pf.Stdout
 
-main =
-    Stdout.line! "Hi there, from inside a Roc app. 🎉"
+main! = |_args|
+    Stdout.line!("Hi there, from inside a Roc app. 🎉")
 ```
 
 This code prints "Hi there, from inside a Roc app. 🎉" to the [standard output](<https://en.wikipedia.org/wiki/Standard_streams#Standard_output_(stdout)>). `Stdout.line` has this type:
 
 ```roc
-Stdout.line : Str -> Task {} *
+Stdout.line! : Str => Result {} [StdoutErr IOErr]
 ```
 
-A `Task` represents an _effect_; an interaction with state outside your Roc program, such as the terminal's standard output, or a file.
+An effectful function is capable of interacting with state outside your Roc program, such as the terminal's standard output, or a file.
 
-The `!` after `Stdout.line` is an operator, similar to the [`?` "try" operator](https://www.roc-lang.org/tutorial#error-handling), but it is used on functions that return a `Task` instead of a `Result` (we'll discuss [the `!` operator in more depth](https://www.roc-lang.org/tutorial#the-!-"await"-operator) later in this tutorial).
+When we call `main!`, the host will provide the arguments passed from the cli `_args` (here we're just ignoring these), and then run. Here, we've set `main!` to be an effectful function that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
 
-When we set `main` to be a `Task`, the task will get run when we run our program. Here, we've set `main` to be a task that writes `"Hi there, from inside a Roc app. 🎉"` to `stdout` when it gets run, so that's what our program does!
+The `Stdout.line!` function here returns a `Result` when called. If it succeeds it returns the unit value `{}`, or if it fails it returns the tag `StdoutErr` with an `IOErr` payload.
 
-`Task` has two type parameters: the type of value it produces when it finishes running, and any errors that might happen when running it. `Stdout.line` has the type `Task {} *` because it doesn't produce any values when it finishes (hence the `{}`) and there aren't any errors that can happen when it runs (hence the `*`).
+In contrast, when `Stdin.line! : {} => Result Str [EndOfFile, StdinErr IOErr]` finishes reading a line from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>), it produces either a `Str` or else `EndOfFile` or a `StdinErr` error tag if standard input reached its end (which can happen if the user types Ctrl+D on UNIX systems or Ctrl+Z on Windows). These possibilities can all be seen just in the type definition of the function.
 
-In contrast, when `Stdin.line` finishes reading a line from [standard input](<https://en.wikipedia.org/wiki/Standard_streams#Standard_input_(stdin)>), it produces either a `Str` or else `End` if standard input reached its end (which can happen if the user types Ctrl+D on UNIX systems or Ctrl+Z on Windows). Those two possibilities are reflected in its type:
+Note that to call this `Stdin.line!`, you need to provide the unit value `{}` as an argument.
 
-```roc
-Stdin.line : Task [Input Str, End] *
-```
+### [Reading values](#reading-values) {#reading-values}
 
-Once this task runs, we'll end up with the [tag union](https://www.roc-lang.org/tutorial#tags-with-payloads) `[Input Str, End]`. Then we can check whether we got an `End` or some actual `Input`, and print out a message accordingly.
-
-### [Reading values from tasks](#task-input) {#task-input}
-
-Let's change `main` to read a line from `stdin`, and then print what we got:
+Let's change `main!` to read a line from `stdin`, and then print what we got:
 
 ```roc
-app [main] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.17.0/lZFLstMUCUvd5bjnnpYromZJXkQUrdhbva4xdBInicE.tar.br" }
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import pf.Stdout
 import pf.Stdin
 
-main =
-    Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
+main! = |_args|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!({})?
+    Stdout.line!("Your input was: ${input}")
 ```
 
 If you run this program, it will print "Type in something and press Enter:" and then pause.
 That's because it's waiting for you to type something in and press Enter! Once you do,
 it should print back out what you entered.
 
-### [Task failure](#task-failure) {#task-failure}
+### [Effectful failure](#failure) {#failure}
 
-Sometimes, tasks can fail. For example, a task for reading from a file might fail if the file is not found.
+Sometimes, effects can fail. For example, reading from a file might fail if the file is not found.
 Even reading from stdin and writing to stdout can fail!
 
-For example, the `Stdin.line` task can fail if stdin is closed before it receives a line. You can try this out
+For example, the `Stdin.line!` function can fail if stdin is closed before it receives a line. You can try this out
 by running the program and pressing Ctrl+Z on Windows, or Ctrl+D on macOS or Linux. (Press that key rather than
 typing in text and pressing Enter.) You'll see a default error message, which the `basic-cli` platform provides
 in case an error occurs that we didn't handle.
@@ -1677,25 +1704,29 @@ in case an error occurs that we didn't handle.
 Although this default error handling behavior might be exactly what we want if we're writing a quick script,
 high-quality programs handle errors gracefully. Fortunately, we can do this nicely in Roc!
 
-If we wanted to add the type annotation to `main` that Roc is inferring for it, we would add this annotation:
+If we wanted to add the type annotation to `main!` that Roc is inferring for it, we would add this annotation:
 
 ```roc
-main : Task {} [Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]
-main =
+import pf.Stdout
+import pf.Stdin
+import pf.Arg exposing [Arg]
+
+main! : List Arg => Result {} [EndOfFile, StdinErr Stdin.IOErr, StdoutErr Stdout.IOErr]
+main = #...
 ```
 
 Let's break down what this type is saying:
 
-- `Task` tells us this is a `Task` type. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this task will produce if it succeeds, and the other one tells us what it will produce if it fails.
-- `{}` tells us that this task always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last task in `main` comes from `Stdout.line`, which doesn't produce anything. (In contrast, the `Stdin` task's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
-- `[Exit I32 Str, StdoutErr Stdout.Err, StdinErr Stdin.Err]` tells us the different ways this task can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line` and `Stdin.line`. We'll talk about `Exit I32 Str` more in a moment.
+- Both the `!` suffix in the name, and the `=>` in the type, tell us this is an effectful function. Its two type parameters are just like the ones we saw in `Result` earlier: the first type tells us what this function will produce if it succeeds, and the other one tells us what it will produce if it fails.
+- `{}` tells us that this function always produces an empty record when it succeeds. (That is, it doesn't produce anything useful. Empty records don't have any information in them!) This is because the last expression in `main!` comes from `Stdout.line!`, which doesn't produce anything. (In contrast, the `Stdin` function's first type parameter is a `Str`, because it produces a `Str` if it succeeds.)
+- `[EndOfFile, StdinErr Stdin.IOErr, StdoutErr Stdout.IOErr]` tells us the different ways this function can fail. The `StdoutErr` and `StdinErr` tags are there because we used `Stdout.line!` and `Stdin.line!`.
 
-To understand what the `Exit I32 Str` error means, let's try temporarily commenting out our current `main` and replacing
+To understand the error a little more, let's try temporarily commenting out our current `main!` and replacing
 it with this one:
 
 ```roc
-main : Task {} [Exit I32 Str]
-main = Task.err (Exit 42 "An error happened!")
+main! : _ => Result {} [Exit I32 Str]
+main! = |_args| Err(Exit(42, "An error happened!"))
 ```
 
 Now if we run the application, it will print the line "An error happened!" to stderr and exit with a status code of 42. (You can check the status code of the most recent terminal command that finished in Windows by running `echo %ERRORLEVEL%` (or `$LASTEXITCODE` in PowerShell), or by running `echo $?` in macOS or Linux.)
@@ -1703,92 +1734,78 @@ Now if we run the application, it will print the line "An error happened!" to st
 Now let's try running it with this version of `main`:
 
 ```roc
-main : Task {} [Exit I32 Str]
-main = Task.ok {}
+main! : _ => Result {} [Exit I32 Str]
+main! = |_args| Ok({})
 ```
 
 This program won't print anything at all, but it will exit with a status code of `0`, indicating success.
 
 In summary:
 
-- If the `main` task ends in a `Task.ok {}`, then it means the final task succeeded and the program will exit with status code 0.
-- If the `main` task ends in a `Task.err (Exit 42 "…")`, then it means the final task failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
+- If the `main!` function ends in a `Ok({})`, then it means the final expression succeeded and the program will exit with status code 0.
+- If the `main!` function ends in a `Err(Exit(42, "…"))`, then it means it failed, and the only information we got about the failure was that the program should exit with code 42 instead of 0, and that it should print a particular string to stderr to inform the user about what happened.
 
-### [Handling task failures](#handling-task-failures) {#handling-task-failures}
+### [Handling failure](#handling-failure) {#handling-failure}
 
-If the `main` task ends up failing with any other errors besides `Exit` (such as `StdoutErr` or `StdinErr`), then the `basic-cli` platform's automatic error handling will handle them by printing out words taken from the source code (such as "StdoutErr" and "StdinErr"), which could lead to a bad experience for people using this program!
+If `main!` ends up failing with any other errors besides `Exit` (such as `StdoutErr` or `StdinErr`), then the `basic-cli` platform's automatic error handling will handle them by printing out words taken from the source code (such as "StdoutErr" and "StdinErr"), which could lead to a bad experience for people using this program!
 
-We can prevent that by gracefully handling the other error types, and then translating them into `Exit` errors so that they affect the program's exit code and don't result in the platform printing anything. A convenient way to make sure we've handled all the other errors is to keep our current type annotation for `main` but restore our old implementation:
+We can prevent that by gracefully handling the other error types, and then translating them into `Exit` errors so that they affect the program's exit code and don't result in the platform printing anything.
+
+A convenient way to make sure we've handled all the other errors is to keep our current type annotation for `main!` but restore our old implementation:
 
 ```roc
-main : Task {} [Exit I32 Str]
-main =
-    Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
+main! : List Arg => Result {} [Exit I32 Str]
+main! = |_args|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!({})?
+    Stdout.line!("Your input was: ${input}")
 ```
 
-Adding this type annotation will give us a type mismatch - which is exactly what we want in this case! The type mismatch is telling us that we're claiming the `main` task will only ever fail with an `Exit` tag, but this implementation can _also_ fail with `StdoutErr` and `StdinErr` tags.
+Adding this type annotation will give us a type mismatch - which is exactly what we want in this case!
 
-In other words, adding this annotation effectively opted us out of `basic-cli`'s default error handling. Now any potential task failures (now and in the future) will have to be handled somehow; if we forget to handle any, we'll get a type mismatch like this! For that reason, `basic-cli` applications that are intended to be high-quality (so, not things like quick scripts) will generally benefit from applying this type annotation to `main`.
+The type mismatch is telling us that we're claiming the `main!` function will only ever fail with an `Exit` tag, but this implementation can _also_ fail with `EndOfFile`, `StdoutErr` and `StdinErr` tags we saw earlier.
+
+In other words, adding this annotation effectively opted us out of `basic-cli`'s default error handling. Now any potential failures (now and in the future) will have to be handled somehow; if we forget to handle any, we'll get a type mismatch like this! For that reason, `basic-cli` applications that are intended to be high-quality (so, not things like quick scripts) will generally benefit from applying this type annotation to `main!`.
 
 Here's one way we can handle those errors:
 
 ```roc
-main : Task {} [Exit I32 Str]
-main =
-    task =
-        Stdout.line! "Type in something and press Enter:"
-        input = Stdin.line!
-        Stdout.line! "Your input was: $(input)"
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
-    Task.mapErr task \err ->
+import pf.Stdout
+import pf.Stdin
+import pf.Arg exposing [Arg]
+
+main! : List Arg => Result {} [Exit I32 Str]
+main! = |_args|
+    Result.map_err(my_function!({}), |err|
         when err is
-            StdoutErr _ -> Exit 1 "Error writing to stdout."
-            StdinErr _ -> Exit 2 "Error writing to stdin."
+            StdoutErr(_) -> Exit(1i32, "Error writing to stdout.")
+            StdinErr(_) -> Exit(2i32, "Error writing to stdin.")
+            EndOfFile -> Exit(3i32, "End of file reached.")
+    )
+
+my_function! : {} => Result {} [EndOfFile, StdinErr _, StdoutErr _]
+my_function! = |{}|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!({})?
+    Stdout.line!("Your input was: ${input}")
 ```
 
-The `Task.mapErr` function translates one error into another. Here, we're translating the `StdoutErr` and `StdinErr` errors into `Exit` errors which include a different exit code plus a message that will print to stderr to explain what happened.
-
-We could also use `Task.onErr` instead, which is like `mapErr` except instead of returning a new error, it returns an entirely new `Task`. This means each branch of our `when` gets a bit more verbose, but it does mean we can run additional tasks before exiting. For example:
-
-```roc
-    Task.onErr task \err ->
-        when err is
-            StdoutErr _ -> Task.err (Exit 1 "Error writing to stdout.")
-            StdinErr _ ->
-                # Here we could now run some other tasks,
-                # e.g. to log the error to disk.
-
-                Task.err (Exit 2 "Error writing to stdin.")
-```
-
-Since we don't have any extra tasks to run, `mapErr` is more concise because we don't have to say `Task.err` at the end of each branch.
+The `Result.map_err` function translates one error into another. Here, we're translating the `EndOfFile`, `StdoutErr` and `StdinErr` errors into `Exit` errors which include a different exit code plus a message that will print to stderr to explain what happened.
 
 ### [The \_ type](#underscore) {#underscore}
 
-In a larger program, we might want to split `main` into different pieces for logic and handling errors:
+Note from our last example how we used `_` to create _partial_ type annotations. For example
 
 ```roc
-main : Task {} [Exit I32 Str]
-main =
-    run
-    |> Task.mapErr handleErr
-
-run : Task {} _
-run =
-    Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
-
-handleErr : _ -> [Exit I32 Str]
-handleErr = \err ->
-    when err is
-        StdoutErr _ -> Exit 1 "Error writing to stdout."
-        StdinErr _ -> Exit 2 "Error writing to stdin."
+when err is
+    StdoutErr(_) -> Exit(1i32, "Error writing to stdout.")
+    StdinErr(_) -> Exit(2i32, "Error writing to stdin.")
+    EndOfFile -> Exit(3i32, "End of file reached.")
 ```
 
-Here, we used `_` to create _partial_ type annotations. Wherever a `_` appears in a type annotation, it essentially means "I'm choosing not to annotate this part right here" and it lets Roc use type inference to fill in the blank behind the scenes. Roc will still compile them and check their types as normal (just like it did before we had any annotations at all); the `_` is about which parts of the type we're choosing to annotate and which parts we're leaving to inference.
+Wherever a `_` appears in a type annotation, it essentially means "I'm choosing not to annotate this part right here" and it lets Roc use type inference to fill in the blank behind the scenes. Roc will still compile them and check their types as normal (just like it did before we had any annotations at all); the `_` is about which parts of the type we're choosing to annotate and which parts we're leaving to inference.
 
 This is a useful technique to use when we don't want to write out a bunch of error types that we're going to handle anyway, and would otherwise have to keep updating every time a new error appeared. If we want to know the full list of errors, we can see it in a number of ways:
 
@@ -1796,163 +1813,127 @@ This is a useful technique to use when we don't want to write out a bunch of err
 - If we're using an editor that supports it, hovering over the `_` might display the inferred type that goes there.
 - We can put an obviously wrong type in there (e.g. replace the `{}` with `Str`, which is totally wrong) and look at the compiler error to see what it inferred as the correct type.
 
-### [The `!` postfix "await" operator](#the-postfix-await-operator) {#the-postfix-await-operator}
-
-The `!` postfix operator is syntax sugar for the `Task.await` function, which has this type:
-
-```roc
-Task.await : Task a err, (a -> Task b err) -> Task b err
-```
-
-Basically, this function creates a task which runs one task, and then runs a second task which can use the output of the first task. (If the first task fails, the second task never gets run.)
-
-More specifically, `Task.await` returns a `Task` which:
-
-1. Runs the given `Task a err`
-2. If it fails with some error, returns a `Task` which fails with that same error. (So if the given `Task a err` fails, the `a -> Task b err` function never gets called.)
-3. If it succeeds (meaning it produces a success value which has the type `a`), pass the value it succeeded with to the `a -> Task b err` function. Whatever `Task b err` that function returns will be the `Task b err` the entire `Task.await` call returns.
-
-The `!` postfix operator is syntax sugar for connecting tasks using `Task.await`. Let's revisit our earlier example here:
-
-```roc
-Stdout.line! "Type in something and press Enter:"
-input = Stdin.line!
-Stdout.line! "Your input was: $(input)"
-```
-
-This desugars to the following:
-
-```roc
-Task.await (Stdout.line "Type in something and press Enter:") \_ ->
-    Task.await Stdin.line \input ->
-        Stdout.line "Your input was: $(input)"
-```
-
-Each of the `!` operators desugars to a `Task.await` call, except for the last one (which desugars to nothing because there's no task after it to connect to; if we wanted to, we could have left out that `!` without changing what the program does, but it looks more consistent to have both `Stdout.line!` calls end in a `!`).
-
-If you prefer, you can always...
-
-- call `Task.await` directly instead of using `!`
-- leave out the last/only `!` in a block of expressions
-
-...without changing what the program does, but it's a stylistic convention in the Roc ecosystem to use `!` wherever possible.
-
 ### [Ignoring informationless return values](#ignoring-informationless-return-values) {#ignoring-informationless-return-values}
 
 The compiler warns us about any unused variable, but as we saw before, if we don't intend to use a variable then we can name it `_` to clarify intent and silence the warning.
 
 Furthermore, if a variable can't possibly contain any useful information, then we can ignore it entirely.
 
-Let's revisit our earlier example again:
+Let's revisit an earlier example:
 
 ```roc
-run =
-    Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
+
+import pf.Stdout
+import pf.Stdin
+
+main! = |_args|
+    Stdout.line!("Type in something and press Enter:")?
+    input = Stdin.line!({})?
+    Stdout.line!("Your input was: ${input}")
 ```
 
 It looks like this block goes "expression, assignment, expression", but expressions are only allowed on the last line of a block. What's happening here?
 
-Since `Stdout.line : Str -> Task {} *`, the above is equivalent to:
+Since `Stdout.line! : Str => Result {} [StdoutErr IOErr]`, in the above we are unwrapping the `Result` returned by calling these effects.
+
+An alternative option, is to just ignore the return value entirely:
 
 ```roc
-run =
-    alwaysAnEmptyRecord = Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
+main! = |_args|
+    _ = Stdout.line!("Type in something and press Enter:")?
+    when Stdin.line!({}) is
+        Ok(input) ->
+            _ = Stdout.line!("Your input was: ${input}")?
+            Ok({})
+        Err(_) ->
+            Ok({})
 ```
-
-We don't intend to use `alwaysAnEmptyRecord`, so we can rename it to `_`.
-
-```roc
-run =
-    _ = Stdout.line! "Type in something and press Enter:"
-    input = Stdin.line!
-    Stdout.line! "Your input was: $(input)"
-```
-
-Furthermore, since the type of `_` is `{}` (the only informationless type in Roc), the compiler allows us to delete the `_ =` entirely. `{}` is the only type for which Roc allows this ignoring/deletion.
 
 ### [Tagging errors](#tagging-errors) {#tagging-errors}
 
 Although it's rare, it is possible that either of the `Stdout.line!` operations in our example could fail:
 
 ```roc
-main =
-    Stdout.line! "Type something and press Enter."
-    input = Stdin.line!
-    Stdout.line! "You entered: $(input)"
+main! = |_args|
+    Stdout.line!("Type something and press Enter.")?
+    input = Stdin.line!({})?
+    Stdout.line!("You entered: ${input}")
 ```
 
-If that happens, we don't necessarily know which one was the cause of the failure. Our `handleErr` function runs when a `StdoutErr` happens, but once it receives a `StdoutErr` it has no way of knowing whether the first or second `Stdout.line` was the cause.
+(In this particular example, it's very unlikely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
 
-(In this particular example, it's not very likely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
+If an error happended here, we wouldn't know which effectful function was the cause of the failure.
 
-A quick way to do this is to "tag the error" using `Task.mapErr` to wrap the error in a [tag](#tags) like so:
+One option is to "tag the error" using `Result.map_err` to wrap the error in a [tag](#tags) like so:
 
 ```roc
-main =
-    Stdout.line "Type something and press Enter."
-    |> Task.mapErr! PrintPrompt
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
-    input = Stdin.line!
+import pf.Stdout
+import pf.Stdin
 
-    Stdout.line "You entered: $(input)"
-    |> Task.mapErr! PrintInput
+main! = |_args|
+
+    Stdout.line!("Type something and press Enter.")
+    |> Result.map_err(UnableToPrintPrompt)?
+
+    input =
+        Stdin.line!({})
+        |> Result.map_err(UnableToReadInput)?
+
+    Stdout.line!("You entered: ${input}")
+    |> Result.map_err(UnableToPrintInput)?
+
+    Ok({})
 ```
 
-The `mapErr` function has this type:
+The `map_err` function has this type:
 
 ```
-Task.mapErr : Task ok a, (a -> b) -> Task ok b
+Result.map_err : Result ok a, (a -> b) -> Result ok b
 ```
 
-Here we're passing in "tagging functions"—namely, `PrintPrompt` and `PrintInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
-
-Note that the `!` moves when we do this. It's no longer after `Stdout.line`, but rather after `Task.mapErr` instead:
-
-```roc
-    Stdout.line "Type something and press Enter."
-    |> Task.mapErr! PrintPrompt
-```
+Here we're passing in "tagging functions" — namely, `UnableToPrintPrompt` and `UnableToReadInput`. (See [Using tags as functions](#using-tags-as-functions) for how this works.)
 
 This code is doing three things:
 
-1. Call `Stdout.line "..."`, which returns a `Task` value
-2. Transform that `Task` value into another `Task` value using `|> Task.mapErr`
-3. Wait until that final `Task` value (returned by `mapErr`) successfully completes, using `!`
+1. Call `Stdout.line!("...")`, which returns a `Result` value
+2. Transform that `Result` value into another `Result` value using `|> Result.map_err`
+3. Unwrap that final `Result` value (returned by `map_err`) using `try` and return early if it's an error
 
-It's easier to see why the `!` needs to move when considering a `Task` that produces a useful value, like `Stdin.line`. Compare these two:
+#### Another option - the ? _infix_ operator
 
-```roc
-    input =
-        Stdin.line
-        |> Task.mapErr! ReadStdin
-```
-
-This versions starts with the `Stdin.line` task, then passes it to `Task.mapErr` to tag its error with `ReadStdin`, and then finally uses `!` to await that final transformed task that `Task.mapErr` returned.
+The above example could be rewritten to the following with no change to how it
+would behave:
 
 ```roc
-    input =
-        Stdin.line!
-        |> Task.mapErr ReadStdin
+app [main!] { pf: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
+
+import pf.Stdout
+import pf.Stdin
+
+main! = |_args|
+    Stdout.line!("Type something and press Enter.") ? UnableToPrintPrompt
+    input = Stdin.line!({}) ? UnableToReadInput
+    Stdout.line!("You entered: ${input}") ? UnableToPrintInput
+    Ok({})
 ```
 
-This version starts with the `Stdin.line` task, awaits it with `!` to get its `Str` value if it succeded, and then tries to call `Task.mapErr` on that `Str` value. This will be a type mismatch!
+Here the `?` is just syntax sugar that does the same thing as the `?` postfix
+operator, put passes any error that would be returned to the function (or in
+this case tag) before it is returned.
 
-In general, an easy rule to remember is "do the `!` last" - if you want to modify a `Task` before running it, use the `!` only after you've made all the modifications and ended up with the final `Task` you'd like to run.
+See the [Error Handling example](https://www.roc-lang.org/examples/ErrorHandling/README.html) for a more detailed explanation of error handling in a larger program.
 
-See the [Task & Error Handling example](https://www.roc-lang.org/examples/Tasks/README.html) for a more detailed explanation of how to use tasks to help with error handling in a larger program.
+### [Displaying Roc values with `Inspect.to_str`](#inspect) {#inspect}
 
-### [Displaying Roc values with `Inspect.toStr`](#inspect) {#inspect}
-
-The [`Inspect.toStr`](https://www.roc-lang.org/builtins/Inspect#toStr) function returns a `Str` representation of any Roc value using its [`Inspect` ability](/abilities#inspect-ability). It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging in particular), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but it would be better to run a `when` on `e` and display a more helpful message.
+The [`Inspect.to_str`](https://www.roc-lang.org/builtins/Inspect#to_str) function returns a `Str` representation of any Roc value using its [`Inspect` ability](/abilities#inspect-ability). It's useful for things like debugging and logging (although [`dbg`](https://www.roc-lang.org/tutorial#debugging) is often nicer for debugging in particular), but its output is almost never something that should be shown to end users! In this case we're just using it for our own learning, but it would be better to run a `when` on `e` and display a more helpful message.
 
 ```roc
 when err is
-    StdoutErr e -> Exit 1 "Error writing to stdout: $(Inspect.toStr e)"
-    StdinErr e -> Exit 2 "Error writing to stdin: $(Inspect.toStr e)"
+    StdoutErr(e) -> Exit 1 "Error writing to stdout: ${Inspect.to_str(e)}"
+    StdinErr(e) -> Exit 2 "Error writing to stdin: ${Inspect.to_str(e)}"
 ```
 
 ### [The early `return` keyword](#the-early-return-keyword) {#the-early-return-keyword}
@@ -1964,14 +1945,14 @@ This is rarely necessary, due to Roc's powerful syntax for expressions and patte
 For example:
 
 ```roc
-stoplightStr : Str
-stoplightStr =
-    stoplightColor =
-        if thisIsABadTime then
+stoplight_str : Str
+stoplight_str =
+    stoplight_color =
+        if this_is_a_bad_time then
             return "Hey, listen, I just don't want to do this."
         else
-            previousStopLightColor
-    when stoplightColor is
+            previous_stop_light_color
+    when stoplight_color is
         Red -> "red"
         Green | Yellow if contrast > 75 -> "not red, but very high contrast"
         Green | Yellow if contrast > 50 -> "not red, but high contrast"
@@ -1986,102 +1967,46 @@ We've covered all of the basic syntax and features of Roc in this Tutorial. You 
 
 You can continue reading through more-advanced topics below, or perhaps checkout some of the [Examples](/examples) for more a detailed exploration of ways to do various things.
 
-## [Under Construction](#under-construction) {#under-construction}
-
-Here are some features that are either coming soon or leaving soon. You may see these used in others' code, but for now you can choose to ignore them all!
-
-### [Purity inference (PI)](#purity-inference) {#purity-inference}
-
-STATUS: Almost ready! For now, this may only work on supporting platforms and supported OSes.
-
-Soon, the `!` postfix "await" operator will evolve into a suffix character inside function names themselves, marking them as effectful. For example, a platform supporting PI may evolve from requiring `main` to requiring `main!`.
-
-Effectful functions are also identifiable from their type signature alone, using `a => b` instead of `a -> b`.
-
-Additionally, app developers will no longer learn or interact with `Task`s as a concept, as they shift to be a lower-level platform implementation detail.
-
-For more information, see [this recent talk](https://www.youtube.com/watch?v=42TUAKhzlRI) and [relevant Zulip threads](https://roc.zulipchat.com/#narrow/search/purity.20inference).
-
-### [The `try` keyword](#the-try-keyword) {#the-try-keyword}
-
-STATUS: Almost ready! For now, this may only work within PI contexts.
-
-Note: Right now, this can lead to confusing and unhelpful error messages.
-
-Roc has a `try` keyword, which is convenient syntax sugar for `Result.try`. For example, consider the following `getLetter` function:
-
-```roc
-getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-getLetter = \indexStr ->
-    index = try Str.toU64 indexStr
-    List.get ["a", "b", "c", "d"] index
-```
-
-Here's what this does:
-
-- If the `Str.toU64` function returns an `Ok` value, then `try` will return what's inside the `Ok`. For example:
-  - If we call `getLetter "2"`, then `Str.toU64` returns `Ok 2`, and the `try` unwraps to the integer 2, so `index` is set to 2 (not `Ok 2`). Then the `List.get` function is called and returns `Ok "c"`.
-- If the `Str.toU64` function returns an `Err` value, then the `try` keyword immediately interrupts the `getLetter` function and makes it return this error.
-  - For example, if we call `getLetter "abc"`, then the call to `Str.toU64` returns `Err InvalidNumStr`, and the `try` keyword ensures that the `getLetter` function returns this error immediately, without executing the rest of the function.
-
-Thanks to the `try` keyword, your code can focus on the "happy path" (where nothing fails) and simply bubble up to the caller any error that might occur. Your error handling code can be neatly separated, and you can rest assured that you won't forget to handle any errors, since the compiler will let you know. See this [code example](https://github.com/roc-lang/examples/blob/main/examples/Results/main.roc) for more details on error handling.
-
-### [The `?` postfix "try" operator](#the-postfix-try-operator) {#the-postfix-try-operator}
-
-STATUS: Deprecated! For now, this may only work within non-PI contexts.
-
-Note: Right now, this can lead to confusing and unhelpful error messages.
-
-Roc also has a `?` postfix operator, which behaves similar to the `try` keyword. An example:
-
-```roc
-getLetter : Str -> Result Str [OutOfBounds, InvalidNumStr]
-getLetter = \indexStr ->
-    index = Str.toU64? indexStr
-    List.get ["a", "b", "c", "d"] index
-```
-
-If you're working with [purity inference](#purity-inference) you'll want to use `try` and if your code is using `Task` you'll want to use `?.`
 ## [Advanced Concepts](#advanced-concepts) {#advanced-concepts}
 
 Here are some concepts you likely won't need as a beginner, but may want to know about eventually. This is listed as an appendix rather than the main tutorial, to emphasize that it's totally fine to stop reading here and go build things!
 
 ### [Open Records and Closed Records](#open-records-and-closed-records) {#open-records-and-closed-records}
 
-Let's say I write a function which takes a record with a `firstName` and `lastName` field, and puts them together with a space in between:
+Let's say I write a function which takes a record with a `first_name` and `last_name` field, and puts them together with a space in between:
 
 ```roc
-fullName = \user ->
-    "$(user.firstName) $(user.lastName)"
+full_name = |user|
+    "${user.first_name} ${user.last_name}"
 ```
 
-I can pass this function a record that has more fields than just `firstName` and `lastName`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
+I can pass this function a record that has more fields than just `first_name` and `last_name`, as long as it has _at least_ both of those fields (and both of them are strings). So any of these calls would work:
 
-- `fullName { firstName: "Sam", lastName: "Sample" }`
-- `fullName { firstName: "Sam", lastName: "Sample", email: "blah@example.com" }`
-- `fullName { age: 5, firstName: "Sam", things: 3, lastName: "Sample", role: Admin }`
+- `full_name({ first_name: "Sam", last_name: "Sample" })`
+- `full_name({ first_name: "Sam", last_name: "Sample", email: "blah@example.com" })`
+- `full_name({ age: 5, first_name: "Sam", things: 3, last_name: "Sample", role: Admin })`
 
 This `user` argument is an _open record_ - that is, a description of a minimum set of fields on a record, and their types. When a function takes an open record as an argument, it's okay if you pass it a record with more fields than just the ones specified.
 
 In contrast, a _closed record_ is one that requires an exact set of fields (and their types), with no additional fields accepted.
 
-If we add a type annotation to this `fullName` function, we can choose to have it accept either an open record or a closed record:
+If we add a type annotation to this `full_name` function, we can choose to have it accept either an open record or a closed record:
 
 ```roc
 # Closed record
-fullName : { firstName : Str, lastName : Str } -> Str
-fullName = \user ->
-    "$(user.firstName) $(user.lastName)"
+full_name : { first_name : Str, last_name : Str } -> Str
+full_name = |user|
+    "${user.first_name} ${user.last_name}"
 ```
 
 ```roc
 # Open record (because of the `*`)
-fullName : { firstName : Str, lastName : Str }* -> Str
-fullName = \user ->
-    "$(user.firstName) $(user.lastName)"
+full_name : { first_name : Str, last_name : Str }* -> Str
+full_name = |user|
+    "${user.first_name} ${user.last_name}"
 ```
 
-The `*` in the type `{ firstName : Str, lastName : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
+The `*` in the type `{ first_name : Str, last_name : Str }*` is what makes it an open record type. This `*` is the _wildcard type_ we saw earlier with empty lists. (An empty list has the type `List *`, in contrast to something like `List Str` which is a list of strings.)
 
 This is because record types can optionally end in a type variable. Just like how we can have `List *` or `List a -> List a`, we can also have `{ first : Str, last : Str }*` or `{ first : Str, last : Str }a -> { first : Str, last : Str }a`. The differences are that in `List a`, the type variable is required and appears with a space after `List`; in a record, the type variable is optional, and appears (with no space) immediately after `}`.
 
@@ -2092,9 +2017,9 @@ If the type variable in a record type is a `*` (such as in `{ first : Str, last 
 The type variable can also be a named type variable, like so:
 
 ```roc
-addHttps : { url : Str }a -> { url : Str }a
-addHttps = \record ->
-    { record & url: "https://$(record.url)" }
+add_https : { url : Str }a -> { url : Str }a
+add_https = |record|
+    { record & url: "https://${record.url}" }
 ```
 
 This function uses _constrained records_ in its type. The annotation is saying:
@@ -2111,7 +2036,7 @@ Here's when you can typically expect to encounter these three flavors of type va
 
 - _Open records_ are what the compiler infers when you use a record as an argument, or when destructuring it (for example, `{ x, y } =`).
 - _Closed records_ are what the compiler infers when you create a new record (for example, `{ x: 5, y: 6 }`)
-- _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: newEmail }`)
+- _Constrained records_ are what the compiler infers when you do a record update (for example, `{ user & email: new_email }`)
 
 Of note, you can pass a closed record to a function that accepts a smaller open record, but not the reverse. So a function `{ a : Str, b : Bool }* -> Str` can accept an `{ a : Str, b : Bool, c : Bool }` record, but a function `{ a : Str, b : Bool, c : Bool } -> Str` would not accept an `{ a : Str, b : Bool }*` record.
 
@@ -2126,8 +2051,8 @@ If you like, you can always annotate your functions as accepting open records. H
 ```roc
 User : {
     email : Str,
-    firstName : Str,
-    lastName : Str,
+    first_name : Str,
+    last_name : Str,
 }
 ```
 
@@ -2136,30 +2061,30 @@ This defines `User` to be a closed record, which in practice is the most common 
 If you want to have a function take a `User`, you might write its type like so:
 
 ```roc
-isValid : User -> Bool
+is_valid : User -> Bool
 ```
 
 If you want to have a function return a `User`, you might write its type like so:
 
 ```roc
-userFromEmail : Str -> User
+user_from_email : Str -> User
 ```
 
 A function which takes a user and returns a user might look like this:
 
 ```roc
-capitalizeNames : User -> User
+capitalize_names : User -> User
 ```
 
-This is a perfectly reasonable way to write all of these functions. However, I might decide that I really want the `isValid` function to take an open record; a record with _at least_ the fields of this `User` record, but possibly others as well.
+This is a perfectly reasonable way to write all of these functions. However, I might decide that I really want the `is_valid` function to take an open record; a record with _at least_ the fields of this `User` record, but possibly others as well.
 
 Since open records have a type variable (like `*` in `{ email : Str }*` or `a` in `{ email : Str }a -> { email : Str }a`), in order to do this I'd need to add a type variable to the `User` type alias:
 
 ```roc
 User a : {
     email : Str
-    firstName : Str
-    lastName : Str
+    first_name : Str
+    last_name : Str
 }a
 ```
 
@@ -2168,13 +2093,13 @@ Notice that the `a` type variable appears not only in `User a` but also in `}a` 
 Using `User a` type alias, I can still write the same three functions, but now their types need to look different. This is what the first one would look like:
 
 ```roc
-isValid : User * -> Bool
+is_valid : User * -> Bool
 ```
 
 Here, the `User *` type alias substitutes `*` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }*`. Now I can pass it any record that has at least the fields in `User`, and possibly others as well, which was my goal.
 
 ```roc
-userFromEmail : Str -> User {}
+user_from_email : Str -> User {}
 ```
 
 Here, the `User {}` type alias substitutes `{}` for the type variable `a` in the type alias, which takes it from `{ email : Str, ... }a` to `{ email : Str, ... }{}`. As noted earlier, this is another way to specify a closed record: putting a `{}` after it, in the same place that you'd find a `*` in an open record.
@@ -2186,20 +2111,20 @@ This function still returns the same record as it always did, it just needs to b
 The third function might need to use a named type variable:
 
 ```roc
-capitalizeNames : User a -> User a
+capitalize_names : User a -> User a
 ```
 
-If this function does a record update on the given user, and returns that - for example, if its definition were `capitalizeNames = \user -> { user & email: "blah" }` - then it needs to use the same named type variable for both the argument and return value.
+If this function does a record update on the given user, and returns that - for example, if its definition were `capitalize_names = |user| { user & email: "blah" }` - then it needs to use the same named type variable for both the argument and return value.
 
 However, if returns a new `User` that it created from scratch, then its type could instead be:
 
 ```roc
-capitalizeNames : User * -> User {}
+capitalize_names : User * -> User {}
 ```
 
 This says that it takes a record with at least the fields specified in the `User` type alias, and possibly others...and then returns a record with exactly the fields specified in the `User` type alias, and no others.
 
-These three examples illustrate why it's relatively uncommon to use open records for type aliases: it makes a lot of types need to incorporate a type variable that otherwise they could omit, all so that `isValid` can be given something that has not only the fields `User` has, but some others as well. (In the case of a `User` record in particular, it may be that the extra fields were included due to a mistake rather than on purpose, and accepting an open record could prevent the compiler from raising an error that would have revealed the mistake.)
+These three examples illustrate why it's relatively uncommon to use open records for type aliases: it makes a lot of types need to incorporate a type variable that otherwise they could omit, all so that `is_valid` can be given something that has not only the fields `User` has, but some others as well. (In the case of a `User` record in particular, it may be that the extra fields were included due to a mistake rather than on purpose, and accepting an open record could prevent the compiler from raising an error that would have revealed the mistake.)
 
 That said, this is a useful technique to know about if you want to (for example) make a record type that accumulates more and more fields as it progresses through a series of operations.
 
@@ -2213,10 +2138,10 @@ Because an open union represents possibilities that are impossible to know ahead
 
 ```roc
 example : [Foo Str, Bar Bool]* -> Bool
-example = \tag ->
+example = |tag|
     when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
+        Foo(str) -> Str.is_empty(str)
+        Bar(bool) -> bool
         _ -> Bool.false
 ```
 
@@ -2224,10 +2149,10 @@ In contrast, a _closed tag union_ (or _closed union_) like `[Foo Str, Bar Bool]`
 
 ```roc
 example : [Foo Str, Bar Bool] -> Bool
-example = \tag ->
+example = |tag|
     when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
+        Foo(str) -> Str.is_empty(str)
+        Bar(bool) -> bool
 ```
 
 If we were to remove the type annotations from the previous two code examples, Roc would infer the same types for them anyway.
@@ -2257,14 +2182,14 @@ This will be a type mismatch because the two branches have incompatible types. S
 
 ```roc
 if x > 5 then
-    Ok "foo"
+    Ok("foo")
 else
-    Err "bar"
+    Err("bar")
 ```
 
-This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok "foo"` to be the closed union `[Ok Str]`, and likewise for `Err "bar"` and `[Err Str]`, then this would have to be a type mismatch - because those two closed unions are incompatible.
+This shouldn't be a type mismatch, because we can see that the two branches are compatible; they are both tags that could easily coexist in the same tag union. But if the compiler inferred the type of `Ok("foo")` to be the closed union `[Ok Str]`, and likewise for `Err("bar")` and `[Err Str]`, then this would have to be a type mismatch - because those two closed unions are incompatible.
 
-Instead, the compiler infers `Ok "foo"` to be the open union `[Ok Str]*`, and `Err "bar"` to be the open union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in a `when` work the same way with open unions.)
+Instead, the compiler infers `Ok("foo")` to be the open union `[Ok Str]*`, and `Err("bar")` to be the open union `[Err Str]*`. Then, when using them together in this conditional, the inferred type of the conditional becomes `[Ok Str, Err Str]*` - that is, the combination of the unions in each of its branches. (Branches in a `when` work the same way with open unions.)
 
 Earlier we saw how a function which accepts an open union must account for more possibilities, by including catch-all `_ ->` patterns in its `when` expressions. So _accepting_ an open union means you have more requirements. In contrast, when you already _have_ a value which is an open union, you have fewer requirements. A value which is an open union (like `Ok "foo"`, which has the type `[Ok Str]*`) can be provided to anything that's expecting a tag union (no matter whether it's open or closed), as long as the expected tag union includes at least the tags in the open union you're providing.
 
@@ -2285,7 +2210,7 @@ That last one works because a function accepting an open union can accept any un
 
 However, I could not pass an `[Ok Str]*` to a function with a _closed_ tag union argument that did not mention `Ok Str` as one of its tags. So if I tried to pass `[Ok Str]*` to a function with the type `[Err Bool, Whatever] -> Str`, I would get a type mismatch - because a `when` in that function could be handling the `Err Bool` possibility and the `Whatever` possibility, and since it would not necessarily have a catch-all `_ ->` branch, it might not know what to do with an `Ok Str` if it received one.
 
-> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it `Ok 5`, that will still be a type mismatch. If you think about it, a `when` in that function might have the branch `Ok str ->` which assumes there's a string inside that `Ok`, and if `Ok 5` type-checked, then that assumption would be false and things would break!
+> **Note:** It wouldn't be accurate to say that a function which accepts an open union handles "all possible tags." For example, if I have a function `[Ok Str]* -> Bool` and I pass it `Ok(5)`, that will still be a type mismatch. If you think about it, a `when` in that function might have the branch `Ok(str) ->` which assumes there's a string inside that `Ok`, and if `Ok(5)` type-checked, then that assumption would be false and things would break!
 >
 > So `[Ok Str]*` is more restrictive than `[]*`. It's basically saying "this may or may not be an `Ok` tag, but if it is an `Ok` tag, then it's guaranteed to have a payload of exactly `Str`."
 
@@ -2302,29 +2227,29 @@ Earlier we saw these two examples, one with an open tag union and the other with
 
 ```roc
 example : [Foo Str, Bar Bool]* -> Bool
-example = \tag ->
+example = |tag|
     when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
+        Foo(str) -> Str.is_empty(str)
+        Bar(bool) -> bool
         _ -> Bool.false
 ```
 
 ```roc
 example : [Foo Str, Bar Bool] -> Bool
-example = \tag ->
+example = |tag|
     when tag is
-        Foo str -> Str.isEmpty str
-        Bar bool -> bool
+        Foo(str) -> Str.is_empty(str)
+        Bar(bool) -> bool
 ```
 
 Similarly to how there are open records with a `*`, closed records with nothing, and constrained records with a named type variable, we can also have _constrained tag unions_ with a named type variable. Here's an example:
 
 ```roc
 example : [Foo Str, Bar Bool]a -> [Foo Str, Bar Bool]a
-example = \tag ->
+example = |tag|
     when tag is
-        Foo str -> Bar (Str.isEmpty str)
-        Bar bool -> Bar Bool.false
+        Foo(str) -> Bar(Str.is_empty(str))
+        Bar(bool) -> Bar(Bool.false)
         other -> other
 ```
 
@@ -2352,58 +2277,58 @@ Record builders are a syntax sugar for sequencing actions and collecting the int
 For example, let's say we want a record builder to match URLs as follows:
 
 ```roc
-combineMatchers : UrlMatcher a, UrlMatcher b, (a, b -> c) -> UrlMatcher c
-combineMatchers = \matcherA, matcherB, combiner -> ...
+combine_matchers : UrlMatcher a, UrlMatcher b, (a, b -> c) -> UrlMatcher c
+combine_matchers = |matcher_a, matcher_b, combiner| ...
 
-userTabMatcher : UrlMatcher { users: {}, userId: U64, tab: Str }
-userTabMatcher =
-    { combineMatchers <-
-        users: exactSegment "users",
-        userId: u64Segment,
-        tab: anySegment,
+user_tab_matcher : UrlMatcher { users: {}, user_id: U64, tab: Str }
+user_tab_matcher =
+    { combine_matchers <-
+        users: exact_segment("users"),
+        user_id: u64_segment,
+        tab: any_segment,
     }
 
 expect
-    userTabMatcher
-    |> matchOnUrl "/users/123/account"
-    == Ok { users: {}, userId: 123, tab: "account" }
+    user_tab_matcher
+    |> match_on_url("/users/123/account")
+    == Ok({ users: {}, user_id: 123, tab: "account" })
 ```
 
-The `userTabMatcher` record builder desugars to the following:
+The `user_tab_matcher` record builder desugars to the following:
 
 ```roc
-userTabMatcher =
-    combineMatchers
-        (exactSegment "users")
-        (
-            combineMatchers
-                u64Segment
-                anySegment
-                \userId, tab -> (userId, tab)
-        )
-        \users, (userId, tab) -> { users, userId, tab }
+user_tab_matcher =
+    combine_matchers(
+        exact_segment("users"),
+        combine_matchers(
+            u64_segment,
+            any_segment,
+            |user_id, tab| (user_id, tab),
+        ),
+        |users, (user_id, tab)| { users, user_id, tab },
+    )
 ```
 
-You can see that the `combineMatchers` builder function is simply applied in sequence, pairing up all fields until a record is created.
+You can see that the `combine_matchers` builder function is simply applied in sequence, pairing up all fields until a record is created.
 
 You'll notice that the `users` field above holds an empty record, and isn't a useful part of the result. If you want to ignore such a field in the record builder, prefix its name with an underscore as you would do to ignore a variable:
 
 ```roc
-userTabMatcher : UrlMatcher { userId: U64 }
-userTabMatcher =
-    { combineMatchers <-
-        _: exactSegment "users",
-        userId: u64Segment,
-        _tab: anySegment,
+user_tab_matcher : UrlMatcher { user_id: U64 }
+user_tab_matcher =
+    { combine_matchers <-
+        _: exact_segment("users"),
+        user_id: u64_segment,
+        _tab: any_segment,
     }
 
 expect
-    userTabMatcher
-    |> matchOnUrl "/users/123/account"
-    == Ok { userId: 123 }
+    user_tab_matcher
+    |> match_on_url("/users/123/account")
+    == Ok({ user_id: 123 })
 ```
 
-If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html) for a moderately-sized example or the [Arg.Builder](https://github.com/roc-lang/basic-cli/blob/main/platform/Arg/Builder.roc) module in our `basic-cli` platform for a complex example.
+If you want to see other examples of using record builders, look at the [Record Builder Example](https://www.roc-lang.org/examples/RecordBuilder/README.html).
 
 ### [Reserved Keywords](#reserved-keywords) {#reserved-keywords}
 
@@ -2421,22 +2346,21 @@ Here are various Roc expressions involving operators, and what they desugar to.
 
 | Expression                   | Desugars To                                                                  |
 | ---------------------------- | ---------------------------------------------------------------------------- |
-| `a + b`                      | `Num.add a b`                                                                |
-| `a - b`                      | `Num.sub a b`                                                                |
-| `a * b`                      | `Num.mul a b`                                                                |
-| `a / b`                      | `Num.div a b`                                                                |
-| `a // b`                     | `Num.divTrunc a b`                                                           |
-| `a ^ b`                      | `Num.pow a b`                                                                |
-| `a % b`                      | `Num.rem a b`                                                                |
-| `-a`                         | `Num.neg a`                                                                  |
-| `a == b`                     | `Bool.isEq a b`                                                              |
-| `a != b`                     | `Bool.isNotEq a b`                                                           |
-| `a && b`                     | `Bool.and a b`                                                               |
-| <code>a \|\| b</code>        | `Bool.or a b`                                                                |
-| `!a`                         | `Bool.not a`                                                                 |
-| <code>a \|> f</code>         | `f a`                                                                        |
-| <code>f a b \|> g x y</code> | `g (f a b) x y`                                                              |
-| `f!`                         | [see example](https://www.roc-lang.org/examples/DesugaringAwait/README.html) |
+| `a + b`                      | `Num.add(a, b)`                                                                |
+| `a - b`                      | `Num.sub(a, b)`                                                                |
+| `a * b`                      | `Num.mul(a, b)`                                                                |
+| `a / b`                      | `Num.div(a, b)`                                                                |
+| `a // b`                     | `Num.div_trunc(a, b)`                                                          |
+| `a ^ b`                      | `Num.pow(a, b)`                                                                |
+| `a % b`                      | `Num.rem(a, b)`                                                                |
+| `-a`                         | `Num.neg(a)`                                                                  |
+| `a == b`                     | `Bool.is_eq(a, b)`                                                             |
+| `a != b`                     | `Bool.is_not_eq(a, b)`                                                         |
+| `a && b`                     | `Bool.and(a, b)`                                                               |
+| <code>a \|\| b</code>        | `Bool.or(a, b)`                                                                |
+| `!a`                         | `Bool.not(a)`                                                                 |
+| <code>a \|> f</code>         | `f(a)`                                                                        |
+| <code>f a b \|> g x y</code> | `g(f(a, b), x y)`                                                              |
 | `f?`                         | [see example](https://www.roc-lang.org/examples/DesugaringTry/README.html)   |
 
 ### [Additional Resources](#additional-resources) {#additional-resources}

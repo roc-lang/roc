@@ -8,7 +8,7 @@ InvalidChar : U8
 to_bytes : Str -> List U8
 to_bytes = \str ->
     str
-    |> Str.toUtf8
+    |> Str.to_utf8
     |> encode_chunks
     |> Bytes.Encode.sequence
     |> Bytes.Encode.encode
@@ -40,7 +40,7 @@ folder = \{ output, accum }, char ->
                     { output, accum: None }
 
 #  SGVs bG8g V29y bGQ=
-# encodeResidual : { output : List ByteEncoder, accum : State } -> List ByteEncoder
+# encode_residual : { output : List ByteEncoder, accum : State } -> List ByteEncoder
 encode_residual = \{ output, accum } ->
     when accum is
         Unreachable(_) -> output
@@ -73,18 +73,18 @@ encode_characters = \a, b, c, d ->
         n2 = unsafe_convert_char(b)
 
         x : U32
-        x = Num.intCast(n1)
+        x = Num.int_cast(n1)
 
         y : U32
-        y = Num.intCast(n2)
+        y = Num.int_cast(n2)
 
         if d == equals then
             if c == equals then
-                n = Num.bitwiseOr(Num.shiftLeftBy(x, 18), Num.shiftLeftBy(y, 12))
+                n = Num.bitwise_or(Num.shift_left_by(x, 18), Num.shift_left_by(y, 12))
 
-                # masking higher bits is not needed, Encode.unsignedInt8 ignores higher bits
+                # masking higher bits is not needed; U8 ignores higher bits
                 b1 : U8
-                b1 = Num.intCast(Num.shiftRightBy(n, 16))
+                b1 = Num.int_cast(Num.shift_right_by(n, 16))
 
                 Ok(Bytes.Encode.u8(b1))
             else if !(is_valid_char(c)) then
@@ -93,12 +93,12 @@ encode_characters = \a, b, c, d ->
                 n3 = unsafe_convert_char(c)
 
                 z : U32
-                z = Num.intCast(n3)
+                z = Num.int_cast(n3)
 
-                n = Num.bitwiseOr(Num.bitwiseOr(Num.shiftLeftBy(x, 18), Num.shiftLeftBy(y, 12)), Num.shiftLeftBy(z, 6))
+                n = Num.bitwise_or(Num.bitwise_or(Num.shift_left_by(x, 18), Num.shift_left_by(y, 12)), Num.shift_left_by(z, 6))
 
                 combined : U16
-                combined = Num.intCast(Num.shiftRightBy(n, 8))
+                combined = Num.int_cast(Num.shift_right_by(n, 8))
 
                 Ok(Bytes.Encode.u16(BE, combined))
         else if !(is_valid_char(d)) then
@@ -108,22 +108,22 @@ encode_characters = \a, b, c, d ->
             n4 = unsafe_convert_char(d)
 
             z : U32
-            z = Num.intCast(n3)
+            z = Num.int_cast(n3)
 
             w : U32
-            w = Num.intCast(n4)
+            w = Num.int_cast(n4)
 
             n =
-                Num.bitwiseOr(
-                    Num.bitwiseOr(Num.shiftLeftBy(x, 18), Num.shiftLeftBy(y, 12)),
-                    Num.bitwiseOr(Num.shiftLeftBy(z, 6), w),
+                Num.bitwise_or(
+                    Num.bitwise_or(Num.shift_left_by(x, 18), Num.shift_left_by(y, 12)),
+                    Num.bitwise_or(Num.shift_left_by(z, 6), w),
                 )
 
             b3 : U8
-            b3 = Num.intCast(n)
+            b3 = Num.int_cast(n)
 
             combined : U16
-            combined = Num.intCast(Num.shiftRightBy(n, 8))
+            combined = Num.int_cast(Num.shift_right_by(n, 8))
 
             Ok(Bytes.Encode.sequence([Bytes.Encode.u16(BE, combined), Bytes.Encode.u8(b3)]))
 
@@ -148,19 +148,19 @@ is_valid_char = \c ->
 
 is_alpha_num : U8 -> Bool
 is_alpha_num = \key ->
-    (key >= 48 && key <= 57) || (key >= 64 && key <= 90) || (key >= 97 && key <= 122)
+    (key >= 48 and key <= 57) or (key >= 64 and key <= 90) or (key >= 97 and key <= 122)
 
 # Convert a base64 character/digit to its index
 # See also [Wikipedia](https://en.wikipedia.org/wiki/Base64#Base64_table)
 unsafe_convert_char : U8 -> U8
 unsafe_convert_char = \key ->
-    if key >= 65 && key <= 90 then
+    if key >= 65 and key <= 90 then
         # A-Z
         key - 65
-    else if key >= 97 && key <= 122 then
+    else if key >= 97 and key <= 122 then
         # a-z
         (key - 97) + 26
-    else if key >= 48 && key <= 57 then
+    else if key >= 48 and key <= 57 then
         # 0-9
         (key - 48) + 26 + 26
     else

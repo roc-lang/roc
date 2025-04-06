@@ -1,10 +1,13 @@
 on:
-  #pull_request:
+  #  pull_request:
   workflow_dispatch:
   schedule:
     - cron: "0 9 * * *"
 
 name: Nightly Release macOS Apple Silicon
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
 
 env:
   RUST_BACKTRACE: 1
@@ -58,7 +61,7 @@ jobs:
 
       - name: test with zig platform
         run: |
-          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/rocLovesZig.roc
+          cd ${{ env.RELEASE_FOLDER_NAME }} && ./roc --build-host --suppress-build-host-warning examples/platform-switching/roc_loves_zig.roc
 
       - name: print short commit SHA
         run: git rev-parse --short "$GITHUB_SHA"

@@ -26,7 +26,7 @@ rm -rf examples-main/
 unzip -o -q examples-main.zip
 cp -R examples-main/examples/ content/examples/
 
-# relace links in content/examples/index.md to work on the WIP site
+# replace links in content/examples/index.md to work on the WIP site
 perl -pi -e 's|\]\(/|\]\(/examples/|g' content/examples/index.md
 
 # clean up examples artifacts
@@ -84,14 +84,9 @@ else
   echo 'Fetching latest roc nightly...'
 
   # get roc release archive
-  # check if testing archive is available
-  TESTING_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-TESTING.tar.gz"
   LATEST_URL="https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-linux_x86_64-latest.tar.gz"
-  if curl --output /dev/null --silent --head --fail "$TESTING_URL"; then 
-    curl -fOL "$TESTING_URL"
-  else
-    curl -fOL "$LATEST_URL"
-  fi
+  curl -fOL "$LATEST_URL"
+  
   # extract archive
   ls | grep "roc_nightly" | xargs tar -xzvf
   # delete archive
@@ -114,74 +109,3 @@ add_github_link_to_examples www/build/examples
 
 # cleanup
 rm -rf roc_nightly roc_releases.json
-
-# LLM prompt building
-
-# > all exercism exercises
-rm -rf exercism
-git clone --depth 1 https://github.com/exercism/roc.git exercism
-echo "BEGIN Roc Exercism Exercises" > prompt.md
-
-for dir in exercism/exercises/practice/*/; do
-    if [ -d "$dir" ]; then
-        echo "> Exercise: $(basename "$dir")" >> prompt.md
-        echo "> problem description:" >> prompt.md
-        cat "$dir.docs/instructions.md" >> prompt.md
-        echo "> solution:" >> prompt.md
-        echo '```' >> prompt.md
-        cat "$dir.meta/Example.roc" >> prompt.md
-        echo '```' >> prompt.md
-    fi
-done
-
-echo "Roc exercism LICENSE:" >> prompt.md
-
-cat exercism/LICENSE >> prompt.md
-
-echo "END Roc Exercism Exercises" >> prompt.md
-
-rm -rf exercism
-
-mv prompt.md www/build/
-
-
-echo 'Generating CLI example platform docs...'
-# Change ROC_DOCS_ROOT_DIR=builtins so that links will be generated relative to
-# "/packages/basic-cli/" rather than "/builtins/"
-export ROC_DOCS_URL_ROOT=/packages/basic-cli
-
-rm -rf ./downloaded-basic-cli
-
-git clone --depth 1 https://github.com/roc-lang/basic-cli.git downloaded-basic-cli
-
-cargo run --bin roc-docs downloaded-basic-cli/platform/main.roc
-
-rm -rf ./downloaded-basic-cli
-
-BASIC_CLI_PACKAGE_DIR="www/build/packages/basic-cli"
-mkdir -p $BASIC_CLI_PACKAGE_DIR
-mv generated-docs/* $BASIC_CLI_PACKAGE_DIR # move all the folders to build/packages/basic-cli
-
-# set up docs for older basic-cli versions
-# we need a github token
-if [ -v GITHUB_TOKEN_READ_ONLY ]; then
-
-  curl -v -H "Authorization: $GITHUB_TOKEN_READ_ONLY" -fL -o basic_cli_releases.json "https://api.github.com/repos/roc-lang/basic-cli/releases"
-
-  DOCS_LINKS=$(cat basic_cli_releases.json | jq -r '.[] | .assets[] | select(.name=="docs.tar.gz") | .browser_download_url')
-
-  rm basic_cli_releases.json
-
-  VERSION_NUMBERS=$(echo "$DOCS_LINKS" | grep -oP '(?<=/download/)[^/]+(?=/docs.tar.gz)')
-
-  while read -r VERSION_NR; do
-      echo $VERSION_NR
-      BASIC_CLI_DIR=$BASIC_CLI_PACKAGE_DIR/$VERSION_NR
-      mkdir -p $BASIC_CLI_DIR
-      curl -fL --output $BASIC_CLI_DIR/docs.tar.gz https://github.com/roc-lang/basic-cli/releases/download/$VERSION_NR/docs.tar.gz
-      tar -xf $BASIC_CLI_DIR/docs.tar.gz -C $BASIC_CLI_DIR/
-      rm $BASIC_CLI_DIR/docs.tar.gz
-      mv $BASIC_CLI_DIR/generated-docs/* $BASIC_CLI_DIR
-      rm -rf $BASIC_CLI_DIR/generated-docs
-  done <<< "$VERSION_NUMBERS"
-fi

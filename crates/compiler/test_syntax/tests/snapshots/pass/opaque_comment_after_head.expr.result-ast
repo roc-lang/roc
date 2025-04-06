@@ -19,9 +19,9 @@
                     name: @0-1 "A",
                     vars: [
                         @4-5 SpaceBefore(
-                            Identifier {
-                                ident: "p",
-                            },
+                            Identifier(
+                                "p",
+                            ),
                             [
                                 LineComment(
                                     "",

@@ -3,10 +3,10 @@ platform "multiple_exposed"
     exposes []
     packages {}
     imports []
-    provides [exposedForHost1, exposedForHost2]
+    provides [exposed_for_host1, exposed_for_host2]
 
-exposedForHost1 : I64 -> I64
-exposedForHost1 = \a -> exposed1 a |> sub1 |> add1
+exposed_for_host1 : I64 -> I64
+exposed_for_host1 = \a -> exposed1(a) |> sub1 |> add1
 
-exposedForHost2 : I64 -> I64
-exposedForHost2 = \a -> exposed2 a |> add1 |> sub1
+exposed_for_host2 : I64 -> I64
+exposed_for_host2 = \a -> exposed2(a) |> add1 |> sub1

@@ -1,9 +1,9 @@
 use crate::ast::{
-    is_expr_suffixed, AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces,
-    Implements, ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword,
-    ImportedModuleName, IngestedFileAnnotation, IngestedFileImport, ModuleImport,
-    ModuleImportParams, Pattern, PatternApplyStyle, Spaceable, Spaced, Spaces, SpacesBefore,
-    TryTarget, TypeAnnotation, TypeDef, TypeHeader, ValueDef,
+    AssignedField, Collection, CommentOrNewline, Defs, Expr, ExtractSpaces, Implements,
+    ImplementsAbilities, ImportAlias, ImportAsKeyword, ImportExposingKeyword, ImportedModuleName,
+    IngestedFileAnnotation, IngestedFileImport, ModuleImport, ModuleImportParams, Pattern,
+    Spaceable, Spaced, Spaces, SpacesBefore, TypeAnnotation, TypeDef, TypeHeader, TypeVar,
+    ValueDef,
 };
 use crate::blankspace::{
     loc_space0_e, require_newline_or_eof, space0_after_e, space0_around_ee, space0_before_e,
@@ -18,8 +18,8 @@ use crate::parser::{
     collection_trailing_sep_e, either, increment_min_indent, indented_seq_skip_first, loc, map,
     map_with_arena, optional, reset_min_indent, sep_by1, sep_by1_e, set_min_indent, skip_first,
     skip_second, specialize_err, specialize_err_ref, then, two_bytes, zero_or_more, EClosure,
-    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, EPattern, ERecord,
-    EReturn, EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
+    EExpect, EExpr, EIf, EImport, EImportParams, EInParens, EList, ENumber, ERecord, EReturn,
+    EString, EType, EWhen, Either, ParseResult, Parser, SpaceProblem,
 };
 use crate::pattern::closure_param;
 use crate::state::State;
@@ -157,12 +157,7 @@ fn record_field_access_chain<'a>() -> impl Parser<'a, Vec<'a, Suffix<'a>>, EExpr
                 )
             )
         ),
-        map(byte(b'!', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Task
-        )),
-        map(byte(b'?', EExpr::Access), |_| Suffix::TrySuffix(
-            TryTarget::Result
-        )),
+        map(byte(b'?', EExpr::Access), |()| Suffix::TrySuffix)
     ))
 }
 
@@ -208,7 +203,7 @@ fn loc_term_or_closure<'a>(
         )),
         loc_term(),
     )
-    .trace("term_or_underscore")
+    .trace("term_or_closure")
 }
 
 fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
@@ -233,12 +228,33 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
             ),
             zero_or_more(pnc_args()),
         ),
-        |arena, (expr, arg_locs_vec)| {
+        #[allow(clippy::type_complexity)]
+        |arena,
+         (expr, arg_locs_with_suffixes_vec): (
+            Loc<Expr<'a>>,
+            bumpalo::collections::Vec<
+                'a,
+                (
+                    Loc<Collection<'a, &'a Loc<Expr>>>,
+                    Option<Vec<'a, Suffix<'a>>>,
+                ),
+            >,
+        )| {
             let mut e = expr;
-            for args_loc in arg_locs_vec.iter() {
+            let orig_region = e.region;
+            for (args_loc, maybe_suffixes) in arg_locs_with_suffixes_vec.iter() {
+                let value = if let Some(suffixes) = maybe_suffixes {
+                    apply_expr_access_chain(
+                        arena,
+                        Expr::PncApply(arena.alloc(e), args_loc.value),
+                        suffixes.clone(),
+                    )
+                } else {
+                    Expr::PncApply(arena.alloc(e), args_loc.value)
+                };
                 e = Loc {
-                    value: Expr::Apply(arena.alloc(e), args_loc.value, CalledVia::ParensAndCommas),
-                    region: Region::span_across(&expr.region, &args_loc.region),
+                    value,
+                    region: Region::span_across(&orig_region, &args_loc.region),
                 };
             }
             e
@@ -247,9 +263,16 @@ fn loc_term<'a>() -> impl Parser<'a, Loc<Expr<'a>>, EExpr<'a>> {
     .trace("term")
 }
 
-fn pnc_args<'a>() -> impl Parser<'a, Loc<&'a [&'a Loc<Expr<'a>>]>, EExpr<'a>> {
+fn pnc_args<'a>() -> impl Parser<
+    'a,
+    (
+        Loc<Collection<'a, &'a Loc<Expr<'a>>>>,
+        Option<Vec<'a, Suffix<'a>>>,
+    ),
+    EExpr<'a>,
+> {
     |arena: &'a Bump, state: State<'a>, min_indent: u32| {
-        map_with_arena(
+        let args_then_suffixes = and(
             specialize_err(
                 EExpr::InParens,
                 loc(collection_trailing_sep_e(
@@ -260,32 +283,23 @@ fn pnc_args<'a>() -> impl Parser<'a, Loc<&'a [&'a Loc<Expr<'a>>]>, EExpr<'a>> {
                     Expr::SpaceBefore,
                 )),
             ),
-            |arena, arg_loc: Loc<Collection<'a, Loc<Expr<'a>>>>| {
-                let mut args_vec = Vec::new_in(arena);
-                let args_len = arg_loc.value.items.len();
-                for (i, arg) in arg_loc.value.items.iter().enumerate() {
-                    if i == (args_len - 1) {
-                        let last_comments = arg_loc.value.final_comments();
-                        if !last_comments.is_empty() {
-                            let sa = Expr::SpaceAfter(arena.alloc(arg.value), last_comments);
-                            let arg_with_spaces: &Loc<Expr<'a>> = arena.alloc(Loc {
-                                value: sa,
-                                region: arg.region,
-                            });
-                            args_vec.push(arg_with_spaces);
-                        } else {
-                            let a: &Loc<Expr<'a>> = arena.alloc(arg);
-                            args_vec.push(a);
-                        }
-                    } else {
-                        let a: &Loc<Expr<'a>> = arena.alloc(arg);
-                        args_vec.push(a);
-                    }
-                }
-                Loc {
-                    value: args_vec.into_bump_slice(),
-                    region: arg_loc.region,
-                }
+            optional(record_field_access_chain()),
+        );
+        map_with_arena(
+            args_then_suffixes,
+            |arena: &'a Bump,
+             (loc_args_coll, maybe_suffixes): (
+                Loc<Collection<'a, Loc<Expr<'a>>>>,
+                Option<Vec<'a, Suffix<'a>>>,
+            )| {
+                let args = loc_args_coll.value.ptrify_items(arena);
+                (
+                    Loc {
+                        region: loc_args_coll.region,
+                        value: args,
+                    },
+                    maybe_suffixes,
+                )
             },
         )
         .parse(arena, state, min_indent)
@@ -718,7 +732,19 @@ fn parse_stmt_operator_chain<'a>(
                     ..
                 },
                 state,
-            )) if matches!(expr_state.expr.value, Expr::Tag(..)) => {
+            )) if matches!(
+                expr_state.expr.value,
+                Expr::Tag(..)
+                    | Expr::Apply(
+                        Loc {
+                            region: _,
+                            value: Expr::Tag(_)
+                        },
+                        &[],
+                        _
+                    )
+            ) =>
+            {
                 return parse_ability_def(expr_state, state, arena, implements, call_min_indent)
                     .map(|(td, s)| (MadeProgress, Stmt::TypeDef(td), s));
             }
@@ -837,7 +863,6 @@ impl<'a> ExprState<'a> {
         } else if !self.expr.value.is_tag()
             && !self.expr.value.is_opaque()
             && !self.arguments.is_empty()
-            && !is_expr_suffixed(&self.expr.value)
         {
             let region = Region::across_all(self.arguments.iter().map(|v| &v.region));
 
@@ -1220,20 +1245,10 @@ fn parse_stmt_alias_or_opaque<'a>(
         let mut type_arguments = Vec::with_capacity_in(arguments.len(), arena);
 
         for argument in arguments {
-            match expr_to_pattern_help(arena, &argument.value) {
-                Ok(good) => {
-                    type_arguments.push(Loc::at(argument.region, good));
-                }
-                Err(()) => {
-                    return Err((
-                        MadeProgress,
-                        EExpr::Pattern(
-                            arena.alloc(EPattern::NotAPattern(state.pos())),
-                            state.pos(),
-                        ),
-                    ));
-                }
-            }
+            type_arguments.push(Loc::at(
+                argument.region,
+                expr_to_type_var(arena, &argument.value),
+            ));
         }
 
         match kind.value {
@@ -1318,6 +1333,29 @@ fn parse_stmt_alias_or_opaque<'a>(
     };
 
     Ok((MadeProgress, res, state))
+}
+
+fn expr_to_type_var<'a>(arena: &'a Bump, expr: &'a Expr<'a>) -> TypeVar<'a> {
+    let expr = expr.extract_spaces();
+
+    let mut ty = match expr.item {
+        Expr::Var {
+            module_name: "",
+            ident,
+        } => TypeVar::Identifier(ident),
+        _ => TypeVar::Malformed(arena.alloc(expr.item)),
+    };
+
+    // Now we re-add the spaces
+
+    if !expr.before.is_empty() {
+        ty = TypeVar::SpaceBefore(arena.alloc(ty), expr.before);
+    }
+    if !expr.after.is_empty() {
+        ty = TypeVar::SpaceAfter(arena.alloc(ty), expr.after);
+    }
+
+    ty
 }
 
 mod ability {
@@ -1440,7 +1478,7 @@ mod ability {
 fn finish_parsing_ability_def_help<'a>(
     call_min_indent: u32,
     name: Loc<&'a str>,
-    args: &'a [Loc<Pattern<'a>>],
+    args: &'a [Loc<TypeVar<'a>>],
     loc_implements: Loc<Implements<'a>>,
     arena: &'a Bump,
     state: State<'a>,
@@ -1864,6 +1902,10 @@ fn parse_stmt_after_apply<'a>(
 ) -> ParseResult<'a, Stmt<'a>, EExpr<'a>> {
     let before_op = state.clone();
     match loc(operator()).parse(arena, state.clone(), call_min_indent) {
+        Err((MadeProgress, EExpr::BadOperator("|", _))) => {
+            let expr = parse_expr_final(expr_state, arena);
+            return Ok((MadeProgress, Stmt::Expr(expr), state));
+        }
         Err((MadeProgress, f)) => Err((MadeProgress, f)),
         Ok((_, loc_op, state)) => {
             expr_state.consume_spaces(arena);
@@ -1891,43 +1933,6 @@ fn parse_stmt_after_apply<'a>(
         }
     }
 }
-
-// #[allow(clippy::too_many_arguments)]
-// fn parse_expr_after_apply<'a>(
-//     arena: &'a Bump,
-//     state: State<'a>,
-//     min_indent: u32,
-//     call_min_indent: u32,
-//     check_for_arrow: CheckForArrow,
-//     check_for_defs: bool,
-//     mut expr_state: ExprState<'a>,
-//     before_op: State<'a>,
-//     initial_state: State<'a>,
-// ) -> Result<(Progress, Expr<'a>, State<'a>), (Progress, EExpr<'a>)> {
-//     match loc(bin_op(check_for_defs)).parse(arena, state.clone(), call_min_indent) {
-//         Err((MadeProgress, f)) => Err((MadeProgress, f)),
-//         Ok((_, loc_op, state)) => {
-//             expr_state.consume_spaces(arena);
-//             let initial_state = before_op;
-//             parse_expr_operator(
-//                 arena,
-//                 state,
-//                 min_indent,
-//                 call_min_indent,
-//                 options,
-//                 check_for_defs,
-//                 expr_state,
-//                 loc_op,
-//                 initial_state,
-//             )
-//         }
-//         Err((NoProgress, _)) => {
-//             let expr = parse_expr_final(expr_state, arena);
-//             // roll back space parsing
-//             Ok((MadeProgress, expr, initial_state))
-//         }
-//     }
-// }
 
 #[allow(clippy::too_many_arguments)]
 fn parse_apply_arg<'a>(
@@ -1991,21 +1996,23 @@ fn parse_ability_def<'a>(
 
     let name = expr_state.expr.map_owned(|e| match e {
         Expr::Tag(name) => name,
+        Expr::Apply(
+            Loc {
+                region: _,
+                value: Expr::Tag(name),
+            },
+            &[],
+            _,
+        ) => name,
         _ => unreachable!(),
     });
 
     let mut arguments = Vec::with_capacity_in(expr_state.arguments.len(), arena);
     for argument in expr_state.arguments {
-        match expr_to_pattern_help(arena, &argument.value) {
-            Ok(good) => {
-                arguments.push(Loc::at(argument.region, good));
-            }
-            Err(_) => {
-                let start = argument.region.start();
-                let err = &*arena.alloc(EPattern::Start(start));
-                return Err((MadeProgress, EExpr::Pattern(err, argument.region.start())));
-            }
-        }
+        arguments.push(Loc::at(
+            argument.region,
+            expr_to_type_var(arena, &argument.value),
+        ));
     }
 
     // Attach any spaces to the `implements` keyword
@@ -2097,7 +2104,7 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         Expr::Underscore(opt_name) => Pattern::Underscore(opt_name),
         Expr::Tag(value) => Pattern::Tag(value),
         Expr::OpaqueRef(value) => Pattern::OpaqueRef(value),
-        Expr::Apply(loc_val, loc_args, called_via) => {
+        Expr::Apply(loc_val, loc_args, _) => {
             let region = loc_val.region;
             let value = expr_to_pattern_help(arena, &loc_val.value)?;
             let val_pattern = arena.alloc(Loc { region, value });
@@ -2111,17 +2118,21 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
                 arg_patterns.push(Loc { region, value });
             }
 
-            let pattern = Pattern::Apply(
-                val_pattern,
-                arg_patterns.into_bump_slice(),
-                if matches!(called_via, CalledVia::ParensAndCommas) {
-                    PatternApplyStyle::ParensAndCommas
-                } else {
-                    PatternApplyStyle::Whitespace
-                },
-            );
+            let pattern = Pattern::Apply(val_pattern, arg_patterns.into_bump_slice());
 
             pattern
+        }
+        Expr::PncApply(loc_val, args) => {
+            let region = loc_val.region;
+            let value = expr_to_pattern_help(arena, &loc_val.value)?;
+            let val_pattern = arena.alloc(Loc { region, value });
+            let pattern_args = args.map_items_result(arena, |arg| {
+                let region = arg.region;
+                let value = expr_to_pattern_help(arena, &arg.value)?;
+                Ok(Loc { region, value })
+            })?;
+
+            Pattern::PncApply(val_pattern, pattern_args)
         }
 
         Expr::Try => Pattern::Identifier { ident: "try" },
@@ -2171,7 +2182,6 @@ fn expr_to_pattern_help<'a>(arena: &'a Bump, expr: &Expr<'a>) -> Result<Pattern<
         | Expr::LowLevelDbg(_, _, _)
         | Expr::LowLevelTry(_, _)
         | Expr::Return(_, _)
-        | Expr::MalformedSuffixed(..)
         | Expr::PrecedenceConflict { .. }
         | Expr::EmptyRecordBuilder(_)
         | Expr::SingleFieldRecordBuilder(_)
@@ -2292,15 +2302,56 @@ pub fn parse_top_level_defs<'a>(
 // PARSER HELPERS
 
 fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+    one_of!(
+        closure_new_syntax_help(check_for_arrow),
+        closure_old_syntax_help(check_for_arrow),
+    )
+}
+
+fn closure_new_syntax_help<'a>(
+    check_for_arrow: CheckForArrow,
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
+    map_with_arena(
+        skip_first(
+            error_on_pizza(byte_indent(b'|', EClosure::Bar), EClosure::Start),
+            reset_min_indent(and(
+                sep_by1_e(
+                    byte_indent(b',', EClosure::Comma),
+                    space0_around_ee(
+                        specialize_err(EClosure::Pattern, closure_param()),
+                        EClosure::IndentArg,
+                        EClosure::IndentArrow,
+                    ),
+                    EClosure::Arg,
+                ),
+                skip_first(
+                    // Parse the -> which separates params from body
+                    byte(b'|', EClosure::Bar),
+                    // Parse the body
+                    block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
+                ),
+            )),
+        ),
+        |arena: &'a Bump, (params, body)| {
+            let params: Vec<'a, Loc<Pattern<'a>>> = params;
+            let params: &'a [Loc<Pattern<'a>>] = params.into_bump_slice();
+            Expr::Closure(params, arena.alloc(body))
+        },
+    )
+}
+
+fn closure_old_syntax_help<'a>(
+    check_for_arrow: CheckForArrow,
+) -> impl Parser<'a, Expr<'a>, EClosure<'a>> {
     // closure_help_help(options)
     map_with_arena(
         // After the first token, all other tokens must be indented past the start of the line
-        indented_seq_skip_first(
+        skip_first(
             // All closures start with a '\' - e.g. (\x -> x + 1)
             byte_indent(b'\\', EClosure::Start),
             // Once we see the '\', we're committed to parsing this as a closure.
             // It may turn out to be malformed, but it is definitely a closure.
-            and(
+            reset_min_indent(and(
                 // Parse the params
                 // Params are comma-separated
                 sep_by1_e(
@@ -2318,7 +2369,7 @@ fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>,
                     // Parse the body
                     block(check_for_arrow, true, EClosure::IndentBody, EClosure::Body),
                 ),
-            ),
+            )),
         ),
         |arena: &'a Bump, (params, body)| {
             let params: Vec<'a, Loc<Pattern<'a>>> = params;
@@ -2326,6 +2377,19 @@ fn closure_help<'a>(check_for_arrow: CheckForArrow) -> impl Parser<'a, Expr<'a>,
             Expr::Closure(params, arena.alloc(body))
         },
     )
+}
+
+fn error_on_pizza<'a, T, E: 'a>(
+    p: impl Parser<'a, T, E>,
+    f: impl Fn(Position) -> E,
+) -> impl Parser<'a, T, E> {
+    move |arena: &'a Bump, state: State<'a>, min_indent: u32| {
+        if state.bytes().starts_with(b"|>") || state.bytes().starts_with(b"||") {
+            Err((NoProgress, f(state.pos())))
+        } else {
+            p.parse(arena, state, min_indent)
+        }
+    }
 }
 
 mod when {
@@ -2963,6 +3027,18 @@ fn parse_stmt_seq<'a, E: SpaceProblem + 'a>(
                         break;
                     }
 
+                    // If this expr might be followed by an arrow (e.g. in a when branch guard),
+                    // then we also need to treat that as a terminator.
+                    if !check_for_arrow.0 && new_state.bytes().starts_with(b"->") {
+                        state = state_before_space;
+                        break;
+                    }
+
+                    if new_state.bytes().starts_with(b"|") {
+                        state = state_before_space;
+                        break;
+                    }
+
                     return Err((
                         MadeProgress,
                         wrap_error(arena.alloc(EExpr::BadExprEnd(state.pos())), state.pos()),
@@ -3107,24 +3183,33 @@ fn stmts_to_defs<'a>(
                         _,
                     ) = e
                     {
-                        let condition = &args[0];
-                        let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
-                        let e = Expr::DbgStmt {
-                            first: condition,
-                            extra_args: &args[1..],
-                            continuation: arena.alloc(rest),
-                        };
+                        if let Some((first, extra_args)) = args.split_first() {
+                            let rest = stmts_to_expr(&stmts[i + 1..], arena)?;
+                            let e = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(rest),
+                                pnc_style: false,
+                            };
 
-                        let e = if sp_stmt.before.is_empty() {
-                            e
+                            let e = if sp_stmt.before.is_empty() {
+                                e
+                            } else {
+                                arena.alloc(e).before(sp_stmt.before)
+                            };
+
+                            last_expr = Some(Loc::at(sp_stmt.item.region, e));
+
+                            // don't re-process the rest of the statements; they got consumed by the dbg expr
+                            break;
                         } else {
-                            arena.alloc(e).before(sp_stmt.before)
-                        };
-
-                        last_expr = Some(Loc::at(sp_stmt.item.region, e));
-
-                        // don't re-process the rest of the statements; they got consumed by the dbg expr
-                        break;
+                            defs.push_value_def(
+                                ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
+                                sp_stmt.item.region,
+                                sp_stmt.before,
+                                &[],
+                            );
+                        }
                     } else {
                         defs.push_value_def(
                             ValueDef::Stmt(arena.alloc(Loc::at(sp_stmt.item.region, e))),
@@ -3158,7 +3243,7 @@ fn stmts_to_defs<'a>(
                     if (spaces_middle.len() <= 1
                         && !ends_with_spaces_conservative(&ann_type.value)
                         && !starts_with_spaces_conservative(&loc_pattern.value))
-                        || header_to_pat(arena, header).equivalent(&loc_pattern.value)
+                        || type_header_equivalent_to_pat(&header, &loc_pattern.value)
                     {
                         // This is a case like
                         //   UserId x : [UserId Int]
@@ -3208,6 +3293,7 @@ fn stmts_to_defs<'a>(
                                 first: arena.alloc(condition),
                                 extra_args: &[],
                                 continuation: arena.alloc(rest),
+                                pnc_style: false,
                             }
                         } else {
                             Expr::Apply(
@@ -3293,24 +3379,39 @@ fn starts_with_spaces_conservative(value: &Pattern<'_>) -> bool {
         | Pattern::ListRest(_)
         | Pattern::OpaqueRef(_) => false,
         Pattern::As(left, _) => starts_with_spaces_conservative(&left.value),
-        Pattern::Apply(left, _, _) => starts_with_spaces_conservative(&left.value),
+        Pattern::Apply(left, _) => starts_with_spaces_conservative(&left.value),
+        Pattern::PncApply(left, _) => starts_with_spaces_conservative(&left.value),
         Pattern::RecordDestructure(_) => false,
         Pattern::RequiredField(_, _) | Pattern::OptionalField(_, _) => false,
         Pattern::SpaceBefore(_, _) => true,
         Pattern::SpaceAfter(inner, _) => starts_with_spaces_conservative(inner),
-        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => true,
+        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) | Pattern::MalformedExpr(_) => true,
     }
 }
 
-fn header_to_pat<'a>(arena: &'a Bump, header: TypeHeader<'a>) -> Pattern<'a> {
-    if header.vars.is_empty() {
-        Pattern::Tag(header.name.value)
-    } else {
-        Pattern::Apply(
-            arena.alloc(Loc::at(header.name.region, Pattern::Tag(header.name.value))),
-            header.vars,
-            PatternApplyStyle::Whitespace,
-        )
+fn type_header_equivalent_to_pat<'a>(header: &TypeHeader<'a>, pat: &Pattern<'a>) -> bool {
+    match pat.without_spaces() {
+        Pattern::Apply(func, args) => {
+            if !matches!(func.value, Pattern::Tag(tag) if header.name.value == tag) {
+                return false;
+            }
+            if args.len() != header.vars.len() {
+                return false;
+            }
+            for (arg, var) in (*args).iter().zip(header.vars) {
+                match (arg.value.without_spaces(), var.value.without_spaces()) {
+                    (Pattern::Identifier { ident: left }, TypeVar::Identifier(right)) => {
+                        if left != right {
+                            return false;
+                        }
+                    }
+                    _ => return false,
+                }
+            }
+            true
+        }
+        Pattern::Tag(tag) => header.vars.is_empty() && header.name.value == tag,
+        _ => false,
     }
 }
 
@@ -3323,7 +3424,7 @@ fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
         TypeAnnotation::As(_, _, type_header) => type_header
             .vars
             .last()
-            .map_or(false, |v| pat_ends_with_spaces_conservative(&v.value)),
+            .map_or(false, |v| type_var_ends_with_spaces_conservative(&v.value)),
         TypeAnnotation::Record { fields: _, ext }
         | TypeAnnotation::Tuple { elems: _, ext }
         | TypeAnnotation::TagUnion { ext, tags: _ } => {
@@ -3344,32 +3445,15 @@ fn ends_with_spaces_conservative(ty: &TypeAnnotation<'_>) -> bool {
     }
 }
 
-fn pat_ends_with_spaces_conservative(pat: &Pattern<'_>) -> bool {
-    match pat {
-        Pattern::Identifier { .. }
-        | Pattern::QualifiedIdentifier { .. }
-        | Pattern::Tag(_)
-        | Pattern::NumLiteral(_)
-        | Pattern::FloatLiteral(_)
-        | Pattern::StrLiteral(_)
-        | Pattern::Underscore(_)
-        | Pattern::SingleQuote(_)
-        | Pattern::Tuple(_)
-        | Pattern::List(_)
-        | Pattern::NonBase10Literal { .. }
-        | Pattern::ListRest(_)
-        | Pattern::As(_, _)
-        | Pattern::OpaqueRef(_)
-        | Pattern::Apply(_, _, PatternApplyStyle::ParensAndCommas) => false,
-        Pattern::Apply(_, args, _) => args
-            .last()
-            .map_or(false, |a| pat_ends_with_spaces_conservative(&a.value)),
-        Pattern::RecordDestructure(_) => false,
-        Pattern::RequiredField(_, _) => unreachable!(),
-        Pattern::OptionalField(_, _) => unreachable!(),
-        Pattern::SpaceBefore(inner, _) => pat_ends_with_spaces_conservative(inner),
-        Pattern::SpaceAfter(_, _) => true,
-        Pattern::Malformed(_) | Pattern::MalformedIdent(_, _) => false,
+fn type_var_ends_with_spaces_conservative(value: &TypeVar<'_>) -> bool {
+    match value {
+        TypeVar::Identifier(_) => false,
+        TypeVar::Malformed(_) => {
+            // conservativly assume it might end in a space
+            true
+        }
+        TypeVar::SpaceBefore(inner, _sp) => type_var_ends_with_spaces_conservative(inner),
+        TypeVar::SpaceAfter(_inner, _sp) => true,
     }
 }
 
@@ -3383,7 +3467,7 @@ pub fn join_alias_to_body<'a>(
     body_expr: &'a Loc<Expr<'a>>,
 ) -> ValueDef<'a> {
     let loc_name = arena.alloc(header.name.map(|x| Pattern::Tag(x)));
-    let ann_pattern = Pattern::Apply(loc_name, header.vars, PatternApplyStyle::Whitespace);
+    let ann_pattern = Pattern::Apply(loc_name, type_vars_to_patterns(arena, header.vars));
 
     let vars_region = Region::across_all(header.vars.iter().map(|v| &v.region));
     let region_ann_pattern = Region::span_across(&loc_name.region, &vars_region);
@@ -3395,6 +3479,35 @@ pub fn join_alias_to_body<'a>(
         lines_between: spaces_middle,
         body_pattern,
         body_expr,
+    }
+}
+
+fn type_vars_to_patterns<'a>(
+    arena: &'a Bump,
+    vars: &'a [Loc<TypeVar<'a>>],
+) -> &'a [Loc<Pattern<'a>>] {
+    let mut result = Vec::with_capacity_in(vars.len(), arena);
+    for var in vars {
+        let pat = type_var_to_pat(arena, &var.value);
+        result.push(Loc::at(var.region, pat));
+    }
+
+    result.into_bump_slice()
+}
+
+fn type_var_to_pat<'a>(arena: &'a Bump, var: &TypeVar<'a>) -> Pattern<'a> {
+    match var {
+        TypeVar::Identifier(ident) => Pattern::Identifier { ident },
+        TypeVar::Malformed(expr) => match expr_to_pattern_help(arena, expr) {
+            Ok(pat) => pat,
+            Err(()) => Pattern::MalformedExpr(expr),
+        },
+        TypeVar::SpaceBefore(inner, sp) => {
+            Pattern::SpaceBefore(arena.alloc(type_var_to_pat(arena, inner)), sp)
+        }
+        TypeVar::SpaceAfter(inner, sp) => {
+            Pattern::SpaceAfter(arena.alloc(type_var_to_pat(arena, inner)), sp)
+        }
     }
 }
 
@@ -3809,10 +3922,7 @@ fn apply_expr_access_chain<'a>(
             Suffix::Accessor(Accessor::TupleIndex(field)) => {
                 Expr::TupleAccess(arena.alloc(value), field)
             }
-            Suffix::TrySuffix(target) => Expr::TrySuffix {
-                target,
-                expr: arena.alloc(value),
-            },
+            Suffix::TrySuffix => Expr::TrySuffix(arena.alloc(value)),
         })
 }
 
@@ -3881,9 +3991,10 @@ enum OperatorOrDef {
 }
 
 fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
-    move |_, state: State<'a>, min_indent| {
+    (move |arena: &'a Bump, state: State<'a>, min_indent| {
         let start = state.pos();
-        let (_, op, state) = operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent)?;
+        let (_, op, state) =
+            operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)?;
         let err_progress = if check_for_defs {
             MadeProgress
         } else {
@@ -3899,16 +4010,20 @@ fn bin_op<'a>(check_for_defs: bool) -> impl Parser<'a, BinOp, EExpr<'a>> {
                 Err((err_progress, EExpr::BadOperator(":=", start)))
             }
         }
-    }
+    })
+    .trace("bin_op")
 }
 
 fn operator<'a>() -> impl Parser<'a, OperatorOrDef, EExpr<'a>> {
-    (move |_, state, min_indent| operator_help(EExpr::Start, EExpr::BadOperator, state, min_indent))
-        .trace("operator")
+    (move |arena: &'a Bump, state, min_indent| {
+        operator_help(arena, EExpr::Start, EExpr::BadOperator, state, min_indent)
+    })
+    .trace("operator")
 }
 
 #[inline(always)]
 fn operator_help<'a, F, G, E>(
+    arena: &'a Bump,
     to_expectation: F,
     to_error: G,
     mut state: State<'a>,
@@ -3919,6 +4034,21 @@ where
     G: Fn(&'a str, Position) -> E,
     E: 'a,
 {
+    let and_or = either(
+        parser::keyword(keyword::AND, EExpr::End),
+        parser::keyword(keyword::OR, EExpr::End),
+    );
+
+    match and_or.parse(arena, state.clone(), min_indent) {
+        Ok((MadeProgress, Either::First(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::And), state))
+        }
+        Ok((MadeProgress, Either::Second(_), state)) => {
+            return Ok((MadeProgress, OperatorOrDef::BinOp(BinOp::Or), state))
+        }
+        _ => {}
+    }
+
     let chomped = chomp_ops(state.bytes());
 
     macro_rules! good {
@@ -3953,6 +4083,7 @@ where
 
             good!(OperatorOrDef::BinOp(BinOp::Minus), 1)
         }
+        "?" => good!(OperatorOrDef::BinOp(BinOp::SingleQuestion), 1),
         "*" => good!(OperatorOrDef::BinOp(BinOp::Star), 1),
         "/" => good!(OperatorOrDef::BinOp(BinOp::Slash), 1),
         "%" => good!(OperatorOrDef::BinOp(BinOp::Percent), 1),
@@ -3974,6 +4105,7 @@ where
         "<=" => good!(OperatorOrDef::BinOp(BinOp::LessThanOrEq), 2),
         "&&" => good!(OperatorOrDef::BinOp(BinOp::And), 2),
         "||" => good!(OperatorOrDef::BinOp(BinOp::Or), 2),
+        "|" => Err((NoProgress, to_error("|", state.pos()))),
         "//" => good!(OperatorOrDef::BinOp(BinOp::DoubleSlash), 2),
         "->" => {
             // makes no progress, so it does not interfere with `_ if isGood -> ...`

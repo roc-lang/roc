@@ -15,7 +15,7 @@ Or even run it in your local Docker environment [Developing inside a Container](
 
 ## Using Nix
 
-On MacOS and Linux, we highly recommend Using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
+On MacOS and Linux, we highly recommend using [nix](https://nixos.org/download.html) to quickly install all dependencies necessary to build roc.
 
 :warning: If you tried to run `cargo` in the repo folder before installing nix, make sure to execute `cargo clean` first. To prevent you from executing `cargo` outside of nix, tools like [direnv](https://github.com/nix-community/nix-direnv) and [lorri](https://github.com/nix-community/lorri) can put you in a nix shell automatically when you `cd` into the directory.
 
@@ -89,22 +89,6 @@ Alternatively, you can use `cargo test --no-fail-fast` or `cargo test -p specifi
 
 For emitting LLVM IR for debugging purposes, the `--emit-llvm-ir` flag can be used.
 
-### libxcb libraries
-
-You may see an error like this during builds:
-
-```text
-/usr/bin/ld: cannot find -lxcb-render
-/usr/bin/ld: cannot find -lxcb-shape
-/usr/bin/ld: cannot find -lxcb-xfixes
-```
-
-If so, you can fix it like so:
-
-```sh
-sudo apt-get install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
-```
-
 ### libz libzstd libraries
 
 You may see an error like this during builds:
@@ -118,6 +102,15 @@ If so, you can fix it like so:
 
 ```sh
 sudo apt-get install libz-dev libzstd-dev
+```
+
+#### Macos zstd not found
+
+If you still hit `ld: library 'zstd' not found` even after doing `brew install zstd z3`,
+add these lines to `.cargo/config.toml`:
+```
+[target.aarch64-apple-darwin]
+rustflags = ["-C", "link-args=-L/opt/homebrew/lib"]
 ```
 
 ### Zig
@@ -223,7 +216,7 @@ export CPPFLAGS="-I/usr/local/opt/llvm/include"
 
 ### LLVM installation on Windows
 
-**Warning** While `cargo build` works on windows, linking roc programs does not yet, see issue #2608. This also means the repl, and many tests will not work on windows.
+**Warning** While `cargo build` works on windows, linking roc programs does not yet, see [issue #2608](https://github.com/roc-lang/roc/issues/2608). This also means the repl, and many tests will not work on windows.
 The official LLVM pre-built binaries for Windows lack features that roc needs. Instead:
 
 1. Download the custom LLVM 7z archive [here](https://github.com/roc-lang/llvm-package-windows/releases/download/v18.1.8/LLVM-18.1.8-win64.7z).

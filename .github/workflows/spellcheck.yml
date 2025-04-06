@@ -7,13 +7,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
 
 jobs:
   spell-check:
     name: spell check
-    runs-on: [ubuntu-20.04]
+    runs-on: [ubuntu-22.04]
     timeout-minutes: 10
     env:
       FORCE_COLOR: 1

@@ -225,6 +225,9 @@ pub enum Problem {
     OverAppliedDbg {
         region: Region,
     },
+    UnderAppliedTry {
+        region: Region,
+    },
     FileProblem {
         filename: PathBuf,
         error: io::ErrorKind,
@@ -251,11 +254,16 @@ pub enum Problem {
     ReturnAtEndOfFunction {
         region: Region,
     },
-    StmtAfterExpr(Region),
     UnsuffixedEffectfulRecordField(Region),
     SuffixedPureRecordField(Region),
     EmptyTupleType(Region),
     UnboundTypeVarsInAs(Region),
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
+    },
+    InterpolatedStringNotAllowed(Region),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -273,6 +281,7 @@ impl Problem {
             Problem::UnusedDef(_, _) => Warning,
             Problem::UnusedImport(_, _) => Warning,
             Problem::UnusedModuleImport(_, _) => Warning,
+            Problem::InterpolatedStringNotAllowed(_) => RuntimeError,
             Problem::ImportNameConflict { .. } => RuntimeError,
             Problem::ExplicitBuiltinImport(_, _) => Warning,
             Problem::ExplicitBuiltinTypeImport(_, _) => Warning,
@@ -292,6 +301,7 @@ impl Problem {
             Problem::DuplicateRecordFieldValue { .. } => Warning,
             Problem::DuplicateRecordFieldType { .. } => RuntimeError,
             Problem::InvalidOptionalValue { .. } => RuntimeError,
+            Problem::InvalidIgnoredValue { .. } => RuntimeError,
             Problem::DuplicateTag { .. } => RuntimeError,
             Problem::RuntimeError(_) => RuntimeError,
             Problem::SignatureDefMismatch { .. } => RuntimeError,
@@ -334,12 +344,12 @@ impl Problem {
             Problem::OverAppliedCrash { .. } => RuntimeError,
             Problem::UnappliedDbg { .. } => RuntimeError,
             Problem::OverAppliedDbg { .. } => RuntimeError,
+            Problem::UnderAppliedTry { .. } => Warning,
             Problem::DefsOnlyUsedInRecursion(_, _) => Warning,
             Problem::FileProblem { .. } => Fatal,
             Problem::ReturnOutsideOfFunction { .. } => Warning,
             Problem::StatementsAfterReturn { .. } => Warning,
             Problem::ReturnAtEndOfFunction { .. } => Warning,
-            Problem::StmtAfterExpr(_) => Fatal,
             Problem::UnsuffixedEffectfulRecordField(_) | Problem::SuffixedPureRecordField(..) => {
                 Warning
             }
@@ -368,6 +378,7 @@ impl Problem {
                 ..
             }
             | Problem::ExplicitBuiltinImport(_, region)
+            | Problem::InterpolatedStringNotAllowed(region)
             | Problem::ExplicitBuiltinTypeImport(_, region)
             | Problem::ImportShadowsSymbol { region, .. }
             | Problem::UnusedArgument(_, _, _, region)
@@ -403,57 +414,14 @@ impl Problem {
                 record_region: region,
                 ..
             }
+            | Problem::InvalidIgnoredValue {
+                record_region: region,
+                ..
+            }
             | Problem::DuplicateTag {
                 tag_union_region: region,
                 ..
             }
-            | Problem::RuntimeError(RuntimeError::Shadowing {
-                original_region: region,
-                ..
-            })
-            | Problem::RuntimeError(RuntimeError::InvalidOptionalValue {
-                record_region: region,
-                ..
-            })
-            | Problem::RuntimeError(RuntimeError::UnsupportedPattern(region))
-            | Problem::RuntimeError(RuntimeError::MalformedPattern(_, region))
-            | Problem::RuntimeError(RuntimeError::LookupNotInScope {
-                loc_name: Loc { region, .. },
-                suggestion_options: _,
-                underscored_suggestion_region: _,
-            })
-            | Problem::RuntimeError(RuntimeError::OpaqueNotDefined {
-                usage: Loc { region, .. },
-                ..
-            })
-            | Problem::RuntimeError(RuntimeError::OpaqueOutsideScope {
-                referenced_region: region,
-                ..
-            })
-            | Problem::RuntimeError(RuntimeError::OpaqueNotApplied(Loc { region, .. }))
-            | Problem::RuntimeError(RuntimeError::OpaqueAppliedToMultipleArgs(region))
-            | Problem::RuntimeError(RuntimeError::ValueNotExposed { region, .. })
-            | Problem::RuntimeError(RuntimeError::ModuleNotImported { region, .. })
-            | Problem::RuntimeError(RuntimeError::InvalidPrecedence(_, region))
-            | Problem::RuntimeError(RuntimeError::MalformedIdentifier(_, _, region))
-            | Problem::RuntimeError(RuntimeError::MalformedTypeName(_, region))
-            | Problem::RuntimeError(RuntimeError::MalformedSuffixed(region))
-            | Problem::RuntimeError(RuntimeError::InvalidRecordUpdate { region })
-            | Problem::RuntimeError(RuntimeError::InvalidFloat(_, region, _))
-            | Problem::RuntimeError(RuntimeError::InvalidInt(_, _, region, _))
-            | Problem::RuntimeError(RuntimeError::InvalidInterpolation(region))
-            | Problem::RuntimeError(RuntimeError::InvalidHexadecimal(region))
-            | Problem::RuntimeError(RuntimeError::InvalidUnicodeCodePt(region))
-            | Problem::RuntimeError(RuntimeError::EmptySingleQuote(region))
-            | Problem::RuntimeError(RuntimeError::MultipleCharsInSingleQuote(region))
-            | Problem::RuntimeError(RuntimeError::DegenerateBranch(region))
-            | Problem::RuntimeError(RuntimeError::EmptyRecordBuilder(region))
-            | Problem::RuntimeError(RuntimeError::SingleFieldRecordBuilder(region))
-            | Problem::RuntimeError(RuntimeError::OptionalFieldInRecordBuilder {
-                record: _,
-                field: region,
-            })
-            | Problem::RuntimeError(RuntimeError::ReadIngestedFileError { region, .. })
             | Problem::InvalidAliasRigid { region, .. }
             | Problem::InvalidInterpolation(region)
             | Problem::EmptyTupleType(region)
@@ -506,6 +474,7 @@ impl Problem {
             | Problem::UnappliedCrash { region }
             | Problem::OverAppliedDbg { region }
             | Problem::UnappliedDbg { region }
+            | Problem::UnderAppliedTry { region }
             | Problem::DefsOnlyUsedInRecursion(_, region)
             | Problem::ReturnOutsideOfFunction { region, .. }
             | Problem::StatementsAfterReturn { region }
@@ -513,21 +482,16 @@ impl Problem {
             | Problem::UnboundTypeVarsInAs(region)
             | Problem::UnsuffixedEffectfulRecordField(region)
             | Problem::SuffixedPureRecordField(region) => Some(*region),
-            Problem::RuntimeError(RuntimeError::CircularDef(cycle_entries))
-            | Problem::BadRecursion(cycle_entries) => {
+
+            Problem::BadRecursion(cycle_entries) => {
                 cycle_entries.first().map(|entry| entry.expr_region)
             }
 
-            Problem::StmtAfterExpr(region) => Some(*region),
-            Problem::RuntimeError(RuntimeError::UnresolvedTypeVar)
-            | Problem::RuntimeError(RuntimeError::ErroneousType)
-            | Problem::RuntimeError(RuntimeError::NonExhaustivePattern)
-            | Problem::RuntimeError(RuntimeError::NoImplementation)
-            | Problem::RuntimeError(RuntimeError::VoidValue)
-            | Problem::RuntimeError(RuntimeError::ExposedButNotDefined(_))
-            | Problem::RuntimeError(RuntimeError::NoImplementationNamed { .. })
-            | Problem::FileProblem { .. }
-            | Problem::ExposedButNotDefined(_) => None,
+            Problem::RuntimeError(runtime_error) => {
+                Some(runtime_error.region()).filter(|region| region.is_empty())
+            }
+
+            Problem::FileProblem { .. } | Problem::ExposedButNotDefined(_) => None,
         }
     }
 }
@@ -606,6 +570,11 @@ pub enum RuntimeError {
         field_name: Lowercase,
         record_region: Region,
         field_region: Region,
+    },
+    InvalidIgnoredValue {
+        field_name: Lowercase,
+        field_region: Region,
+        record_region: Region,
     },
     // Example: (5 = 1 + 2) is an unsupported pattern in an assignment; Int patterns aren't allowed in assignments!
     UnsupportedPattern(Region),
@@ -719,7 +688,9 @@ pub enum RuntimeError {
         field: Region,
     },
 
-    MalformedSuffixed(Region),
+    NonFunctionHostedAnnotation(Region),
+    InvalidTupleIndex(Region),
+    IngestedFilePathError(Region),
 }
 
 impl RuntimeError {
@@ -740,6 +711,7 @@ impl RuntimeError {
         match self {
             RuntimeError::Shadowing { shadow, .. } => shadow.region,
             RuntimeError::InvalidOptionalValue { field_region, .. } => *field_region,
+            RuntimeError::InvalidIgnoredValue { field_region, .. } => *field_region,
             RuntimeError::UnsupportedPattern(region)
             | RuntimeError::MalformedPattern(_, region)
             | RuntimeError::OpaqueOutsideScope {
@@ -752,11 +724,12 @@ impl RuntimeError {
             | RuntimeError::InvalidPrecedence(_, region)
             | RuntimeError::MalformedIdentifier(_, _, region)
             | RuntimeError::MalformedTypeName(_, region)
-            | RuntimeError::MalformedSuffixed(region)
             | RuntimeError::InvalidRecordUpdate { region }
             | RuntimeError::InvalidFloat(_, region, _)
             | RuntimeError::InvalidInt(_, _, region, _)
             | RuntimeError::EmptySingleQuote(region)
+            | RuntimeError::InvalidTupleIndex(region)
+            | RuntimeError::IngestedFilePathError(region)
             | RuntimeError::MultipleCharsInSingleQuote(region)
             | RuntimeError::DegenerateBranch(region)
             | RuntimeError::InvalidInterpolation(region)
@@ -768,17 +741,21 @@ impl RuntimeError {
                 field: region,
             }
             | RuntimeError::ReadIngestedFileError { region, .. }
-            | RuntimeError::InvalidUnicodeCodePt(region) => *region,
-            RuntimeError::UnresolvedTypeVar | RuntimeError::ErroneousType => Region::zero(),
+            | RuntimeError::InvalidUnicodeCodePt(region)
+            | RuntimeError::NonFunctionHostedAnnotation(region) => *region,
+
+            RuntimeError::UnresolvedTypeVar
+            | RuntimeError::ErroneousType
+            | RuntimeError::NonExhaustivePattern
+            | RuntimeError::NoImplementationNamed { .. }
+            | RuntimeError::NoImplementation
+            | RuntimeError::VoidValue
+            | RuntimeError::ExposedButNotDefined(_) => Region::zero(),
+
             RuntimeError::LookupNotInScope { loc_name, .. } => loc_name.region,
             RuntimeError::OpaqueNotDefined { usage, .. } => usage.region,
             RuntimeError::OpaqueNotApplied(ident) => ident.region,
             RuntimeError::CircularDef(cycle) => cycle[0].symbol_region,
-            RuntimeError::NonExhaustivePattern => Region::zero(),
-            RuntimeError::NoImplementationNamed { .. }
-            | RuntimeError::NoImplementation
-            | RuntimeError::VoidValue
-            | RuntimeError::ExposedButNotDefined(_) => Region::zero(),
         }
     }
 }

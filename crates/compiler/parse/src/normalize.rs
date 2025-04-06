@@ -3,7 +3,7 @@ use bumpalo::Bump;
 use roc_module::called_via::{BinOp, UnaryOp};
 use roc_region::all::{Loc, Position, Region};
 
-use crate::ast::ImplementsAbilities;
+use crate::ast::{ImplementsAbilities, TypeVar};
 use crate::{
     ast::{
         AbilityImpls, AbilityMember, AssignedField, Collection, Defs, Expr, FullAst, Header,
@@ -172,10 +172,9 @@ impl<'a> Normalize<'a> for Header<'a> {
                 provides: header.provides.normalize(arena),
             }),
             Header::Hosted(header) => Header::Hosted(HostedHeader {
-                before_name: &[],
-                name: header.name.normalize(arena),
+                before_exposes: &[],
                 exposes: header.exposes.normalize(arena),
-                imports: header.imports.normalize(arena),
+                old_imports: None,
             }),
         }
     }
@@ -386,6 +385,18 @@ impl<'a> Normalize<'a> for TypeDef<'a> {
                 loc_implements: loc_has.normalize(arena),
                 members: members.normalize(arena),
             },
+        }
+    }
+}
+
+impl<'a> Normalize<'a> for TypeVar<'a> {
+    fn normalize(&self, arena: &'a Bump) -> Self {
+        match self {
+            TypeVar::Identifier(ident) => TypeVar::Identifier(ident),
+            TypeVar::Malformed(expr) => TypeVar::Malformed(expr.normalize(arena)),
+            TypeVar::SpaceBefore(inner, _sp) | TypeVar::SpaceAfter(inner, _sp) => {
+                *inner.normalize(arena)
+            }
         }
     }
 }
@@ -691,10 +702,7 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::AccessorFunction(a) => Expr::AccessorFunction(a),
             Expr::RecordUpdater(a) => Expr::RecordUpdater(a),
             Expr::TupleAccess(a, b) => Expr::TupleAccess(arena.alloc(a.normalize(arena)), b),
-            Expr::TrySuffix { expr: a, target } => Expr::TrySuffix {
-                expr: arena.alloc(a.normalize(arena)),
-                target,
-            },
+            Expr::TrySuffix(a) => Expr::TrySuffix(arena.alloc(a.normalize(arena))),
             Expr::List(a) => Expr::List(a.normalize(arena)),
             Expr::RecordUpdate { update, fields } => Expr::RecordUpdate {
                 update: arena.alloc(update.normalize(arena)),
@@ -721,10 +729,12 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 first,
                 extra_args,
                 continuation,
+                pnc_style,
             } => Expr::DbgStmt {
                 first: arena.alloc(first.normalize(arena)),
                 extra_args: extra_args.normalize(arena),
                 continuation: arena.alloc(continuation.normalize(arena)),
+                pnc_style,
             },
             Expr::LowLevelDbg(x, a, b) => Expr::LowLevelDbg(
                 x,
@@ -737,8 +747,13 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 arena.alloc(a.normalize(arena)),
                 b.map(|loc_b| &*arena.alloc(loc_b.normalize(arena))),
             ),
-            Expr::Apply(a, b, c) => {
-                Expr::Apply(arena.alloc(a.normalize(arena)), b.normalize(arena), c)
+            Expr::Apply(a, b, called_via) => Expr::Apply(
+                arena.alloc(a.normalize(arena)),
+                b.normalize(arena),
+                called_via,
+            ),
+            Expr::PncApply(a, b) => {
+                Expr::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
             }
             Expr::BinOps(a, b) => Expr::BinOps(a.normalize(arena), arena.alloc(b.normalize(arena))),
             Expr::UnaryOp(a, b) => {
@@ -762,11 +777,11 @@ impl<'a> Normalize<'a> for Expr<'a> {
             Expr::If {
                 if_thens,
                 final_else,
-                indented_else,
+                indented_else: _,
             } => Expr::If {
                 if_thens: if_thens.normalize(arena),
                 final_else: arena.alloc(final_else.normalize(arena)),
-                indented_else,
+                indented_else: false,
             },
             Expr::When(a, b) => Expr::When(arena.alloc(a.normalize(arena)), b.normalize(arena)),
             Expr::ParensAround(a) => {
@@ -774,7 +789,6 @@ impl<'a> Normalize<'a> for Expr<'a> {
                 a.normalize(arena)
             }
             Expr::MalformedIdent(a, b) => Expr::MalformedIdent(a, remove_spaces_bad_ident(b)),
-            Expr::MalformedSuffixed(a) => Expr::MalformedSuffixed(a),
             Expr::PrecedenceConflict(a) => Expr::PrecedenceConflict(a),
             Expr::SpaceBefore(a, _) => a.normalize(arena),
             Expr::SpaceAfter(a, _) => a.normalize(arena),
@@ -821,19 +835,24 @@ fn fold_defs<'a>(
                             ),
                         ..
                     }) => {
-                        let rest = fold_defs(arena, defs, final_expr);
-                        let new_final = Expr::DbgStmt {
-                            first: args[0],
-                            extra_args: &args[1..],
-                            continuation: arena.alloc(Loc::at_zero(rest)),
-                        };
-                        if new_defs.is_empty() {
-                            return new_final;
+                        if let Some((first, extra_args)) = args.split_first() {
+                            let rest = fold_defs(arena, defs, final_expr);
+                            let new_final = Expr::DbgStmt {
+                                first,
+                                extra_args,
+                                continuation: arena.alloc(Loc::at_zero(rest)),
+                                pnc_style: false,
+                            };
+                            if new_defs.is_empty() {
+                                return new_final;
+                            }
+                            return Expr::Defs(
+                                arena.alloc(new_defs),
+                                arena.alloc(Loc::at_zero(new_final)),
+                            );
+                        } else {
+                            new_defs.push_value_def(vd, Region::zero(), &[], &[]);
                         }
-                        return Expr::Defs(
-                            arena.alloc(new_defs),
-                            arena.alloc(Loc::at_zero(new_final)),
-                        );
                     }
                     _ => {
                         new_defs.push_value_def(vd, Region::zero(), &[], &[]);
@@ -879,11 +898,13 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::Identifier { ident } => Pattern::Identifier { ident },
             Pattern::Tag(a) => Pattern::Tag(a),
             Pattern::OpaqueRef(a) => Pattern::OpaqueRef(a),
-            Pattern::Apply(a, b, c) => Pattern::Apply(
+            Pattern::Apply(a, b) => Pattern::Apply(
                 arena.alloc(a.normalize(arena)),
                 arena.alloc(b.normalize(arena)),
-                c,
             ),
+            Pattern::PncApply(a, b) => {
+                Pattern::PncApply(arena.alloc(a.normalize(arena)), b.normalize(arena))
+            }
             Pattern::RecordDestructure(a) => Pattern::RecordDestructure(a.normalize(arena)),
             Pattern::RequiredField(a, b) => {
                 Pattern::RequiredField(a, arena.alloc(b.normalize(arena)))
@@ -909,6 +930,7 @@ impl<'a> Normalize<'a> for Pattern<'a> {
             Pattern::StrLiteral(a) => Pattern::StrLiteral(a.normalize(arena)),
             Pattern::Underscore(a) => Pattern::Underscore(a),
             Pattern::Malformed(a) => Pattern::Malformed(a),
+            Pattern::MalformedExpr(a) => Pattern::MalformedExpr(arena.alloc(a.normalize(arena))),
             Pattern::MalformedIdent(a, b) => Pattern::MalformedIdent(a, remove_spaces_bad_ident(b)),
             Pattern::QualifiedIdentifier { module_name, ident } => {
                 Pattern::QualifiedIdentifier { module_name, ident }
@@ -1191,6 +1213,7 @@ impl<'a> Normalize<'a> for EClosure<'a> {
             EClosure::IndentArrow(_) => EClosure::IndentArrow(Position::zero()),
             EClosure::IndentBody(_) => EClosure::IndentBody(Position::zero()),
             EClosure::IndentArg(_) => EClosure::IndentArg(Position::zero()),
+            EClosure::Bar(_) => EClosure::Bar(Position::zero()),
         }
     }
 }

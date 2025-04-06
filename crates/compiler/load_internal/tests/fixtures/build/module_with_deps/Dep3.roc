@@ -1,6 +1,4 @@
-interface Dep3
-    exposes [one, two, foo, bar]
-    imports []
+module [one, two, foo, bar]
 
 one = 1
 

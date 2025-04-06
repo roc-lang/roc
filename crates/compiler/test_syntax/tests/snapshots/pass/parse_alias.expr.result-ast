@@ -19,12 +19,12 @@
                     header: TypeHeader {
                         name: @0-4 "Blah",
                         vars: [
-                            @5-6 Identifier {
-                                ident: "a",
-                            },
-                            @7-8 Identifier {
-                                ident: "b",
-                            },
+                            @5-6 Identifier(
+                                "a",
+                            ),
+                            @7-8 Identifier(
+                                "b",
+                            ),
                         ],
                     },
                     ann: @11-26 Apply(

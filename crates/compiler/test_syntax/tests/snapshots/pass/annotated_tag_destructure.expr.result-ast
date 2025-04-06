@@ -26,7 +26,6 @@
                                 ident: "x",
                             },
                         ],
-                        Whitespace,
                     ),
                     ann_type: @11-25 TagUnion {
                         ext: None,
@@ -55,7 +54,6 @@
                                 ident: "x",
                             },
                         ],
-                        Whitespace,
                     ),
                     body_expr: @37-46 Apply(
                         @37-43 Tag(

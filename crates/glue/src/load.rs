@@ -247,11 +247,11 @@ fn call_roc_make_glue(
                 &roc_std::RocList<roc_type::Types>,
             );
 
-            let name_of_main = "roc__makeGlueForHost_1_exposed_generic";
+            let name_of_main = "roc__make_glue_for_host_1_exposed_generic";
 
             let make_glue: libloading::Symbol<MakeGlue> = unsafe {
                 lib.get(name_of_main.as_bytes())
-                    .unwrap_or_else(|_| panic!("Unable to load glue function"))
+                    .unwrap_or_else(|_| panic!("Unable to load glue function: {lib:?}"))
             };
             let mut files = RocCallResult::new(roc_std::RocResult::err(roc_std::RocStr::empty()));
             unsafe { make_glue(&mut files, &roc_types) };

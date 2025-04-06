@@ -1,4 +1,4 @@
-maybeEarlyReturn = \x ->
+maybeEarlyReturn = |x|
     y =
         when x is
             5 ->
@@ -7,6 +7,6 @@ maybeEarlyReturn = \x ->
 
             _ -> x + 2
 
-    Num.toStr y
+    Num.to_str y
 
 maybeEarlyRetun 3

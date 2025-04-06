@@ -1,17 +1,17 @@
-procedure Bool.12 (#Attr.2, #Attr.3):
-    let Bool.24 : Int1 = lowlevel NotEq #Attr.2 #Attr.3;
-    ret Bool.24;
+procedure Bool.10 (#Attr.2, #Attr.3):
+    let Bool.22 : Int1 = lowlevel NotEq #Attr.2 #Attr.3;
+    ret Bool.22;
 
-procedure Bool.7 (Bool.19, Bool.20):
-    let Bool.23 : Int1 = CallByName Bool.12 Bool.19 Bool.20;
-    ret Bool.23;
+procedure Bool.5 (Bool.17, Bool.18):
+    let Bool.21 : Int1 = CallByName Bool.10 Bool.17 Bool.18;
+    ret Bool.21;
 
 procedure Test.6 ():
     let Test.10 : Int1 = false;
     let Test.0 : [C Int1, C Int1, C Int1] = TagId(2) Test.10;
     let Test.9 : Int1 = false;
     let Test.1 : [C Int1, C Int1, C Int1] = TagId(0) Test.9;
-    let Test.8 : Int1 = CallByName Bool.7 Test.0 Test.1;
+    let Test.8 : Int1 = CallByName Bool.5 Test.0 Test.1;
     expect Test.8;
     let Test.7 : {} = Struct {};
     ret Test.7;

@@ -1,6 +1,6 @@
 app [main] { pf: platform "../test-platform-simple-zig/main.roc" }
 
-makeA =
+make_a =
     a = 1
 
     expect a == 2
@@ -9,19 +9,19 @@ makeA =
     a
 
 expect
-    a = makeA
+    a = make_a
     b = 2i64
 
     a == b
 
-polyDbg = \x ->
+poly_dbg = \x ->
     dbg x
 
     x
 
 main =
     str = "this will for sure be a large string so when we split it it will use seamless slices which affect printing"
-    words = Str.splitOn str " "
+    words = Str.split_on(str, " ")
     expect words == []
 
     x = 42
@@ -31,7 +31,7 @@ main =
 
     dbg "this is line 24"
 
-    r = { x: polyDbg "abc", y: polyDbg 10u8, z: polyDbg (A (B C)) }
+    r = { x: poly_dbg("abc"), y: poly_dbg(10u8), z: poly_dbg(A(B(C))) }
 
     when r is
         _ -> "Program finished!\n"

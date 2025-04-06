@@ -90,7 +90,7 @@ table tr td {
 }
 
 .entry-name:target {
-  background-color: var(--violet-bg);
+  border: 4px solid var(--violet);
 }
 
 .entry-name a {
@@ -206,6 +206,7 @@ main {
   scrollbar-color: var(--violet) var(--body-bg-color);
   scrollbar-gutter: stable both-edges;
   scroll-padding-top: calc(16px + 16px + 1lh + 16px + 16px);
+  align-content: start;
 }
 
 main > * {
@@ -714,19 +715,8 @@ pre>samp {
   line-height: 1.3em;
 }
 
-.module-header-container {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-end;
-  margin-bottom: 48px;
-}
-
-.llm-prompt-link {
-  flex-shrink: 0;
-}
-
-.module-name {
-    flex-grow: 1;
+.ai-docs-link {
+  margin-bottom: 10px;
 }
 
 @media (prefers-color-scheme: dark) {

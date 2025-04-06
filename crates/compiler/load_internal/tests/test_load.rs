@@ -271,11 +271,13 @@ fn load_fixture(
         );
     }
 
-    assert!(loaded_module
-        .type_problems
-        .remove(&home)
-        .unwrap_or_default()
-        .is_empty());
+    assert_eq!(
+        loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default(),
+        Vec::new()
+    );
 
     let expected_name = loaded_module
         .interns
@@ -433,11 +435,13 @@ fn module_with_deps() {
         loaded_module.can_problems.remove(&home).unwrap_or_default(),
         Vec::new()
     );
-    assert!(loaded_module
-        .type_problems
-        .remove(&home)
-        .unwrap_or_default()
-        .is_empty(),);
+    assert_eq!(
+        loaded_module
+            .type_problems
+            .remove(&home)
+            .unwrap_or_default(),
+        Vec::new()
+    );
 
     let mut def_count = 0;
     let declarations = loaded_module.declarations_by_id.remove(&home).unwrap();
@@ -512,11 +516,11 @@ fn load_docs() {
         (None, Some("An interface for docs tests\n")),
         (Some("User"), Some("This is a user\n")),
         (
-            Some("makeUser"),
+            Some("make_user"),
             Some("Makes a user\n\nTakes a name Str.\n"),
         ),
-        (Some("getName"), Some("Gets the user's name\n")),
-        (Some("getNameExposed"), None),
+        (Some("get_name"), Some("Gets the user's name\n")),
+        (Some("get_name_exposed"), None),
     ]
     .into_iter()
     .map(|(ident_str_opt, doc_str_opt)| {
@@ -553,8 +557,8 @@ fn import_inside_def() {
     expect_types(
         loaded_module,
         hashmap! {
-            "dep1Str" => "Str",
-            "dep2TwoDobuled" => "Frac *",
+            "dep1_str" => "Str",
+            "dep2_two_dobuled" => "Frac *",
         },
     );
 }
@@ -585,15 +589,15 @@ fn test_load_and_typecheck() {
     expect_types(
         loaded_module,
         hashmap! {
-            "floatTest" => "F64",
-            "divisionFn" => "Frac a, Frac a -> Frac a",
+            "float_test" => "F64",
+            "division_fn" => "Frac a, Frac a -> Frac a",
             "x" => "Frac *",
-            "divisionTest" => "F64",
-            "intTest" => "I64",
-            "constantNum" => "Num *",
-            "divisionTest" => "F64",
-            "divDep1ByDep2" => "Frac a",
-            "fromDep2" => "Frac a",
+            "division_test" => "F64",
+            "int_test" => "I64",
+            "constant_num" => "Num *",
+            "division_test" => "F64",
+            "div_dep1_by_dep2" => "Frac a",
+            "from_dep2" => "Frac a",
         },
     );
 }
@@ -608,7 +612,7 @@ fn iface_quicksort() {
         hashmap! {
             "swap" => "U64, U64, List a -> List a",
             "partition" => "U64, U64, List (Num a) -> [Pair U64 (List (Num a))]",
-            "partitionHelp" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
+            "partition_help" => "U64, U64, List (Num a), U64, Num a -> [Pair U64 (List (Num a))]",
             "quicksort" => "List (Num a), U64, U64 -> List (Num a)",
         },
     );
@@ -622,11 +626,11 @@ fn load_astar() {
     expect_types(
         loaded_module,
         hashmap! {
-            "findPath" => "{ costFunction : position, position -> F64, end : position, moveFunction : position -> Set position, start : position } -> Result (List position) [KeyNotFound] where position implements Hash & Eq",
-            "initialModel" => "position -> Model position where position implements Hash & Eq",
-            "reconstructPath" => "Dict position position, position -> List position where position implements Hash & Eq",
-            "updateCost" => "position, position, Model position -> Model position where position implements Hash & Eq",
-            "cheapestOpen" => "(position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
+            "find_path" => "{ cost_function : position, position -> F64, end : position, move_function : position -> Set position, start : position } -> Result (List position) [KeyNotFound] where position implements Hash & Eq",
+            "initial_model" => "position -> Model position where position implements Hash & Eq",
+            "reconstruct_path" => "Dict position position, position -> List position where position implements Hash & Eq",
+            "update_cost" => "position, position, Model position -> Model position where position implements Hash & Eq",
+            "cheapest_open" => "(position -> F64), Model position -> Result position [KeyNotFound] where position implements Hash & Eq",
             "astar" => "(position, position -> F64), (position -> Set position), position, Model position -> [Err [KeyNotFound], Ok (List position)] where position implements Hash & Eq",
         },
     );
@@ -640,7 +644,7 @@ fn load_principal_types() {
     expect_types(
         loaded_module,
         hashmap! {
-            "intVal" => "Str",
+            "int_val" => "Str",
             "identity" => "a -> a",
         },
     );
@@ -657,13 +661,13 @@ fn iface_dep_types() {
             "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Frac *",
+            "always_three" => "* -> Frac *",
             "identity" => "a -> a",
             "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
-            "withDefault" => "Res.Res a err, a -> a",
+            "with_default" => "Res.Res a err, a -> a",
         },
     );
 }
@@ -679,13 +683,13 @@ fn app_dep_types() {
             "blah2" => "Frac *",
             "blah3" => "Str",
             "str" => "Str",
-            "alwaysThree" => "* -> Frac *",
+            "always_three" => "* -> Frac *",
             "identity" => "a -> a",
             "z" => "Frac *",
             "w" => "Dep1.Identity {}",
             "succeed" => "a -> Dep1.Identity a",
             "yay" => "Res.Res {} err",
-            "withDefault" => "Res.Res a err, a -> a",
+            "with_default" => "Res.Res a err, a -> a",
         },
     );
 }
@@ -855,10 +859,10 @@ fn platform_exposes_main_return_by_pointer_issue() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : { content: Str, other: Str }
-                    mainForHost = main
+                    main_for_host : { content: Str, other: Str }
+                    main_for_host = main
                     "#
             ),
         ),
@@ -897,13 +901,13 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
             "Main.roc",
             indoc!(
                 r"
-                    module [twenty, readAge]
+                    module [twenty, read_age]
 
                     import Age exposing [Age]
 
                     twenty = @Age 20
 
-                    readAge = \@Age n -> n
+                    read_age = \@Age n -> n
                     "
             ),
         ),
@@ -933,8 +937,8 @@ fn opaque_wrapped_unwrapped_outside_defining_module() {
 
                 The unwrapped opaque type Age referenced here:
 
-                7│  readAge = \@Age n -> n
-                               ^^^^
+                7│  read_age = \@Age n -> n
+                                ^^^^
 
                 is imported from another module:
 
@@ -997,27 +1001,27 @@ fn unused_imports() {
             "Main.roc",
             indoc!(
                 r#"
-            module [usedModule, unusedModule, unusedExposed, usingThreeValue, unusedWithAlias]
+            module [used_module, unused_module, unused_exposed, using_three_value, unused_with_alias]
 
             import Dep1
             import Dep3 exposing [Three]
 
-            usedModule =
+            used_module =
                 import Dep2
                 Dep2.two
 
-            unusedModule =
+            unused_module =
                 import Dep2
                 2
 
-            unusedExposed =
+            unused_exposed =
                 import Dep2 exposing [two]
                 2
 
-            usingThreeValue =
+            using_three_value =
                 Dep3.three
 
-            unusedWithAlias =
+            unused_with_alias =
                 import Dep2 as D2
                 2
                 "#
@@ -1191,13 +1195,13 @@ fn explicit_builtin_type_import() {
             r#"
                 interface Main exposes [main] imports []
 
-                import Dict exposing [Dict, isEmpty]
+                import Dict exposing [Dict, is_empty]
 
-                myDict : Dict * *
-                myDict =
+                my_dict : Dict * *
+                my_dict =
                     Dict.empty {}
 
-                main = isEmpty myDict
+                main = is_empty my_dict
                 "#
         ),
     )];
@@ -1210,7 +1214,7 @@ fn explicit_builtin_type_import() {
 
             `Dict.Dict` was imported here:
 
-            3│  import Dict exposing [Dict, isEmpty]
+            3│  import Dict exposing [Dict, is_empty]
                                       ^^^^
 
             All types from builtins are automatically exposed, so you can remove
@@ -1490,9 +1494,9 @@ fn alias_using_builtin_name() {
             "BoolExtra.roc",
             indoc!(
                 r"
-                interface BoolExtra exposes [toNum] imports []
+                interface BoolExtra exposes [to_num] imports []
 
-                toNum = \value ->
+                to_num = \value ->
                     if value then 1 else 0
                 "
             ),
@@ -1574,7 +1578,7 @@ fn module_params_checks() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1605,7 +1609,7 @@ fn module_params_optional() {
                 r#"
             module { key, exp ? "default" } -> [url]
 
-            url = "example.com/$(key)?exp=$(exp)"
+            url = "example.com/${key}?exp=${exp}"
             "#
             ),
         ),
@@ -1636,7 +1640,7 @@ fn module_params_typecheck_fail() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1687,7 +1691,7 @@ fn module_params_missing_fields() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1740,7 +1744,7 @@ fn module_params_extra_fields() {
                 r#"
             module { key } -> [url]
 
-            url = "example.com/$(key)"
+            url = "example.com/${key}"
             "#
             ),
         ),
@@ -1839,7 +1843,7 @@ fn module_params_missing() {
                 r#"
             module { key, exp } -> [url]
 
-            url = "example.com/$(key)?exp=$(Num.toStr exp)"
+            url = "example.com/${key}?exp=${Num.to_str(exp)}"
             "#
             ),
         ),
@@ -1896,10 +1900,10 @@ fn issue_2863_module_type_does_not_exist() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
-                    mainForHost : Str
-                    mainForHost = main
+                    main_for_host : Str
+                    main_for_host = main
                     "#
             ),
         ),
@@ -1957,12 +1961,12 @@ fn import_builtin_in_platform_and_check_app() {
                         exposes []
                         packages {}
                         imports []
-                        provides [mainForHost]
+                        provides [main_for_host]
 
                     import Str
 
-                    mainForHost : Str
-                    mainForHost = main
+                    main_for_host : Str
+                    main_for_host = main
                     "#
             ),
         ),
@@ -2169,7 +2173,7 @@ fn roc_package_depends_on_other_package() {
                 r#"
             module [say]
 
-            say = \msg -> "$(msg), world!"
+            say = \msg -> "${msg}, world!"
             "#
             ),
         ),

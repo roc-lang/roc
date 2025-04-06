@@ -1,7 +1,5 @@
-interface Principal
-    exposes [identity, intVal]
-    imports []
+module [identity, int_val]
 
 identity = \a -> a
 
-intVal = identity "hi"
+int_val = identity("hi")

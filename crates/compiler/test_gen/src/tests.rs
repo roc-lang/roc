@@ -22,7 +22,6 @@ pub mod gen_str;
 pub mod gen_tags;
 pub mod gen_tuples;
 mod helpers;
-pub mod wasm_str;
 
 #[cfg(feature = "gen-wasm")]
 pub mod wasm_linking;

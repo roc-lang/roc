@@ -15,12 +15,14 @@ use parking_lot::Mutex;
 use roc_builtins::roc::module_source;
 use roc_can::abilities::{AbilitiesStore, PendingAbilitiesStore, ResolvedImpl};
 use roc_can::constraint::{Constraint as ConstraintSoa, Constraints, TypeOrVar};
-use roc_can::env::FxMode;
+use roc_can::env::Env;
 use roc_can::expr::{Declarations, ExpectLookup, PendingDerives};
 use roc_can::module::{
     canonicalize_module_defs, ExposedByModule, ExposedForModule, ExposedModuleTypes, Module,
     ModuleParams, ResolvedImplementations, TypeState,
 };
+use roc_can::scope::Scope;
+use roc_can_solo::module::{solo_canonicalize_module_defs, SoloCanOutput};
 use roc_collections::soa::slice_extend_new;
 use roc_collections::{default_hasher, BumpMap, MutMap, MutSet, VecMap, VecSet};
 use roc_constrain::module::constrain_module;
@@ -34,7 +36,7 @@ use roc_debug_flags::{
 use roc_derive::SharedDerivedModule;
 use roc_error_macros::internal_error;
 use roc_late_solve::{AbilitiesView, WorldAbilities};
-use roc_module::ident::{Ident, IdentSuffix, ModuleName, QualifiedModuleName};
+use roc_module::ident::{Ident, ModuleName, QualifiedModuleName};
 use roc_module::symbol::{
     IdentIds, IdentIdsByModule, Interns, ModuleId, ModuleIds, PQModuleName, PackageModuleIds,
     PackageQualified, Symbol,
@@ -205,9 +207,20 @@ fn start_phase<'a>(
                     root_type: state.root_type.clone(),
                 }
             }
+            Phase::SoloCanonicalize => {
+                // canonicalize the file
+                let parsed = state.module_cache.parsed.get(&module_id).unwrap().clone();
+
+                BuildTask::SoloCanonicalize { parsed }
+            }
             Phase::CanonicalizeAndConstrain => {
                 // canonicalize the file
                 let parsed = state.module_cache.parsed.remove(&module_id).unwrap();
+                let solo_can_output = state
+                    .module_cache
+                    .solo_canonicalized
+                    .remove(&module_id)
+                    .unwrap();
 
                 let deps_by_name = &parsed.deps_by_name;
                 let num_deps = deps_by_name.len();
@@ -319,7 +332,7 @@ fn start_phase<'a>(
                     exposed_module_ids: state.exposed_modules,
                     exec_mode: state.exec_mode,
                     imported_module_params,
-                    fx_mode: state.fx_mode,
+                    solo_can_output,
                 }
             }
 
@@ -579,6 +592,7 @@ enum Msg<'a> {
     Many(Vec<Msg<'a>>),
     Header(ModuleHeader<'a>),
     Parsed(ParsedModule<'a>),
+    SoloCanonicalized(ModuleId, CanSolo<'a>),
     CanonicalizedAndConstrained(CanAndCon),
     SolvedTypes {
         module_id: ModuleId,
@@ -654,6 +668,9 @@ enum Msg<'a> {
 }
 
 #[derive(Debug)]
+struct CanSolo<'a>(SoloCanOutput<'a>);
+
+#[derive(Debug)]
 struct CanAndCon {
     constrained_module: ConstrainedModule,
     canonicalization_problems: Vec<roc_problem::can::Problem>,
@@ -714,7 +731,6 @@ struct State<'a> {
     pub platform_path: PlatformPath<'a>,
     pub target: Target,
     pub(self) function_kind: FunctionKind,
-    pub fx_mode: FxMode,
 
     /// Note: only packages and platforms actually expose any modules;
     /// for all others, this will be empty.
@@ -802,7 +818,6 @@ impl<'a> State<'a> {
             cache_dir,
             target,
             function_kind,
-            fx_mode: FxMode::Task,
             platform_data: None,
             platform_path: PlatformPath::NotSpecified,
             module_cache: ModuleCache::default(),
@@ -894,6 +909,9 @@ enum BuildTask<'a> {
         ident_ids_by_module: SharedIdentIdsByModule,
         root_type: RootType,
     },
+    SoloCanonicalize {
+        parsed: ParsedModule<'a>,
+    },
     CanonicalizeAndConstrain {
         parsed: ParsedModule<'a>,
         qualified_module_ids: PackageModuleIds<'a>,
@@ -905,7 +923,7 @@ enum BuildTask<'a> {
         skip_constraint_gen: bool,
         exec_mode: ExecutionMode,
         imported_module_params: VecMap<ModuleId, ModuleParams>,
-        fx_mode: FxMode,
+        solo_can_output: SoloCanOutput<'a>,
     },
     Solve {
         module: Module,
@@ -2274,7 +2292,7 @@ fn update<'a>(
                     config_shorthand,
                     provides,
                     exposes_ids,
-                    requires,
+                    requires: _,
                     ..
                 } => {
                     work.extend(state.dependencies.notify_package(config_shorthand));
@@ -2311,30 +2329,11 @@ fn update<'a>(
                     if header.is_root_module {
                         state.exposed_modules = exposes_ids;
                     }
-
-                    if requires.iter().any(|requires| {
-                        IdentSuffix::from_name(requires.value.ident.value).is_bang()
-                    }) {
-                        state.fx_mode = FxMode::PurityInference;
-                    }
                 }
-                Builtin { .. } => {
-                    if header.is_root_module {
-                        debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
-                        state.platform_path = PlatformPath::RootIsModule;
-                    }
-                }
-                Hosted { exposes, .. } | Module { exposes, .. } => {
+                Builtin { .. } | Hosted { .. } | Module { .. } => {
                     if header.is_root_module {
                         debug_assert!(matches!(state.platform_path, PlatformPath::NotSpecified));
                         state.platform_path = PlatformPath::RootIsHosted;
-                    }
-                    // WARNING: This will be bypassed if we export a record of effectful functions. This is a temporary hacky method
-                    if exposes
-                        .iter()
-                        .any(|exposed| exposed.value.is_effectful_fn())
-                    {
-                        state.fx_mode = FxMode::PurityInference;
                     }
                 }
             }
@@ -2390,7 +2389,6 @@ fn update<'a>(
                 extend_module_with_builtin_import(parsed, ModuleId::DECODE);
                 extend_module_with_builtin_import(parsed, ModuleId::HASH);
                 extend_module_with_builtin_import(parsed, ModuleId::INSPECT);
-                extend_module_with_builtin_import(parsed, ModuleId::TASK);
             }
             state
                 .module_cache
@@ -2430,6 +2428,23 @@ fn update<'a>(
             state.module_cache.parsed.insert(module_id, parsed);
 
             let work = state.dependencies.notify(module_id, Phase::Parse);
+
+            start_tasks(arena, &mut state, work, injector, worker_wakers)?;
+
+            Ok(state)
+        }
+
+        SoloCanonicalized(module_id, CanSolo(solo_can_output)) => {
+            log!("solo canonicalized module {:?}", module_id);
+
+            state
+                .module_cache
+                .solo_canonicalized
+                .insert(module_id, solo_can_output);
+
+            let work = state
+                .dependencies
+                .notify(module_id, Phase::SoloCanonicalize);
 
             start_tasks(arena, &mut state, work, injector, worker_wakers)?;
 
@@ -2487,6 +2502,7 @@ fn update<'a>(
 
             Ok(state)
         }
+
         SolvedTypes {
             module_id,
             ident_ids,
@@ -3711,7 +3727,6 @@ fn load_module<'a>(
         "Decode", ModuleId::DECODE
         "Hash", ModuleId::HASH
         "Inspect", ModuleId::INSPECT
-        "Task", ModuleId::TASK
     }
 
     let (filename, opt_shorthand) = module_name_to_path(src_dir, &module_name, arc_shorthands);
@@ -3937,17 +3952,25 @@ fn parse_header<'a>(
             },
             parse_state,
         )) => {
+            let module_name = match opt_expected_module_name {
+                Some(pq_name) => arena.alloc_str(pq_name.as_inner().as_str()),
+                None => {
+                    // [modules-revamp] [privacy-changes] TODO: Support test/check on nested modules
+                    arena.alloc_str(filename.file_stem().unwrap().to_str().unwrap())
+                }
+            };
+
             let info = HeaderInfo {
                 filename,
                 is_root_module,
                 opt_shorthand,
                 packages: &[],
                 header_type: HeaderType::Hosted {
-                    name: header.name.value,
-                    exposes: unspace(arena, header.exposes.item.items),
+                    name: roc_parse::header::ModuleName::new(module_name),
+                    exposes: unspace(arena, header.exposes.items),
                 },
                 module_comments: comments,
-                header_imports: Some(header.imports),
+                header_imports: header.old_imports,
             };
 
             let (module_id, _, header) =
@@ -5109,6 +5132,31 @@ fn build_platform_header<'a>(
 }
 
 #[allow(clippy::unnecessary_wraps)]
+fn canonicalize_solo<'a>(arena: &'a Bump, parsed: ParsedModule<'a>) -> CanSolo<'a> {
+    let canonicalize_solo_start = Instant::now();
+
+    let ParsedModule {
+        module_path,
+        header_type,
+        src,
+        parsed_defs,
+        mut module_timing,
+        ..
+    } = parsed;
+
+    let parsed_defs = arena.alloc(parsed_defs);
+
+    let solo_can_output =
+        solo_canonicalize_module_defs(arena, header_type, parsed_defs, module_path, src);
+
+    let canonicalize_solo_end = Instant::now();
+
+    module_timing.canonicalize_solo = canonicalize_solo_end.duration_since(canonicalize_solo_start);
+
+    CanSolo(solo_can_output)
+}
+
+#[allow(clippy::unnecessary_wraps)]
 fn canonicalize_and_constrain<'a>(
     arena: &'a Bump,
     qualified_module_ids: &'a PackageModuleIds<'a>,
@@ -5121,22 +5169,21 @@ fn canonicalize_and_constrain<'a>(
     exposed_module_ids: &[ModuleId],
     exec_mode: ExecutionMode,
     imported_module_params: VecMap<ModuleId, ModuleParams>,
-    fx_mode: FxMode,
+    solo_can_output: SoloCanOutput<'a>,
 ) -> CanAndCon {
     let canonicalize_start = Instant::now();
 
     let ParsedModule {
         module_id,
         module_path,
-        src,
         header_type,
-        exposed_ident_ids,
         parsed_defs,
         initial_scope,
         available_modules,
         mut module_timing,
         symbols_from_requires,
         opt_shorthand,
+        exposed_ident_ids,
         ..
     } = parsed;
 
@@ -5144,36 +5191,55 @@ fn canonicalize_and_constrain<'a>(
     let _before = roc_types::types::get_type_clone_count();
 
     let parsed_defs_for_docs = parsed_defs.clone();
-    let parsed_defs = arena.alloc(parsed_defs);
 
     let mut var_store = VarStore::default();
 
-    let fx_mode = if module_id.is_builtin() {
-        // Allow builtins to expose effectful functions
-        // even if platform is `Task`-based
-        FxMode::PurityInference
-    } else {
-        fx_mode
-    };
+    let env = Env::from_solo_can(
+        arena,
+        &module_path,
+        module_id,
+        &dep_idents,
+        qualified_module_ids,
+        solo_can_output.problems,
+        opt_shorthand,
+        solo_can_output.src,
+        solo_can_output.lazy_line_info,
+    );
+
+    let mut scope = Scope::new(
+        module_id,
+        qualified_module_ids
+            .get_name(module_id)
+            .expect("home module not found")
+            .as_inner()
+            .to_owned(),
+        exposed_ident_ids,
+        imported_abilities_state,
+    );
+
+    for (name, alias) in aliases.into_iter() {
+        scope.add_alias(
+            name,
+            alias.region,
+            alias.type_variables,
+            alias.infer_ext_in_output_variables,
+            alias.typ,
+            alias.kind,
+        );
+    }
 
     let mut module_output = canonicalize_module_defs(
         arena,
-        parsed_defs,
         &header_type,
         module_id,
-        &*arena.alloc(module_path.to_string_lossy()),
-        src,
-        qualified_module_ids,
-        exposed_ident_ids,
-        &dep_idents,
-        aliases,
-        imported_abilities_state,
         initial_scope,
         exposed_symbols,
         &symbols_from_requires,
         &mut var_store,
-        opt_shorthand,
-        fx_mode,
+        scope,
+        env,
+        solo_can_output.loc_defs,
+        solo_can_output.module_params,
     );
 
     let mut types = Types::new();
@@ -5285,7 +5351,6 @@ fn canonicalize_and_constrain<'a>(
                         | ModuleId::SET
                         | ModuleId::HASH
                         | ModuleId::INSPECT
-                        | ModuleId::TASK
                 );
 
                 if !name.is_builtin() || should_include_builtin {
@@ -6274,6 +6339,12 @@ fn run_task<'a>(
             ident_ids_by_module,
             root_type,
         ),
+        SoloCanonicalize { parsed } => {
+            let module_id = parsed.module_id;
+            let solo_can = canonicalize_solo(arena, parsed);
+
+            Ok(Msg::SoloCanonicalized(module_id, solo_can))
+        }
         CanonicalizeAndConstrain {
             parsed,
             qualified_module_ids,
@@ -6285,7 +6356,7 @@ fn run_task<'a>(
             exposed_module_ids,
             exec_mode,
             imported_module_params,
-            fx_mode,
+            solo_can_output,
         } => {
             let can_and_con = canonicalize_and_constrain(
                 arena,
@@ -6299,7 +6370,7 @@ fn run_task<'a>(
                 exposed_module_ids,
                 exec_mode,
                 imported_module_params,
-                fx_mode,
+                solo_can_output,
             );
 
             Ok(Msg::CanonicalizedAndConstrained(can_and_con))

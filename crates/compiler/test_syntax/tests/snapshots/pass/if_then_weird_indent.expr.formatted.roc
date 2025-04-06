@@ -2,7 +2,6 @@ if
     k
 then
     A
-    else
-
-e
-r
+else
+    e
+    r

@@ -1,54 +1,54 @@
 app [quicksort] { pf: platform "quicksort-platform/main.roc" }
 
-quicksort = \originalList ->
-    n = List.len originalList
+quicksort = \original_list ->
+    n = List.len(original_list)
 
-    quicksortHelp originalList 0 (n - 1)
+    quicksort_help(original_list, 0, (n - 1))
 
-quicksortHelp : List (Num a), U64, U64 -> List (Num a)
-quicksortHelp = \list, low, high ->
+quicksort_help : List (Num a), U64, U64 -> List (Num a)
+quicksort_help = \list, low, high ->
     if low < high then
-        when partition low high list is
-            Pair partitionIndex partitioned ->
+        when partition(low, high, list) is
+            Pair(partition_index, partitioned) ->
                 partitioned
-                |> quicksortHelp low (partitionIndex - 1)
-                |> quicksortHelp (partitionIndex + 1) high
+                |> quicksort_help(low, (partition_index - 1))
+                |> quicksort_help((partition_index + 1), high)
     else
         list
 
 partition : U64, U64, List (Num a) -> [Pair U64 (List (Num a))]
-partition = \low, high, initialList ->
-    when List.get initialList high is
-        Ok pivot ->
-            when partitionHelp low low initialList high pivot is
-                Pair newI newList ->
-                    Pair newI (swap newI high newList)
+partition = \low, high, initial_list ->
+    when List.get(initial_list, high) is
+        Ok(pivot) ->
+            when partition_help(low, low, initial_list, high, pivot) is
+                Pair(new_i, new_list) ->
+                    Pair(new_i, swap(new_i, high, new_list))
 
-        Err _ ->
-            Pair low initialList
+        Err(_) ->
+            Pair(low, initial_list)
 
-partitionHelp : U64, U64, List (Num c), U64, Num c -> [Pair U64 (List (Num c))]
-partitionHelp = \i, j, list, high, pivot ->
+partition_help : U64, U64, List (Num c), U64, Num c -> [Pair U64 (List (Num c))]
+partition_help = \i, j, list, high, pivot ->
     if j < high then
-        when List.get list j is
-            Ok value ->
+        when List.get(list, j) is
+            Ok(value) ->
                 if value <= pivot then
-                    partitionHelp (i + 1) (j + 1) (swap i j list) high pivot
+                    partition_help((i + 1), (j + 1), swap(i, j, list), high, pivot)
                 else
-                    partitionHelp i (j + 1) list high pivot
+                    partition_help(i, (j + 1), list, high, pivot)
 
-            Err _ ->
-                Pair i list
+            Err(_) ->
+                Pair(i, list)
     else
-        Pair i list
+        Pair(i, list)
 
 swap : U64, U64, List a -> List a
 swap = \i, j, list ->
-    when Pair (List.get list i) (List.get list j) is
-        Pair (Ok atI) (Ok atJ) ->
+    when Pair(List.get(list, i), List.get(list, j)) is
+        Pair(Ok(at_i), Ok(at_j)) ->
             list
-            |> List.set i atJ
-            |> List.set j atI
+            |> List.set(i, at_j)
+            |> List.set(j, at_i)
 
         _ ->
             # to prevent a decrement on list

@@ -199,15 +199,10 @@ pub fn fmt_module_header<'a>(buf: &mut Buf, header: &'a ModuleHeader<'a>) {
 pub fn fmt_hosted_header<'a>(buf: &mut Buf, header: &'a HostedHeader<'a>) {
     buf.indent(0);
     buf.push_str("hosted");
-    let indent = INDENT;
-    fmt_default_spaces(buf, header.before_name, indent);
 
-    buf.push_str(header.name.value.as_str());
+    let indent = fmt_spaces_with_outdent(buf, header.before_exposes, 0);
 
-    header.exposes.keyword.format(buf, indent);
-    fmt_exposes(buf, header.exposes.item, indent);
-    header.imports.keyword.format(buf, indent);
-    fmt_imports(buf, header.imports.item, indent);
+    fmt_exposes(buf, header.exposes, indent);
 }
 
 pub fn fmt_app_header<'a>(buf: &mut Buf, header: &'a AppHeader<'a>) {

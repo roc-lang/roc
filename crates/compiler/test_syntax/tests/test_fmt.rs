@@ -1186,14 +1186,34 @@ mod test_fmt {
 
     #[test]
     fn func_def() {
+        // New syntax
         expr_formats_same(indoc!(
             r"
-                f = \x, y ->
+                f = |x, y|
                     x
 
                 f 4
             "
         ));
+        // Old syntax
+        expr_formats_to(
+            indoc!(
+                r"
+                f = \x, y ->
+                    x
+
+                f 4
+            "
+            ),
+            indoc!(
+                r"
+                f = |x, y|
+                    x
+
+                f 4
+            "
+            ),
+        );
     }
 
     #[test]
@@ -1201,7 +1221,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r#"
-                f = \x, y ->
+                f = |x, y|
                     y = 4
                     z = 8
                     x
@@ -1210,7 +1230,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                f = \x, y ->
+                f = |x, y|
                     y = 4
                     z = 8
                     x
@@ -1221,7 +1241,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r#"
-            f = \x, y ->
+            f = |x, y|
                 a = 3
                 b = 6
 
@@ -1408,24 +1428,68 @@ mod test_fmt {
     fn multi_arg_closure() {
         expr_formats_same(indoc!(
             r"
-            \a, b, c -> a b c
+            |a, b, c| a b c
             "
         ));
     }
 
     #[test]
     fn destructure_tag_closure() {
+        // New syntax
         expr_formats_same(indoc!(
             r"
-            \Foo a -> Foo a
+            |Foo a| Foo a
             "
         ));
 
         expr_formats_same(indoc!(
             r"
-            \Foo someVar -> Foo someVar
+            |Foo someVar| Foo someVar
             "
         ));
+
+        expr_formats_to_with_flags(
+            indoc!(
+                r"
+            |Foo someVar| Foo someVar
+            "
+            ),
+            indoc!(
+                r"
+            |Foo some_var| Foo some_var
+            "
+            ),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: false,
+            },
+        );
+        // Old syntax
+        expr_formats_to(
+            indoc!(
+                r"
+            \Foo a -> Foo a
+            "
+            ),
+            indoc!(
+                r"
+            |Foo a| Foo a
+            "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+            \Foo someVar -> Foo someVar
+            "
+            ),
+            indoc!(
+                r"
+            |Foo someVar| Foo someVar
+            "
+            ),
+        );
 
         expr_formats_to_with_flags(
             indoc!(
@@ -1435,7 +1499,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-            \Foo some_var -> Foo some_var
+            |Foo some_var| Foo some_var
             "
             ),
             MigrationFlags {
@@ -1449,9 +1513,21 @@ mod test_fmt {
     fn destructure_nested_tag_closure() {
         expr_formats_same(indoc!(
             r"
-            \Foo (Bar a) -> Foo (Bar a)
+            |Foo (Bar a)| Foo (Bar a)
             "
         ));
+        expr_formats_to(
+            indoc!(
+                r"
+            \Foo (Bar a) -> Foo (Bar a)
+            "
+            ),
+            indoc!(
+                r"
+            |Foo (Bar a)| Foo (Bar a)
+            "
+            ),
+        );
     }
 
     // DEFS
@@ -1628,7 +1704,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                f = \x ->
+                f = |x|
                     # 1st
 
 
@@ -1642,7 +1718,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                f = \x ->
+                f = |x|
                     # 1st
 
                     # 2nd
@@ -1713,9 +1789,10 @@ mod test_fmt {
 
     #[test]
     fn lambda_returns_record() {
+        // New syntax
         expr_formats_same(indoc!(
             r"
-                to_record = \_ -> {
+                to_record = |_| {
                     x: 1,
                     y: 2,
                     z: 3,
@@ -1727,7 +1804,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                    func = \_ ->
+                    func = |_|
                         { x: 1, y: 2, z: 3 }
 
                     func
@@ -1736,7 +1813,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                to_record = \_ ->
+                to_record = |_|
                     val = 0
 
                     {
@@ -1752,7 +1829,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                    to_record = \_ ->
+                    to_record = |_|
                         {
                             x: 1,
                             y: 2,
@@ -1764,7 +1841,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                    to_record = \_ -> {
+                    to_record = |_| {
                         x: 1,
                         y: 2,
                         z: 3,
@@ -1780,7 +1857,7 @@ mod test_fmt {
     fn lambda_returns_list() {
         expr_formats_same(indoc!(
             r"
-                to_list = \_ -> [
+                to_list = |_| [
                     1,
                     2,
                     3,
@@ -1792,7 +1869,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                    func = \_ ->
+                    func = |_|
                         [1, 2, 3]
 
                     func
@@ -1801,7 +1878,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-                to_list = \_ ->
+                to_list = |_|
                     val = 0
 
                     [
@@ -1817,7 +1894,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                    to_list = \_ ->
+                    to_list = |_|
                         [
                             1,
                             2,
@@ -1829,7 +1906,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                    to_list = \_ -> [
+                    to_list = |_| [
                         1,
                         2,
                         3,
@@ -2768,9 +2845,10 @@ mod test_fmt {
 
     #[test]
     fn def_closure() {
+        // Starting from new syntax
         expr_formats_same(indoc!(
             r"
-            identity = \a -> a
+            identity = |a| a
 
             identity 42
             "
@@ -2778,7 +2856,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-            identity = \a ->
+            identity = |a|
                 a
 
             identity 44
@@ -2787,7 +2865,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-            identity = \a -> a
+            identity = |a| a
 
             # Hello
             identity 40
@@ -2797,15 +2875,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                    identity = \a
-                        -> a
+                    identity = |a
+                        | a
 
                     identity 41
                 "
             ),
             indoc!(
                 r"
-                    identity = \a -> a
+                    identity = |a| a
 
                     identity 41
                 "
@@ -2815,8 +2893,8 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                    identity = \a
-                        ->
+                    identity = |a
+                        |
                             a + b
 
                     identity 4010
@@ -2824,7 +2902,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                    identity = \a ->
+                    identity = |a|
                         a + b
 
                     identity 4010
@@ -2834,7 +2912,7 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
-            identity = \a, b -> a
+            identity = |a, b| a
 
             identity 43
             "
@@ -2855,6 +2933,173 @@ mod test_fmt {
 
         expr_formats_same(indoc!(
             r"
+            identity = |a,
+                b,
+                # it's c!!
+                c
+                | a
+
+            identity 43
+            "
+        ));
+        // Starting from old syntax
+        expr_formats_to(
+            indoc!(
+                r"
+            identity = \a -> a
+
+            identity 42
+            "
+            ),
+            indoc!(
+                r"
+            identity = |a| a
+
+            identity 42
+            "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+            identity = \a ->
+                a
+
+            identity 44
+            "
+            ),
+            indoc!(
+                r"
+            identity = |a|
+                a
+
+            identity 44
+            "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+            identity = \a -> a
+
+            # Hello
+            identity 40
+            "
+            ),
+            indoc!(
+                r"
+            identity = |a| a
+
+            # Hello
+            identity 40
+            "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    identity = \a
+                        -> a
+
+                    identity 41
+                "
+            ),
+            indoc!(
+                r"
+                    identity = |a| a
+
+                    identity 41
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    identity = \a
+                        ->
+                            a + b
+
+                    identity 4010
+                "
+            ),
+            indoc!(
+                r"
+                    identity = |a|
+                        a + b
+
+                    identity 4010
+                "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+            identity = \a, b -> a
+
+            identity 43
+            "
+            ),
+            indoc!(
+                r"
+            identity = |a, b| a
+
+            identity 43
+            "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+           identity =
+               |{
+                   x,
+                   y
+                }| a
+
+           identity 43
+           "
+            ),
+            indoc!(
+                r"
+           identity =
+               |{ x, y }| a
+
+           identity 43
+           "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+           identity =
+               \{
+                   x,
+                   y
+                } -> a
+
+           identity 43
+           "
+            ),
+            indoc!(
+                r"
+           identity =
+               |{ x, y }| a
+
+           identity 43
+           "
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
             identity = \a,
                 b,
                 # it's c!!
@@ -2863,22 +3108,58 @@ mod test_fmt {
 
             identity 43
             "
-        ));
+            ),
+            indoc!(
+                r"
+            identity = |a,
+                b,
+                # it's c!!
+                c
+                | a
+
+            identity 43
+            "
+            ),
+        );
     }
 
     #[test]
     fn closure_multiline_pattern() {
         expr_formats_same(indoc!(
             r"
-            identity = \a,
+            identity = |a,
                 b,
                 # it's c!!
                 c
-                -> a
+                | a
 
             identity 43
             "
         ));
+        expr_formats_to(
+            indoc!(
+                r"
+                identity = \a,
+                    b,
+                    # it's c!!
+                    c
+                    -> a
+
+                identity 43
+                "
+            ),
+            indoc!(
+                r"
+                identity = |a,
+                    b,
+                    # it's c!!
+                    c
+                    | a
+
+                identity 43
+                "
+            ),
+        );
     }
 
     // LIST
@@ -3215,6 +3496,41 @@ mod test_fmt {
 
     #[test]
     fn empty_record_patterns() {
+        // New syntax
+        expr_formats_to(
+            indoc!(
+                r#"
+                    f = |{  }| "Hello World"
+
+                    f
+                "#
+            ),
+            indoc!(
+                r#"
+                    f = |{}| "Hello World"
+
+                    f
+                "#
+            ),
+        );
+
+        expr_formats_to(
+            indoc!(
+                r"
+                    f = |a, b| {  }
+
+                    f
+                "
+            ),
+            indoc!(
+                r"
+                    f = |a, b| {}
+
+                    f
+                "
+            ),
+        );
+        // Old syntax
         expr_formats_to(
             indoc!(
                 r#"
@@ -3225,7 +3541,7 @@ mod test_fmt {
             ),
             indoc!(
                 r#"
-                    f = \{} -> "Hello World"
+                    f = |{}| "Hello World"
 
                     f
                 "#
@@ -3242,7 +3558,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                    f = \a, b -> {}
+                    f = |a, b| {}
 
                     f
                 "
@@ -3460,7 +3776,7 @@ mod test_fmt {
 
 
                 then
-                    \_ -> leave
+                    |_| leave
 
                 else
                     identity
@@ -3471,7 +3787,7 @@ mod test_fmt {
                 if
                     willBoil home water
                 then
-                    \_ -> leave
+                    |_| leave
                 else
                     identity
                 "
@@ -3680,15 +3996,25 @@ mod test_fmt {
 
     #[test]
     fn early_return_else() {
-        expr_formats_same(indoc!(
-            r"
-            if foo then
-                bar
-                else
+        expr_formats_to(
+            indoc!(
+                r"
+                if foo then
+                    bar
+                    else
 
-            baz
-            "
-        ));
+                baz
+                "
+            ),
+            indoc!(
+                r"
+                if foo then
+                    bar
+                else
+                    baz
+                "
+            ),
+        );
 
         expr_formats_to(
             indoc!(
@@ -3703,9 +4029,8 @@ mod test_fmt {
                 r"
                 if thing then
                     whatever
-                    else
-
-                too close
+                else
+                    too close
                 "
             ),
         );
@@ -3715,8 +4040,7 @@ mod test_fmt {
                 r"
                 if isGrowing plant then
                     LetBe
-                    else
-
+                else
                     Water
                 "
             ),
@@ -3724,9 +4048,8 @@ mod test_fmt {
                 r"
                 if isGrowing plant then
                     LetBe
-                    else
-
-                Water
+                else
+                    Water
                 "
             ),
         );
@@ -3806,6 +4129,16 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             combine(peanut_butter, chocolate)
+            "
+        ));
+    }
+
+    #[test]
+    fn pipe_pnc_application_with_comment_no_args() {
+        expr_formats_same(indoc!(
+            r"
+            combine( # This is a comment
+            )
             "
         ));
     }
@@ -3976,7 +4309,7 @@ mod test_fmt {
     fn def_when() {
         expr_formats_same(indoc!(
             r"
-            my_long_function_name = \x ->
+            my_long_function_name = |x|
                 when b is
                     1 | 2 ->
                         when c is
@@ -3989,6 +4322,39 @@ mod test_fmt {
             123
         "
         ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+            my_long_function_name = \x ->
+                when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+            123
+        "
+            ),
+            indoc!(
+                r"
+            my_long_function_name = |x|
+                when b is
+                    1 | 2 ->
+                        when c is
+                            6 | 7 ->
+                                8
+
+                    3 | 4 ->
+                        5
+
+            123
+        "
+            ),
+        );
     }
 
     #[test]
@@ -4424,6 +4790,20 @@ mod test_fmt {
     fn def_returning_closure() {
         expr_formats_same(indoc!(
             r"
+            f = |x| x
+            g = |x| x
+
+            |x|
+                a = f x
+                b = f x
+
+                x
+            "
+        ));
+
+        expr_formats_to(
+            indoc!(
+                r"
             f = \x -> x
             g = \x -> x
 
@@ -4433,7 +4813,20 @@ mod test_fmt {
 
                 x
             "
-        ));
+            ),
+            indoc!(
+                r"
+            f = |x| x
+            g = |x| x
+
+            |x|
+                a = f x
+                b = f x
+
+                x
+            "
+            ),
+        );
     }
 
     #[test]
@@ -4443,7 +4836,7 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                \x ->
+                |x|
                     m = 2
 
 
@@ -4454,7 +4847,7 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                \x ->
+                |x|
                     m = 2
 
                     m1 = insert m n powerOf10
@@ -4636,8 +5029,8 @@ mod test_fmt {
                 r#"
             if
                 (1 == 1)
-                && (2 == 1)
-                && (3 == 2)
+                and (2 == 1)
+                and (3 == 2)
             then
                 "true"
             else
@@ -4931,18 +5324,63 @@ mod test_fmt {
     }
 
     #[test]
-    fn multi_line_binary_op_1() {
+    fn multi_line_binary_op_and() {
+        expr_formats_to(
+            indoc!(
+                r"
+                is_last
+                && is_empty
+                && is_loaded
+                "
+            ),
+            indoc!(
+                r"
+                is_last
+                and is_empty
+                and is_loaded
+                "
+            ),
+        );
+
         expr_formats_same(indoc!(
             r"
-            isLast
-            && isEmpty
-            && isLoaded
+            is_last
+            and is_empty
+            and is_loaded
             "
         ));
     }
 
     #[test]
-    fn multi_line_binary_op_2() {
+    fn multi_line_binary_op_or() {
+        expr_formats_to(
+            indoc!(
+                r"
+                is_last
+                || is_empty
+                || is_loaded
+                "
+            ),
+            indoc!(
+                r"
+                is_last
+                or is_empty
+                or is_loaded
+                "
+            ),
+        );
+
+        expr_formats_same(indoc!(
+            r"
+            is_last
+            or is_empty
+            or is_loaded
+            "
+        ));
+    }
+
+    #[test]
+    fn multi_line_binary_op_symbol() {
         expr_formats_to(
             indoc!(
                 r"
@@ -5012,15 +5450,15 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                isGreenLight
-                    && isRedLight && isYellowLight
+                is_green_light
+                    && is_red_light && is_yellow_light
                 "
             ),
             indoc!(
                 r"
-                isGreenLight
-                && isRedLight
-                && isYellowLight
+                is_green_light
+                and is_red_light
+                and is_yellow_light
                 "
             ),
         );
@@ -5043,10 +5481,29 @@ mod test_fmt {
             r"
             List.map
                 xs
-                (\i ->
+                (|i|
                     i + length)
             "
         ));
+
+        expr_formats_to(
+            indoc!(
+                r"
+                List.map
+                    xs
+                    (\i ->
+                        i + length)
+                "
+            ),
+            indoc!(
+                r"
+                List.map
+                    xs
+                    (|i|
+                        i + length)
+                "
+            ),
+        );
     }
 
     #[test]
@@ -5056,7 +5513,7 @@ mod test_fmt {
             shout
             |> List.map
                 xs
-                (\i -> i)
+                (|i| i)
             "
         ));
     }
@@ -5068,7 +5525,7 @@ mod test_fmt {
             shout
             |> List.map
                 xs
-                (\i -> i)
+                (|i| i)
             |> List.join
             "
         ));
@@ -5091,10 +5548,10 @@ mod test_fmt {
     fn pipeline_apply_lambda_multiline() {
         expr_formats_same(indoc!(
             r"
-                example = \model ->
+                example = |model|
                     model
                     |> withModel
-                        (\result ->
+                        (|result|
                             when result is
                                 Err _ ->
                                     Err {}
@@ -5110,10 +5567,10 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 r"
-                    example = \model ->
+                    example = |model|
                         model
                             |> withModel
-                                (\result ->
+                                (|result|
                                         when result is
                                             Err _ ->
                                                 Err {}
@@ -5127,10 +5584,10 @@ mod test_fmt {
             ),
             indoc!(
                 r"
-                    example = \model ->
+                    example = |model|
                         model
                         |> withModel
-                            (\result ->
+                            (|result|
                                 when result is
                                     Err _ ->
                                         Err {}
@@ -5146,15 +5603,59 @@ mod test_fmt {
     }
 
     #[test]
+    fn pnc_apply_with_try_suffix_after_fn() {
+        expr_formats_to_with_flags(
+            indoc!("some_fn?(arg1, arg2)"),
+            indoc!("some_fn(arg1, arg2)?"),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
+    }
+
+    #[test]
+    fn ws_apply_with_try_suffix_after_fn() {
+        expr_formats_to_with_flags(
+            indoc!("some_fn? arg1 arg2"),
+            indoc!("some_fn(arg1, arg2)?"),
+            MigrationFlags {
+                snakify: true,
+                parens_and_commas: true,
+            },
+        );
+    }
+
+    #[test]
     fn func_call_trailing_multiline_lambda() {
+        // New syntax
         expr_formats_same(indoc!(
             r"
-                list = List.map [1, 2, 3] \x ->
+                list = List.map [1, 2, 3] |x|
                     x + 1
 
                 list
             "
         ));
+        // Old Syntax
+        expr_formats_to(
+            indoc!(
+                r"
+                list = List.map [1, 2, 3] \x ->
+                    x + 1
+
+                list
+            "
+            ),
+            indoc!(
+                r"
+                list = List.map [1, 2, 3] |x|
+                    x + 1
+
+                list
+            "
+            ),
+        );
     }
 
     // MODULES
@@ -5270,7 +5771,7 @@ mod test_fmt {
             exposes [] \
             packages {} \
             imports [] \
-            provides [mainForHost]",
+            provides [main_for_host]",
         );
     }
 
@@ -5336,27 +5837,40 @@ mod test_fmt {
 
     #[test]
     fn single_line_hosted() {
-        module_formats_same(indoc!(
-            r"
-                hosted Foo exposes [] imports []"
-        ));
+        module_formats_to(
+            indoc!(
+                r"
+                    hosted Foo exposes [] imports []"
+            ),
+            indoc!(
+                r"
+                    hosted []"
+            ),
+        );
     }
 
     #[test]
     fn multi_line_hosted() {
-        module_formats_same(indoc!(
-            r"
-                hosted Foo
-                    exposes [
+        module_formats_to(
+            indoc!(
+                r"
+                    hosted Foo
+                        exposes [
+                            Stuff,
+                            Things,
+                            somethingElse,
+                        ]
+                        imports []"
+            ),
+            indoc!(
+                r"
+                    hosted [
                         Stuff,
                         Things,
                         somethingElse,
-                    ]
-                    imports [
-                        Blah,
-                        Baz.{ stuff, things },
                     ]"
-        ));
+            ),
+        );
     }
 
     /// Annotations and aliases
@@ -5368,7 +5882,7 @@ mod test_fmt {
             ConsList a : [Cons a (ConsList a), Nil]
 
             f : ConsList a -> ConsList a
-            f = \_ -> Nil
+            f = |_| Nil
 
             f
             "
@@ -5540,7 +6054,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             f : [True, False] -> [True, False]
-            f = \x -> x
+            f = |x| x
 
             a
             "
@@ -5574,7 +6088,7 @@ mod test_fmt {
         expr_formats_same(indoc!(
             r"
             f : [Cons a (ConsList a), Nil] as ConsList a -> [Just a, Nothing]
-            f = \list ->
+            f = |list|
                 when list is
                     Nil ->
                         Nothing
@@ -5589,7 +6103,7 @@ mod test_fmt {
             indoc!(
                 r"
             f : [Cons aVar (ConsList aVar), Nil] as ConsList aVar -> [Just aVar, Nothing]
-            f = \list ->
+            f = |list|
                 when list is
                     Nil ->
                         Nothing
@@ -5603,7 +6117,7 @@ mod test_fmt {
             indoc!(
                 r"
             f : [Cons a_var (ConsList a_var), Nil] as ConsList a_var -> [Just a_var, Nothing]
-            f = \list ->
+            f = |list|
                 when list is
                     Nil ->
                         Nothing
@@ -5720,7 +6234,7 @@ mod test_fmt {
                 (Str -> Bool),
                 Str
                 -> Bool
-            foo = \bar, baz ->
+            foo = |bar, baz|
                 42
 
             42
@@ -5740,7 +6254,7 @@ mod test_fmt {
             r"
                 foo :
                     (Str -> Bool), Str -> Bool
-                foo = \bar, baz ->
+                foo = |bar, baz|
                     42
 
                 42
@@ -5751,7 +6265,7 @@ mod test_fmt {
             r"
                 foo :
                     (Str -> Bool), Str -> Bool # comment
-                foo = \bar, baz ->
+                foo = |bar, baz|
                     42
 
                 42
@@ -5993,32 +6507,6 @@ mod test_fmt {
     }
 
     #[test]
-    /// Test that everything under examples/ is formatted correctly
-    /// If this test fails on your diff, it probably means you need to re-format the examples.
-    /// Try this:
-    /// `cargo run -- format $(find examples -name \*.roc)`
-    fn test_fmt_examples() {
-        let mut count = 0;
-        let mut root = workspace_root();
-        root.push("examples");
-        for entry in walkdir::WalkDir::new(&root) {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if path.extension() == Some(std::ffi::OsStr::new("roc")) {
-                count += 1;
-                let src = std::fs::read_to_string(path).unwrap();
-                println!("Now trying to format {}", path.display());
-                module_formats_same(&src);
-            }
-        }
-        assert!(
-            count > 0,
-            "Expecting to find at least 1 .roc file to format under {}",
-            root.display()
-        );
-    }
-
-    #[test]
     /// Test that builtins are formatted correctly
     /// If this test fails on your diff, it probably means you need to re-format a builtin.
     /// Try this:
@@ -6233,7 +6721,7 @@ mod test_fmt {
                 exposes []
                 packages {}
                 imports []
-                provides [mainForHost]
+                provides [main_for_host]
             "#
         ));
     }
@@ -6360,7 +6848,7 @@ mod test_fmt {
                 _ = crash   ""   ""
                 try
                     foo
-                    (\_ ->   crash "")
+                    (|_|   crash "")
                 "#
             ),
             indoc!(
@@ -6370,7 +6858,7 @@ mod test_fmt {
                 _ = crash "" ""
                 try
                     foo
-                    (\_ -> crash "")
+                    (|_| crash "")
                 "#
             ),
         );
@@ -6395,7 +6883,7 @@ mod test_fmt {
                 _ = crash   ""   ""
                 try
                     foo
-                    (\_ ->   crash "")
+                    (|_|   crash "")
                 "#
             ),
             indoc!(
@@ -6405,7 +6893,7 @@ mod test_fmt {
                 _ = crash "" ""
                 try
                     foo
-                    (\_ -> crash "")
+                    (|_| crash "")
                 "#
             ),
         );
@@ -6591,13 +7079,13 @@ mod test_fmt {
         expr_formats_to(
             indoc!(
                 "
-                    x = \"foo:\u{200B} $(bar).\"
+                    x = \"foo:\u{200B} ${bar}.\"
                     x
                 "
             ),
             indoc!(
                 r#"
-                    x = "foo:\u(200b) $(bar)."
+                    x = "foo:\u(200b) ${bar}."
                     x
                 "#
             ),
@@ -6611,7 +7099,7 @@ mod test_fmt {
                 "
                     x =
                         \"\"\"
-                        foo:\u{200B} $(bar).
+                        foo:\u{200B} ${bar}.
                         \"\"\"
                     x
                 "
@@ -6620,7 +7108,7 @@ mod test_fmt {
                 r#"
                     x =
                         """
-                        foo:\u(200b) $(bar).
+                        foo:\u(200b) ${bar}.
                         """
                     x
                 "#

@@ -189,7 +189,7 @@ pub struct MonomorphizedModule<'a> {
     pub glue_layouts: GlueLayouts<'a>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParsedModule<'a> {
     pub module_id: ModuleId,
     pub module_path: PathBuf,
@@ -228,7 +228,7 @@ pub struct Expectations {
 
 #[derive(Clone, Debug, Default)]
 pub struct ExposedToHost {
-    /// usually `mainForHost`
+    /// usually `main_for_host`
     pub top_level_values: MutMap<Symbol, Variable>,
     /// exposed closure types, typically `Fx`
     pub closure_types: Vec<Symbol>,
@@ -237,11 +237,12 @@ pub struct ExposedToHost {
     pub getters: Vec<Symbol>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ModuleTiming {
     pub read_roc_file: Duration,
     pub parse_header: Duration,
     pub parse_body: Duration,
+    pub canonicalize_solo: Duration,
     pub canonicalize: Duration,
     pub constrain: Duration,
     pub solve: Duration,
@@ -261,6 +262,7 @@ impl ModuleTiming {
             read_roc_file: Duration::default(),
             parse_header: Duration::default(),
             parse_body: Duration::default(),
+            canonicalize_solo: Duration::default(),
             canonicalize: Duration::default(),
             constrain: Duration::default(),
             solve: Duration::default(),
@@ -281,6 +283,7 @@ impl ModuleTiming {
             read_roc_file,
             parse_header,
             parse_body,
+            canonicalize_solo,
             canonicalize,
             constrain,
             solve,
@@ -297,6 +300,7 @@ impl ModuleTiming {
                 .checked_sub(*find_specializations)?
                 .checked_sub(*solve)?
                 .checked_sub(*constrain)?
+                .checked_sub(*canonicalize_solo)?
                 .checked_sub(*canonicalize)?
                 .checked_sub(*parse_body)?
                 .checked_sub(*parse_header)?

@@ -3,9 +3,9 @@ platform "test-platform"
     exposes []
     packages {}
     imports []
-    provides [mainForHost]
+    provides [main_for_host]
 
 StrRoseTree : [Tree Str (List StrRoseTree)]
 
-mainForHost : StrRoseTree
-mainForHost = main
+main_for_host : StrRoseTree
+main_for_host = main

@@ -245,6 +245,7 @@ impl<'a> LowLevelCall<'a> {
                 backend.code_builder.i32_const(UPDATE_MODE_IMMUTABLE);
                 backend.call_host_fn_after_loading_args(bitcode::STR_FROM_UTF8);
             }
+            StrFromUtf8Lossy => self.load_args_and_call_zig(backend, bitcode::STR_FROM_UTF8_LOSSY),
             StrTrimStart => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_START),
             StrTrimEnd => self.load_args_and_call_zig(backend, bitcode::STR_TRIM_END),
             StrToUtf8 => self.load_args_and_call_zig(backend, bitcode::STR_TO_UTF8),
@@ -258,6 +259,15 @@ impl<'a> LowLevelCall<'a> {
                 self.load_args_and_call_zig(backend, bitcode::STR_SUBSTRING_UNSAFE)
             }
             StrWithCapacity => self.load_args_and_call_zig(backend, bitcode::STR_WITH_CAPACITY),
+            StrWithAsciiLowercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_LOWERCASED)
+            }
+            StrWithAsciiUppercased => {
+                self.load_args_and_call_zig(backend, bitcode::STR_WITH_ASCII_UPPERCASED)
+            }
+            StrCaselessAsciiEquals => {
+                self.load_args_and_call_zig(backend, bitcode::STR_CASELESS_ASCII_EQUALS)
+            }
 
             // List
             ListLenU64 => {
@@ -2163,14 +2173,6 @@ impl<'a> LowLevelCall<'a> {
             NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
             NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
             NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
-            And => {
-                self.load_args(backend);
-                backend.code_builder.i32_and();
-            }
-            Or => {
-                self.load_args(backend);
-                backend.code_builder.i32_or();
-            }
             Not => {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();

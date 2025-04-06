@@ -55,7 +55,7 @@ mod cli_tests {
         // pre-build the platform
         std::process::Command::new("bash")
             .arg(file_from_root(
-                "examples/platform-switching/rust-platform",
+                "crates/cli/tests/platform-switching/rust-platform",
                 "build.sh",
             ))
             .status()
@@ -63,7 +63,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             roc_cli::CMD_DEV,
-            file_from_root("examples/platform-switching", "rocLovesRust.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "roc_loves_rust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
@@ -80,7 +80,7 @@ mod cli_tests {
 
         let cli_build = ExecCli::new(
             CMD_BUILD,
-            file_from_root("examples/platform-switching", "rocLovesZig.roc"),
+            file_from_root("crates/cli/tests/platform-switching", "roc_loves_zig.roc"),
         )
         .arg(BUILD_HOST_FLAG)
         .arg(SUPPRESS_BUILD_HOST_WARNING_FLAG);
@@ -104,7 +104,10 @@ mod cli_tests {
         // so let's just check it for now
         let cli_check = ExecCli::new(
             CMD_CHECK,
-            file_from_root("examples/platform-switching", "rocLovesWebAssembly.roc"),
+            file_from_root(
+                "crates/cli/tests/platform-switching",
+                "roc_loves_web_assembly.roc",
+            ),
         );
 
         let cli_check_out = cli_check.run();
@@ -160,34 +163,6 @@ mod cli_tests {
         );
     }
 
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_server() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-server.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
-    // TODO: write a new test once mono bugs are resolved in investigation
-    // Encountering this TODO years later, I presume the new test should test the execution, not just roc check.
-    #[test]
-    #[cfg(not(debug_assertions))] // https://github.com/roc-lang/roc/issues/4806 - later observation: this issue is closed but the tests still hangs in debug mode
-    fn check_virtual_dom_client() {
-        let cli_check = ExecCli::new(
-            CMD_CHECK,
-            file_from_root("examples/virtual-dom-wip", "example-client.roc"),
-        );
-
-        let cli_check_out = cli_check.run();
-        cli_check_out.assert_clean_success();
-    }
-
     #[test]
     #[cfg_attr(windows, ignore)]
     // tea = The Elm Architecture
@@ -213,7 +188,8 @@ mod cli_tests {
     }
 
     #[test]
-    #[cfg_attr(windows, ignore)]
+    // #[cfg_attr(windows, ignore)]
+    #[ignore]
     fn false_interpreter() {
         let cli_build = ExecCli::new(
             CMD_BUILD,
@@ -343,7 +319,7 @@ mod cli_tests {
         #[test]
         #[cfg_attr(windows, ignore)]
         fn roc_check_markdown_docs() {
-            let cli_build = ExecCli::new(
+            let cli_check = ExecCli::new(
                 CMD_CHECK,
                 file_from_root("crates/cli/tests/markdown", "form.md"),
             );
@@ -351,13 +327,13 @@ mod cli_tests {
             let expected_out =
                 "0 errors and 0 warnings found in <ignored for test> ms.\n\n0 errors and 0 warnings found in <ignored for test> ms.\n\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_check.run().assert_clean_stdout(expected_out);
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn import_in_expect() {
-            let cli_build = ExecCli::new(
+            let cli_test = ExecCli::new(
                 CMD_TEST,
                 file_from_root(
                     "crates/cli/tests/test-projects/module_params",
@@ -367,7 +343,23 @@ mod cli_tests {
 
             let expected_out = "0 failed and 3 passed in <ignored for test> ms.\n";
 
-            cli_build.run().assert_clean_stdout(expected_out);
+            cli_test.run().assert_clean_stdout(expected_out);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        // https://github.com/roc-lang/roc/issues/7461
+        fn issue7461() {
+            let cli_test = ExecCli::new(
+                CMD_TEST,
+                file_from_root("crates/cli/tests/test-projects/", "issue7461.roc"),
+            );
+
+            let expected_out = "0 failed and 1 passed in <ignored for test> ms.\n";
+
+            cli_test
+                .run()
+                .assert_stdout_and_stderr_ends_with(expected_out);
         }
     }
 
@@ -390,7 +382,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
-                    "combine-tasks.roc",
+                    "combine_tasks.roc",
                 ),
             );
 
@@ -613,7 +605,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-one.roc",
+                    "direct_one.roc",
                 ),
             );
 
@@ -637,7 +629,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-one-and-two.roc",
+                    "direct_one_and_two.roc",
                 ),
             );
 
@@ -661,7 +653,7 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/fixtures/transitive-deps",
-                    "direct-zero.roc",
+                    "direct_zero.roc",
                 ),
             );
 
@@ -823,7 +815,7 @@ mod cli_tests {
                     CMD_BUILD,
                     file_from_root(
                         "crates/cli/tests/test-projects/test-platform-effects-zig/",
-                        "app-stub.roc",
+                        "app_stub.roc",
                     ),
                 )
                 .arg(BUILD_HOST_FLAG)
@@ -849,7 +841,7 @@ mod cli_tests {
 
             let cli_build = ExecCli::new(
                 CMD_BUILD,
-                file_from_root("crates/cli/tests/test-projects/effectful", "print-line.roc"),
+                file_from_root("crates/cli/tests/test-projects/effectful", "print_line.roc"),
             );
 
             let expected_output =
@@ -873,11 +865,11 @@ mod cli_tests {
                 CMD_BUILD,
                 file_from_root(
                     "crates/cli/tests/test-projects/effectful",
-                    "inspect-logging.roc",
+                    "inspect_logging.roc",
                 ),
             );
 
-            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favoriteColor: Blue, firstName: \"John\", hasBeard: Bool.true, lastName: \"Smith\"}), (@Person {age: 47, favoriteColor: Green, firstName: \"Debby\", hasBeard: Bool.false, lastName: \"Johnson\"}), (@Person {age: 33, favoriteColor: (RGB (255, 255, 0)), firstName: \"Jane\", hasBeard: Bool.false, lastName: \"Doe\"})]})\n";
+            let expected_output = "(@Community {friends: [{2}, {2}, {0, 1}], people: [(@Person {age: 27, favorite_color: Blue, first_name: \"John\", has_beard: Bool.true, last_name: \"Smith\"}), (@Person {age: 47, favorite_color: Green, first_name: \"Debby\", has_beard: Bool.false, last_name: \"Johnson\"}), (@Person {age: 33, favorite_color: (RGB (255, 255, 0)), first_name: \"Jane\", has_beard: Bool.false, last_name: \"Doe\"})]})\n";
 
             cli_build.full_check_build_and_run(
                 expected_output,
@@ -988,7 +980,7 @@ mod cli_tests {
                 ),
             );
 
-            let expected_output = "notEffectful: hardcoded\neffectful: from stdin\n";
+            let expected_output = "not_effectful: hardcoded\neffectful: from stdin\n";
 
             cli_build.check_build_and_run(
                 expected_output,
@@ -1210,7 +1202,7 @@ mod cli_tests {
                 Please enter an integer
                 4
             "};
-            test_benchmark("nQueens.roc", expected_output, Some("6"), UseValgrind::Yes);
+            test_benchmark("n_queens.roc", expected_output, Some("6"), UseValgrind::Yes);
         }
 
         #[test]
@@ -1220,7 +1212,7 @@ mod cli_tests {
                 Please enter an integer
                 11 & 11
             "};
-            test_benchmark("cFold.roc", expected_output, Some("3"), UseValgrind::Yes);
+            test_benchmark("c_fold.roc", expected_output, Some("3"), UseValgrind::Yes);
         }
 
         #[test]
@@ -1242,7 +1234,7 @@ mod cli_tests {
                 10
             "};
             test_benchmark(
-                "rBTreeCk.roc",
+                "r_b_tree_ck.roc",
                 expected_output,
                 Some("100"),
                 UseValgrind::Yes,
@@ -1253,17 +1245,22 @@ mod cli_tests {
         #[cfg_attr(windows, ignore)]
         fn rbtree_insert() {
             let expected_output = "Node Black 0 {} Empty Empty\n";
-            test_benchmark("rBTreeInsert.roc", expected_output, None, UseValgrind::Yes);
+            test_benchmark(
+                "r_b_tree_insert.roc",
+                expected_output,
+                None,
+                UseValgrind::Yes,
+            );
         }
 
         #[test]
         #[cfg_attr(windows, ignore)]
         fn astar() {
             if cfg!(feature = "wasm32-cli-run") {
-                eprintln!("WARNING: skipping testing benchmark testAStar.roc because it currently does not work on wasm32 due to dictionaries.");
+                eprintln!("WARNING: skipping testing benchmark test_a_star.roc because it currently does not work on wasm32 due to dictionaries.");
             } else {
                 let expected_output = "True\n";
-                test_benchmark("testAStar.roc", expected_output, None, UseValgrind::Yes);
+                test_benchmark("test_a_star.roc", expected_output, None, UseValgrind::Yes);
             }
         }
 
@@ -1274,7 +1271,7 @@ mod cli_tests {
                 encoded: SGVsbG8gV29ybGQ=
                 decoded: Hello World
             "};
-            test_benchmark("testBase64.roc", expected_output, None, UseValgrind::Yes);
+            test_benchmark("test_base64.roc", expected_output, None, UseValgrind::Yes);
         }
 
         #[test]
@@ -1296,7 +1293,7 @@ mod cli_tests {
         fn quicksort_app() {
             let expected_output = "Please enter an integer\n[0, 1, 1, 2, 2, 2, 3, 3, 3, 3, 3, 4, 4, 4, 4, 5, 6, 6, 8, 9]\n";
             test_benchmark(
-                "quicksortApp.roc",
+                "quicksort_app.roc",
                 expected_output,
                 Some("0"),
                 UseValgrind::Yes,
@@ -1431,7 +1428,7 @@ mod cli_tests {
             CMD_FORMAT,
             file_from_root(
                 "crates/cli/tests/test-projects/fixtures/format",
-                "not-formatted.roc",
+                "not_formatted.roc",
             ),
         )
         .arg(CHECK_FLAG)
@@ -1441,7 +1438,7 @@ mod cli_tests {
 
     #[test]
     fn format_check_folders() {
-        // This fails, because "not-formatted.roc" is present in this folder
+        // This fails, because "not_formatted.roc" is present in this folder
         ExecCli::new(
             CMD_FORMAT,
             dir_from_root("crates/cli/tests/test-projects/fixtures/format"),

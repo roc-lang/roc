@@ -513,7 +513,7 @@ impl<'a> WasmModule<'a> {
             })
     }
 
-    /// Linking steps for host-to-app functions like `roc__mainForHost_1_exposed`
+    /// Linking steps for host-to-app functions like `roc__main_for_host_1_exposed`
     /// (See further explanation in the gen_wasm README)
     /// - Remove the target function from the ImportSection. It's not a JS import but the host declared it as one.
     /// - Update all of its call sites to the new index in the app
