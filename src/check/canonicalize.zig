@@ -50,7 +50,30 @@ pub fn canonicalize(
             .import => |import| {
                 bringImportIntoScope(&import, parse_ir, can_ir, &scope);
             },
-            else => std.debug.panic("Unhandled statement type: {}", .{stmt}),
+            .decl => |decl| {
+                _ = decl;
+            },
+            .expr => |expr| {
+                _ = expr;
+            },
+            .crash => |crash| {
+                _ = crash;
+            },
+            .expect => |expect| {
+                _ = expect;
+            },
+            .@"return" => |return_stmt| {
+                _ = return_stmt;
+            },
+            .type_decl => |type_decl| {
+                _ = type_decl;
+            },
+            .type_anno => |type_anno| {
+                _ = type_anno;
+            },
+            .malformed => |malformed| {
+                _ = malformed;
+            },
         }
     }
 
