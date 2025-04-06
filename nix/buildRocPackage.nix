@@ -1,4 +1,5 @@
-{ pkgs, roc-cli, name, entryPoint, src, outputHash, linker ? "", ... }:
+{ pkgs, roc-cli, name, entryPoint, src, outputHash, linker ? "", optimize ? true
+, ... }:
 let
   packageDependencies = pkgs.stdenv.mkDerivation {
     inherit src;
@@ -30,9 +31,9 @@ in pkgs.stdenv.mkDerivation {
   XDG_CACHE_HOME = packageDependencies;
 
   buildPhase = ''
-    roc build ${entryPoint} --output ${name} --optimize ${
-      if linker != "" then "--linker=${linker}" else ""
-    }
+    roc build ${entryPoint} --output ${name} \
+    ${if optimize == true then "--optimize" else ""} \
+    ${if linker != "" then "--linker=${linker}" else ""}
 
     mkdir -p $out/bin
     mv ${name} $out/bin/${name}
