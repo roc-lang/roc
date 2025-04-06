@@ -2,12 +2,12 @@
 , ... }:
 let
   packageDependencies = pkgs.stdenv.mkDerivation {
-    inherit src;
+    inherit src outputHash;
     name = "roc-dependencies";
     nativeBuildInputs = with pkgs; [ gnutar brotli ripgrep wget cacert ];
 
     buildPhase = ''
-      list=$(rg -o 'https://github.com[^"]*' ${entryPoint})
+      list=$(rg -o 'https://github.com[^"]*tar.br|https://github.com[^"]*tar.gz' -IN)
       for url in $list; do
         path=$(echo $url | awk -F'github.com/|/[^/]*$' '{print $2}')
         packagePath=$out/roc/packages/github.com/$path
@@ -23,7 +23,6 @@ let
 
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
-    outputHash = outputHash;
   };
 in pkgs.stdenv.mkDerivation {
   inherit name src;
