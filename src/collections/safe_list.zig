@@ -49,6 +49,13 @@ pub fn SafeList(comptime T: type) type {
             }
         };
 
+        /// Intialize the `SafeList` with the specified capacity.
+        pub fn initCapacity(gpa: Allocator, capacity: usize) SafeList(T) {
+            return .{
+                .items = std.ArrayListUnmanaged(T).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
+            };
+        }
+
         /// Deinitialize the memory of this `SafeList`.
         pub fn deinit(self: *SafeList(T), gpa: Allocator) void {
             self.items.deinit(gpa);
@@ -161,6 +168,15 @@ pub fn SafeMultiList(comptime T: type) type {
         /// The value for a specific field at a specific index in the list.
         pub fn fieldItem(self: *const SafeMultiList(T), comptime field_name: Field, idx: Idx) type {
             return self.items.items(field_name)[@as(usize, @intFromEnum(idx))];
+        }
+
+        /// Intialize the `SafeMultiList` with the specified capacity.
+        pub fn initCapacity(gpa: Allocator, capacity: usize) SafeMultiList(T) {
+            var items = std.MultiArrayList(T){};
+            items.ensureTotalCapacity(gpa, capacity) catch |err| exitOnOom(err);
+            return .{
+                .items = items,
+            };
         }
 
         /// Deinitialize the memory of a `SafeMultiList`.

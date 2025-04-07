@@ -7,6 +7,9 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   # use .tar.gz for quick testing
   ARCHIVE_FORMAT: .tar.br
@@ -168,3 +171,17 @@ jobs:
           name: basic-webserver-platform
           path: |
             ${{ env.TAR_FILENAME }}
+
+      - name: build basic-webserver docs
+        env:
+          ROC_DOCS_URL_ROOT: /basic-webserver/${{ env.RELEASE_TAG }}
+        run: |
+          ./roc_nightly/roc docs ./basic-webserver/platform/main.roc
+          tar -czvf docs.tar.gz generated-docs/
+
+      - name: Upload docs archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets-docs
+          path: |
+            docs.tar.gz

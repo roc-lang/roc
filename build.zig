@@ -43,9 +43,6 @@ pub fn build(b: *std.Build) void {
     const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
-    if (tracy != null and target.result.os.tag == .macos) {
-        std.log.warn("Tracy has significantly more overhead on MacOS. Be cautious when generating timing and analyzing results.", .{});
-    }
     if (tracy_callstack) {
         std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
     }
@@ -53,7 +50,12 @@ pub fn build(b: *std.Build) void {
     // Create compile time build options
     const build_options = b.addOptions();
     build_options.addOption(bool, "enable_tracy", tracy != null);
-    build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+    if (target.result.os.tag == .macos and tracy_callstack) {
+        std.log.warn("Tracy callstack does not work on MacOS, disabling.", .{});
+        build_options.addOption(bool, "enable_tracy_callstack", false);
+    } else {
+        build_options.addOption(bool, "enable_tracy_callstack", tracy_callstack);
+    }
     build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
 
@@ -271,6 +273,7 @@ fn add_tracy(
 
         base.root_module.addIncludePath(.{ .cwd_relative = tracy_path });
         base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = client_cpp }, .flags = tracy_c_flags });
+        base.root_module.addCSourceFile(.{ .file = .{ .cwd_relative = "src/tracy-shutdown.cpp" }, .flags = tracy_c_flags });
         if (!links_llvm) {
             base.root_module.linkSystemLibrary("c++", .{ .use_pkg_config = .no });
         }

@@ -6,6 +6,9 @@ on:
 
 name: Nightly Release macOS x86_64
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   LLVM_SYS_180_PREFIX: /usr/local/opt/llvm@18
 

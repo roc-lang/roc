@@ -39,20 +39,28 @@ const usage =
 
 /// The CLI entrypoint for the Roc compiler.
 pub fn main() !void {
-    const gpa = std.heap.c_allocator;
-
-    const args = try std.process.argsAlloc(gpa);
-    defer gpa.free(args);
+    var gpa_tracy: tracy.TracyAllocator(null) = undefined;
+    var gpa = std.heap.c_allocator;
 
     if (tracy.enable_allocation) {
-        var gpa_tracy = tracy.tracyAllocator(gpa);
-        return mainArgs(gpa_tracy.allocator(), args);
+        gpa_tracy = tracy.tracyAllocator(gpa);
+        gpa = gpa_tracy.allocator();
     }
 
-    return mainArgs(gpa, args);
+    var arena_impl = std.heap.ArenaAllocator.init(gpa);
+    defer arena_impl.deinit();
+    const arena = arena_impl.allocator();
+
+    const args = try std.process.argsAlloc(arena);
+
+    const result = mainArgs(gpa, arena, args);
+    if (tracy.enable) {
+        try tracy.waitForShutdown();
+    }
+    return result;
 }
 
-fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
+fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
@@ -74,7 +82,7 @@ fn mainArgs(gpa: Allocator, args: []const []const u8) !void {
             .roc_build => try rocBuild(gpa, opt, cmd_args),
             .roc_test => try rocTest(gpa, opt, cmd_args),
             .roc_repl => try rocRepl(gpa, opt, cmd_args),
-            .roc_format => try rocFormat(gpa, cmd_args),
+            .roc_format => try rocFormat(gpa, arena, cmd_args),
             .roc_version => try rocVersion(gpa, cmd_args),
             .roc_check => rocCheck(gpa, opt, cmd_args),
             .roc_docs => try rocDocs(gpa, opt, cmd_args),
@@ -130,19 +138,24 @@ fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 
 /// Reads, parses, formats, and overwrites all Roc files at the given paths.
 /// Recurses into directories to search for Roc files.
-fn rocFormat(gpa: Allocator, args: []const []const u8) !void {
+fn rocFormat(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
     var timer = try std.time.Timer.start();
-    var count: usize = 0;
+    var count = fmt.SuccessFailCount{ .success = 0, .failure = 0 };
     if (args.len > 0) {
         for (args) |arg| {
-            count += try fmt.formatPath(gpa, std.fs.cwd(), arg);
+            const inner_count = try fmt.formatPath(gpa, arena, std.fs.cwd(), arg);
+            count.success += inner_count.success;
+            count.failure += inner_count.failure;
         }
     } else {
-        count = try fmt.formatPath(gpa, std.fs.cwd(), "main.roc");
+        count = try fmt.formatPath(gpa, arena, std.fs.cwd(), "main.roc");
     }
-
     const elapsed = timer.read() / std.time.ns_per_ms;
-    try std.io.getStdOut().writer().print("Successfully formatted {} files in {} ms.\n", .{ count, elapsed });
+    try std.io.getStdOut().writer().print("Successfully formatted {} files\n", .{count.success});
+    if (count.failure > 0) {
+        try std.io.getStdOut().writer().print("Failed to format {} files.\n", .{count.failure});
+    }
+    try std.io.getStdOut().writer().print("Took {} ms.\n", .{elapsed});
 }
 
 fn rocVersion(gpa: Allocator, args: []const []const u8) !void {

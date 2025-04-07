@@ -12,22 +12,27 @@ foo = if true A
 NIL
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
-LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:14),UpperIdent(3:15-3:16),Newline(1:5-1:5),
-KwElse(5:5-5:9),OpenCurly(5:10-5:11),Newline(1:5-1:5),
-UpperIdent(6:5-6:6),Newline(1:5-1:5),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:4),OpAssign(3:5-3:6),KwIf(3:7-3:9),LowerIdent(3:10-3:14),UpperIdent(3:15-3:16),Newline(1:1-1:1),
+Newline(1:1-1:1),
+KwElse(5:5-5:9),OpenCurly(5:10-5:11),Newline(1:1-1:1),
+UpperIdent(6:5-6:6),Newline(1:1-1:1),
 CloseCurly(7:5-7:6),EndOfFile(7:6-7:6),
 ~~~PARSE
-(file (1:1-7:6)
-    (module (1:1-1:13)
-        (exposed_item (1:9-1:12) (lower_ident "foo")))
+(file
+    (module (1:1-1:13) (exposed_item (lower_ident "foo")))
     (decl (3:1-7:6)
         (ident (3:1-3:4) "foo")
         (if_then_else (3:7-7:6)
             (ident (3:10-3:14) "" "true")
             (tag (3:15-3:16) "A")
-            (block (5:10-7:6) (tag (6:5-6:6) "B")))))
+            (block (tag (6:5-6:6) "B")))))
 ~~~FORMATTED
 module [foo]
 
-foo = if true A else B
+foo = if true A
+
+    else {
+        B
+    }
 ~~~END

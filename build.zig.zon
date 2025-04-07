@@ -55,6 +55,6 @@
         "build.zig.zon",
         "src",
         "LICENSE",
-        "LEGAL_DETAILS",
+        "legal_details",
     },
 }

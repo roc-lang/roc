@@ -97,6 +97,7 @@
            
           zls # zig language server
           watchexec
+          simple-http-server # to view the website locally
         ]);
 
         aliases = ''
