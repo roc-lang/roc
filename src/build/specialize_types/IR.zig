@@ -1,13 +1,5 @@
 //! The intermediate representation (IR) for a Roc module that has been monomorphized.
 //!
-//! Monomorphization, also known as type specialization, is the process of creating a distinct copy
-//! of each instance of a generic function or value based on all specific usages in a program.
-//! For example; a function with the type `Num a -> Num a` may only be called in the program with a
-//! `U64` and a `I64`. Specialization will then create two functions with the types `U64 -> U64` and
-//! `I64 -> I64`.
-//! This trades off some compile time for a much better runtime performance, since we don't need to
-//! look up which implementation to call at runtime (AKA dynamic dispatch).
-//!
 //! Doing type specialization as the first build stage helps simplify compilation of lambda sets, or
 //! values captured by closures.
 //!

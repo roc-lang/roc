@@ -31,7 +31,7 @@ tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
 
-/// Returns true if the given region spans multiple lines.
+/// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *IR, region: Region) bool {
     var i = region.start;
     const tags = self.tokens.tokens.items(.tag);
@@ -112,6 +112,10 @@ pub const Diagnostic = struct {
 pub const Region = struct {
     start: TokenIdx,
     end: TokenIdx,
+
+    pub fn spanAcross(self: Region, other: Region) Region {
+        return .{ .start = self.start, .end = other.end };
+    }
 };
 
 /// Unstructured information about a Node.  These
@@ -499,7 +503,7 @@ pub const NodeStore = struct {
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
-    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         var store: NodeStore = .{
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
@@ -660,7 +664,7 @@ pub const NodeStore = struct {
                 node.region = mod.region;
             },
             .malformed => {
-                @panic("use addMalformed instead");
+                @panic("Use addMalformed instead");
             },
             else => {},
         }
@@ -791,7 +795,7 @@ pub const NodeStore = struct {
                 node.data.rhs = a.anno.id;
             },
             .malformed => {
-                @panic("use addMalformed instead");
+                @panic("Use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -862,16 +866,14 @@ pub const NodeStore = struct {
                 node.region = u.region;
             },
             .alternatives => |a| {
-                // disabled because it was hit by a fuzz test
-                // for a repro see src/snapshots/fuzz_crash_012.txt
-                // std.debug.assert(a.patterns.span.len > 1);
+                std.debug.assert(a.patterns.span.len > 1);
                 node.region = a.region;
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
                 node.data.rhs = a.patterns.span.len;
             },
             .malformed => {
-                @panic("use addMalformed instead");
+                @panic("Use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1020,7 +1022,7 @@ pub const NodeStore = struct {
                 node.region = e.region;
             },
             .malformed => {
-                @panic("use addMalformed instead");
+                @panic("Use addMalformed instead");
             },
         }
         const nid = store.nodes.append(store.gpa, node);
@@ -1194,7 +1196,7 @@ pub const NodeStore = struct {
                 node.data.lhs = p.anno.id;
             },
             .malformed => {
-                @panic("use addMalformed instead");
+                @panic("Use addMalformed instead");
             },
         }
 
@@ -1384,6 +1386,12 @@ pub const NodeStore = struct {
                     .anno = .{ .id = node.data.rhs },
                 } };
             },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
             else => {
                 std.debug.panic("Expected a valid statement tag, got {s}", .{@tagName(node.tag)});
             },
@@ -1466,6 +1474,12 @@ pub const NodeStore = struct {
             },
             .underscore_patt => {
                 return .{ .underscore = .{
+                    .region = node.region,
+                } };
+            },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
                     .region = node.region,
                 } };
             },
@@ -1791,22 +1805,20 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-            var node = sexpr.Expr.init(env.gpa, "file");
-
-            node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+            var file_node = sexpr.Expr.init(env.gpa, "file");
 
             const header = ir.store.getHeader(self.header);
             var header_node = header.toSExpr(env, ir, line_starts);
 
-            node.appendNodeChild(env.gpa, &header_node);
+            file_node.appendNodeChild(env.gpa, &header_node);
 
             for (ir.store.statementSlice(self.statements)) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
                 var stmt_node = stmt.toSExpr(env, ir, line_starts);
-                node.appendNodeChild(env.gpa, &stmt_node);
+                file_node.appendNodeChild(env.gpa, &stmt_node);
             }
 
-            return node;
+            return file_node;
         }
     };
 
@@ -1817,19 +1829,17 @@ pub const NodeStore = struct {
         region: Region,
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
-            var node = sexpr.Expr.init(env.gpa, "block");
-
-            node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+            var block_node = sexpr.Expr.init(env.gpa, "block");
 
             for (ir.store.statementSlice(self.statements)) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
                 var stmt_node = stmt.toSExpr(env, ir, line_starts);
 
-                node.appendNodeChild(env.gpa, &stmt_node);
+                block_node.appendNodeChild(env.gpa, &stmt_node);
             }
 
-            return node;
+            return block_node;
         }
     };
 
@@ -1929,12 +1939,11 @@ pub const NodeStore = struct {
         },
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+            _ = line_starts;
             var node = sexpr.Expr.init(env.gpa, "exposed_item");
             var inner_node = sexpr.Expr.init(env.gpa, @tagName(self));
-
             switch (self) {
                 .lower_ident => |i| {
-                    node.appendRegionChild(env.gpa, ir.regionInfo(i.region, line_starts));
                     const token = ir.tokens.tokens.get(i.ident);
                     const text = env.idents.getText(token.extra.interned);
                     inner_node.appendStringChild(env.gpa, text);
@@ -1945,7 +1954,6 @@ pub const NodeStore = struct {
                     }
                 },
                 .upper_ident => |i| {
-                    node.appendRegionChild(env.gpa, ir.regionInfo(i.region, line_starts));
                     const token = ir.tokens.tokens.get(i.ident);
                     const text = env.idents.getText(token.extra.interned);
                     inner_node.appendStringChild(env.gpa, text);
@@ -1956,7 +1964,6 @@ pub const NodeStore = struct {
                     }
                 },
                 .upper_ident_star => |i| {
-                    node.appendRegionChild(env.gpa, ir.regionInfo(i.region, line_starts));
                     const token = ir.tokens.tokens.get(i.ident);
                     const text = env.idents.getText(token.extra.interned);
                     inner_node.appendStringChild(env.gpa, text);
