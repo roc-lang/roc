@@ -1,4 +1,4 @@
-x = when n{
+x = match n {
 
     0->0}
 42

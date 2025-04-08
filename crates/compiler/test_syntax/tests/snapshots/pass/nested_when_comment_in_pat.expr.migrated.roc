@@ -1,6 +1,6 @@
-when 6{
+match 6 {
 
     O( #
-    B,)->when 6{
+    B)->match 6 {
 
         1->O}}

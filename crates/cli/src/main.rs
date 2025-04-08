@@ -13,7 +13,6 @@ use roc_cli::{
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::{internal_error, user_error};
-use roc_fmt::MigrationFlags;
 use roc_gen_dev::AssemblyBackendMode;
 use roc_gen_llvm::llvm::build::LlvmBackendMode;
 use roc_load::{LoadingProblem, Threading};
@@ -395,10 +394,6 @@ fn main() -> io::Result<()> {
                     false => FormatMode::WriteToFile,
                 }
             };
-            let flags = MigrationFlags {
-                snakify: migrate,
-                parens_and_commas: migrate,
-            };
 
             if from_stdin && matches!(format_mode, FormatMode::WriteToFile) {
                 eprintln!("When using the --stdin flag, either the --check or the --stdout flag must also be specified. (Otherwise, it's unclear what filename to write to!)");
@@ -451,7 +446,7 @@ fn main() -> io::Result<()> {
                     std::process::exit(1);
                 });
 
-                match format_src(&arena, src, flags) {
+                match format_src(&arena, src, migrate) {
                     Ok(formatted_src) => {
                         match format_mode {
                             FormatMode::CheckOnly => {
@@ -483,7 +478,7 @@ fn main() -> io::Result<()> {
                     }
                 }
             } else {
-                match format_files(roc_files, format_mode, flags) {
+                match format_files(roc_files, format_mode, migrate) {
                     Ok(()) => 0,
                     Err(message) => {
                         eprintln!("{message}");

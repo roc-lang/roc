@@ -216,7 +216,7 @@ impl BinOp {
         ASSOCIATIVITY_TABLE[self as usize]
     }
 
-    fn precedence(self) -> u8 {
+    pub fn precedence(self) -> u8 {
         const PRECEDENCE_TABLE: [u8; 18] = generate_precedence_table();
 
         PRECEDENCE_TABLE[self as usize]

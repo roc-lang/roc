@@ -1,5 +1,5 @@
 return
 something
-|> pipeToFunction
-|> andAnother
+.(pipeToFunction)()
+.(andAnother)()
 

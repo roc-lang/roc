@@ -55,7 +55,14 @@ pub fn regionInfo(self: *IR, region: Region, line_starts: std.ArrayList(u32)) ba
     const start = self.tokens.resolve(region.start);
     const end = self.tokens.resolve(region.end);
     const info = base.DiagnosticPosition.position(self.source, line_starts, start.start.offset, end.end.offset) catch {
-        std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
+        // std.debug.panic("failed to calculate position info for region {?}, start: {}, end: {}", .{ region, start, end });
+        return .{
+            .start_line_idx = 0,
+            .start_col_idx = 0,
+            .end_line_idx = 0,
+            .end_col_idx = 0,
+            .line_text = "",
+        };
     };
 
     return info;
@@ -77,7 +84,6 @@ pub const Diagnostic = struct {
         bad_indent,
         multiple_platforms,
         no_platform,
-        unexpected_token,
         missing_header,
         list_not_closed,
         missing_arrow,
@@ -105,6 +111,30 @@ pub const Diagnostic = struct {
         import_exposing_no_open,
         import_exposing_no_close,
         no_else,
+        expected_type_field_name,
+        expected_colon_after_type_field_name,
+        expected_arrow,
+        expected_ty_close_curly_or_comma,
+        expected_ty_close_square_or_comma,
+        expected_lower_name_after_exposed_item_as,
+        expected_upper_name_after_exposed_item_as,
+        exposed_item_unexpected_token,
+        expected_upper_name_after_import_as,
+        expected_colon_after_type_annotation,
+        expected_lower_ident_pat_field_name,
+        expected_colon_after_pat_field_name,
+        expected_expr_bar,
+        expected_expr_close_curly_or_comma,
+        expected_expr_close_round_or_comma,
+        expected_expr_close_square_or_comma,
+        expected_close_curly_at_end_of_match,
+        expected_open_curly_after_match,
+        expr_unexpected_token,
+        expected_expr_record_field_name,
+        expected_ty_apply_close_round,
+        expected_ty_anno_end_of_function,
+        expected_ty_anno_end,
+        expected_expr_apply_close_round,
     };
 };
 
@@ -234,16 +264,26 @@ pub const Node = struct {
 
         // Type terms
 
-        /// DESCRIPTION
-        /// Example: EXAMPLE
+        /// `List(a, b, c)` for example
+        /// * lhs - offset of func (List, in this case)
+        /// * rhs - number of type args + 1, to account for the function itself
+        ty_apply,
+
+        /// `a` in `MyType(a) : List(a)`
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         ty_var,
-        /// DESCRIPTION
-        /// Example: EXAMPLE
+
+        /// `List` in `MyType(a) : List(a)`
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
-        ty_tag,
+        ty_ty,
+
+        /// `MyMod.MyType` in `Foo : MyMod.MyType`
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        ty_mod_ty,
+
         /// DESCRIPTION
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
@@ -1139,6 +1179,12 @@ pub const NodeStore = struct {
         };
 
         switch (anno) {
+            .apply => |a| {
+                node.tag = .ty_apply;
+                node.region = a.region;
+                node.data.lhs = a.args.span.start;
+                node.data.rhs = a.args.span.len;
+            },
             .ty_var => |v| {
                 node.tag = .ty_var;
                 node.region = v.region;
@@ -1148,12 +1194,18 @@ pub const NodeStore = struct {
                 node.tag = .ty_underscore;
                 node.region = u.region;
             },
-            .tag => |t| {
-                node.tag = .ty_tag;
+            .ty => |t| {
+                node.tag = .ty_ty;
                 node.region = t.region;
                 node.main_token = t.tok;
-                node.data.lhs = t.args.span.start;
-                node.data.rhs = t.args.span.len;
+                node.data.rhs = @bitCast(t.ident);
+            },
+            .mod_ty => |t| {
+                node.tag = .ty_mod_ty;
+                node.region = t.region;
+                node.main_token = t.tok;
+                node.data.lhs = @bitCast(t.mod_ident);
+                node.data.rhs = @bitCast(t.ty_ident);
             },
             .tag_union => |tu| {
                 node.tag = .ty_union;
@@ -1711,6 +1763,15 @@ pub const NodeStore = struct {
         const node = store.nodes.get(@enumFromInt(anno.id));
 
         switch (node.tag) {
+            .ty_apply => {
+                return .{ .apply = .{
+                    .region = node.region,
+                    .args = .{ .span = .{
+                        .start = node.data.lhs,
+                        .len = node.data.rhs,
+                    } },
+                } };
+            },
             .ty_var => {
                 return .{ .ty_var = .{
                     .tok = node.main_token,
@@ -1722,13 +1783,18 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
-            .ty_tag => {
-                return .{ .tag = .{
+            .ty_ty => {
+                return .{ .ty = .{
                     .tok = node.main_token,
-                    .args = .{ .span = .{
-                        .start = node.data.lhs,
-                        .len = node.data.rhs,
-                    } },
+                    .ident = @bitCast(node.data.rhs),
+                    .region = node.region,
+                } };
+            },
+            .ty_mod_ty => {
+                return .{ .mod_ty = .{
+                    .tok = node.main_token,
+                    .mod_ident = @bitCast(node.data.lhs),
+                    .ty_ident = @bitCast(node.data.rhs),
                     .region = node.region,
                 } };
             },
@@ -2157,6 +2223,10 @@ pub const NodeStore = struct {
     };
 
     pub const TypeAnno = union(enum) {
+        apply: struct {
+            args: TypeAnnoSpan,
+            region: Region,
+        },
         ty_var: struct {
             tok: TokenIdx,
             region: Region,
@@ -2164,9 +2234,15 @@ pub const NodeStore = struct {
         underscore: struct {
             region: Region,
         },
-        tag: struct {
+        ty: struct {
             tok: TokenIdx,
-            args: TypeAnnoSpan,
+            ident: base.Ident.Idx,
+            region: Region,
+        },
+        mod_ty: struct {
+            tok: TokenIdx,
+            mod_ident: base.Ident.Idx,
+            ty_ident: base.Ident.Idx,
             region: Region,
         },
         tag_union: struct {
@@ -2200,6 +2276,19 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             switch (self) {
+                // (apply <ty> [<args>])
+                .apply => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "apply");
+
+                    node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
+
+                    for (ir.store.typeAnnoSlice(a.args)) |b| {
+                        var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+
+                    return node;
+                },
                 // (ty_var <var>)
                 .ty_var => |a| {
                     var node = sexpr.Expr.init(env.gpa, "ty_var");
@@ -2213,17 +2302,17 @@ pub const NodeStore = struct {
                 .underscore => {
                     return sexpr.Expr.init(env.gpa, "_");
                 },
-                // (tag [<args>])
-                .tag => |a| {
-                    var node = sexpr.Expr.init(env.gpa, "tag");
-
-                    node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-
+                // (ty name)
+                .ty => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "ty");
                     node.appendStringChild(env.gpa, ir.resolve(a.tok));
-                    for (ir.store.typeAnnoSlice(a.args)) |b| {
-                        var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
-                        node.appendNodeChild(env.gpa, &child);
-                    }
+                    return node;
+                },
+                // (mod_ty mod ty)
+                .mod_ty => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "mod_ty");
+                    node.appendStringChild(env.gpa, ir.resolve(a.tok));
+                    node.appendStringChild(env.gpa, ir.resolve(a.tok + 1));
                     return node;
                 },
                 .tag_union => |a| {
@@ -2344,7 +2433,6 @@ pub const NodeStore = struct {
             reason: Diagnostic.Tag,
             region: Region,
         },
-
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             switch (self) {
                 .ident => |ident| {
@@ -2356,40 +2444,99 @@ pub const NodeStore = struct {
 
                     return node;
                 },
-                .tag => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .tag => |tag| {
+                    var node = sexpr.Expr.init(env.gpa, "tag");
+
+                    node.appendRegionChild(env.gpa, ir.regionInfo(tag.region, line_starts));
+
+                    node.appendStringChild(env.gpa, ir.resolve(tag.tag_tok));
+
+                    // Add arguments if there are any
+                    for (ir.store.patternSlice(tag.args)) |arg| {
+                        var arg_node = ir.store.getPattern(arg).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &arg_node);
+                    }
+
+                    return node;
                 },
-                .number => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .number => |num| {
+                    var node = sexpr.Expr.init(env.gpa, "number");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(num.region, line_starts));
+                    node.appendStringChild(env.gpa, ir.resolve(num.number_tok));
+                    return node;
                 },
-                .string => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .string => |str| {
+                    var node = sexpr.Expr.init(env.gpa, "string");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(str.region, line_starts));
+                    node.appendStringChild(env.gpa, ir.resolve(str.string_tok));
+                    return node;
                 },
-                .record => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .record => |rec| {
+                    var node = sexpr.Expr.init(env.gpa, "record");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(rec.region, line_starts));
+
+                    for (ir.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
+                        const field = ir.store.getPatternRecordField(field_idx);
+                        var field_node = sexpr.Expr.init(env.gpa, "field");
+                        field_node.appendStringChild(env.gpa, ir.resolve(field.name));
+
+                        if (field.value) |value| {
+                            var value_node = ir.store.getPattern(value).toSExpr(env, ir, line_starts);
+                            field_node.appendNodeChild(env.gpa, &value_node);
+                        }
+
+                        if (field.rest) {
+                            field_node.appendStringChild(env.gpa, "rest");
+                        }
+
+                        node.appendNodeChild(env.gpa, &field_node);
+                    }
+
+                    return node;
                 },
-                .list => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .list => |list| {
+                    var node = sexpr.Expr.init(env.gpa, "list");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(list.region, line_starts));
+
+                    for (ir.store.patternSlice(list.patterns)) |pat| {
+                        var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &pattern_node);
+                    }
+
+                    return node;
                 },
-                .list_rest => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .list_rest => |rest| {
+                    var node = sexpr.Expr.init(env.gpa, "list_rest");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(rest.region, line_starts));
+
+                    if (rest.name) |name_tok| {
+                        node.appendStringChild(env.gpa, ir.resolve(name_tok));
+                    }
+
+                    return node;
                 },
-                .tuple => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .tuple => |tuple| {
+                    var node = sexpr.Expr.init(env.gpa, "tuple");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(tuple.region, line_starts));
+
+                    for (ir.store.patternSlice(tuple.patterns)) |pat| {
+                        var pattern_node = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &pattern_node);
+                    }
+
+                    return node;
                 },
                 .underscore => {
                     return sexpr.Expr.init(env.gpa, "underscore");
                 },
-                .alternatives => {
-                    std.debug.print("TODO implement toSExpr for Pattern {} not yet implemented", .{self});
-                    @panic("unimplemented");
+                .alternatives => |a| {
+                    // '|' separated list of patterns
+                    var node = sexpr.Expr.init(env.gpa, "alternatives");
+                    for (ir.store.patternSlice(a.patterns)) |pat| {
+                        var patNode = ir.store.getPattern(pat).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &patNode);
+                    }
+                    return node;
                 },
                 .malformed => |a| {
                     var node = sexpr.Expr.init(env.gpa, "malformed_pattern");
@@ -2667,6 +2814,44 @@ pub const NodeStore = struct {
 
                     return node;
                 },
+                .dbg => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "dbg");
+
+                    var arg = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
+                    node.appendNodeChild(env.gpa, &arg);
+
+                    return node;
+                },
+                .match => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "match");
+
+                    var expr = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
+
+                    // handle branches
+                    var branches = sexpr.Expr.init(env.gpa, "branches");
+                    for (ir.store.whenBranchSlice(a.branches)) |branch| {
+                        var branch_node = ir.store.getBranch(branch).toSExpr(env, ir, line_starts);
+                        branches.appendNodeChild(env.gpa, &branch_node);
+                    }
+
+                    node.appendNodeChild(env.gpa, &expr);
+
+                    node.appendNodeChild(env.gpa, &branches);
+
+                    return node;
+                },
+                .ellipsis => {
+                    return sexpr.Expr.init(env.gpa, "ellipsis");
+                },
+                .suffix_single_question => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "suffix_single_question");
+
+                    node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
+
+                    var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
+                    node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
                 else => {
                     std.debug.print("\n\n toSExpr not implement for Expr {}\n\n", .{self});
                     @panic("not implemented yet");
@@ -2699,6 +2884,16 @@ pub const NodeStore = struct {
         pattern: PatternIdx,
         body: ExprIdx,
         region: Region,
+
+        pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
+            var node = sexpr.Expr.init(env.gpa, "branch");
+            node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+            var pattern = ir.store.getPattern(self.pattern).toSExpr(env, ir, line_starts);
+            node.appendNodeChild(env.gpa, &pattern);
+            var body = ir.store.getExpr(self.body).toSExpr(env, ir, line_starts);
+            node.appendNodeChild(env.gpa, &body);
+            return node;
+        }
     };
 
     pub const BinOp = struct {

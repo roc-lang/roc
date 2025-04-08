@@ -1,4 +1,4 @@
-when n{
+match n {
 
     O->s}
 #

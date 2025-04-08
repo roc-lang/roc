@@ -2,8 +2,8 @@ app [main] {
     cli: platform "../basic-cli/platform/main.roc",
 }
 
-importcli.Stdout
+import cli.Stdout
 
 main =
-Stdout.line("hello",)
+Stdout.line("hello")
 

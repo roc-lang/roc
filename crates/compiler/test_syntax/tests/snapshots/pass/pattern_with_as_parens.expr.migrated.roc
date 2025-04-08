@@ -1,3 +1,3 @@
-when t{
+match t {
 
-    Ok({} as d,)->S}
+    Ok({} as d)->S}
