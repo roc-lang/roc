@@ -36,6 +36,14 @@ Implementation:
 
 ## Keyword
 
+A specific word that has a predefined meaning in the language, like `crash`, `if`, `when`, ... .
+Many keywords can not be used as a variable name.
+We have an [overview of all Roc keywords](https://www.roc-lang.org/tutorial#reserved-keywords).
+
+Keywords in the compiler:
+- [new compiler](src/check/parse/tokenize.zig)
+- [old compiler](crates/compiler/parse/src/keyword.rs)
+
 ## Operator
 
 ## Syntax
