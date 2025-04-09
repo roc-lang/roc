@@ -1,3 +1,3 @@
 s( #
-implements,): s
+implements): s
 s

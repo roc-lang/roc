@@ -3,6 +3,9 @@ on:
 
 name: CI
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 env:
   RUST_BACKTRACE: 1
 
@@ -14,8 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Check for duplicate AUTHORS
-        run: diff <(sort AUTHORS) <(sort AUTHORS | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
+      - name: Check for duplicate authors
+        run: diff <(sort authors) <(sort authors | uniq) # The < operator treats a string as a file. diff 'succeeds' if no difference.
 
       - name: Update PATH to use zig 13
         run: |

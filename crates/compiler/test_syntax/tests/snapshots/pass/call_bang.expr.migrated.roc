@@ -1,1 +1,1 @@
-launchTheNukes!(123,)
+launchTheNukes!(123)

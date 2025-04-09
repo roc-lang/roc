@@ -4,6 +4,9 @@ on:
 
 name: Docker images tests
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
   nightly-ubuntu-latest:
     name: nightly-ubuntu-latest
@@ -95,21 +98,3 @@ jobs:
         run: |
           curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
           docker compose -f docker/nightly-debian-bookworm/docker-compose.yml run roc main.roc
-
-  nightly-debian-buster:
-    name: nightly-debian-buster
-    runs-on: [ubuntu-22.04]
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Copy example docker file
-        run: cp docker/nightly-debian-buster/docker-compose.example.yml docker/nightly-debian-buster/docker-compose.yml
-
-      - name: Build image
-        run: docker compose -f docker/nightly-debian-buster/docker-compose.yml build
-
-      - name: Test with hello world
-        run: |
-          curl -OL https://raw.githubusercontent.com/roc-lang/examples/refs/heads/main/examples/HelloWorld/main.roc
-          docker compose -f docker/nightly-debian-buster/docker-compose.yml run roc main.roc

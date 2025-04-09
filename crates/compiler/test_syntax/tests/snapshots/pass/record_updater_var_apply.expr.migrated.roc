@@ -1,1 +1,1 @@
-foo(&bar,5,)
+foo(&bar, 5)

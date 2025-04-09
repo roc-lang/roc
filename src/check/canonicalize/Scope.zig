@@ -15,26 +15,19 @@ const Self = @This();
 
 env: *base.ModuleEnv,
 /// The custom alias that this file is centered around, if one has been defined.
-focused_custom_alias: ?Alias.Idx,
+focused_custom_alias: ?Alias.Idx = null,
 // TODO: handle renaming, e.g. `CustomType := [ExportedName as LocalName]`
-custom_tags: std.AutoHashMap(Ident.Idx, Alias.Idx),
+custom_tags: std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx) = .{},
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
-allocator: std.mem.Allocator,
 
+/// Initialize a new scope.
 pub fn init(
     env: *base.ModuleEnv,
     builtin_aliases: []const struct { alias: Alias.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
-    allocator: std.mem.Allocator,
 ) Self {
-    var scope = Self{
-        .env = env,
-        .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
-        .levels = Levels.init(env, allocator),
-        .allocator = allocator,
-    };
+    var scope = Self{ .env = env, .levels = Levels{ .env = env } };
 
     scope.levels.enter();
 
@@ -55,9 +48,10 @@ pub fn init(
     return scope;
 }
 
+/// Deinitialize a scope's memory
 pub fn deinit(self: *Self) void {
-    self.custom_tags.deinit();
-    self.levels.deinit();
+    self.custom_tags.deinit(self.env.gpa);
+    self.levels.deinit(self.env.gpa);
 }
 
 /// Generates a unique ident like "1" or "5" in the home module.
@@ -75,6 +69,7 @@ pub fn genUnique(self: *Self) Ident.Idx {
     return unique_idx;
 }
 
+/// todo
 pub fn Contains(item_kind: Level.ItemKind) type {
     return union(enum) {
         InScope: Level.Name(item_kind),
@@ -83,6 +78,7 @@ pub fn Contains(item_kind: Level.ItemKind) type {
     };
 }
 
+/// todo
 pub fn LookupResult(item_kind: Level.ItemKind) type {
     return union(enum) {
         InScope: Level.Name(item_kind),
@@ -90,12 +86,13 @@ pub fn LookupResult(item_kind: Level.ItemKind) type {
     };
 }
 
+/// todo
 pub const Level = struct {
-    idents: std.ArrayList(IdentInScope),
-    aliases: std.ArrayList(AliasInScope),
-
+    idents: std.ArrayListUnmanaged(IdentInScope) = .{},
+    aliases: std.ArrayListUnmanaged(AliasInScope) = .{},
+    /// todo
     pub const ItemKind = enum { ident, alias };
-
+    /// todo
     pub fn Item(comptime item_kind: ItemKind) type {
         return switch (item_kind) {
             .ident => IdentInScope,
@@ -103,6 +100,7 @@ pub const Level = struct {
         };
     }
 
+    /// todo
     pub fn ItemName(comptime item_kind: ItemKind) type {
         return switch (item_kind) {
             .ident => Ident.Idx,
@@ -110,71 +108,56 @@ pub const Level = struct {
         };
     }
 
-    pub fn items(level: *Level, comptime item_kind: ItemKind) *std.ArrayList(Item(item_kind)) {
+    /// todo
+    pub fn items(level: *Level, comptime item_kind: ItemKind) *std.ArrayListUnmanaged(Item(item_kind)) {
         return switch (item_kind) {
             .ident => &level.idents,
             .alias => &level.aliases,
         };
     }
-
+    /// todo
     pub const IdentInScope = struct {
         scope_name: Ident.Idx,
         ident: Ident.Idx,
     };
-
+    /// todo
     pub const AliasInScope = struct {
         scope_name: Ident.Idx,
         alias: Alias.Idx,
     };
-
-    pub fn init(allocator: std.mem.Allocator) Level {
-        return Level{
-            .idents = std.ArrayList(IdentInScope).init(allocator),
-            .aliases = std.ArrayList(AliasInScope).init(allocator),
-        };
-    }
-
-    pub fn deinit(self: *Level) void {
-        self.idents.deinit();
-        self.aliases.deinit();
+    /// todo
+    pub fn deinit(self: *Level, gpa: std.mem.Allocator) void {
+        self.idents.deinit(gpa);
+        self.aliases.deinit(gpa);
     }
 };
 
+/// todo
 pub const Levels = struct {
     env: *base.ModuleEnv,
-    levels: std.ArrayList(Level),
-    allocator: std.mem.Allocator,
-
-    pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Levels {
-        return Levels{
-            .env = env,
-            .levels = std.ArrayList(Level).init(allocator),
-            .allocator = allocator,
-        };
-    }
-
+    levels: std.ArrayListUnmanaged(Level) = .{},
+    /// todo
     pub fn deinit(self: *Levels) void {
-        self.levels.deinit();
+        self.levels.deinit(self.env.gpa);
     }
-
+    /// todo
     pub fn enter(self: *Levels) void {
-        self.levels.append(Level.init(self.allocator)) catch exitOnOom();
+        self.levels.append(self.env.gpa, .{}) catch |err| exitOnOom(err);
     }
-
+    /// todo
     pub fn exit(self: *Levels) void {
         if (self.levels.items.len <= 1) {
-            self.env.problems.append(Problem.Compiler.make(.{
+            self.env.problems.append(self.env.gpa, Problem.Compiler.make(.{
                 .canonicalize = .exited_top_scope_level,
-            })) catch exitOnOom();
+            })) catch |err| exitOnOom(err);
         } else {
             _ = self.levels.pop();
         }
     }
-
+    /// todo
     pub fn iter(self: *Levels, comptime item_kind: Level.ItemKind) Iterator(item_kind) {
         return Iterator(item_kind).new(self);
     }
-
     fn contains(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -189,7 +172,7 @@ pub const Levels = struct {
 
         return null;
     }
-
+    /// todo
     pub fn lookup(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -221,17 +204,17 @@ pub const Levels = struct {
             },
         }
 
-        self.env.problems.append(problem) catch exitOnOom();
+        self.env.problems.append(problem) catch |err| exitOnOom(err);
         return LookupResult{ .Problem = problem };
     }
-
+    /// todo
     pub fn introduce(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
         scope_item: Level.Item(item_kind),
     ) Level.Item(item_kind) {
         if (self.contains(item_kind, scope_item.scope_name)) |item_in_scope| {
-            const can_problem = switch (item_kind) {
+            const can_problem: Problem.Canonicalize = switch (item_kind) {
                 .ident => .{ .IdentAlreadyInScope = .{
                     .original_ident = item_in_scope.scope_name,
                     .shadow = scope_item.scope_name,
@@ -242,23 +225,23 @@ pub const Levels = struct {
                 } },
             };
 
-            self.env.problems.append(Problem.Canonicalize.make(can_problem)) catch exitOnOom();
+            _ = self.env.problems.append(self.env.gpa, Problem.Canonicalize.make(can_problem));
             // TODO: is this correct for shadows?
             return scope_item;
         }
 
         var last_level = self.levels.getLast();
-        last_level.items(item_kind).append(scope_item) catch exitOnOom();
+        last_level.items(item_kind).append(self.env.gpa, scope_item) catch |err| exitOnOom(err);
 
         return scope_item;
     }
-
+    /// todo
     pub fn Iterator(comptime item_kind: Level.ItemKind) type {
         return struct {
             levels: *Levels,
             level_index: usize,
             prior_item_index: usize,
-
+            /// todo
             pub fn empty(levels: *Levels) Iterator(item_kind) {
                 return Iterator(item_kind){
                     .levels = levels,
@@ -266,7 +249,7 @@ pub const Levels = struct {
                     .prior_item_index = 0,
                 };
             }
-
+            /// todo
             pub fn new(scope_levels: *Levels) Iterator(item_kind) {
                 if (scope_levels.levels.items.len == 0) {
                     return empty(scope_levels);
@@ -287,7 +270,7 @@ pub const Levels = struct {
                     .prior_item_index = prior_item_index,
                 };
             }
-
+            /// todo
             pub fn next(
                 self: *Iterator(item_kind),
             ) ?Level.ItemName(item_kind) {
@@ -311,7 +294,7 @@ pub const Levels = struct {
 
                 return next_item.scope_name;
             }
-
+            /// todo
             pub fn nextData(
                 self: *Iterator(item_kind),
             ) ?Level.Item(item_kind) {
@@ -340,16 +323,18 @@ pub const Levels = struct {
 };
 
 fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInScope) Self {
-    const allocator = std.testing.allocator;
-    var env = base.ModuleEnv.init(allocator);
+    const gpa = std.testing.allocator;
+    var env = base.ModuleEnv.init(gpa);
+    defer env.deinit();
 
     var scope = Self{
         .env = &env,
         .focused_custom_alias = null,
-        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(allocator),
-        .levels = Levels.init(&env, allocator),
-        .allocator = allocator,
+        .custom_tags = std.AutoHashMap(Ident.Idx, Alias.Idx).init(gpa),
+        .levels = Levels.init(&env, gpa),
+        .gpa = gpa,
     };
+    scope.deinit();
 
     const max_level = @min(idents.len, aliases.len);
     for (0..max_level) |_| {
@@ -360,7 +345,7 @@ fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInSco
         for (idents, 0..) |ident_level, level_index| {
             var level = scope.levels.levels.items[level_index];
             for (ident_level) |ident_in_scope| {
-                level.idents.append(ident_in_scope) catch exitOnOom();
+                level.idents.append(ident_in_scope) catch |err| exitOnOom(err);
             }
         }
     }
@@ -369,7 +354,7 @@ fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInSco
         for (aliases, 0..) |alias_level, level_index| {
             var level = scope.levels.levels.items[level_index];
             for (alias_level) |aliases_in_scope| {
-                level.aliases.append(aliases_in_scope) catch exitOnOom();
+                level.aliases.append(aliases_in_scope) catch |err| exitOnOom(err);
             }
         }
     }

@@ -4,6 +4,6 @@ app [main] {
 
 main =
 "jq --version"
-|> Cmd.new
-|> Cmd.status
-|> Result.mapErr?(UnableToCheckJQVersion,)
+.(Cmd.new)()
+.(Cmd.status)()
+.(Result.mapErr?)(UnableToCheckJQVersion)

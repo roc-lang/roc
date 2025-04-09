@@ -1,2 +1,2 @@
-doStuff: UserId, -> Dict(Str,_,)
+doStuff: UserId -> Dict(Str, _)
 42

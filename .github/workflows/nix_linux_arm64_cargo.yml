@@ -6,6 +6,9 @@ name: test cargo build on linux arm64 inside nix
 env:
     RUST_BACKTRACE: 1
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
     nix-linux-arm64-cargo:
         name: nix-linux-arm64

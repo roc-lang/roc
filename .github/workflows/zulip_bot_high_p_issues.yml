@@ -1,5 +1,8 @@
 name: Notify zulip high priority issues
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 on:
   issues:
     types: [labeled]

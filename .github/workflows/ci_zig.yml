@@ -3,6 +3,9 @@ on:
 
 name: CI New Compiler
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
     check-zig:
         runs-on: ubuntu-22.04
@@ -11,13 +14,28 @@ jobs:
               uses: actions/checkout@v4
             - uses: mlugg/setup-zig@v1
               with:
-                version: 0.13.0
+                version: 0.14.0
 
-            - run: |
+            - name: zig lints
+              run: |
+                ./ci/zig_lints.sh
+
                 zig build check-fmt
+
+              # We run zig check with tracy enabled.
+              # This ensure it compiles and doesn't go stale.
+            - name: Checkout Tracy
+              uses: actions/checkout@v4
+              with:
+                path: tracy
+                repository: wolfpld/tracy
+                ref: v0.11.0
+
+            - name: zig check
+              run: |
                 # -Dllvm incurs a costly download step, leave that for later.
                 # Just the do super fast check step for now.
-                zig build check -Dfuzz
+                zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
     zig-tests:
         needs: check-zig
@@ -31,11 +49,11 @@ jobs:
               uses: actions/checkout@v4
             - uses: mlugg/setup-zig@v1
               with:
-                version: 0.13.0
+                version: 0.14.0
 
             - name: build roc
               run: |
-                zig build -Dllvm -Dfuzz
+                zig build -Dllvm -Dfuzz -Dsystem-afl=false
 
             - name: roc executable minimal check (Unix)
               if: runner.os != 'Windows'
@@ -49,7 +67,23 @@ jobs:
 
             - name: zig tests
               run: |
-                zig build test -Dllvm -Dfuzz
+                zig build test -Dllvm -Dfuzz -Dsystem-afl=false
+
+            - name: zig snapshot tests
+              run: zig build snapshot
+
+            - name: Check for snapshot changes
+              run: |
+                git diff --exit-code src/snapshots || {
+                  echo ""
+                  echo ""
+                  echo "OOPS! It looks like the snapshots in 'src/snapshots' have changed.";
+                  echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+                  echo "Here’s what changed:";
+                  echo ""
+                  git diff src/snapshots;
+                  exit 1;
+                }
 
             - name: check if statically linked (ubuntu)
               if: startsWith(matrix.os, 'ubuntu')
@@ -99,7 +133,7 @@ jobs:
               uses: actions/checkout@v4
             - uses: mlugg/setup-zig@v1
               with:
-                version: 0.13.0
+                version: 0.14.0
 
             - name: cross compile with llvm
               run: |

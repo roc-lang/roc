@@ -1,3 +1,3 @@
 e: J
-as H(), -> A
+as H -> A
 r

@@ -1,5 +1,5 @@
-launchTheNukes: {}, => Result(Bool,LaunchNukeErr,)
+launchTheNukes: {} => Result(Bool, LaunchNukeErr)
 launchTheNukes = |{}|
-crash("todo",)
+crash("todo")
 
 launchTheNukes

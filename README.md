@@ -6,7 +6,7 @@
 - [**tutorial**](https://roc-lang.org/tutorial)
 - [**docs** for the standard library](https://www.roc-lang.org/builtins)
 - [**examples**](https://www.roc-lang.org/examples)
-- [**faq**: frequently asked questions](https://github.com/roc-lang/roc/blob/main/www/content/faq.md)
+- [**faq**: frequently asked questions](https://www.roc-lang.org/faq)
 - [**group chat**](https://roc.zulipchat.com) for help, questions and discussions
 
 If you'd like to contribute, [get started here](CONTRIBUTING.md). Don't hesitate to ask for help on our [group chat](https://roc.zulipchat.com), we're friendly!

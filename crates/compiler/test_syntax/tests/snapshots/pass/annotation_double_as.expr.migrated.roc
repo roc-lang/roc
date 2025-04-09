@@ -1,2 +1,2 @@
-s: eas A()as A()
+s: eas Aas A
 s

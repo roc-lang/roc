@@ -1,0 +1,19 @@
+~~~META
+description=fuzz crash
+verbose-tokens
+~~~SOURCE
+ff8.8.d
+~~~PROBLEMS
+PARSER: missing_header
+PARSER: expr_unexpected_token
+PARSER: expr_unexpected_token
+~~~TOKENS
+LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFile(1:8-1:8),
+~~~PARSE
+(file
+    (malformed_header (1:1-1:4) "missing_header")
+    (malformed_expr (1:4-1:6) "expr_unexpected_token")
+    (malformed_expr (1:6-1:8) "expr_unexpected_token"))
+~~~FORMATTED
+
+~~~END

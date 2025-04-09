@@ -1,45 +1,44 @@
-//! The common state or environment for a module for things that live for the duration of the compilation.
+//! The common state for a module: any data useful over the full lifetime of its compilation.
 //!
-//! Stores all interned data like symbols, strings, tag names, field names, and problems.
+//! Stores all interned data like idents, strings, and problems.
 //!
 //! This reduces the size of this module's IRs as they can store references to this
 //! interned (and deduplicated) data instead of storing the values themselves.
+
 const std = @import("std");
-const collections = @import("../collections.zig");
+const type_mod = @import("../types.zig");
 const problem = @import("../problem.zig");
+const collections = @import("../collections.zig");
+const Ident = @import("Ident.zig");
+const StringLiteral = @import("StringLiteral.zig");
 
-const Ident = @import("./Ident.zig");
-const Module = @import("./Module.zig");
-const StringLiteral = @import("./StringLiteral.zig");
-const Type = @import("../types/type.zig").Type;
-
+const Type = type_mod.Type;
 const Problem = problem.Problem;
 
 const Self = @This();
 
-idents: Ident.Store,
+gpa: std.mem.Allocator,
+idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
-modules: Module.Store,
 strings: StringLiteral.Store,
-problems: std.ArrayList(Problem),
-type_store: Type.Store,
-arena: *std.heap.ArenaAllocator,
+problems: Problem.List,
 
-pub fn init(arena: *std.heap.ArenaAllocator) Self {
-    var ident_store = Ident.Store.init(arena);
-
+/// Initialize the module environment.
+pub fn init(gpa: std.mem.Allocator) Self {
+    // TODO: maybe wire in smarter default based on the initial input text size.
     return Self{
-        .idents = ident_store,
-        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).init(arena.allocator()),
-        .modules = Module.Store.init(arena, &ident_store),
-        .strings = StringLiteral.Store.init(arena.allocator()),
-        .problems = std.ArrayList(Problem).init(arena.allocator()),
-        .type_store = Type.Store.init(arena.allocator()),
-        .arena = arena,
+        .gpa = gpa,
+        .idents = Ident.Store.initCapacity(gpa, 256),
+        .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 64),
+        .strings = StringLiteral.Store.initCapacityBytes(gpa, 256),
+        .problems = Problem.List.initCapacity(gpa, 16),
     };
 }
 
-pub fn addExposedIdentForModule(self: *Self, ident: Ident.Idx, module: Module.Idx) void {
-    self.modules.addExposedIdent(module, ident, &self.problems);
-    self.idents.setExposingModule(ident, module);
+/// Deinitialize the module environment.
+pub fn deinit(self: *Self) void {
+    self.idents.deinit(self.gpa);
+    self.ident_ids_for_slicing.deinit(self.gpa);
+    self.strings.deinit(self.gpa);
+    self.problems.deinit(self.gpa);
 }

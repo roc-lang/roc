@@ -1,12 +1,15 @@
-name: CI Manager
+on:
+  pull_request:
 
 # cancel current runs when a new commit is pushed
 concurrency:
     group: ${{ github.workflow }}-${{ github.ref }}
     cancel-in-progress: true
-    
-on:
-  pull_request:
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+name: CI Manager
 
 jobs:
   check-changes:
@@ -27,9 +30,12 @@ jobs:
               - 'build.zig'
               - 'build.zig.zon'
               - '.github/workflows/ci_zig.yml'
+              - 'ci/zig_lints.sh'
       - uses: dorny/paths-filter@v3
         id: other_filter
         with:
+          # Makes it so that every pattern below must match.
+          # This enables the negative patterns to disable this job.
           predicate-quantifier: 'every'
           filters: |
             other_than_zig:
@@ -38,6 +44,17 @@ jobs:
               - '!build.zig'
               - '!build.zig.zon'
               - '!.github/workflows/ci_zig.yml'
+              - '!ci/zig_lints.sh'
+              # Files that ci manager workflows should not run on.
+              - '!.gitignore'
+              - '!.reuse'
+              - '!authors'
+              - '!legal_details'
+              - '!LICENSE'
+              - '!*.md'
+              - '!src/**/*.md'
+              - '!design/**'
+              - '!examples/**'
 
   call-zig-workflow:
     needs: check-changes

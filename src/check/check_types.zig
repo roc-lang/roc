@@ -1,49 +1,79 @@
 const std = @import("std");
-const testing = std.testing;
-const Allocator = std.mem.Allocator;
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
-const resolve = @import("./resolve_imports.zig");
+const type_mod = @import("../types/type.zig");
+const can = @import("canonicalize.zig");
+const unify = @import("check_types/unify.zig");
+const resolve = @import("resolve_imports.zig");
 const ModuleEnv = @import("../base/ModuleEnv.zig");
-const Type = @import("../types/type.zig").Type;
-const unify = @import("./check_types/unify.zig");
+
+const testing = std.testing;
+const Allocator = std.mem.Allocator;
+const Ident = base.Ident;
+const Region = base.Region;
+const ModuleWork = base.ModuleWork;
+const Type = type_mod.Type;
 
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
-    resolve_ir: resolve.IR,
-    other_modules: []resolve.IR,
+    type_store: *Type.Store,
+    resolve_ir: *const resolve.IR,
+    other_modules: *const ModuleWork(resolve.IR).Store,
+    other_typestores: *const ModuleWork(Type.Store).Store,
 ) void {
+    _ = type_store;
     _ = resolve_ir;
     _ = other_modules;
+    _ = other_typestores;
 
-    // do something??
+    // TODO: implement
 }
 
-// test "checkTypes - basic type unification" {
+test "checkTypes - basic type unification" {
+    const gpa = testing.allocator;
 
-//     // Create minimal ResolveIR
-//     var module_env = ModuleEnv.init(testing.allocator);
+    var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
+        gpa,
+        &.{ModuleWork(can.IR){
+            .package_idx = @enumFromInt(1),
+            .module_idx = @enumFromInt(0),
+            .work = can.IR.init(gpa),
+        }},
+    );
+    defer can_irs.deinit(gpa);
 
-//     const type_id_1 = module_env.newTypeId();
-//     const type_id_2 = module_env.newTypeId();
+    var type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
+    defer type_stores.deinit(gpa);
 
-//     const empty_ir = resolve.IR.init(&module_env, testing.allocator);
-//     const empty_other_modules = &[_]resolve.IR{};
+    var resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
+    defer resolve_irs.deinit(gpa);
 
-//     checkTypes(empty_ir, empty_other_modules);
+    var env = &can_irs.getWork(@enumFromInt(0)).env;
+    const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
+    const type_store = type_stores.getWork(@enumFromInt(0));
 
-//     // Test that we can perform basic type unification
-//     const a_type = Type{ .flex_var = null };
-//     const int_type = Type{ .rigid_var = "Int" };
-//     try testing.expect(module_env.type_store.get(type_id_1).?.equal(a_type));
-//     try testing.expect(module_env.type_store.get(type_id_2).?.equal(int_type));
+    const type_id_1 = type_store.fresh();
+    const type_id_2 = type_store.fresh();
 
-//     // After unification, both variables should have the rigid type
-//     const result = try unify.unify(testing.allocator, module_env, type_id_1, type_id_2);
+    checkTypes(type_store, resolve_ir, &resolve_irs, &type_stores);
 
-//     try testing.expect(result.mismatches.items.len == 0);
-//     try testing.expect(result.has_changed);
-//     try testing.expect(module_env.type_store.get(type_id_1).?.* == .{ .RigidVar = "Int" });
-//     try testing.expect(module_env.type_store.subs.get(type_id_2).?.* == .{ .RigidVar = "Int" });
-// }
+    // Test that we can perform basic type unification
+    const a_type = Type{ .flex_var = null };
+    const int_name = env.idents.insert(env.gpa, Ident.for_text("Int"), Region.zero());
+    const int_type = Type{ .rigid_var = int_name };
+
+    type_store.set(type_id_1, a_type);
+    type_store.set(type_id_2, int_type);
+
+    try testing.expectEqual(type_store.get(type_id_1).*, a_type);
+    try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+
+    // // After unification, both variables should have the rigid type
+    // const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+
+    // try testing.expect(result.mismatches.items.len == 0);
+    // try testing.expect(result.has_changed);
+    // try testing.expectEqual(type_store.get(type_id_1).*, int_type);
+    // try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+}

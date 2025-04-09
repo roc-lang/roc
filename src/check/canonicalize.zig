@@ -14,7 +14,9 @@ const Problem = problem.Problem;
 const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
-pub const IR = @import("./canonicalize/IR.zig");
+
+/// The intermediate representation of a canonicalized Roc program.
+pub const IR = @import("canonicalize/IR.zig");
 
 /// After parsing a Roc program, the [ParseIR](src/check/parse/ir.zig) is transformed into a [canonical
 /// form](src/check/canonicalize/ir.zig) called CanIR.
@@ -34,16 +36,15 @@ pub const IR = @import("./canonicalize/IR.zig");
 pub fn canonicalize(
     can_ir: *IR,
     parse_ir: *parse.IR,
-    allocator: std.mem.Allocator,
 ) void {
     var env = can_ir.env;
     const builtin_aliases = &.{};
     const imported_idents = &.{};
-    var scope = Scope.init(&env, builtin_aliases, imported_idents, allocator);
+    var scope = Scope.init(&env, builtin_aliases, imported_idents);
 
-    const file = parse_ir.store.getFile(parse.IR.NodeStore.FileIdx{ .id = 0 });
+    const file = parse_ir.store.getFile();
 
-    for (file.statements) |stmt_id| {
+    for (parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = parse_ir.store.getStatement(stmt_id);
         switch (stmt) {
             .import => |import| {
@@ -53,7 +54,7 @@ pub fn canonicalize(
         }
     }
 
-    @panic("not implemented");
+    // TODO: implement
 }
 
 fn bringImportIntoScope(
@@ -73,12 +74,12 @@ fn bringImportIntoScope(
         .end = Region.Position.zero(),
     };
 
-    const res = ir.env.modules.getOrInsert(import_name, shorthand);
+    const res = ir.imports.getOrInsert(ir.env.gpa, import_name, shorthand);
 
     if (res.was_present) {
-        ir.env.problems.append(Problem.Canonicalize.make(.{ .DuplicateImport = .{
+        _ = ir.env.problems.append(ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
             .duplicate_import_region = region,
-        } })) catch exitOnOom();
+        } }));
     }
 
     // for (import.exposing.items.items) |exposed| {

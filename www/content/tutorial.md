@@ -24,9 +24,9 @@
         <p>Roc doesn’t have a numbered release or an installer yet, but you can follow the install instructions for your OS<a href="/install/getting_started.html#installation"> here </a>. If you get stuck, friendly people will be happy to help if you open a topic in<a href="https://roc.zulipchat.com/#narrow/stream/231634-beginners"> #beginners </a>on<a href="https://roc.zulipchat.com/"> Roc Zulip Chat </a>and ask for assistance!</p>
     </section>
 
-## [LLM Docs](#llm-docs) {#llm-docs}
+## [AI Docs](#ai-docs) {#ai-docs}
 
-We have experimental LLM-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite LLM to answer your questions about Roc!
+We have experimental AI-friendly text files for our [tutorial](/llms.txt) and [standard library](/builtins/llms.txt) that you can use to prompt your favorite large language model to answer your questions about Roc!
 
 ## [REPL](#repl) {#repl}
 
@@ -682,7 +682,7 @@ We can use tags with payloads to make a list that contains a mixture of differen
 List.map([StrElem "A", StrElem "b", NumElem 1, StrElem "c", NumElem -3], |elem|
     when elem is
         NumElem(num) -> Num.is_negative(num)
-        StrElem(str) -> Str.starts_with(str) "A"
+        StrElem(str) -> Str.starts_with(str, "A")
 )
 # returns [Bool.true, Bool.false, Bool.false, Bool.false, Bool.true]
 ```
@@ -1201,7 +1201,7 @@ from_str = |str|
     @Username(str)
 
 to_str : Username -> Str
-to_str = \@Username(str) ->
+to_str = |@Username(str)|
     str
 ```
 
@@ -1313,7 +1313,7 @@ Sometimes you may want to write a function that accepts configuration options. T
 For example:
 
 ```roc
-table = \{ height, width, title ?? "oak", description ?? "a wooden table" } ->
+table = |{ height, width, title ?? "oak", description ?? "a wooden table" }| ...
 ```
 
 This is using _default value field destructuring_ to destructure a record while
@@ -1474,14 +1474,13 @@ expect double(0) == 0
 
 ## [Modules](#modules) {#modules}
 
-Each `.roc` file is a separate module and contains Roc code for different purposes. Here are all of the different types of modules that Roc supports;
+Each `.roc` file is a separate module and contains Roc code for different purposes. Here are the types of modules:
 
-- **Builtins** provide functions that are automatically imported into every module.
-- **Applications** are combined with a platform and compiled into an executable.
-- **Modules** provide functions which can be imported into other modules.
-- **Packages** organise modules to share functionality across applications and platforms.
-- **Platforms** provide effects such as IO to interface with the outside world.
-- **Hosted** _note this module type is likely to be deprecated soon_.
+- app [(example)](https://github.com/roc-lang/examples/blob/main/examples/HelloWorld/main.roc): Applications are combined with a platform and compiled into an executable.
+- module [(example)](https://github.com/roc-lang/examples/blob/main/examples/MultipleRocFiles/Hello.roc): Provide types and functions which can be imported into other modules.
+- package [(example)](https://github.com/lukewilliamboswell/roc-json/blob/main/package/main.roc): Organises modules to share functionality across applications and platforms.
+- platform [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/main.roc): Provides memory management and effects like writing to files, network communication,... to interface with the outside world. [Detailed explanation](https://www.roc-lang.org/platforms).
+- hosted [(example)](https://github.com/roc-lang/basic-cli/blob/main/platform/Host.roc): Lists all Roc types and functions provided by the platform.
 
 ### [Builtin Modules](#builtin-modules) {#builtin-modules}
 
@@ -1949,7 +1948,7 @@ For example:
 stoplight_str : Str
 stoplight_str =
     stoplight_color =
-        if this_ss_a_bad_time then
+        if this_is_a_bad_time then
             return "Hey, listen, I just don't want to do this."
         else
             previous_stop_light_color

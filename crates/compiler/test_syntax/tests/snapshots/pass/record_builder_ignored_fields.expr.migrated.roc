@@ -1,2 +1,2 @@
-{Foo.Bar.baz<-x: 5y: 0_z: 3_: 2
+{Foo.Bar.baz<-x: 5, y: 0, _z: 3, _: 2
 }

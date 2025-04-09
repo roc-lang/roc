@@ -10,7 +10,7 @@ strip ./target/release-with-lto/roc_language_server
 mkdir -p $1 $1/examples
 
 mv target/release-with-lto/{roc,roc_language_server,lib} $1
-mv LICENSE LEGAL_DETAILS $1
+mv LICENSE legal_details $1
 
 mv crates/cli/tests/platform-switching $1/examples
 mv examples/README.md $1/examples

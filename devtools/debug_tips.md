@@ -31,10 +31,11 @@ Note that the addresses shown in objdump may use a different offset compared to 
 1. [Download here](https://hex-rays.com/ida-free/)
 2. Build your roc app with the legacy linker if it does not error only with the surgical linker: `roc build myApp.roc --linker=legacy`
 3. Open the produced executable with IDA free, don't change any of the suggested settings.
-4. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
-5. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
-6. Run the debugger by pressing F9
-7. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
+4. If IDA ever asks for the path for roc_app, just click cancel.
+5. You probably want to go to the function you saw in valgrind like `List_walkTryHelp_...` [here](https://github.com/roc-lang/examples/pull/192#issuecomment-2269571439). You can use Ctrl+F in the Function s window in IDA free.
+6. Right click and choose `Add Breakpoint` at the first instruction of the function you clicked on the previous step.
+7. Run the debugger by pressing F9
+8. Use step into (F7) and step over (F8) to see what's going on. Keep an eye on the `General Registers` and `Stack view` windows while you're stepping.
 
 
 #### gdb

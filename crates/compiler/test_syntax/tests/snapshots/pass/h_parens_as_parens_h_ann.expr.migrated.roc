@@ -1,2 +1,2 @@
-N() : A(Has H(),H,)
+N : A(Has H, H)
 I

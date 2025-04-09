@@ -1,6 +1,6 @@
 const std = @import("std");
 const base = @import("../../base.zig");
-const types = @import("../../types.zig");
+const types_module = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
@@ -21,46 +21,52 @@ typed_patterns: Pattern.Typed.List,
 typed_idents: TypedIdent.List,
 when_branches: WhenBranch.List,
 
-pub fn init(env: *base.ModuleEnv, allocator: std.mem.Allocator) Self {
+pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
-        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(allocator),
-        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(allocator),
-        .types = Type.List.init(allocator),
-        .exprs = Expr.List.init(allocator),
-        .typed_exprs = Expr.Typed.List.init(allocator),
-        .patterns = Pattern.List.init(allocator),
-        .typed_patterns = Pattern.Typed.List.init(allocator),
-        .typed_idents = TypedIdent.List.init(allocator),
-        .when_branches = WhenBranch.List.init(allocator),
+        .exposed_values = std.AutoHashMap(Ident.Idx, Expr.Idx).init(env.gpa),
+        .exposed_functions = std.AutoHashMap(Ident.Idx, Function).init(env.gpa),
+        .types = .{},
+        .exprs = .{},
+        .typed_exprs = .{},
+        .patterns = .{},
+        .typed_patterns = .{},
+        .typed_idents = .{},
+        .when_branches = .{},
     };
 }
 
 pub fn deinit(self: *Self) void {
-    self.exposed_values.deinit();
-    self.exposed_functions.deinit();
-    self.types.deinit();
-    self.exprs.deinit();
-    self.typed_exprs.deinit();
-    self.patterns.deinit();
-    self.typed_patterns.deinit();
-    self.typed_idents.deinit();
-    self.when_branches.deinit();
+    self.exposed_values.deinit(self.env.gpa);
+    self.exposed_functions.deinit(self.env.gpa);
+    self.types.deinit(self.env.gpa);
+    self.exprs.deinit(self.env.gpa);
+    self.typed_exprs.deinit(self.env.gpa);
+    self.patterns.deinit(self.env.gpa);
+    self.typed_patterns.deinit(self.env.gpa);
+    self.typed_idents.deinit(self.env.gpa);
+    self.when_branches.deinit(self.env.gpa);
 }
 
+/// todo
 pub const Type = union(enum) {
-    primitive: types.Primitive,
+    primitive: types_module.Primitive,
     box: Type.Idx,
     list: Type.Idx,
     @"struct": Type.NonEmptySlice,
     tag_union: Type.NonEmptySlice,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 };
 
+/// todo
 pub const Expr = union(enum) {
     let: Def,
     str: StringLiteral,
@@ -110,16 +116,23 @@ pub const Expr = union(enum) {
 
     compiler_bug: Problem.Compiler,
 
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
 
+    /// todo
     pub const Typed = struct {
         expr: Expr.Idx,
         type: Type.Idx,
 
+        /// todo
         pub const List = collections.SafeMultiList(@This());
+        /// todo
         pub const Slice = Typed.List.Slice;
     };
 };
@@ -135,7 +148,7 @@ pub const Def = struct {
     pub const List = collections.SafeMultiList(@This());
     pub const Slice = List.Slice;
 };
-
+/// todo
 pub const WhenBranch = struct {
     /// The pattern(s) to match the value against
     patterns: Pattern.NonEmptySlice,
@@ -147,27 +160,28 @@ pub const WhenBranch = struct {
     pub const List = collections.SafeList(@This());
     pub const NonEmptySlice = List.NonEmptySlice;
 };
-
+/// todo
 pub const Function = struct {
     args: Pattern.Slice,
     return_type: Type.Idx,
     expr: Expr.Idx,
 };
-
+/// todo
 pub const StructDestruct = struct {
     ident: Ident.Idx,
     field: Ident.Idx,
     kind: Kind,
-
+    /// todo
     pub const Kind = union(enum) {
         Required,
         Guard: Pattern.Typed,
     };
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };
-
+/// todo
 pub const Pattern = union(enum) {
     identifier: Ident.Idx,
     as: struct {
@@ -197,25 +211,30 @@ pub const Pattern = union(enum) {
     },
     underscore,
     compiler_bug: Problem.Compiler,
-
+    /// todo
     pub const List = collections.SafeList(@This());
+    /// todo
     pub const Idx = List.Idx;
+    /// todo
     pub const Slice = List.Slice;
+    /// todo
     pub const NonEmptySlice = List.NonEmptySlice;
-
+    /// todo
     pub const Typed = struct {
         pattern: Pattern.Idx,
         type: Type.Idx,
-
+        /// todo
         pub const List = collections.SafeMultiList(@This());
+        /// todo
         pub const Slice = Typed.List.Slice;
     };
 };
-
+/// todo
 pub const TypedIdent = struct {
     pattern: Pattern.Idx,
     type: Type.Idx,
-
+    /// todo
     pub const List = collections.SafeMultiList(@This());
+    /// todo
     pub const Slice = List.Slice;
 };

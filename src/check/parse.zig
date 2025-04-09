@@ -2,39 +2,44 @@ const std = @import("std");
 const testing = std.testing;
 
 const base = @import("../base.zig");
+const tracy = @import("../tracy.zig");
 const tokenize = @import("parse/tokenize.zig");
 const TokenIndex = tokenize.TokenIndex;
 const TokenizedBuffer = tokenize.TokenizedBuffer;
-pub const IR = @import("parse/IR.zig");
 const NodeList = IR.NodeList;
 const Diagnostic = IR.Diagnostic;
 const Parser = @import("parse/Parser.zig");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
-source: []const u8,
-tokens: TokenizedBuffer,
-store: IR.NodeStore,
-errors: []const Diagnostic,
+/// Represents the intermediate representation or Abstract Syntax Tree (AST) of a parsed Roc file.
+pub const IR = @import("parse/IR.zig");
 
 /// Parses a single Roc file.  The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
-pub fn parse(env: *base.ModuleEnv, allocator: std.mem.Allocator, source: []const u8) IR {
+pub fn parse(env: *base.ModuleEnv, source: []const u8) IR {
+    const trace = tracy.trace(@src());
+    defer trace.end();
+
     var messages: [128]tokenize.Diagnostic = undefined;
     const msg_slice = messages[0..];
-    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice, allocator);
+    var tokenizer = tokenize.Tokenizer.init(env, source, msg_slice);
     tokenizer.tokenize();
-    const result = tokenizer.finish_and_deinit();
+    const result = tokenizer.finishAndDeinit();
 
-    if (result.messages.len > 0) {
-        tokenizeReport(allocator, source, result.messages);
+    for (result.messages) |msg| {
+        _ = env.problems.append(env.gpa, .{ .tokenize = msg });
     }
 
-    var parser = Parser.init(allocator, result.tokens);
+    var parser = Parser.init(result.tokens);
     defer parser.deinit();
 
     parser.parseFile();
 
-    const errors = parser.diagnostics.toOwnedSlice() catch exitOnOom();
+    for (parser.diagnostics.items) |msg| {
+        _ = env.problems.append(env.gpa, .{ .parser = msg });
+    }
+
+    const errors = parser.diagnostics.toOwnedSlice(env.gpa) catch |err| exitOnOom(err);
 
     return .{
         .source = source,
@@ -42,70 +47,4 @@ pub fn parse(env: *base.ModuleEnv, allocator: std.mem.Allocator, source: []const
         .store = parser.store,
         .errors = errors,
     };
-}
-
-fn lineNum(newlines: std.ArrayList(usize), pos: u32) u32 {
-    const pos_usize = @as(usize, @intCast(pos));
-    var lineno: u32 = 0;
-    while (lineno < newlines.items.len) {
-        if (newlines.items[lineno + 1] > pos_usize) {
-            return lineno;
-        }
-        lineno += 1;
-    }
-    return lineno;
-}
-
-fn tokenizeReport(allocator: std.mem.Allocator, source: []const u8, msgs: []const tokenize.Diagnostic) void {
-    std.debug.print("Found the {d} following issues while parsing:\n", .{msgs.len});
-    var newlines = std.ArrayList(usize).init(allocator);
-    defer newlines.deinit();
-    newlines.append(0) catch exitOnOom();
-    var pos: usize = 0;
-    for (source) |c| {
-        if (c == '\n') {
-            newlines.append(pos) catch exitOnOom();
-        }
-        pos += 1;
-    }
-    for (msgs) |message| {
-        switch (message.tag) {
-            .MismatchedBrace => {
-                const start_line_num = lineNum(newlines, message.begin);
-                const start_col = message.begin - newlines.items[start_line_num];
-                const end_line_num = lineNum(newlines, message.end);
-                const end_col = message.end - newlines.items[end_line_num];
-
-                const src = source[newlines.items[start_line_num]..newlines.items[end_line_num + 1]];
-                var spaces = std.ArrayList(u8).init(allocator);
-                defer spaces.deinit();
-                for (0..start_col) |_| {
-                    spaces.append(' ') catch exitOnOom();
-                }
-
-                std.debug.print(
-                    "({d}:{d}-{d}:{d}) Expected the correct closing brace here:\n{s}\n{s}^\n",
-                    .{ start_line_num, start_col, end_line_num, end_col, src, spaces.toOwnedSlice() catch exitOnOom() },
-                );
-            },
-            else => {
-                std.debug.print("MSG: {any}", .{message});
-            },
-        }
-    }
-}
-
-test "example s-expr" {
-    const source =
-        \\module []
-        \\
-        \\foo = "bar"
-    ;
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    var env = base.ModuleEnv.init(&arena);
-    var parse_ir = parse(&env, testing.allocator, source);
-    defer parse_ir.deinit();
-
-    // std.debug.print("{}", .{parse_ir});
 }

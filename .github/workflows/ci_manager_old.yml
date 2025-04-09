@@ -3,6 +3,9 @@ on:
 
 name: Old CI manager
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
     check-changes:
         runs-on: ubuntu-22.04
@@ -16,7 +19,7 @@ jobs:
               id: check_ignored_files
               run: |
                 git fetch origin ${{ github.base_ref }}
-                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$)'; then
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^authors$)'; then
                     echo "should_run_tests=y" >> $GITHUB_OUTPUT
                 else
                     echo "should_run_tests=n" >> $GITHUB_OUTPUT
@@ -36,7 +39,7 @@ jobs:
               id: check_rs_comments
               run: |
                 git fetch origin ${{ github.base_ref }}
-                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$|\.rs|\.roc)'; then
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^authors$|\.rs|\.roc)'; then
                     echo "should_run_tests=y" >> $GITHUB_OUTPUT
                 else
                   if git diff --unified=0 origin/${{ github.base_ref }} HEAD '*.rs' | grep -E --color=never '^[+-]' | grep -qvE '^(\+\+\+|\-\-\-|[+-]\s*($|\/\/[^\/]|\/\*.*\*\/\s*$))'; then
@@ -50,7 +53,7 @@ jobs:
               id: check_roc_comments
               run: |
                 git fetch origin ${{ github.base_ref }}
-                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^AUTHORS$|\.rs|\.roc)'; then
+                if git diff --name-only origin/${{ github.base_ref }} HEAD | grep -qvE '(\.md$|\.css$|\.html$|^authors$|\.rs|\.roc)'; then
                     echo "should_run_tests=y" >> $GITHUB_OUTPUT
                 else
                   if git diff --unified=0 origin/${{ github.base_ref }} HEAD '*.roc' | grep -E --color=never '^[+-]' | grep -qvE '^(\+\+\+|\-\-\-|[+-]\s*($|#))'; then

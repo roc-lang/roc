@@ -1,0 +1,14 @@
+~~~META
+description=fuzz crash
+verbose-tokens
+~~~SOURCE
+F
+~~~PROBLEMS
+PARSER: missing_header
+~~~TOKENS
+UpperIdent(1:1-1:2),EndOfFile(1:2-1:2),
+~~~PARSE
+(file (malformed_header (1:1-1:2) "missing_header"))
+~~~FORMATTED
+
+~~~END

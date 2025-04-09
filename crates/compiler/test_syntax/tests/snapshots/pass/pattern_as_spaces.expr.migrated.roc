@@ -1,4 +1,4 @@
-when 0{
+match 0 {
 
     0 # foobar
      as # barfoo

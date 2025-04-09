@@ -4,13 +4,16 @@ on:
 
 name: Test latest nightly releases for macOS and Linux
 
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
 jobs:
   test-nightly:
-    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 20.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
+    name: test nightly macos 13 (x64), macos 14 (aarch64), ubuntu 22.04-24.04 (x64), ubuntu 22.04-24.04 (aarch64)
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-13, macos-14, ubuntu-20.04, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
+        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04, ubuntu-22.04-arm, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -21,10 +24,6 @@ jobs:
 
       - name: Delete everything except ci folder to test the release like a real user would
         run: find . -maxdepth 1 ! -name ci ! -name '.' -exec rm -rf {} +
-
-      - name: install z3 on macOS
-        if: startsWith(matrix.os, 'macos')
-        run: brew install z3
 
       - name: get the latest release archive for linux (x86_64)
         if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
@@ -48,16 +47,4 @@ jobs:
 
       - name: prep and run basic tests
         run: |
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (x86_64)
-        if: startsWith(matrix.os, 'ubuntu') && !endsWith(matrix.os, '-arm')
-        run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_x86_64-latest.tar.gz -o roc_release.tar.gz
-          ./ci/basic_release_test.sh roc_release.tar.gz
-
-      - name: test with old linux release (arm64)
-        if: startsWith(matrix.os, 'ubuntu') && endsWith(matrix.os, '-arm')
-        run: |
-          curl -fL https://github.com/roc-lang/roc/releases/download/nightly/roc_nightly-old_linux_arm64-latest.tar.gz -o roc_release.tar.gz
           ./ci/basic_release_test.sh roc_release.tar.gz

@@ -6,6 +6,7 @@ const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 const Ident = base.Ident;
 
+/// Represents types
 pub const Type = union(enum) {
     /// Builtin `Bool` type
     bool,

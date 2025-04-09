@@ -1,1 +1,1 @@
-fallible!(args,) ? WrapOverErr
+fallible!(args) ? WrapOverErr
