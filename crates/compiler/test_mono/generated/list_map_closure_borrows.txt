@@ -71,12 +71,12 @@ procedure Num.51 (#Attr.2, #Attr.3):
     ret Num.285;
 
 procedure Str.16 (#Attr.2, #Attr.3):
-    let Str.385 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
-    ret Str.385;
+    let Str.388 : Str = lowlevel StrRepeat #Attr.2 #Attr.3;
+    ret Str.388;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.386 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.386;
+    let Str.389 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.389;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";

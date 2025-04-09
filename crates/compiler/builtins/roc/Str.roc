@@ -333,6 +333,7 @@ module [
     join_with,
     split_on,
     repeat,
+    len,
     count_utf8_bytes,
     to_utf8,
     from_utf8,
@@ -520,6 +521,11 @@ split_on : Str, Str -> List Str
 ## expect Str.repeat("anything", 0) == ""
 ## ```
 repeat : Str, U64 -> Str
+
+## A stub function to help people discover [how they should handle this in Roc](https://www.roc-lang.org/faq.html#strings-in-roc).
+len : Str -> [LearnAboutStringsInRoc Str]
+len = |_str|
+    LearnAboutStringsInRoc "We want to help you make reliable software, so we aim to make sure that you're aware of all the pitfalls when handing strings. For (professional) software that needs to be reliable, check out the explainer [here](https://www.roc-lang.org/builtins/Str) and the [unicode package](https://github.com/roc-lang/unicode). For personal scripts or things like advent of code, the [roc-ascii package](https://github.com/Hasnep/roc-ascii) can cover your needs."
 
 ## Returns a [List] of the string's [U8] UTF-8 [code units](https://unicode.org/glossary/#code_unit).
 ## (To split the string into a [List] of smaller [Str] values instead of [U8] values,
@@ -1306,9 +1312,9 @@ drop_prefix : Str, Str -> Str
 drop_prefix = |haystack, prefix|
     if Str.starts_with(haystack, prefix) then
         start = Str.count_utf8_bytes(prefix)
-        len = Num.sub_wrap(Str.count_utf8_bytes(haystack), start)
+        remaining_len = Num.sub_wrap(Str.count_utf8_bytes(haystack), start)
 
-        substring_unsafe(haystack, start, len)
+        substring_unsafe(haystack, start, remaining_len)
     else
         haystack
 
@@ -1323,9 +1329,9 @@ drop_suffix : Str, Str -> Str
 drop_suffix = |haystack, suffix|
     if Str.ends_with(haystack, suffix) then
         start = 0
-        len = Num.sub_wrap(Str.count_utf8_bytes(haystack), Str.count_utf8_bytes(suffix))
+        remaining_len = Num.sub_wrap(Str.count_utf8_bytes(haystack), Str.count_utf8_bytes(suffix))
 
-        substring_unsafe(haystack, start, len)
+        substring_unsafe(haystack, start, remaining_len)
     else
         haystack
 
