@@ -963,7 +963,13 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
 
-                try fmt.formatCollection(provides.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = provides.span }), Formatter.formatExposedItem);
+                try fmt.formatCollection(
+                    provides.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
+                    Formatter.formatExposedItem,
+                );
 
                 if (multiline and try fmt.flushCommentsAfter(provides.region.end)) {
                     if (fmt.curr_indent == start_indent) {
@@ -1061,7 +1067,13 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
+                try fmt.formatCollection(
+                    exposes.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
+                    Formatter.formatExposedItem,
+                );
                 return .something_formatted;
             },
             .hosted => |h| {
@@ -1074,7 +1086,13 @@ const Formatter = struct {
                 } else {
                     try fmt.push(' ');
                 }
-                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
+                try fmt.formatCollection(
+                    exposes.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
+                    Formatter.formatExposedItem,
+                );
                 return .something_formatted;
             },
             .package => |p| {
@@ -1093,7 +1111,13 @@ const Formatter = struct {
                 }
                 const exposes = fmt.ast.store.getCollection(p.exposes);
                 // TODO: This needs to be extended to the next CloseSquare
-                try fmt.formatCollection(exposes.region, .square, IR.NodeStore.ExposedItemIdx, fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }), Formatter.formatExposedItem);
+                try fmt.formatCollection(
+                    exposes.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
+                    Formatter.formatExposedItem,
+                );
                 if (multiline) {
                     try fmt.newline();
                     try fmt.pushIndent();
@@ -1101,17 +1125,129 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 const packages = fmt.ast.store.getCollection(p.packages);
-                try fmt.formatCollection(packages.region, .curly, IR.NodeStore.RecordFieldIdx, fmt.ast.store.recordFieldSlice(.{ .span = packages.span }), Formatter.formatRecordField);
+                try fmt.formatCollection(
+                    packages.region,
+                    .curly,
+                    IR.NodeStore.RecordFieldIdx,
+                    fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
+                    Formatter.formatRecordField,
+                );
                 return .something_formatted;
+            },
+            .platform => |p| {
+                const multiline = fmt.ast.regionIsMultiline(p.region);
+                try fmt.pushAll("platform");
+                if (multiline and try fmt.flushCommentsAfter(p.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.push('"');
+                try fmt.pushTokenText(p.name);
+                try fmt.push('"');
+                _ = try fmt.flushCommentsAfter(p.name + 1);
+                fmt.curr_indent = start_indent + 1; // Reset to always be this
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+
+                try fmt.pushAll("requires");
+                const rigids = fmt.ast.store.getCollection(p.requires_rigids);
+                if (multiline and try fmt.flushCommentsBefore(rigids.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(
+                    rigids.region,
+                    .curly,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = rigids.span }),
+                    Formatter.formatExposedItem,
+                );
+                if (multiline and try fmt.flushCommentsAfter(rigids.region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                // Signatures
+                _ = try fmt.formatTypeAnno(p.requires_signatures);
+                const signatures_region = fmt.nodeRegion(p.requires_signatures.id);
+                if (multiline and try fmt.flushCommentsAfter(signatures_region.end)) {
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                }
+                const exposes = fmt.ast.store.getCollection(p.exposes);
+                try fmt.pushAll("exposes");
+                if (multiline and try fmt.flushCommentsBefore(exposes.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(
+                    exposes.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
+                    Formatter.formatExposedItem,
+                );
+                if (multiline and try fmt.flushCommentsAfter(exposes.region.end)) {
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                }
+                try fmt.pushAll("packages");
+                const packages = fmt.ast.store.getCollection(p.packages);
+                if (multiline and try fmt.flushCommentsBefore(packages.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(
+                    packages.region,
+                    .curly,
+                    IR.NodeStore.RecordFieldIdx,
+                    fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
+                    Formatter.formatRecordField,
+                );
+                if (multiline and try fmt.flushCommentsAfter(packages.region.end)) {
+                    fmt.curr_indent = start_indent + 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.newline();
+                    try fmt.pushIndent();
+                }
+                try fmt.pushAll("provides");
+                const provides = fmt.ast.store.getCollection(p.provides);
+                if (multiline and try fmt.flushCommentsBefore(provides.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.formatCollection(
+                    provides.region,
+                    .square,
+                    IR.NodeStore.ExposedItemIdx,
+                    fmt.ast.store.exposedItemSlice(.{ .span = provides.span }),
+                    Formatter.formatExposedItem,
+                );
             },
             .malformed => {
                 // Output nothing for a malformed node
                 return .nothing_formatted;
             },
-            else => {
-                std.debug.panic("TODO: Handle formatting {s}", .{@tagName(header)});
-            },
         }
+        return .something_formatted;
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) IR.Region {
@@ -1245,7 +1381,7 @@ const Formatter = struct {
                     }
                     i += 1;
                 }
-                try fmt.pushAll(" ->");
+                try fmt.pushAll(if (f.effectful) " =>" else " ->");
                 const ret_region = fmt.nodeRegion(f.ret.id);
                 if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
                     fmt.curr_indent += 1;
@@ -1818,6 +1954,52 @@ test "Package Header - nonempty multiline" {
     );
 }
 
+test "Platform header - empty" {
+    try moduleFmtsSame(
+        \\platform "foo"
+        \\    requires {} {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides []
+    );
+
+    try moduleFmtsTo(
+        \\platform "foo" requires {} {} exposes [] packages {} provides []
+    ,
+        \\platform "foo"
+        \\    requires {} {}
+        \\    exposes []
+        \\    packages {}
+        \\    provides []
+    );
+}
+
+test "Platform header - nonempty" {
+    try moduleFmtsSame(
+        \\platform # Comment after platform keyword
+        \\    "foo" # Comment after name
+        \\    requires # Coment after requires keyword
+        \\        { # Comment after rigids open
+        \\            Main, # Comment after rigid member
+        \\        } # Comment after rigids close
+        \\            { # Comment after signatures open
+        \\                main! : List(Str) => {}, # Comment after signature
+        \\            } # Comment after signatures clsoe
+        \\    exposes # Comment after exposes keyword
+        \\        [ # Comment after exposes open
+        \\            foo, # Comment after exposed item
+        \\        ] # Comment after exposes close
+        \\    packages # Comment after packages keyword
+        \\        { # Comment after packages open
+        \\            some_pkg: "../some_pkg.roc", # Comment after package
+        \\        } # Comment after packages close
+        \\    provides # Comment after provides keyword
+        \\        [ # Comment after provides open
+        \\            bar, # Comment after exposed item
+        \\        ]
+    );
+}
+
 test "Syntax grab bag" {
     try moduleFmtsSame(
         \\# This is a module comment!
@@ -1885,7 +2067,7 @@ test "Syntax grab bag" {
         \\
         \\add_one_oneline = |num| if num 2 else 5
         \\
-        \\add_one : (U64 -> U64)
+        \\add_one : U64 -> U64
         \\add_one = |num| {
         \\    other = 1
         \\    if num {

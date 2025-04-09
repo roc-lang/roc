@@ -81,15 +81,32 @@ pub const Diagnostic = struct {
         missing_header,
         list_not_closed,
         missing_arrow,
-        expected_provides_open_square,
-        expected_provides,
-        expected_provides_close_square,
-        expected_package_platform_open_curly,
+        expected_exposes,
+        expected_exposes_close_square,
+        expected_exposes_open_square,
+        expected_imports,
+        expected_imports_close_curly,
+        expected_imports_open_curly,
         expected_package_or_platform_name,
         expected_package_or_platform_colon,
-        expected_platform_string,
         expected_package_or_platform_string,
         expected_package_platform_close_curly,
+        expected_package_platform_open_curly,
+        expected_packages,
+        expected_packages_close_curly,
+        expected_packages_open_curly,
+        expected_platform_name_end,
+        expected_platform_name_start,
+        expected_platform_name_string,
+        expected_platform_string,
+        expected_provides,
+        expected_provides_close_square,
+        expected_provides_open_square,
+        expected_requires,
+        expected_requires_rigids_close_curly,
+        expected_requires_rigids_open_curly,
+        expected_requires_signatures_close_curly,
+        expected_requires_signatures_open_curly,
         expect_closing_paren,
         header_expected_open_square,
         header_expected_close_square,
@@ -710,10 +727,26 @@ pub const NodeStore = struct {
                 node.data.rhs = package.packages.id;
                 node.region = package.region;
             },
+            .platform => |platform| {
+                node.tag = .platform_header;
+                node.main_token = platform.name;
+
+                const ed_start = store.extra_data.items.len;
+                store.extra_data.append(store.gpa, platform.requires_rigids.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, platform.requires_signatures.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, platform.exposes.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, platform.packages.id) catch |err| exitOnOom(err);
+                store.extra_data.append(store.gpa, platform.provides.id) catch |err| exitOnOom(err);
+                const ed_len = store.extra_data.items.len - ed_start;
+
+                node.data.lhs = @intCast(ed_start);
+                node.data.rhs = @intCast(ed_len);
+
+                node.region = platform.region;
+            },
             .malformed => {
                 @panic("Use addMalformed instead");
             },
-            else => {},
         }
         const nid = store.nodes.append(store.gpa, node);
         return .{ .id = @intFromEnum(nid) };
@@ -1232,7 +1265,10 @@ pub const NodeStore = struct {
                 node.tag = .ty_fn;
                 node.region = f.region;
                 node.data.lhs = f.args.span.start;
-                node.data.rhs = f.args.span.len;
+                node.data.rhs = @bitCast(TypeAnno.TypeAnnoFnRhs{
+                    .effectful = if (f.effectful) 1 else 0,
+                    .args_len = @intCast(f.args.span.len), // We hope a function has less than 2.147b args
+                });
                 const ret_idx = store.extra_data.items.len;
                 store.extra_data.append(store.gpa, f.ret.id) catch |err| exitOnOom(err);
                 node.main_token = @as(u32, @intCast(ret_idx));
@@ -1304,6 +1340,20 @@ pub const NodeStore = struct {
                 return .{ .package = .{
                     .exposes = .{ .id = node.data.lhs },
                     .packages = .{ .id = node.data.rhs },
+                    .region = node.region,
+                } };
+            },
+            .platform_header => {
+                const ed_start = node.data.lhs;
+                std.debug.assert(node.data.rhs == 5);
+
+                return .{ .platform = .{
+                    .name = node.main_token,
+                    .requires_rigids = .{ .id = store.extra_data.items[ed_start] },
+                    .requires_signatures = .{ .id = store.extra_data.items[ed_start + 1] },
+                    .exposes = .{ .id = store.extra_data.items[ed_start + 2] },
+                    .packages = .{ .id = store.extra_data.items[ed_start + 3] },
+                    .provides = .{ .id = store.extra_data.items[ed_start + 4] },
                     .region = node.region,
                 } };
             },
@@ -1818,13 +1868,15 @@ pub const NodeStore = struct {
                 } };
             },
             .ty_fn => {
+                const rhs = @as(TypeAnno.TypeAnnoFnRhs, @bitCast(node.data.rhs));
                 return .{ .@"fn" = .{
                     .region = node.region,
                     .ret = .{ .id = store.extra_data.items[@as(usize, @intCast(node.main_token))] },
                     .args = .{ .span = .{
                         .start = node.data.lhs,
-                        .len = node.data.rhs,
+                        .len = @intCast(rhs.args_len),
                     } },
+                    .effectful = rhs.effectful == 1,
                 } };
             },
             .ty_parens => {
@@ -1922,6 +1974,12 @@ pub const NodeStore = struct {
         },
         platform: struct {
             // TODO: complete this
+            name: TokenIdx,
+            requires_rigids: CollectionIdx,
+            requires_signatures: TypeAnnoIdx,
+            exposes: CollectionIdx,
+            packages: CollectionIdx,
+            provides: CollectionIdx,
             region: Region,
         },
         hosted: struct {
@@ -2245,6 +2303,7 @@ pub const NodeStore = struct {
         @"fn": struct {
             args: TypeAnnoSpan,
             ret: TypeAnnoIdx,
+            effectful: bool,
             region: Region,
         },
         parens: struct {
@@ -2257,6 +2316,7 @@ pub const NodeStore = struct {
         },
 
         const TagUnionRhs = packed struct { open: u1, tags_len: u31 };
+        const TypeAnnoFnRhs = packed struct { effectful: u1, args_len: u31 };
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             switch (self) {
