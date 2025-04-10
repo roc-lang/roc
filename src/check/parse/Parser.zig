@@ -36,6 +36,7 @@ pub fn init(tokens: TokenizedBuffer) Parser {
     };
 }
 
+// Deinit the parser.  The buffer of tokens and the store are still owned by the caller.
 pub fn deinit(parser: *Parser) void {
     parser.scratch_nodes.deinit(parser.gpa);
     parser.diagnostics.deinit(parser.gpa);
@@ -68,7 +69,7 @@ pub fn advance(self: *Parser) void {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
 }
 
-///
+/// Helper to advance the parser exactly one token, whether it is significant or not.
 pub fn advanceOne(self: *Parser) void {
     self.pos += 1;
     // We have an EndOfFile token that we never expect to advance past
@@ -85,22 +86,16 @@ pub fn expect(self: *Parser, expected: Token.Tag) !void {
     self.advance();
 }
 
-/// look ahead at the next token
+/// Peek at the token at the current position
 ///
 /// **note** caller is responsible to ensure this isn't the last token
-pub fn peek(self: Parser) Token.Tag {
+pub fn peek(self: *Parser) Token.Tag {
     std.debug.assert(self.pos < self.tok_buf.tokens.len);
     return self.tok_buf.tokens.items(.tag)[self.pos];
 }
-/// todo -- what is this?
-pub fn peekLast(self: Parser) ?Token.Tag {
-    if (self.pos == 0) {
-        return null;
-    }
-    return self.tok_buf.tokens.items(.tag)[self.pos - 1];
-}
-/// peek at the next available token
-pub fn peekNext(self: Parser) Token.Tag {
+
+/// Peek at the next significant token
+pub fn peekNext(self: *Parser) Token.Tag {
     var next = self.pos + 1;
     const tags = self.tok_buf.tokens.items(.tag);
     while (next < self.tok_buf.tokens.len and tags[next] == .Newline) {
@@ -112,7 +107,8 @@ pub fn peekNext(self: Parser) Token.Tag {
     return tags[next];
 }
 
-pub fn peekN(self: Parser, n: u32) Token.Tag {
+/// Peek at `n` significant tokens forward
+pub fn peekN(self: *Parser, n: u32) Token.Tag {
     if (n == 0) {
         return self.peek();
     }
@@ -206,7 +202,6 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
     }
     const collection_end = self.pos;
     self.expect(end_token) catch {
-        std.debug.print("Expected {s}, found {s} @ {d}\n", .{ @tagName(end_token), @tagName(self.peek()), self.pos });
         self.debugToken(20);
         return ExpectError.expected_not_found;
     };
