@@ -202,12 +202,12 @@ fn parseCollectionSpan(self: *Parser, comptime T: type, end_token: Token.Tag, sc
     }
     const collection_end = self.pos;
     self.expect(end_token) catch {
-        self.debugToken(20);
         return ExpectError.expected_not_found;
     };
     return collection_end;
 }
 
+/// Utility to see where a the current position is within the buffer of tokens
 fn debugToken(self: *Parser, window: usize) void {
     const current = self.pos;
     const start = if (window > current) 0 else current - window;
