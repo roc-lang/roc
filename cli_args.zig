@@ -8,10 +8,11 @@ const FlagOrCmd = struct {
     /// An optional pointer to the next arg (relevant with `=`, e.g. `roc --foo=bar`)
     equals_val: ?[*:0]const u8,
 
-    /// Convert a null-terminated UTF-8 string into a i64
-    /// If the string is longer than 8 bytes, sets long_arg to true
-    fn parse(arg: []const [*:0]u8) FlagOrCmd {
-        // If the length here is 0 or 1, this isn't a flag or subcommand.
+    return FlagOrCmd{
+        .as_i64 = if (is_flag) -answer else answer,
+        .equals_val = null,
+    };
+}
         // Both of these scenarios should be extremely rare, so doing a branch for them.
         if (arg[0] == 0 or arg[1] == 0) {
             return FlagOrCmd{
@@ -43,14 +44,14 @@ const FlagOrCmd = struct {
                     // Found an '=' in the argument; return what we've parsed so far,
                     // and make equals_val point to what comes after the '='
                     return FlagOrCmd{
-                        .arg_as_u64 = if (is_flag) -answer else answer,
+                        .as_i64 = if (is_flag) -answer else answer,
                         .equals_val = @ptrCast(arg[index + 1 ..].ptr),
                     };
                 },
                 0 => {
                     // We've hit the end of the string; we're done!
                     return FlagOrCmd{
-                        .arg_as_u64 = if (is_flag) -answer else answer,
+                        .as_i64 = if (is_flag) -answer else answer,
                         .equals_val = null,
                     };
                 },
@@ -74,24 +75,20 @@ const FlagOrCmd = struct {
 
 // Subcommands
 const CMD_VERSION = parse_flag_or_cmd("version").as_i64;
-const CMD_CHECK = parse_flag_or_cmd("test").as_i64;
+const CMD_CHECK = parse_flag_or_cmd("check").as_i64;
 const CMD_BUILD = parse_flag_or_cmd("build").as_i64;
 const CMD_HELP = parse_flag_or_cmd("help").as_i64;
 
-// Flags (these can start with 1 or 2 dashes; we accept either as equivalent, for convenience)
+// Flags
 const FLAG_VERSION = parse_flag_or_cmd("-version").as_i64;
 const FLAG_OPTIMIZE = parse_flag_or_cmd("-optimize").as_i64;
 const FLAG_HELP = parse_flag_or_cmd("-help").as_i64;
 const FLAG_MAIN = parse_flag_or_cmd("-main").as_i64;
 const FLAG_TIME = parse_flag_or_cmd("-time").as_i64;
+const FLAG_V = parse_flag_or_cmd("-v").as_i64;
+const FLAG_H = parse_flag_or_cmd("-h").as_i64;
 
-// For convenience, we accept `-v` and `-h` as shorthands for --version and --help,
-// just because you might assume they're there and try to run them. We don't do this for
-// anything else though.
-const FLAG_V = parse_flag_or_cmd("-v");
-const FLAG_H = parse_flag_or_cmd("-h");
-
-fn process_args(args: std.process.ArgIterator) void {
+fn process_args(args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
     // Skip the first arg (path to the executable)
     _ = args.next();
 
@@ -103,7 +100,7 @@ fn process_args(args: std.process.ArgIterator) void {
             // We found an `=` in the subcommand.
             // This means we got something like `roc foo=bar`, which
             // we should treat as a filesystem path that has an `=` in it.
-            return run(second_arg, args);
+            return run(second_arg, args, allocator);
         }
 
         switch (info.as_i64) {
@@ -153,7 +150,7 @@ const Optimize = enum {
     Dev,
 };
 
-fn run(first_arg: []const u8, other_args: std.process.argiterator) void {
+fn run(first_arg: []const u8, other_args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
     var arg = first_arg;
     var file_path_arg: ?[]const u8 = null;
     var optimize: Optimize = .Dev;
@@ -235,7 +232,7 @@ fn print_help(command: []const u8) void {
     std.debug.print("  --optimize  Optimize the code\n", .{});
 }
 
-fn check(args: std.process.argiterator) void {
+fn check(args: std.process.ArgIterator) void {
     var filename: ?[]const u8 = null;
     var optimize = false;
     var main: ?[]const u8 = null;
@@ -287,28 +284,125 @@ fn print_version() void {
 }
 
 test "arg_info" {
-    var long_arg = false;
-
     // Test with short string
-    try testing.expectEqual(@as(i64, 0x6f6c6c6568), parse_flag_or_cmd("hello", &long_arg));
-    try testing.expect(!long_arg);
+    try testing.expectEqual(@as(i64, 0x6f6c6c6568), parse_flag_or_cmd("hello").as_i64);
 
     // Test with 8-byte string
-    try testing.expectEqual(@as(i64, 0x74736574676e6f6c), parse_flag_or_cmd("longtest", &long_arg));
-    try testing.expect(!long_arg);
+    try testing.expectEqual(@as(i64, 0x74736574676e6f6c), parse_flag_or_cmd("longtest").as_i64);
 
     // Test with longer string
-    _ = parse_flag_or_cmd("this_is_longer_than_8_bytes", &long_arg);
-    try testing.expect(long_arg);
+    try testing.expectEqual(@as(i64, 0), parse_flag_or_cmd("this_is_longer_than_8_bytes").as_i64);
 
     // Test with empty string
-    try testing.expectEqual(@as(i64, 0), parse_flag_or_cmd("", &long_arg));
-    try testing.expect(!long_arg);
+    try testing.expectEqual(@as(i64, 0), parse_flag_or_cmd("").as_i64);
+}
+
+/// Optimization level for code generation
+const Optimize = enum {
+    /// Optimize for runtime performance
+    Perf,
+    /// Optimize for compiled binary size
+    Size,
+    /// Optimize for development speed
+    Dev,
+};
+
+fn process_args(args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
+    _ = args.next(); // Skip executable name
+
+    const second_arg = args.next() orelse {
+        return run("main.roc", args, allocator);
+    };
+
+    const info = parse_flag_or_cmd(second_arg);
+    if (info.equals_val != null) {
+        return run(second_arg, args, allocator);
+    }
+
+    switch (info.as_i64) {
+        CMD_VERSION, FLAG_VERSION, FLAG_V => return print_version(),
+        CMD_CHECK => return check(args, allocator),
+        CMD_BUILD => return build(args, allocator),
+        CMD_HELP, FLAG_HELP, FLAG_H => return print_help(""),
+        else => return run(second_arg, args, allocator),
+    }
+}
+
+fn run(first_arg: []const u8, args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
+    _ = allocator;
+    var optimize: Optimize = .Dev;
+    var time = false;
+
+    var it = args;
+    while (it.next()) |arg| {
+        const info = parse_flag_or_cmd(arg);
+        switch (info.as_i64) {
+            FLAG_OPTIMIZE => {
+                if (info.equals_val) |val| {
+                    const val_str = std.mem.span(val);
+                    if (std.mem.eql(u8, val_str, "perf")) {
+                        optimize = .Perf;
+                    } else if (std.mem.eql(u8, val_str, "size")) {
+                        optimize = .Size;
+                    } else if (std.mem.eql(u8, val_str, "dev")) {
+                        optimize = .Dev;
+                    } else {
+                        std.debug.print("Error: invalid value for --optimize\n", .{});
+                        return;
+                    }
+                } else optimize = .Perf;
+            },
+            FLAG_TIME => time = info.equals_val == null or std.mem.eql(u8, std.mem.span(info.equals_val.?), "true"),
+            else => {},
+        }
+    }
+
+    _ = first_arg;
+    _ = optimize;
+    _ = time;
+}
+
+fn check(args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
+    _ = allocator;
+    var it = args;
+    while (it.next()) |arg| {
+        const info = parse_flag_or_cmd(arg);
+        switch (info.as_i64) {
+            FLAG_HELP, FLAG_H => return print_help("check"),
+            else => {},
+        }
+    }
+}
+
+fn build(args: std.process.ArgIterator, allocator: std.mem.Allocator) !void {
+    _ = args;
+    _ = allocator;
+}
+
+fn print_version() void {
+    std.debug.print("Roc version 0.1.0\n", .{});
+}
+
+fn print_help(command: []const u8) void {
+    if (command.len > 0) {
+        std.debug.print("Usage: roc {s} [options]\n", .{command});
+    } else {
+        std.debug.print("Usage: roc [command] [options]\n", .{});
+    }
+    std.debug.print("\nCommands:\n", .{});
+    std.debug.print("  build     Build a Roc project\n", .{});
+    std.debug.print("  check     Check a Roc project\n", .{});
+    std.debug.print("  help      Show this help message\n", .{});
+    std.debug.print("  version   Show version information\n", .{});
+    std.debug.print("\nOptions:\n", .{});
+    std.debug.print("  --help, -h     Show this help message\n", .{});
+    std.debug.print("  --version, -v  Show version information\n", .{});
 }
 
 pub fn main() !void {
-    const args = try std.process.argsAlloc(arena);
-    process_args(std.process.args());
-
-    return mainArgs(gpa, arena, args);
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    const allocator = gpa.allocator();
+    defer _ = gpa.deinit();
+    
+    try process_args(std.process.args(), allocator);
 }
