@@ -12,28 +12,35 @@ let
       # function that recursively prefetches roc dependencies
       # so they're available during roc build stage
       function prefetch () {
-        local list=$(rg -o 'https://github.com[^"]*tar.br|https://github.com[^"]*tar.gz' -IN $1)
+        local searchPath=$1
 
-        if [ -z "$list" ]; then
-          echo "No URLs found in $1"
+        local dependenciesRegexp='https://[^"]*tar.br|https://[^"]*tar.gz'
+        local getDependenciesCommand="rg -o '$dependenciesRegexp' -IN $searchPath"
+        local depsUrlsList=$(eval "$getDependenciesCommand")
+
+        if [ -z "$depsUrlsList" ]; then
+          echo "Executed: $getDependenciesCommand"
+          echo "No URLs found in $searchPath"
         fi
 
-        for url in $list; do
+        for url in $depsUrlsList; do
           if [[ -n "''${visitedUrls["$url"]^^}" ]]; then
             echo "Skipping already visited URL: $url"
           else
             echo "Prefetching $url"
             visitedUrls["$url"]=1
 
-            local path=$(echo $url | awk -F'github.com/|/[^/]*$' '{print $2}')
-            local packagePath="$out/roc/packages/github.com/$path"
-            echo "Package path: $packagePath"
+            local domain=$(echo $url | awk -F '/' '{print $3}')
 
-            mkdir -p "$packagePath"
+            local packagePath=$(echo $url | awk -F "$domain/|/[^/]*$" '{print $2}')
+            local outputPackagePath="$out/roc/packages/$domain/$packagePath"
+            echo "Package path: $outputPackagePath"
+
+            mkdir -p "$outputPackagePath"
 
             # Download dependency
             set -e
-            if ! (wget -P "$packagePath" "$url" 2>/tmp/wget_error); then
+            if ! (wget -P "$outputPackagePath" "$url" 2>/tmp/wget_error); then
               echo "WARNING: Failed to download $url: $(cat /tmp/wget_error)"
               continue 
             fi
@@ -41,17 +48,17 @@ let
 
             # Unpack dependency
             if [[ $url == *.br ]]; then
-              brotli -d "$packagePath"/*.tar.br
-              tar -xf "$packagePath"/*.tar --one-top-level -C $packagePath
+              brotli -d "$outputPackagePath"/*.tar.br
+              tar -xf "$outputPackagePath"/*.tar --one-top-level -C $outputPackagePath
             elif [[ $url == *.gz ]]; then
-              tar -xzf "$packagePath"/*.tar.gz --one-top-level -C $packagePath
+              tar -xzf "$outputPackagePath"/*.tar.gz --one-top-level -C $outputPackagePath
             fi
 
             # Delete temporary files
-            rm "$packagePath"/*tar*
+            rm "$outputPackagePath"/*tar*
 
             # Recursively fetch dependencies of dependencies
-            prefetch "$packagePath"
+            prefetch "$outputPackagePath"
           fi
         done
       }
