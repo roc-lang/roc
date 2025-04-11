@@ -46,7 +46,17 @@ Keywords in the compiler:
 
 ## Operator
 
+An operator is a [symbol](#symbol) or [keyword](#keyword) that performs a specific operation on one or more operands (values or variables) to produce a result.
+Some examples: `+`, `=`, `==`, `>`. [A table of all operators in Roc](https://www.roc-lang.org/tutorial#operator-desugaring-table).
+`+` is an example of binary operator because it works with two operands, e.g. `1 + 1`. Similarly `!` (e.g. `!Bool.false`) is a unary operator.
+
+Operators in the compiler:
+- New compiler: search `Op` in [tokenize.zig](src/check/parse/tokenize.zig)
+- Old compiler: search `operator_help` in [expr.rs](crates/compiler/parse/src/expr.rs)
+
 ## Syntax
+
+## Syntactic Sugar
 
 ## Compiler Phase
 
