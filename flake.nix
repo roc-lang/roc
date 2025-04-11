@@ -2,7 +2,8 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
+    nixpkgs.url =
+      "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -21,30 +22,34 @@
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }@inputs:
     let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+      supportedSystems =
+        [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
       templates = import ./nix/templates { };
       buildRocPackage = import ./nix/buildRocPackage.nix;
-    in {
+    in
+    {
       inherit templates;
       lib = { inherit buildRocPackage; };
-    } // 
-    flake-utils.lib.eachSystem supportedSystems (system:
+    } // flake-utils.lib.eachSystem supportedSystems (system:
       let
 
-        overlays = [ (import rust-overlay) ]
-        ++ [(final: prev: {
+        overlays = [ (import rust-overlay) ] ++ [
+          (final: prev: {
             # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
             # the server is used for local testing of the roc website
-          simple-http-server = final.callPackage ./nix/simple-http-server.nix { };
-        })];
+            simple-http-server =
+              final.callPackage ./nix/simple-http-server.nix { };
+          })
+        ];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
-          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
+        inherit (compile-deps)
+          zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath
+          darwinInputs;
 
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
@@ -56,10 +61,10 @@
 
         # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
-          lib.optionals stdenv.isDarwin
-            (with pkgs.darwin.apple_sdk.frameworks; [
-              curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
-            ]);
+          lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks;
+          [
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
+          ]);
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -111,7 +116,8 @@
       {
 
         devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs;
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs
+          ++ darwinDevInputs ++ linuxDevInputs;
 
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
@@ -121,9 +127,9 @@
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 
-          LD_LIBRARY_PATH =  with pkgs;
+          LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
-            ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
+              ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
 
           shellHook = ''
@@ -159,28 +165,30 @@
           };
         };
 
-        checks.canBuildRocPackage = let
-          fizzBuzzCli = buildRocPackage {
-            inherit pkgs;
-            roc-cli = rocBuild.roc-cli;
-            linker = "legacy";
-            name = "fizzbuzz";
-            optimize = true;
-            src = ./examples/fizzbuzz;
-            entryPoint = "./main.roc";
-            outputHash = "sha256-L5RBS/zMDcbsARaINp9lY4LVp76TqR68c3uyp1r9DJg=";
-          };
-        in pkgs.runCommand "build fizzbuzz" { } ''
-          expectedOutput="1,2,Fizz,4,Buzz,Fizz,7,8,Fizz,Buzz"
-          actualOutput=$(${fizzBuzzCli}/bin/fizzbuzz)
-          if [ "$actualOutput" = "$expectedOutput" ]; then
-            echo "FizzBuzz output is correct."
-            touch $out
-          else
-            echo "Actual output: $actualOutput"
-            echo "FizzBuzz output is incorrect." >&2
-            exit 1
-          fi
-        '';
+        checks.canBuildRocPackage =
+          let
+            fizzBuzzCli = buildRocPackage {
+              inherit pkgs;
+              roc-cli = rocBuild.roc-cli;
+              linker = "legacy";
+              name = "fizzbuzz";
+              optimize = true;
+              src = ./examples/fizzbuzz;
+              entryPoint = "./main.roc";
+              outputHash = "sha256-L5RBS/zMDcbsARaINp9lY4LVp76TqR68c3uyp1r9DJg=";
+            };
+          in
+          pkgs.runCommand "build fizzbuzz" { } ''
+            expectedOutput="1,2,Fizz,4,Buzz,Fizz,7,8,Fizz,Buzz,11,Fizz,13,14,FizzBuzz"
+            actualOutput=$(${fizzBuzzCli}/bin/fizzbuzz)
+            if [ "$actualOutput" = "$expectedOutput" ]; then
+              echo "FizzBuzz output is correct."
+              touch $out
+            else
+              echo "Actual output: $actualOutput"
+              echo "FizzBuzz output is incorrect." >&2
+              exit 1
+            fi
+          '';
       });
 }

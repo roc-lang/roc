@@ -1,5 +1,13 @@
-{ pkgs, roc-cli, name, entryPoint, src, outputHash, linker ? "", optimize ? true
-, ... }:
+{ pkgs
+, roc-cli
+, name
+, entryPoint
+, src
+, outputHash
+, linker ? ""
+, optimize ? true
+, ...
+}:
 let
   packageDependencies = pkgs.stdenv.mkDerivation {
     inherit src outputHash;
@@ -76,7 +84,8 @@ let
     outputHashMode = "recursive";
     outputHashAlgo = "sha256";
   };
-in pkgs.stdenv.mkDerivation {
+in
+pkgs.stdenv.mkDerivation {
   inherit name src;
   nativeBuildInputs = [ roc-cli ];
   XDG_CACHE_HOME = packageDependencies;
