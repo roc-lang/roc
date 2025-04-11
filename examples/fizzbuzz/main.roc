@@ -3,7 +3,7 @@ app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/down
 import cli.Stdout
 
 main! = |_args|
-    List.range({ start: At(1), end: At(10) })
+    List.range({ start: At(1), end: At(15) })
     |> List.map(fizz_buzz)
     |> Str.join_with(",")
     |> Stdout.line!
