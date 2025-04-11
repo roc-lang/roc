@@ -47,3 +47,6 @@ jobs:
 
       - name: test building wasm repl
         run: nix develop -c ./ci/www-repl.sh
+
+      - name: run flake checks
+        run: nix flake check
