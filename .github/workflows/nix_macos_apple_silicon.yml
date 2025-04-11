@@ -25,10 +25,10 @@ jobs:
         run: nix develop -c cargo fmt --all -- --check
 
       - name: check code style with clippy
-        run: nix develop -c cargo clippy -j 2 --workspace --tests -- --deny warnings
+        run: nix develop -c cargo clippy -j 1 --workspace --tests -- --deny warnings
 
       - name: check code style with clippy --release
-        run: nix develop -c cargo clippy -j 2 --workspace --tests --release -- --deny warnings
+        run: nix develop -c cargo clippy -j 1 --workspace --tests --release -- --deny warnings
 
       - name: test building default.nix
         run: nix-build
