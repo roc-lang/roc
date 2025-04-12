@@ -58,6 +58,18 @@ Operators in the compiler:
 
 ## Syntactic Sugar
 
+[Syntax](#syntax) within a programming language that is designed to make things easier to read or express.
+It allows developers to write code in a more concise, readable, or convenient way without adding new functionality
+to the language itself.
+
+Desugaring converts syntax sugar (like `x + 1`) into more fundamental operations (like `Num.add(x, 1)`).
+
+[A table of all operators in Roc and what they desugar to](https://www.roc-lang.org/tutorial#operator-desugaring-table)
+
+Desugaring in the compiler:
+- New compiler: [canonicalize.zig (WIP)](src/check/canonicalize.zig)
+- Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
+
 ## Compiler Phase
 
 A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
