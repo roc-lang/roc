@@ -132,6 +132,105 @@ pub const Level = struct {
     }
 };
 
+/// Bucket sizes: 1B, 2B, 3B, 4B, 8B, 16B, 17B+
+const num_buckets = 7;
+
+const max_small_str_len: usize = 16;
+
+pub const ScopeStack = struct {
+    /// For each level in the stack, we track the lengths of each bucket.
+    levels: std.ArrayListUnmanaged([num_buckets]u32),
+
+    /// Each bucket holds small strings of one particular sizes.
+    /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
+    /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
+    /// alignment. It's num_buckets - 1 because large strings are stored separately.
+    small_str_buckets: [num_buckets - 1](*const @Vector(1, u128)),
+
+    /// The flag is just a bit for whether it's a var or a const.
+    small_str_flags: [num_buckets - 1](*const ConstOrVar),
+
+    /// The capacities for each of these allocations. (The levels determine the lengths.)
+    small_str_capacities: [num_buckets - 1]u32,
+
+    /// The CanId values for each of these declarations
+    can_ids: [num_buckets]CanId,
+
+    large_str_buckets: std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)),
+
+    /// Assign the given name to the given value.
+    /// If there was a `var` before this, then `is_var_decl` is true.
+    fn assign(self: *ScopeStack, str: []u8, can_id: CanId, is_var_decl: bool) Assigned!AssignErr {
+        const len = str.len;
+
+        if (len <= max_small_str_len) {
+            // 1-4 => 0-3
+            const small_bucket_index = len - 1;
+
+            // 5-8 => 4
+            // 9-16 => 5
+            const big_bucket_index = (len << 3) + 3;
+
+            const bucket_index = if (len <= 4) small_bucket_index else big_bucket_index;
+            const bucket = &self.buckets[bucket_index];
+
+            switch (bucket_index) {
+                0 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, copy the u8 over
+                },
+                1 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, make a u16, copy it in
+                },
+                2 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, make a u32 (zero-padded), copy it in
+                },
+                3 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, make a u32, copy it in
+                },
+                4 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, make a u64 (zero-padded), copy it in
+                },
+                5 => {
+                    // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+                    // TODO bump capacity, make a u128 (zero-padded), copy it in
+                },
+            }
+        } else {
+            // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
+            // It's big! Bump capacity, then put it into the hashmap at the current level.
+        }
+    }
+};
+
+/// Whether this assignment turned out to be a new const declaration or
+/// a valid reassignment of a `var` that was in scope.
+pub const Assigned = union(enum) {
+    /// This `=` is assigning a new constant.
+    NewConst: void,
+    /// This `=` is reassigning an existing `var` declaration,
+    /// and the id is the id of that var declaration.
+    VarReassign: CanId,
+};
+
+pub const AssignErr = union(enum) {
+    /// This is an attempt to assign (with or without being a `var` decl)
+    /// to a value that already has a constant with that name declared in scope.
+    ShadowingConst: CanId,
+    /// This is an attempt to use `var` to define something that already
+    /// has a `var` by that name declared in scope.
+    ShadowingVar: CanId,
+};
+
+pub const ConstOrVar = enum {
+    Const,
+    Var,
+};
+
 /// todo
 pub const Levels = struct {
     env: *base.ModuleEnv,
