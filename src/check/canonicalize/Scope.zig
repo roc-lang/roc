@@ -4,6 +4,7 @@ const problem_mod = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 
 const Alias = @import("./Alias.zig");
+const CanId = @import("./CanId.zig");
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -145,79 +146,114 @@ pub const ScopeStack = struct {
     /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
     /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
     /// alignment. It's num_buckets - 1 because large strings are stored separately.
-    small_str_buckets: [num_buckets - 1](*const @Vector(1, u128)),
+    small_str_buckets: [num_buckets - 1](*@Vector(1, u128)),
 
     /// The flag is just a bit for whether it's a var or a const.
-    small_str_flags: [num_buckets - 1](*const ConstOrVar),
+    small_str_flags: [num_buckets - 1](*ConstOrVar),
 
     /// The capacities for each of these allocations. (The levels determine the lengths.)
     small_str_capacities: [num_buckets - 1]u32,
 
     /// The CanId values for each of these declarations
-    can_ids: [num_buckets]CanId,
+    can_ids: [num_buckets](*CanId),
 
     large_str_buckets: std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)),
 
+    fn init(allocator: *Allocator) Self {
+        const levels = std.ArrayListUnmanaged.initCapacity(allocator, 8);
+
+        // We should *always* have at least 1 level, for the top-level scope.
+        levels.append(allocator, [_]u32{0} ** num_buckets) catch unreachable;
+
+        return Self {
+            levels,
+        };
+    }
+
     /// Assign the given name to the given value.
-    /// If there was a `var` before this, then `is_var_decl` is true.
-    fn assign(self: *ScopeStack, str: []u8, can_id: CanId, is_var_decl: bool) Assigned!AssignErr {
+    /// const_or_var is Var if there was a `var` keyword preceding this `=`,
+    /// and Const otherwise.
+    fn assign(self: *ScopeStack, allocator: *Allocator, str: []u8, can_id: CanId, const_or_var: ConstOrVar) Assignment {
         const len = str.len;
+        const bucket_index = undefined;
+        const bucket_len = undefined;
+        const index_in_bucket = undefined;
+        const answer = undefined;
 
         if (len <= max_small_str_len) {
-            // 1-4 => 0-3
-            const small_bucket_index = len - 1;
-
-            // 5-8 => 4
-            // 9-16 => 5
-            const big_bucket_index = (len << 3) + 3;
-
-            const bucket_index = if (len <= 4) small_bucket_index else big_bucket_index;
-            const bucket = &self.buckets[bucket_index];
+            bucket_index = bucket_index_from_len(len);
+            bucket_len = &self.levels.getLast()[bucket_index];
+            index_in_bucket = *bucket_len;
 
             switch (bucket_index) {
                 0 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, copy the u8 over
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO copy the u8 over
                 },
                 1 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, make a u16, copy it in
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO make a u16, copy it in
                 },
                 2 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, make a u32 (zero-padded), copy it in
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO make a u32 (zero-padded), copy it in
                 },
                 3 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, make a u32, copy it in
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO make a u32, copy it in
                 },
                 4 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, make a u64 (zero-padded), copy it in
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO make a u64 (zero-padded), copy it in
                 },
                 5 => {
                     // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-                    // TODO bump capacity, make a u128 (zero-padded), copy it in
+                    self.ensure_bucket_capacity(allocator, bucket_index);
+                    // TODO make a u128 (zero-padded), copy it in
                 },
             }
+
+            small_str_flags[bucket_index][index_in_bucket] = const_or_var;
         } else {
+            bucket_index = num_buckets - 1;
+            bucket_len = &self.levels.getLast()[bucket_index];
+            index_in_bucket = *bucket_len;
             // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
-            // It's big! Bump capacity, then put it into the hashmap at the current level.
+            // It's big! Bump capacity (don't use ensure_bucket_capacity; this works differently),
+            // then put it into the hashmap at the current level.
         }
+
+        // Capacity should already have been bumped by this point if needed,
+        // so we can set these without checking.
+        *bucket_len = index_in_bucket + 1;
+        self.can_ids[bucket_index] = can_id;
+
+        return answer;
+    }
+
+    /// Ensure that the given bucket has at least this much capacity available.
+    /// If it does not, make a new allocation (grow capacity by 1.5x), copy
+    /// over the existing data, and deinit the existing allocation.
+    fn ensure_bucket_capacity(self: *Scope, allocator: *Allocator, capacity: usize) void {
+        const bucket_capacity = self.bucket_capacity;
+        const index_in_bucket = self.index_in_bucket;
+
+        if (index_in_bucket >= bucket_capacity) {
+        // TODO alloc new, copy everything over, dealloc old, set new bucket_len
     }
 };
 
-/// Whether this assignment turned out to be a new const declaration or
-/// a valid reassignment of a `var` that was in scope.
-pub const Assigned = union(enum) {
-    /// This `=` is assigning a new constant.
+pub const Assignment = union(enum) {
+    /// This `=` is successfully declaring a new constant.
     NewConst: void,
-    /// This `=` is reassigning an existing `var` declaration,
+    /// This `=` is successfully reassigning an existing `var` declaration,
     /// and the id is the id of that var declaration.
     VarReassign: CanId,
-};
-
-pub const AssignErr = union(enum) {
     /// This is an attempt to assign (with or without being a `var` decl)
     /// to a value that already has a constant with that name declared in scope.
     ShadowingConst: CanId,
@@ -459,6 +495,18 @@ fn createTestScope(idents: [][]Level.IdentInScope, aliases: [][]Level.AliasInSco
     }
 
     return scope;
+}
+
+fn bucket_index_from_len(len: usize) usize {
+    // 1-4 => 0-3
+    const small_bucket_index = len - 1;
+
+    // 5-8 => 4
+    // 9-16 => 5
+    const big_bucket_index = (len << 3) + 3;
+
+    // Branchlessly get the bucket index.
+    return if (len <= 4) small_bucket_index else big_bucket_index;
 }
 
 // test "empty scope has no items" {
