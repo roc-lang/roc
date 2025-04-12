@@ -138,6 +138,109 @@ const num_buckets = 7;
 
 const max_small_str_len: usize = 16;
 
+/// Small string buckets need to be 128-bit aligned because we do 128-bit SIMD
+/// operations on them.
+pub const BucketEntry = u128;
+
+const initial_bucket_capacity = 16; // Starting capacity for each bucket
+
+/// Top-level scope has different rules and tradeoffs compared to nested scopes.
+/// - Top-level scope does not allow `var` declarations.
+/// - For top-level scope, all declarations are added in one pass, and then sorted.
+/// - Duplicates are detected during sorting instead of during declarations.
+/// - Since they are sorted, binary search can be used for lookups.
+///
+/// Note that this does not distinguish between modules, types, tags, and lowercase identifiers.
+/// Callers should make separate scopes for each of these, because this will shrink the search space
+/// for each of them.
+pub const TopLevelScope = struct {
+    /// The total number of entries in scope.
+    len: u32,
+
+    /// Each bucket holds small strings of one particular sizes.
+    /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
+    /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
+    /// alignment. It's num_buckets - 1 because large strings are stored separately.
+    small_str_buckets: [num_buckets - 1](*BucketEntry),
+
+    /// The capacities for each of these allocations.
+    small_str_capacities: [num_buckets - 1]u32,
+
+    /// The CanId of the declaration node which caused this to be added to scope.
+    can_ids: [num_buckets](*CanId),
+
+    large_str_buckets: std.ArrayListUnmanaged(std.AutoHashSet([]u8)),
+
+    /// This is simpler than ScopeStack's `assign` because:
+    /// - It does not support `var`
+    /// - It does not check for duplicate declarations (that is, shadowing). That's done later, during sorting.
+    pub fn add(self: *TopLevelScope, allocator: *Allocator, str: []u8, can_id: CanId) void {
+        // TODO add
+    }
+
+    /// Sort each bucket by string name, allowing future lookups to use binary searches.
+    /// Appends duplicates to the given ArrayList, which the caller can then use to report shadowing.
+    /// This should only ever be called once, after all entries have been added. No entries should
+    /// be added after sort() has been called. (Also, lookup() should only be called after sort() has run.)
+    pub fn sort(self: *TopLevelScope, allocator: *Allocator, duplicates: *ArrayListUnmanaged(CanId)) Allocator.Error!void {
+        // TODO do a manual sort (mergesort? quicksort? timsort?) where we also rearrange the can_ids at the same time,
+        // and also whenever there's a tie, we report a duplicate and drop whichever CanId is lower. (This has the effect
+        // that the one which is furthest down in the file "wins" - essentially, shadowing.) To preserve the maximally-fast
+        // sorting algorithm (e.g. not having to compact things), we don't actually *remove* the duplicate entry; rather,
+        // we set its CanId to be equal to the other's. In this way, all lookups will resolve to the other CanId, so it's
+        // as if the other one had been removed, but we don't have to slow down sorting for this error case.
+    }
+
+    /// This must only be called after sort() has been called, because it does a binary search
+    /// which relies on the assumption that everything has been sorted.
+    pub fn lookup(self: *TopLevelScope, name: []const u8) ?CanId {
+        // TODO if it's a small string, do a binary search of the buckets.
+        // TODO if it's a large string, do a hash lookup.
+    }
+
+    pub fn init(allocator: Allocator) Allocator.Error!TopLevelScope {
+        var small_str_buckets: [num_buckets - 1](*BucketEntry) = undefined;
+        var small_str_flags: [num_buckets - 1](*ConstOrVar) = undefined;
+        var small_str_capacities: [num_buckets - 1]u32 = undefined;
+        var can_ids: [num_buckets](*CanId) = undefined;
+
+        // Small string buckets
+        for (0..num_buckets - 1) |i| {
+            small_str_buckets[i] = try allocator.alignedAlloc(BucketEntry, @alignOf(BucketEntry), initial_bucket_capacity);
+            small_str_capacities[i] = @intCast(initial_bucket_capacity);
+            can_ids[i] = try allocator.alloc(CanId, initial_bucket_capacity);
+        }
+
+        // Large string bucket
+        can_ids[num_buckets - 1] = try allocator.alloc(CanId, 16);
+        var large_str_buckets = std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)){};
+        try large_str_buckets.append(allocator, std.AutoHashMap([]u8, ConstOrVar).init(allocator));
+
+        return TopLevelScope{
+            .small_str_buckets = small_str_buckets,
+            .small_str_flags = small_str_flags,
+            .small_str_capacities = small_str_capacities,
+            .can_ids = can_ids,
+            .large_str_buckets = large_str_buckets,
+        };
+    }
+
+    pub fn deinit(self: *TopLevelScope, allocator: std.mem.Allocator) void {
+        for (0..num_buckets - 1) |i| {
+            allocator.free(self.small_str_buckets[i]);
+            allocator.free(self.small_str_flags[i]);
+            allocator.free(self.can_ids[i]);
+        }
+
+        allocator.free(self.can_ids[num_buckets - 1]);
+
+        for (self.large_str_buckets.items) |*hashmap| {
+            hashmap.deinit();
+        }
+        self.large_str_buckets.deinit(allocator);
+    }
+};
+
 pub const ScopeStack = struct {
     /// For each level in the stack, we track the lengths of each bucket.
     levels: std.ArrayListUnmanaged([num_buckets]u32),
@@ -146,7 +249,7 @@ pub const ScopeStack = struct {
     /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
     /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
     /// alignment. It's num_buckets - 1 because large strings are stored separately.
-    small_str_buckets: [num_buckets - 1](*@Vector(1, u128)),
+    small_str_buckets: [num_buckets - 1](*BucketEntry),
 
     /// The flag is just a bit for whether it's a var or a const.
     small_str_flags: [num_buckets - 1](*ConstOrVar),
@@ -154,7 +257,7 @@ pub const ScopeStack = struct {
     /// The capacities for each of these allocations. (The levels determine the lengths.)
     small_str_capacities: [num_buckets - 1]u32,
 
-    /// The CanId values for each of these declarations
+    /// The CanId of the declaration node which caused this to be added to scope.
     can_ids: [num_buckets](*CanId),
 
     large_str_buckets: std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)),
@@ -165,9 +268,27 @@ pub const ScopeStack = struct {
         // We should *always* have at least 1 level, for the top-level scope.
         levels.append(allocator, [_]u32{0} ** num_buckets) catch unreachable;
 
-        return Self {
+        return Self{
             levels,
         };
+    }
+
+    fn deinit(self: *Self, allocator: *Allocator) void {
+        // TODO
+    }
+
+    /// Enter a new scope. For every `enter` call, there must be a corresponding `exit` call.
+    fn enter(self: *Self, allocator: *Allocator) Allocator.Error!void {
+        std.debug.assert(self.levels.items.len > 0); // Scope stack should never be empty
+        const current_level = self.levels.items[self.levels.items.len - 1];
+        try self.levels.append(allocator, [_]u32{0} ** num_buckets);
+    }
+
+    /// Exit the current scope. This must never be called more times than `enter` has called,
+    /// as doing so would eliminate the top-level scope. That would result in UB.
+    fn exit(self: *Self) void {
+        self.levels.pop();
+        std.debug.assert(self.levels.items.len > 0); // Scope stack should never be empty
     }
 
     /// Assign the given name to the given value.
@@ -236,15 +357,23 @@ pub const ScopeStack = struct {
         return answer;
     }
 
+    /// This must only be called after sort() has been called, because it does a binary search
+    /// which relies on the assumption that everything has been sorted.
+    pub fn lookup(self: *const ScopeStack, name: []const u8, top_level: *const TopLevelScope) ?CanId {
+        // TODO if it's a small string, do a *reverse* search of the buckets, and then a top level scope lookup
+        // TODO if it's a large string, do a hash lookup, and then a top level scope lookup if that fails.
+    }
+
     /// Ensure that the given bucket has at least this much capacity available.
     /// If it does not, make a new allocation (grow capacity by 1.5x), copy
     /// over the existing data, and deinit the existing allocation.
-    fn ensure_bucket_capacity(self: *Scope, allocator: *Allocator, capacity: usize) void {
+    fn ensure_bucket_capacity(self: *ScopeStack, allocator: *Allocator, capacity: usize) void {
         const bucket_capacity = self.bucket_capacity;
         const index_in_bucket = self.index_in_bucket;
 
         if (index_in_bucket >= bucket_capacity) {
-        // TODO alloc new, copy everything over, dealloc old, set new bucket_len
+            // TODO alloc new, copy everything over, dealloc old, set new bucket_len
+        }
     }
 };
 
