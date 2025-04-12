@@ -1,3 +1,4 @@
+
 { pkgs
 , roc-cli
 , name
@@ -8,6 +9,7 @@
 , optimize ? true
 , ...
 }:
+# see checks.canBuildRocPackage in /flake.nix for example usage
 let
   packageDependencies = pkgs.stdenv.mkDerivation {
     inherit src outputHash;

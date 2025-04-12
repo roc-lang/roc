@@ -115,7 +115,8 @@
       in
       {
 
-        devShell = pkgs.mkShell {
+        devShells = {
+          default = pkgs.mkShell {
           buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs
           ++ darwinDevInputs ++ linuxDevInputs;
 
@@ -141,6 +142,7 @@
             unset NIX_LDFLAGS
           '';
         };
+      };
 
         formatter = pkgs.nixpkgs-fmt;
 
@@ -162,31 +164,41 @@
           default = {
             type = "app";
             program = "${rocBuild.roc-cli}/bin/roc";
+            meta = {
+              description = "Roc CLI";
+              mainProgram = "roc";
+            };
           };
         };
 
+        # test for nix/buildRocPackage.nix
         checks.canBuildRocPackage =
           let
-            fizzBuzzCli = buildRocPackage {
+            helloWorldPackage = buildRocPackage {
               inherit pkgs;
               roc-cli = rocBuild.roc-cli;
               linker = "legacy";
-              name = "fizzbuzz";
+              name = "helloworld";
               optimize = true;
-              src = ./examples/fizzbuzz;
-              entryPoint = "./main.roc";
+              # use `src = ./myfolder;` for local usage
+              src = pkgs.fetchFromGitHub {
+                owner = "roc-lang";
+                repo = "examples";
+                rev = "main";
+                sha256 = "sha256-DqqkA5iASoK68XBFKv6Gbrso4687smKz8PqVUL2rRsE=";
+              };
+              entryPoint = "./examples/HelloWorld/main.roc";
               outputHash = "sha256-L5RBS/zMDcbsARaINp9lY4LVp76TqR68c3uyp1r9DJg=";
             };
           in
-          pkgs.runCommand "build fizzbuzz" { } ''
-            expectedOutput="1,2,Fizz,4,Buzz,Fizz,7,8,Fizz,Buzz,11,Fizz,13,14,FizzBuzz"
-            actualOutput=$(${fizzBuzzCli}/bin/fizzbuzz)
+          pkgs.runCommand "build helloworld" { } ''
+            expectedOutput="Hello, World!"
+            actualOutput=$(${helloWorldPackage}/bin/helloworld)
             if [ "$actualOutput" = "$expectedOutput" ]; then
-              echo "FizzBuzz output is correct."
+              echo "helloworld output is correct."
               touch $out
             else
-              echo "Actual output: $actualOutput"
-              echo "FizzBuzz output is incorrect." >&2
+              echo "helloworld output is incorrect, I expected '$expectedOutput' but got '$actualOutput'" >&2
               exit 1
             fi
           '';
