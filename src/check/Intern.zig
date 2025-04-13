@@ -32,28 +32,41 @@ pub const InternId = union {
     }
 };
 
-const InlineInternId = struct {
+pub const InlineInternId = struct {
     num: u32,
 
     // Branchlessly create a u32 from a slice of 1-4 bytes,
     // by padding with zeroes.
     //
-    // This is designed to be used with slices of length 1 to 4,
-    // but it does not assert anything about that so that it can
-    // be used branchlessly.
-    fn new(bytes: []const u8) InlineInternId {
-        const answer: u32 = undefined;
-        const dest: *u8 = @ptrCast(&answer);
-        const bytes1 = bytes[1];
-        const bytes2 = bytes[2];
-        const bytes3 = bytes[3];
+    // Slices of 5+ bytes are accepted, but bytes 5+ will
+    // be ignored. Empty slices are not accepted.
+    pub fn new(bytes: []const u8) InlineInternId {
+        const len = bytes.len;
 
+        // Get the addresses of bytes 2, 3, and 4, but don't dereference them yet
+        // because depending on our length they might point to inaccessible memory!
+        const addr1: *const u8 = @ptrCast(bytes.ptr + 1);
+        const addr2: *const u8 = @ptrCast(bytes.ptr + 2);
+        const addr3: *const u8 = @ptrCast(bytes.ptr + 3);
+
+        // Branchlessly zero-pad a u32 by (branchlessly) choosing either these pointers,
+        // or else a pointer to zero, depending on the length.
+        var answer: u32 = undefined;
+        var dest = @as([*]u8, @ptrCast(&answer));
+        const zero: u8 = 0;
+
+        // Always set the first byte, because we don't accept empty slices.
+        std.debug.assert(len > 0);
         dest[0] = bytes[0];
-        dest[1] = if (bytes.len > 1) bytes1 else 0;
-        dest[2] = if (bytes.len > 2) bytes2 else 0;
-        dest[3] = if (bytes.len > 3) bytes3 else 0;
+        dest[1] = (if (len > 1) addr1 else &zero).*;
+        dest[2] = (if (len > 2) addr2 else &zero).*;
+        dest[3] = (if (len > 3) addr3 else &zero).*;
 
-        return answer;
+        return .{ .num = answer };
+    }
+
+    pub fn toBytes(self: InlineInternId) [4]u8 {
+        return @as([4]u8, @bitCast(self.num));
     }
 };
 
@@ -64,14 +77,118 @@ const IndexAndLen = struct {
 };
 
 const LenCategory = enum {
-    FiveToEight,
+    UpToEight,
     NineToSixteen,
     OverSixteen,
 
+    /// len must not be zero.
     fn fromLen(len: usize) LenCategory {
-        return @as(LenCategory, @enumFromInt(@intCast(u2, (len - 1) >> 2)));
+        std.debug.assert(len != 0);
+
+        // Branchless implementation using bit shifts
+        // 1-8 maps to 0 (UpToEight)
+        // 9-16 maps to 1 (NineToSixteen)
+        // 17+ maps to 2 (OverSixteen)
+
+        // (len-1) >> 3 gives us:
+        // 0 for lengths 1-8
+        // 1 for lengths 9-16
+        // 2+ for lengths 17+
+        const shift_result = (len - 1) >> 3;
+
+        // Clamp values over 2 to exactly 2.
+        const clamped = @min(shift_result, 2);
+
+        return @as(LenCategory, @enumFromInt(@as(u2, @intCast(clamped))));
     }
 };
+
+test "LenCategory.fromLen correctly categorizes lengths" {
+    for (1..9) |i| {
+        try std.testing.expectEqual(LenCategory.UpToEight, LenCategory.fromLen(i));
+    }
+
+    for (9..17) |i| {
+        try std.testing.expectEqual(LenCategory.NineToSixteen, LenCategory.fromLen(i));
+    }
+
+    try std.testing.expectEqual(LenCategory.OverSixteen, LenCategory.fromLen(17));
+    try std.testing.expectEqual(LenCategory.OverSixteen, LenCategory.fromLen(20));
+    try std.testing.expectEqual(LenCategory.OverSixteen, LenCategory.fromLen(100));
+    try std.testing.expectEqual(LenCategory.OverSixteen, LenCategory.fromLen(255));
+}
+
+test "InlineInternId handles strings of length 1 correctly" {
+    const input = "a";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    try std.testing.expect(bytes[0] == 'a');
+    try std.testing.expect(bytes[1] == 0);
+    try std.testing.expect(bytes[2] == 0);
+    try std.testing.expect(bytes[3] == 0);
+}
+
+test "InlineInternId handles strings of length 2 correctly" {
+    const input = "ab";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    try std.testing.expect(bytes[0] == 'a');
+    try std.testing.expect(bytes[1] == 'b');
+    try std.testing.expect(bytes[2] == 0);
+    try std.testing.expect(bytes[3] == 0);
+}
+
+test "InlineInternId handles strings of length 3 correctly" {
+    const input = "abc";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    try std.testing.expect(bytes[0] == 'a');
+    try std.testing.expect(bytes[1] == 'b');
+    try std.testing.expect(bytes[2] == 'c');
+    try std.testing.expect(bytes[3] == 0);
+}
+
+test "InlineInternId handles strings of length 4 correctly" {
+    const input = "abcd";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    try std.testing.expect(bytes[0] == 'a');
+    try std.testing.expect(bytes[1] == 'b');
+    try std.testing.expect(bytes[2] == 'c');
+    try std.testing.expect(bytes[3] == 'd');
+}
+
+test "InlineInternId handles non-ASCII characters correctly" {
+    // Test with non-ASCII characters
+    const input = "é";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    // 'é' is encoded as 0xC3 0xA9 in UTF-8
+    try std.testing.expect(bytes[0] == 0xC3);
+    try std.testing.expect(bytes[1] == 0xA9);
+    try std.testing.expect(bytes[2] == 0);
+    try std.testing.expect(bytes[3] == 0);
+}
+
+test "InlineInternId preserves exactly 4 bytes" {
+    // Test with exactly 4 bytes
+    const input = "abcd";
+    const id = InlineInternId.new(input);
+    const bytes = id.toBytes();
+
+    try std.testing.expect(bytes[0] == 'a');
+    try std.testing.expect(bytes[1] == 'b');
+    try std.testing.expect(bytes[2] == 'c');
+    try std.testing.expect(bytes[3] == 'd');
+
+    // Make sure we're getting back exactly what we put in
+    try std.testing.expectEqualSlices(u8, input, &bytes);
+}
 
 const Bucket = struct {
     capacity: u32,
