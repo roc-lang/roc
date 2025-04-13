@@ -6,8 +6,8 @@ const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 const Ident = base.Ident;
 
-/// Represents types
-pub const Type = union(enum) {
+const OomErr = std.mem.Allocator.Error.OutOfMemory;
+pub const Prim = union(enum) {
     /// Builtin `Bool` type
     bool,
 
@@ -19,7 +19,29 @@ pub const Type = union(enum) {
 
     /// Builtin `Float a` type
     frac: Frac,
+};
+pub const Frac = enum {
+    f32,
+    f64,
+    dec,
+};
 
+pub const Int = enum {
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+};
+/// Represents types
+pub const RType = union(enum) {
+    ///A primitive type
+    prim: Prim,
     /// A type variable which the user did not name in an annotation
     flex_var: ?Ident.Idx,
 
@@ -50,25 +72,9 @@ pub const Type = union(enum) {
         arguments: []Idx,
     };
 
-    pub const Frac = enum {
-        f32,
-        f64,
-        dec,
-    };
-
-    pub const Int = enum {
-        u8,
-        i8,
-        u16,
-        i16,
-        u32,
-        i32,
-        u64,
-        i64,
-        u128,
-        i128,
-    };
-
+    pub fn primType(inType: Prim) @This() {
+        return @This(){ .prim = inType };
+    }
     pub fn format(
         self: @This(),
         comptime fmt: []const u8,
@@ -78,16 +84,16 @@ pub const Type = union(enum) {
         _ = fmt;
         _ = options;
         switch (self) {
-            .bool => {
+            .Prim.bool => {
                 try writer.writeAll("Bool");
             },
-            .apply => {
+            .Apply => {
                 @panic("todo");
             },
-            .str => {
+            .Prim.str => {
                 @panic("todo");
             },
-            .int => |i| {
+            .Prim.int => |i| {
                 switch (i) {
                     .u8 => try writer.writeAll("U8"),
                     .i8 => try writer.writeAll("I8"),
@@ -101,7 +107,7 @@ pub const Type = union(enum) {
                     .i128 => try writer.writeAll("I128"),
                 }
             },
-            .frac => {
+            .Prim.frac => {
                 @panic("todo");
             },
             .flex_var => {
@@ -143,14 +149,14 @@ pub const Type = union(enum) {
             }
         };
 
-        pub fn init(allocator: std.mem.Allocator) Store {
+        pub fn init(env: *base.ModuleEnv) Store {
             var store = Store{
                 .pending = 0,
-                .slots = Slot.List.init(allocator),
-                .descriptors = Descriptor.List.init(allocator),
+                .slots = Slot.List.init(env.gpa),
+                .descriptors = Descriptor.List.init(env.gpa),
             };
 
-            store.descriptors.append(Descriptor.NONE) catch exitOnOom();
+            store.descriptors.append(Descriptor.NONE) catch exitOnOom(OomErr);
 
             return store;
         }
@@ -168,7 +174,7 @@ pub const Type = union(enum) {
             if (self.getInitialized(idx)) |current| {
                 current.* = descriptor;
             } else {
-                self.descriptors.append(descriptor) catch exitOnOom();
+                self.descriptors.append(descriptor) catch exitOnOom(OomErr);
                 const descriptor_idx: u31 = @intCast(self.descriptors.items.len - 1);
 
                 self.setSlot(idx, Slot.root(descriptor_idx));
@@ -177,11 +183,11 @@ pub const Type = union(enum) {
 
         fn setSlot(self: *Store, idx: Idx, slot: Slot) void {
             if (self.pending > 0) {
-                const slice = self.slots.addManyAsSlice(self.pending) catch exitOnOom();
+                const slice = self.slots.addManyAsSlice(self.pending) catch exitOnOom(OomErr);
                 @memset(slice, Slot.UNINITIALIZED);
 
                 // Assuming more than half of slots are redirects
-                self.descriptors.ensureTotalCapacity(self.slots.items.len / 2) catch exitOnOom();
+                self.descriptors.ensureTotalCapacity(self.slots.items.len / 2) catch exitOnOom(OomErr);
                 self.pending = 0;
             }
 
@@ -246,15 +252,23 @@ pub const Mark = struct {
 pub const Descriptor = struct {
     rank: Rank,
     mark: Mark,
-    type: Type,
+    type: RType,
 
     const NONE: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = .{ .flex_var = null } };
 
     const List = std.ArrayList(Descriptor);
 };
 
+pub fn toDesc(rocType: RType) Descriptor {
+    var desc = Descriptor.NONE;
+    desc.type = rocType;
+    return desc;
+}
+
 test "store" {
-    var store = Type.Store.init(testing.allocator);
+    var env = base.ModuleEnv.init(testing.allocator);
+    defer env.deinit();
+    var store = RType.Store.init(&env);
     defer store.deinit();
 
     // Test fresh index creation
@@ -266,22 +280,23 @@ test "store" {
     try testing.expectEqual(store.get(idx1).type, Descriptor.NONE.type);
 
     // Test setting and getting a descriptor
-    const desc = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = Type.bool };
+    var desc: Descriptor = Descriptor.NONE;
+    desc.type = RType.primType(Prim.bool);
     store.set(idx1, desc);
-    try testing.expectEqual(store.get(idx1).type, Type.bool);
+    try testing.expectEqual(store.get(idx1).type, RType.primType(Prim.bool));
 
     // Test updating an existing descriptor
-    const updated_desc = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = Type.str };
+    const updated_desc: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = RType.primType(Prim.bool) };
     store.set(idx1, updated_desc);
-    try testing.expectEqual(store.get(idx1).type, Type.str);
+    try testing.expectEqual(store.get(idx1).type, RType.primType(Prim.bool));
 
     // Test merge
     const idx3 = store.fresh();
     const idx4 = store.fresh();
-    const union_desc = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = .bool };
+    const union_desc: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = RType.primType(Prim.bool) };
     store.merge(idx3, idx4, union_desc);
-    try testing.expectEqual(store.get(idx3).type, .bool);
-    try testing.expectEqual(store.get(idx4).type, .bool);
+    try testing.expectEqual(store.get(idx3).type, RType.primType(Prim.bool));
+    try testing.expectEqual(store.get(idx4).type, RType.primType(Prim.bool));
 
     // TODO test double redirect
 }

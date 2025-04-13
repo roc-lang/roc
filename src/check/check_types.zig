@@ -12,15 +12,15 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleWork = base.ModuleWork;
-const Type = type_mod.Type;
+const RType = type_mod.RType;
 
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
-    type_store: *Type.Store,
+    type_store: *RType.Store,
     resolve_ir: *const resolve.IR,
     other_modules: *const ModuleWork(resolve.IR).Store,
-    other_typestores: *const ModuleWork(Type.Store).Store,
+    other_typestores: *const ModuleWork(RType.Store).Store,
 ) void {
     _ = type_store;
     _ = resolve_ir;
@@ -43,12 +43,11 @@ test "checkTypes - basic type unification" {
     );
     defer can_irs.deinit(gpa);
 
-    var type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
+    var type_stores = ModuleWork(RType.Store).Store.initFromCanIrs(gpa, &can_irs);
     defer type_stores.deinit(gpa);
 
     var resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
     defer resolve_irs.deinit(gpa);
-
     var env = &can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
     const type_store = type_stores.getWork(@enumFromInt(0));
@@ -59,9 +58,9 @@ test "checkTypes - basic type unification" {
     checkTypes(type_store, resolve_ir, &resolve_irs, &type_stores);
 
     // Test that we can perform basic type unification
-    const a_type = Type{ .flex_var = null };
+    const a_type = type_mod.toDesc(RType{ .flex_var = null });
     const int_name = env.idents.insert(env.gpa, Ident.for_text("Int"), Region.zero());
-    const int_type = Type{ .rigid_var = int_name };
+    const int_type = type_mod.toDesc(RType{ .rigid_var = int_name });
 
     type_store.set(type_id_1, a_type);
     type_store.set(type_id_2, int_type);

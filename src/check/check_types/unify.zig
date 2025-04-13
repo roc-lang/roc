@@ -3,7 +3,7 @@ const Allocator = std.mem.Allocator;
 const base = @import("../../base.zig");
 
 const roc_type = @import("../../types/type.zig");
-const Type = roc_type.Type;
+const RType = roc_type.RType;
 const Mark = roc_type.Mark;
 const Rank = roc_type.Rank;
 const Descriptor = roc_type.Descriptor;
@@ -20,12 +20,12 @@ const TypeMismatch = enum { type_mismatch };
 /// Unifies two types in a type store.
 pub fn unify(
     allocator: Allocator,
-    type_store: *Type.Store,
-    first: Type.Idx,
-    second: Type.Idx,
+    type_store: *RType.Store,
+    first: RType.Idx,
+    second: RType.Idx,
 ) !UnificationResult {
-    const first_desc = env.type_store.get(first);
-    const second_desc = env.type_store.get(second);
+    const first_desc = type_store.get(first);
+    const second_desc = type_store.get(second);
 
     var result = UnificationResult{
         .mismatches = std.ArrayList(TypeMismatch).init(allocator),
@@ -38,7 +38,7 @@ pub fn unify(
 
     var ctx = Context{
         .allocator = allocator,
-        .env = env,
+        .env = ModuleEnv,
         .first = first,
         .first_desc = first_desc,
         .second = second,
@@ -54,9 +54,9 @@ pub fn unify(
 const Context = struct {
     allocator: Allocator,
     env: *ModuleEnv,
-    first: Type.Idx,
+    first: RType.Idx,
     first_desc: *const Descriptor,
-    second: Type.Idx,
+    second: RType.Idx,
     second_desc: *const Descriptor,
     result: *UnificationResult,
 
@@ -146,7 +146,7 @@ const Context = struct {
         }
     }
 
-    fn merge(self: *Context, ty: Type) void {
+    fn merge(self: *Context, ty: RType) void {
         const rank = self.first_desc.rank.min(self.second_desc.rank);
         const desc = Descriptor{
             .rank = rank,
