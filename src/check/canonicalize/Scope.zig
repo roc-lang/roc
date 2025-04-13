@@ -133,10 +133,9 @@ pub const Level = struct {
     }
 };
 
-/// Bucket sizes: 1B, 2B, 3B, 4B, 8B, 16B, 17B+
-const num_buckets = 7;
-
-const max_small_str_len: usize = 16;
+/// Bucket sizes: 1B, 2B, 3B, 4B
+const max_small_str_len: usize = 4;
+const num_small_string_buckets: usize = max_small_str_len;
 
 /// Small string buckets need to be 128-bit aligned because we do 128-bit SIMD
 /// operations on them.
@@ -146,30 +145,24 @@ const initial_bucket_capacity = 16; // Starting capacity for each bucket
 
 /// Top-level scope has different rules and tradeoffs compared to nested scopes.
 /// - Top-level scope does not allow `var` declarations.
-/// - For top-level scope, all declarations are added in one pass, and then sorted.
-/// - Duplicates are detected during sorting instead of during declarations.
-/// - Since they are sorted, binary search can be used for lookups.
+/// - For top-level scope, all declarations are added, and then sorted, before any lookups happen.
+/// - Duplicates are detected during sorting instead of at declaration time.
+/// - Binary search can be used for lookups, because lookups only happen after sorting has finished.
 ///
-/// Note that this does not distinguish between modules, types, tags, and lowercase identifiers.
+/// Note that this scope does not distinguish between modules, types, tags, and lowercase identifiers.
 /// Callers should make separate scopes for each of these, because this will shrink the search space
 /// for each of them.
 pub const TopLevelScope = struct {
-    /// The total number of entries in scope.
-    len: u32,
-
-    /// Each bucket holds small strings of one particular sizes.
-    /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
-    /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
-    /// alignment. It's num_buckets - 1 because large strings are stored separately.
-    small_str_buckets: [num_buckets - 1](*BucketEntry),
-
-    /// The capacities for each of these allocations.
-    small_str_capacities: [num_buckets - 1]u32,
-
+    /// Each bucket holds small strings of one particular sizes. They each have
+    /// different sizes (e.g. 2B small strings vs 3B small strings), but we use
+    /// 128-bit SIMD operations on all of them, so they all need 128-bit alignment.
+    small_str_buckets: [num_small_string_buckets](*BucketEntry),
+    bucket_lens: [num_small_string_buckets]u32,
+    bucket_capacities: [num_small_string_buckets]u32,
     /// The CanId of the declaration node which caused this to be added to scope.
-    can_ids: [num_buckets](*CanId),
+    bucket_can_ids: [num_small_string_buckets](*CanId),
 
-    large_str_buckets: std.ArrayListUnmanaged(std.AutoHashSet([]u8)),
+    large_strings: std.AutoHashMap(InternedStrId, CanId),
 
     /// This is simpler than ScopeStack's `assign` because:
     /// - It does not support `var`
@@ -199,40 +192,40 @@ pub const TopLevelScope = struct {
     }
 
     pub fn init(allocator: Allocator) Allocator.Error!TopLevelScope {
-        var small_str_buckets: [num_buckets - 1](*BucketEntry) = undefined;
-        var small_str_flags: [num_buckets - 1](*ConstOrVar) = undefined;
-        var small_str_capacities: [num_buckets - 1]u32 = undefined;
-        var can_ids: [num_buckets](*CanId) = undefined;
+        var small_str_buckets: [num_small_string_buckets](*BucketEntry) = undefined;
+        var small_str_flags: [num_small_string_buckets](*ConstOrVar) = undefined;
+        var small_str_capacities: [num_small_string_buckets]u32 = undefined;
+        var can_ids: [num_small_string_buckets](*CanId) = undefined;
 
         // Small string buckets
-        for (0..num_buckets - 1) |i| {
+        for (0..num_small_string_buckets) |i| {
             small_str_buckets[i] = try allocator.alignedAlloc(BucketEntry, @alignOf(BucketEntry), initial_bucket_capacity);
             small_str_capacities[i] = @intCast(initial_bucket_capacity);
             can_ids[i] = try allocator.alloc(CanId, initial_bucket_capacity);
         }
 
         // Large string bucket
-        can_ids[num_buckets - 1] = try allocator.alloc(CanId, 16);
+        can_ids[num_small_string_buckets] = try allocator.alloc(CanId, 16);
         var large_str_buckets = std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)){};
         try large_str_buckets.append(allocator, std.AutoHashMap([]u8, ConstOrVar).init(allocator));
 
         return TopLevelScope{
             .small_str_buckets = small_str_buckets,
             .small_str_flags = small_str_flags,
-            .small_str_capacities = small_str_capacities,
+            .bucket_capacities = small_str_capacities,
             .can_ids = can_ids,
             .large_str_buckets = large_str_buckets,
         };
     }
 
     pub fn deinit(self: *TopLevelScope, allocator: std.mem.Allocator) void {
-        for (0..num_buckets - 1) |i| {
+        for (0..num_small_string_buckets) |i| {
             allocator.free(self.small_str_buckets[i]);
             allocator.free(self.small_str_flags[i]);
             allocator.free(self.can_ids[i]);
         }
 
-        allocator.free(self.can_ids[num_buckets - 1]);
+        allocator.free(self.can_ids[num_small_string_buckets]);
 
         for (self.large_str_buckets.items) |*hashmap| {
             hashmap.deinit();
@@ -241,24 +234,30 @@ pub const TopLevelScope = struct {
     }
 };
 
+/// A stack of nested scopes. This should be used for all non-top-level scopes, such as inside functions
+/// or top-level constant blocks.
+///
+/// Note that this scope does not distinguish between modules, types, tags, and lowercase identifiers.
+/// Callers should make separate scopes for each of these, because this will shrink the search space
+/// for each of them.
 pub const ScopeStack = struct {
     /// For each level in the stack, we track the lengths of each bucket.
-    levels: std.ArrayListUnmanaged([num_buckets]u32),
+    levels: std.ArrayListUnmanaged([num_small_string_buckets]u32),
 
     /// Each bucket holds small strings of one particular sizes.
     /// They each have different sizes (e.g. 4B small strings vs 8B small strings),
     /// but we use 128-bit SIMD operations on all of them, so they all need 128-bit
-    /// alignment. It's num_buckets - 1 because large strings are stored separately.
-    small_str_buckets: [num_buckets - 1](*BucketEntry),
+    /// alignment. It's num_small_string_buckets because large strings are stored separately.
+    small_str_buckets: [num_small_string_buckets](*BucketEntry),
 
     /// The flag is just a bit for whether it's a var or a const.
-    small_str_flags: [num_buckets - 1](*ConstOrVar),
+    small_str_flags: [num_small_string_buckets](*ConstOrVar),
 
     /// The capacities for each of these allocations. (The levels determine the lengths.)
-    small_str_capacities: [num_buckets - 1]u32,
+    small_str_capacities: [num_small_string_buckets]u32,
 
     /// The CanId of the declaration node which caused this to be added to scope.
-    can_ids: [num_buckets](*CanId),
+    can_ids: [num_small_string_buckets](*CanId),
 
     large_str_buckets: std.ArrayListUnmanaged(std.AutoHashMap([]u8, ConstOrVar)),
 
@@ -266,7 +265,7 @@ pub const ScopeStack = struct {
         const levels = std.ArrayListUnmanaged.initCapacity(allocator, 8);
 
         // We should *always* have at least 1 level, for the top-level scope.
-        levels.append(allocator, [_]u32{0} ** num_buckets) catch unreachable;
+        levels.append(allocator, [_]u32{0} ** num_small_string_buckets) catch unreachable;
 
         return Self{
             levels,
@@ -281,7 +280,7 @@ pub const ScopeStack = struct {
     fn enter(self: *Self, allocator: *Allocator) Allocator.Error!void {
         std.debug.assert(self.levels.items.len > 0); // Scope stack should never be empty
         const current_level = self.levels.items[self.levels.items.len - 1];
-        try self.levels.append(allocator, [_]u32{0} ** num_buckets);
+        try self.levels.append(allocator, [_]u32{0} ** num_small_string_buckets);
     }
 
     /// Exit the current scope. This must never be called more times than `enter` has called,
@@ -341,7 +340,7 @@ pub const ScopeStack = struct {
 
             small_str_flags[bucket_index][index_in_bucket] = const_or_var;
         } else {
-            bucket_index = num_buckets - 1;
+            bucket_index = num_small_string_buckets;
             bucket_len = &self.levels.getLast()[bucket_index];
             index_in_bucket = *bucket_len;
             // TODO check if shadowing (it's ok if this is not a var and the old decl was a var)
