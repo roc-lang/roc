@@ -176,20 +176,20 @@ procedure List.8 (#Attr.2, #Attr.3):
     ret List.726;
 
 procedure Num.127 (#Attr.2):
-    let Num.288 : U8 = lowlevel NumIntCast #Attr.2;
-    ret Num.288;
+    let Num.294 : U8 = lowlevel NumIntCast #Attr.2;
+    ret Num.294;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.290 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.290;
+    let Num.296 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.296;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.289 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.289;
+    let Num.295 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.295;
 
 procedure Num.96 (#Attr.2):
-    let Num.287 : Str = lowlevel NumToStr #Attr.2;
-    ret Num.287;
+    let Num.293 : Str = lowlevel NumToStr #Attr.2;
+    ret Num.293;
 
 procedure Str.12 (#Attr.2):
     let Str.392 : List U8 = lowlevel StrToUtf8 #Attr.2;

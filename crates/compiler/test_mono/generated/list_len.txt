@@ -7,8 +7,8 @@ procedure List.6 (#Attr.2):
     ret List.676;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.0 ():
     let Test.1 : List I64 = Array [1i64, 2i64, 3i64];

@@ -8,8 +8,8 @@ procedure List.59 (List.387):
     ret List.675;
 
 procedure Num.46 (#Attr.2, #Attr.3):
-    let Num.283 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U8 = lowlevel NumCompare #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.0 ():
     let Test.2 : List I64 = Array [4i64, 3i64, 2i64, 1i64];

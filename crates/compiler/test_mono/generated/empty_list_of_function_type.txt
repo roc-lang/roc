@@ -23,8 +23,8 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.680;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.2 (Test.5):
     let Test.17 : Str = "bar";
