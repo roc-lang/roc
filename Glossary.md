@@ -34,6 +34,12 @@ Implementation:
 
 ## Identifier
 
+TODO
+
+Identifier in the compiler:
+- [new compiler](src/base/Ident.zig) 
+- old compiler: TODO
+
 ## Keyword
 
 A specific word that has a predefined meaning in the language, like `crash`, `if`, `when`, ... .
