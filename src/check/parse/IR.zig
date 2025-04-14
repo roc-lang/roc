@@ -986,7 +986,6 @@ pub const NodeStore = struct {
                 node.region = u.region;
             },
             .alternatives => |a| {
-                std.debug.assert(a.patterns.span.len > 1);
                 node.region = a.region;
                 node.tag = .alternatives_patt;
                 node.data.lhs = a.patterns.span.start;
