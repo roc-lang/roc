@@ -3,6 +3,8 @@ const base = @import("../../base.zig");
 const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
+const testing = std.testing;
+const parse = @import("../parse.zig");
 const Alias = @import("./Alias.zig");
 const Ident = base.Ident;
 const Region = base.Region;
@@ -592,3 +594,37 @@ pub const TagExt = union(enum) {
     /// This tag extension can grow unboundedly.
     Any: TypeIdx,
 };
+
+pub const FileHeader = extern struct {
+    files_len: u32,
+};
+
+pub fn serialize(self: *const Self) []std.posix.iovec_const {
+    _ = self;
+    @panic("Not implemented");
+}
+
+pub fn deserialize(gpa: std.mem.Allocator, bytes: *const []std.posix.iovec_const) Self {
+    _ = bytes;
+    return Self.init(gpa);
+}
+
+test "Should serialize roc code" {
+    const allocator = testing.allocator;
+    const roc_code =
+        \\import cli.Stdout
+        \\main! = |_args|
+        \\    Stdout.line!("Hello, World!")
+    ;
+    var can_ir = Self.init(allocator);
+    defer can_ir.deinit();
+    var parse_ir = parse.parse(&can_ir.env, roc_code);
+    parse_ir.store.emptyScratch();
+    defer parse_ir.deinit();
+
+    const serialized = serialize(&can_ir);
+    var actual_ir = deserialize(allocator, &serialized);
+    defer actual_ir.deinit();
+
+    try testing.expectEqualDeep(can_ir, actual_ir);
+}
