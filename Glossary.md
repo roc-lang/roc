@@ -32,13 +32,29 @@ Implementation:
 - old compiler:
   - [module folder](crates/compiler/module)
 
+## IR
+
+(Intermediate Representation)
+
+## Interning
+
 ## Identifier
 
-TODO
+Any text in a Roc source file that has significant content, but is not a Roc Str like "Hello".
+Used for variable names, record field names, type names, etc. .
+
+During [tokenization](#tokenization) all identifiers are put into a deduplicated collection and given an ID.
+That ID is used in [IRs](#ir) instead of the actual text to save memory.
 
 Identifier in the compiler:
-- [new compiler](src/base/Ident.zig) 
-- old compiler: TODO
+- new compiler:
+    - [Ident](src/base/Ident.zig)
+    - [Ident tokenization](src/check/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
+    - [Ident parsing](src/check/parse/Parser.zig): search `Ident`
+- old compiler:
+    - [IdentStr](crates/compiler/ident/src/lib.rs)
+    - [module/ident.rs](crates/compiler/module/src/ident.rs)
+    - [parsing](crates/compiler/parse/src/expr.rs): search "identifier" (case-insensitive)
 
 ## Keyword
 
