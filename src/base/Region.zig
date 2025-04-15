@@ -16,7 +16,7 @@ pub const List = collections.SafeList(@This());
 pub const Idx = List.Idx;
 
 /// A slice into a list of regions.
-pub const Slice = List.Slice;
+pub const Range = List.Range;
 
 /// Create an empty `Region`.
 pub fn zero() Self {

@@ -126,7 +126,7 @@ pub const Expr = union(enum) {
     },
     list: struct {
         elem_var: TypeIdx,
-        elems: ExprAtRegion.Slice,
+        elems: ExprAtRegion.Range,
     },
 
     @"var": struct {
@@ -138,12 +138,12 @@ pub const Expr = union(enum) {
     @"if": struct {
         cond_var: TypeIdx,
         branch_var: TypeIdx,
-        branches: IfBranch.Slice,
+        branches: IfBranch.Range,
         final_else: ExprAtRegion.Idx,
     },
 
     let: struct {
-        defs: Def.Slice,
+        defs: Def.Range,
         cont: ExprAtRegion.Idx,
         // cycle_mark: IllegalCycleMark,
     },
@@ -153,7 +153,7 @@ pub const Expr = union(enum) {
     call: struct {
         // TODO:
         // Box<(Variable, Loc<Expr>, Variable, Variable)>,
-        args: TypedExprAtRegion.Slice,
+        args: TypedExprAtRegion.Range,
         // called_via: base.CalledVia,
     },
 
@@ -189,7 +189,7 @@ pub const Expr = union(enum) {
         tag_union_var: TypeIdx,
         ext_var: TypeIdx,
         name: Ident.Idx,
-        arguments: TypedExprAtRegion.Slice,
+        arguments: TypedExprAtRegion.Range,
     },
 
     zero_argument_tag: struct {
@@ -206,10 +206,10 @@ pub const Expr = union(enum) {
     pub const List = collections.SafeList(@This());
     /// An index into a list of canonicalized expressions.
     pub const Idx = List.Idx;
-    /// A slice of canonicalized expressions.
-    pub const Slice = List.Slice;
+    /// A range of canonicalized expressions.
+    pub const Range = List.Range;
     /// A non-empty slice of canonicalized expressions.
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// A file of any type that has been ingested into a Roc module
@@ -226,10 +226,10 @@ pub const IngestedFile = struct {
     pub const List = collections.SafeList(@This());
     /// In index into a list of ingested files.
     pub const Idx = List.Idx;
-    /// A slice of ingested files.
-    pub const Slice = List.Slice;
+    /// A range of ingested files.
+    pub const Range = List.Range;
     /// A non-empty slice of ingested files.
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// A definition of a value (or destructured values) that
@@ -259,7 +259,7 @@ pub const Def = struct {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -289,7 +289,7 @@ pub const ExprAtRegion = struct {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -301,7 +301,7 @@ pub const TypedExprAtRegion = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -321,7 +321,7 @@ pub const IfBranch = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -334,7 +334,7 @@ pub const When = struct {
     region: Region,
     /// The branches of the when, and the type of the condition that they expect to be matched
     /// against.
-    branches: WhenBranch.Slice,
+    branches: WhenBranch.Range,
     branches_cond_var: TypeIdx,
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
@@ -356,12 +356,12 @@ pub const WhenBranchPattern = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
 pub const WhenBranch = struct {
-    patterns: WhenBranchPattern.Slice,
+    patterns: WhenBranchPattern.Range,
     value: ExprAtRegion.Idx,
     guard: ?ExprAtRegion.Idx,
     /// Whether this branch is redundant in the `when` it appears in
@@ -370,7 +370,7 @@ pub const WhenBranch = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -386,12 +386,12 @@ pub const Pattern = union(enum) {
         whole_var: TypeIdx,
         ext_var: TypeIdx,
         tag_name: Ident.Idx,
-        arguments: TypedPatternAtRegion.Slice,
+        arguments: TypedPatternAtRegion.Range,
     },
     record_destructure: struct {
         whole_var: TypeIdx,
         ext_var: TypeIdx,
-        destructs: RecordDestruct.Slice,
+        destructs: RecordDestruct.Range,
     },
     list: struct {
         list_var: TypeIdx,
@@ -438,7 +438,7 @@ pub const Pattern = union(enum) {
 
     pub const List = collections.SafeList(@This());
     pub const Idx = List.Idx;
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -448,7 +448,7 @@ pub const PatternAtRegion = struct {
 
     pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -459,7 +459,7 @@ pub const TypedPatternAtRegion = struct {
 
     pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
@@ -480,7 +480,7 @@ pub const RecordDestruct = struct {
     pub const List = collections.SafeMultiList(@This());
 
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// Marks whether a when branch is redundant using a variable.
@@ -521,10 +521,10 @@ pub const Content = union(enum) {
 pub const FlatType = union(enum) {
     Apply: struct {
         ident: Ident.Idx,
-        vars: collections.SafeList(TypeIdx).Slice,
+        vars: collections.SafeList(TypeIdx).Range,
     },
     Func: struct {
-        arg_vars: collections.SafeList(TypeIdx).Slice,
+        arg_vars: collections.SafeList(TypeIdx).Range,
         ret_var: TypeIdx,
         fx: TypeIdx,
     },
@@ -532,7 +532,7 @@ pub const FlatType = union(enum) {
     EffectfulFunc,
     Record: struct {
         whole_var: TypeIdx,
-        fields: RecordField.Slice,
+        fields: RecordField.Range,
     },
     // TagUnion: struct {
     //     union_tags: UnionTags,
@@ -566,7 +566,7 @@ pub const FlatType = union(enum) {
         /// todo
         pub const List = collections.SafeMultiList(@This());
         /// todo
-        pub const Slice = List.Slice;
+        pub const Range = List.Range;
     };
 };
 

@@ -76,22 +76,22 @@ pub const Type = union(enum) {
     /// e.g. List(U64)
     list: Type.Idx,
     /// Records, tuples and tag union payload become structs
-    @"struct": Type.NonEmptySlice,
+    @"struct": Type.NonEmptyRange,
     /// e.g. `[Red, Yellow, Green]`
-    tag_union: Type.NonEmptySlice,
+    tag_union: Type.NonEmptyRange,
     /// A function that has a return value and 0 or more arguments
     func: struct {
         /// A slice containing the return value followed by the arguments
-        ret_then_args: Type.NonEmptySlice,
+        ret_then_args: Type.NonEmptyRange,
     },
     /// list of Type
     pub const List = collections.SafeList(@This());
     /// Index into Type.List
     pub const Idx = List.Idx;
     /// Sublist reference of Type.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// Sublist reference into Type.List that is guaranteed to be non-empty
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// Represents a Roc expression
@@ -105,7 +105,7 @@ pub const Expr = union(enum) {
     /// e.g. [1, 2, 3]
     list: struct {
         elem_type: Type.Idx,
-        elems: Expr.Slice,
+        elems: Expr.Range,
     },
     /// e.g. `pf.Stdout` or `x`
     lookup: struct {
@@ -117,19 +117,19 @@ pub const Expr = union(enum) {
         fn_type: Type.Idx,
         // ???
         fn_expr: Expr.Idx,
-        args: Expr.Typed.Slice,
+        args: Expr.Typed.Range,
     },
     /// e.g. `|x| x * 2`
     lambda: struct {
         fn_type: Type.Idx,
-        arguments: Pattern.Typed.Slice,
+        arguments: Pattern.Typed.Range,
         body: Expr.Idx,
         recursive: base.Recursive,
     },
     /// Represents the empty record `{}`
     unit,
     /// Record or tuple becomes struct
-    @"struct": Expr.NonEmptySlice,
+    @"struct": Expr.NonEmptyRange,
     /// Record or tuple access
     struct_access: struct {
         record_expr: Expr.Idx,
@@ -144,7 +144,7 @@ pub const Expr = union(enum) {
         /// e.g. `Result` for `Ok(1)`
         tag_union_type: Type.Idx,
         /// e.g. `1` for `Ok(1)`
-        args: Expr.Typed.Slice,
+        args: Expr.Typed.Range,
     },
     /// from pattern matching with `match`
     match: struct {
@@ -155,7 +155,7 @@ pub const Expr = union(enum) {
         /// The return type of all branches and thus the whole match expression
         branch_type: Type.Idx,
         /// The branches of the match expression
-        branches: MatchBranch.NonEmptySlice,
+        branches: MatchBranch.NonEmptyRange,
     },
 
     compiler_bug: Problem.Compiler,
@@ -165,9 +165,9 @@ pub const Expr = union(enum) {
     /// Index into an Expr.List
     pub const Idx = List.Idx;
     /// Sublist reference of Expr.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// Sublist reference into Expr.List that is guaranteed to be non-empty
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
     /// Expression with accompanying type
     pub const Typed = struct {
         expr: Expr.Idx,
@@ -175,7 +175,7 @@ pub const Expr = union(enum) {
         /// List of Expr.Typed
         pub const List = collections.SafeMultiList(@This());
         /// Sublist reference into Expr.Typed.List
-        pub const Slice = Typed.List.Slice;
+        pub const Range = Typed.List.Range;
     };
 };
 
@@ -184,7 +184,7 @@ pub const Def = struct {
     /// For what's to the left of `=`, could be a var name or destructuring
     pattern: Pattern.Idx,
     /// Named variables in the pattern, e.g. `a` and `b` in `{a, b} = ...`
-    pattern_vars: TypedIdent.Slice,
+    pattern_vars: TypedIdent.Range,
     /// expression to the right of `=`
     expr: Expr.Idx,
     /// type of the expression to the right of `=`
@@ -192,13 +192,13 @@ pub const Def = struct {
     /// List of Def
     pub const List = collections.SafeMultiList(@This());
     /// Sublist reference into Def.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// Branch of a `match` expression, e.g. `Green -> "green"`
 pub const MatchBranch = struct {
     /// The pattern(s) to match the value against
-    patterns: Pattern.NonEmptySlice,
+    patterns: Pattern.NonEmptyRange,
     /// A boolean expression that must be true for this branch to be taken
     guard: ?Expr.Idx,
     /// The expression to produce if the pattern matches
@@ -206,12 +206,12 @@ pub const MatchBranch = struct {
     /// List of MatchBranch
     pub const List = collections.SafeList(@This());
     /// Reference to non-empty sublist into MatchBranch.List
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// e.g. `|x| x * 2`
 pub const Function = struct {
-    args: Pattern.Slice,
+    args: Pattern.Range,
     return_type: Type.Idx,
     /// ??? Is expr the body of the function?
     expr: Expr.Idx,
@@ -231,7 +231,7 @@ pub const StructDestruct = struct {
     /// List of StructDestruct
     pub const List = collections.SafeMultiList(@This());
     /// Reference to sublist into StructDestruct.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// Represents a pattern used in pattern matching e.g. `Ok x` as part of a match branch
@@ -253,13 +253,13 @@ pub const Pattern = union(enum) {
         tag_union_type: Type.Idx,
         tag_name: Ident.Idx,
         /// e.g. `x` in `Ok(x)`
-        args: Pattern.Slice,
+        args: Pattern.Range,
     },
     /// e.g. `{x, y}` in `{x, y} -> Point(x, y)`
     struct_destructure: struct {
         struct_type: Type.Idx,
         /// e.g. for `{ x, y: 123 } -> ...` there are two StructDestruct; one for x and one for y
-        destructs: StructDestruct.Slice,
+        destructs: StructDestruct.Range,
         /// e.g. `..` in `{x, y, ..}`
         opt_spread: ?Pattern.Typed,
     },
@@ -267,7 +267,7 @@ pub const Pattern = union(enum) {
     list: struct {
         elem_type: Type.Idx,
         /// e.g. Foo and Bar in `[Foo, Bar, ..]`
-        patterns: Pattern.Slice,
+        patterns: Pattern.Range,
         /// refers to e.g. `..tail` in `[head, ..tail]`
         opt_rest: ?struct {
             /// position in list of `..`; e.g. 0 in `[.., Foo, Bar]`
@@ -284,9 +284,9 @@ pub const Pattern = union(enum) {
     /// Index into Pattern.List
     pub const Idx = List.Idx;
     /// Sublist reference of Pattern.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// Sublist reference into Pattern.List that is guaranteed to be non-empty
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
     /// Pattern with accompanying type
     pub const Typed = struct {
         pattern: Pattern.Idx,
@@ -294,7 +294,7 @@ pub const Pattern = union(enum) {
         /// List of Pattern.Typed
         pub const List = collections.SafeMultiList(@This());
         /// Reference to sublist into Pattern.Typed.List
-        pub const Slice = Typed.List.Slice;
+        pub const Range = Typed.List.Range;
     };
 };
 
@@ -306,5 +306,5 @@ pub const TypedIdent = struct {
     /// List of TypedIdent
     pub const List = collections.SafeMultiList(@This());
     /// Reference to sublist into TypedIdent.List
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };

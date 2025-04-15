@@ -32,11 +32,11 @@ pub const Problem = union(enum) {
         },
         AliasNotInScope: struct {
             name: Ident.Idx,
-            suggestions: collections.SafeList(Ident.Idx).Slice,
+            suggestions: collections.SafeList(Ident.Idx).Range,
         },
         IdentNotInScope: struct {
             ident: Ident.Idx,
-            suggestions: collections.SafeList(Ident.Idx).Slice,
+            suggestions: collections.SafeList(Ident.Idx).Range,
         },
         AliasAlreadyInScope: struct {
             original_name: Ident.Idx,

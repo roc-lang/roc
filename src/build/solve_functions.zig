@@ -15,7 +15,7 @@ pub const FunctionSet = struct {
     /// todo
     pub const Data = struct {
         function_name: Ident.Idx,
-        captures: ?func_lift.IR.Type.Slice,
+        captures: ?func_lift.IR.Type.Range,
     };
     /// todo
     pub const List = collections.SafeList(@This());
