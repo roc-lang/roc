@@ -1892,6 +1892,11 @@ pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
     });
 }
 
+/// Parse a where clause
+///
+/// e.g. `a.hash(hasher) -> hasher`
+/// e.g. `hasher.Hasher`
+/// e.g. `module(a).decode(List(U8)) -> a`
 pub fn parseWhereClause(self: *Parser) IR.NodeStore.WhereClauseIdx {
     const start = self.pos;
     if (self.peek() == .KwModule) {
