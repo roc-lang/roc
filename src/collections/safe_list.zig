@@ -169,7 +169,10 @@ pub fn SafeMultiList(comptime T: type) type {
         items: std.MultiArrayList(T) = .{},
 
         /// Index of an item in the list.
-        pub const Idx = enum(u32) { _ };
+        pub const Idx = enum(u32) { zero = 0, _ };
+
+        /// A non-type-safe slice of the list.
+        pub const Slice = std.MultiArrayList(T).Slice;
 
         /// A type-safe slice of the list.
         pub const Range = SafeRange(Idx);
@@ -212,6 +215,48 @@ pub fn SafeMultiList(comptime T: type) type {
             self.items.append(gpa, item) catch |err| exitOnOom(err);
 
             return @enumFromInt(@as(u32, @intCast(length)));
+        }
+
+        pub fn appendSlice(self: *SafeMultiList(T), gpa: Allocator, elems: []const T) Range {
+            if (elems.len == 0) {
+                return .{ .start = .zero, .end = .zero };
+            }
+            const start_length = self.len();
+            self.items.ensureUnusedCapacity(gpa, elems.len) catch |err| exitOnOom(err);
+            for (elems) |elem| {
+                self.items.appendAssumeCapacity(elem);
+            }
+            const end_length = self.len();
+            return Range{ .start = @enumFromInt(start_length), .end = @enumFromInt(end_length) };
+        }
+
+        /// Convert a range to a slice
+        pub fn rangeToSlice(self: *const SafeMultiList(T), range: *const Range) Slice {
+            const start: usize = @intFromEnum(range.start);
+            const end: usize = @intFromEnum(range.end);
+
+            std.debug.assert(start <= end);
+            std.debug.assert(end <= self.items.len);
+
+            const base = self.items.slice();
+
+            var new_ptrs: [base.ptrs.len][*]u8 = undefined;
+
+            // This has to be inline, so `cur_field` can be known at comptime
+            inline for (0..base.ptrs.len) |i| {
+                const cur_field = @as(Field, @enumFromInt(i));
+                const cur_items = base.items(cur_field);
+                new_ptrs[i] = if (cur_items.len == 0)
+                    undefined
+                else
+                    @ptrCast(&cur_items[start]);
+            }
+
+            return .{
+                .ptrs = new_ptrs,
+                .len = end - start,
+                .capacity = base.capacity - start,
+            };
         }
 
         /// Set the value of an element in this list.
@@ -305,4 +350,58 @@ test "SafeList(u8) rangeToSlice" {
     const sliceB = list.rangeToSlice(&rangeB);
     try testing.expectEqual('c', sliceB[0]);
     try testing.expectEqual('d', sliceB[1]);
+}
+
+test "SafeMultiList(u8) appendSlice" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = StructMultiList.initCapacity(gpa, 3);
+    defer multilist.deinit(gpa);
+
+    const rangeA = multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'd' } });
+    try testing.expectEqual(0, @intFromEnum(rangeA.start));
+    try testing.expectEqual(3, @intFromEnum(rangeA.end));
+
+    const rangeB = multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 400, .char = 'd' }, .{ .num = 500, .char = 'e' }, .{ .num = 600, .char = 'f' } });
+    try testing.expectEqual(3, @intFromEnum(rangeB.start));
+    try testing.expectEqual(6, @intFromEnum(rangeB.end));
+}
+
+test "SafeMultiList(u8) rangeToSlice" {
+    const gpa = testing.allocator;
+
+    const Struct = struct { num: u32, char: u8 };
+    const StructMultiList = SafeMultiList(Struct);
+
+    var multilist = StructMultiList.initCapacity(gpa, 3);
+    defer multilist.deinit(gpa);
+
+    const range_a = multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'c' } });
+    const slice_a = multilist.rangeToSlice(&range_a);
+
+    const num_slice_a = slice_a.items(.num);
+    try testing.expectEqual(3, num_slice_a.len);
+    try testing.expectEqual(100, num_slice_a[0]);
+    try testing.expectEqual(200, num_slice_a[1]);
+    try testing.expectEqual(300, num_slice_a[2]);
+
+    const char_slice_a = slice_a.items(.char);
+    try testing.expectEqual(3, char_slice_a.len);
+    try testing.expectEqual('a', char_slice_a[0]);
+    try testing.expectEqual('b', char_slice_a[1]);
+    try testing.expectEqual('c', char_slice_a[2]);
+
+    const range_b = StructMultiList.Range{ .start = @enumFromInt(1), .end = @enumFromInt(2) };
+    const slice_b = multilist.rangeToSlice(&range_b);
+
+    const num_slice_b = slice_b.items(.num);
+    try testing.expectEqual(1, num_slice_b.len);
+    try testing.expectEqual(200, num_slice_b[0]);
+
+    const char_slice_b = slice_b.items(.char);
+    try testing.expectEqual(1, char_slice_b.len);
+    try testing.expectEqual('b', char_slice_b[0]);
 }
