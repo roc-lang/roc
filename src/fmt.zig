@@ -389,12 +389,39 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatTypeAnno(d.anno);
+                if (d.where) |w| {
+                    _ = try fmt.flushCommentsAfter(anno_region.end);
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                    try fmt.formatWhereConstraint(w);
+                }
                 return .extra_newline_needed;
             },
             .type_anno => |t| {
                 try fmt.pushTokenText(t.name);
-                try fmt.pushAll(" : ");
+                if (multiline and try fmt.flushCommentsAfter(t.name)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.push(':');
+                const anno_region = fmt.nodeRegion(t.anno.id);
+                if (multiline and try fmt.flushCommentsBefore(anno_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
                 _ = try fmt.formatTypeAnno(t.anno);
+                if (t.where) |w| {
+                    _ = try fmt.flushCommentsAfter(anno_region.end);
+                    fmt.curr_indent += 1;
+                    try fmt.ensureNewline();
+                    try fmt.pushIndent();
+                    try fmt.formatWhereConstraint(w);
+                }
                 return .no_extra_newline;
             },
             .expect => |e| {
@@ -437,6 +464,36 @@ const Formatter = struct {
                 // Output nothing for malformed node
                 return .no_extra_newline;
             },
+        }
+    }
+
+    fn formatWhereConstraint(fmt: *Formatter, w: IR.NodeStore.CollectionIdx) !void {
+        const start_indent = fmt.curr_indent;
+        defer fmt.curr_indent = start_indent;
+        try fmt.pushAll("where");
+        var i: usize = 0;
+        const clause_coll = fmt.ast.store.getCollection(w);
+        const clauses_multiline = fmt.ast.regionIsMultiline(clause_coll.region);
+        const clause_slice = fmt.ast.store.whereClauseSlice(.{ .span = clause_coll.span });
+        for (clause_slice) |clause| {
+            const clause_region = fmt.nodeRegion(clause.id);
+            const flushed_after_clause = try fmt.flushCommentsBefore(clause_region.start);
+            if (i == 0 and (clauses_multiline or flushed_after_clause)) {
+                fmt.curr_indent += 1;
+            } else if (i == 0) {
+                try fmt.push(' ');
+            }
+            if (clauses_multiline or flushed_after_clause) {
+                try fmt.ensureNewline();
+                try fmt.pushIndent();
+            }
+            try fmt.formatWhereClause(clause);
+            if ((!clauses_multiline and !flushed_after_clause) and i < clause_slice.len - 1) {
+                try fmt.pushAll(", ");
+            } else if (clauses_multiline or flushed_after_clause) {
+                try fmt.push(',');
+            }
+            i += 1;
         }
     }
 
@@ -1386,6 +1443,117 @@ const Formatter = struct {
         return field.region;
     }
 
+    fn formatWhereClause(fmt: *Formatter, idx: IR.NodeStore.WhereClauseIdx) !void {
+        const clause = fmt.ast.store.getWhereClause(idx);
+        const start_indent = fmt.curr_indent;
+        defer fmt.curr_indent = start_indent;
+        switch (clause) {
+            .alias => |c| {
+                const multiline = fmt.ast.regionIsMultiline(c.region);
+                try fmt.pushTokenText(c.var_tok);
+                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('.');
+                if (multiline and try fmt.flushCommentsBefore(c.alias_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(c.alias_tok);
+            },
+            .method => |c| {
+                const multiline = fmt.ast.regionIsMultiline(c.region);
+                try fmt.pushTokenText(c.var_tok);
+                if (multiline and try fmt.flushCommentsAfter(c.var_tok)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push('.');
+                try fmt.pushTokenText(c.name_tok);
+                const args_coll = fmt.ast.store.getCollection(c.args);
+                if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
+                try fmt.formatCollection(
+                    args_coll.region,
+                    .round,
+                    IR.NodeStore.TypeAnnoIdx,
+                    args,
+                    Formatter.formatTypeAnno,
+                );
+                if (multiline and try fmt.flushCommentsAfter(args_coll.region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                    try fmt.pushAll("->");
+                } else {
+                    try fmt.pushAll(" ->");
+                }
+                const ret_region = fmt.nodeRegion(c.ret_anno.id);
+                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatTypeAnno(c.ret_anno);
+            },
+            .mod_method => |c| {
+                const multiline = fmt.ast.regionIsMultiline(c.region);
+                try fmt.pushAll("module(");
+                const tags = fmt.ast.tokens.tokens.items(.tag);
+                const varNeedsFlush = tags[c.var_tok - 1] == .Newline or (tags.len > (c.var_tok + 1) and tags[c.var_tok + 1] == .Newline);
+                if (varNeedsFlush) {
+                    _ = try fmt.flushCommentsBefore(c.var_tok);
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.pushTokenText(c.var_tok);
+                if (varNeedsFlush) {
+                    _ = try fmt.flushCommentsAfter(c.var_tok);
+                    fmt.curr_indent -= 1;
+                    try fmt.pushIndent();
+                }
+                try fmt.push(')');
+                try fmt.push('.');
+                try fmt.pushTokenText(c.name_tok);
+                const args_coll = fmt.ast.store.getCollection(c.args);
+                if (multiline and try fmt.flushCommentsBefore(args_coll.region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                }
+                const args = fmt.ast.store.typeAnnoSlice(.{ .span = args_coll.span });
+                try fmt.formatCollection(
+                    args_coll.region,
+                    .round,
+                    IR.NodeStore.TypeAnnoIdx,
+                    args,
+                    Formatter.formatTypeAnno,
+                );
+                if (multiline and try fmt.flushCommentsAfter(args_coll.region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                    try fmt.pushAll("->");
+                } else {
+                    try fmt.pushAll(" ->");
+                }
+                const ret_region = fmt.nodeRegion(c.ret_anno.id);
+                if (multiline and try fmt.flushCommentsBefore(ret_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatTypeAnno(c.ret_anno);
+            },
+            .malformed => {
+                // Output nothing for malformed node
+            },
+        }
+    }
+
     fn formatTypeAnno(fmt: *Formatter, anno: IR.NodeStore.TypeAnnoIdx) !IR.Region {
         const a = fmt.ast.store.getTypeAnno(anno);
         var region = IR.Region{ .start = 0, .end = 0 };
@@ -2063,6 +2231,61 @@ test "Platform header - nonempty" {
         \\        [ # Comment after provides open
         \\            bar, # Comment after exposed item
         \\        ]
+    );
+}
+
+test "Where clauses" {
+    try moduleFmtsSame(
+        \\module [Hash]
+        \\
+        \\Hash a : a
+        \\    where
+        \\        a.hash(hasher) -> hasher,
+        \\        hasher.Hasher,
+        \\
+        \\Decode a : a
+        \\    where
+        \\        module(a).decode(List(U8)) -> a,
+    );
+
+    try moduleFmtsSame(
+        \\module [decode]
+        \\
+        \\import Decode exposing [Decode]
+        \\
+        \\decodeThings : List(List(U8)) -> List(a)
+        \\    where a.Decode
+    );
+
+    try moduleFmtsSame(
+        \\module [Hash]
+        \\
+        \\Hash a # After header
+        \\    : # After colon
+        \\        a # After var
+        \\            where # After where
+        \\                a.hash(hasher) # After method
+        \\                    -> # After arrow
+        \\                        hasher, # After first clause
+        \\                hasher.Hasher,
+        \\
+        \\Decode a : a
+        \\    where
+        \\        module(a).decode( # After method args open
+        \\            List(U8), # After method arg
+        \\        ) -> a,
+    );
+
+    try moduleFmtsSame(
+        \\module [decode]
+        \\
+        \\import Decode exposing [Decode]
+        \\
+        \\decodeThings # After member name
+        \\    : # After colon
+        \\        List(List(U8)) -> List(a) # After anno
+        \\            where # after where
+        \\                a.Decode,
     );
 }
 

@@ -152,6 +152,15 @@ pub const Diagnostic = struct {
         expected_ty_anno_end_of_function,
         expected_ty_anno_end,
         expected_expr_apply_close_round,
+        where_expected_where,
+        where_expected_mod_open,
+        where_expected_var,
+        where_expected_mod_close,
+        where_expected_arg_open,
+        where_expected_arg_close,
+        where_expected_method_arrow,
+        where_expected_method_or_alias_name,
+        where_expected_var_or_module,
     };
 };
 
@@ -340,6 +349,24 @@ pub const Node = struct {
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
         ty_record_field,
+
+        // Where Clauses
+
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        where_alias,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        where_method,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - LHS DESCRIPTION
+        /// * rhs - RHS DESCRIPTION
+        where_mod_method,
 
         // Type Header
 
@@ -545,6 +572,12 @@ pub const Node = struct {
 
         /// Collection of packages fields
         collection_packages,
+
+        /// Collection of where clauses
+        collection_where_clause,
+
+        /// Collection of type annotations
+        collection_ty_anno,
     };
 };
 
@@ -566,6 +599,7 @@ pub const NodeStore = struct {
     scratch_type_annos: std.ArrayListUnmanaged(TypeAnnoIdx),
     scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
     scratch_exposed_items: std.ArrayListUnmanaged(ExposedItemIdx),
+    scratch_where_clauses: std.ArrayListUnmanaged(WhereClauseIdx),
 
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
@@ -585,6 +619,7 @@ pub const NodeStore = struct {
             .scratch_type_annos = std.ArrayListUnmanaged(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_anno_record_fields = std.ArrayListUnmanaged(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_exposed_items = std.ArrayListUnmanaged(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_where_clauses = std.ArrayListUnmanaged(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
         };
 
         _ = store.nodes.append(gpa, .{
@@ -620,6 +655,7 @@ pub const NodeStore = struct {
         store.scratch_type_annos.deinit(store.gpa);
         store.scratch_anno_record_fields.deinit(store.gpa);
         store.scratch_exposed_items.deinit(store.gpa);
+        store.scratch_where_clauses.deinit(store.gpa);
     }
 
     /// Ensures that all scratch buffers in the store
@@ -635,6 +671,7 @@ pub const NodeStore = struct {
         store.scratch_type_annos.shrinkRetainingCapacity(0);
         store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
         store.scratch_exposed_items.shrinkRetainingCapacity(0);
+        store.scratch_where_clauses.shrinkRetainingCapacity(0);
     }
 
     pub fn debug(store: *NodeStore) void {
@@ -655,6 +692,7 @@ pub const NodeStore = struct {
         std.debug.print("Scratch type annos: {any}\n", .{store.scratch_type_annos.items});
         std.debug.print("Scratch anno record fields: {any}\n", .{store.scratch_anno_record_fields.items});
         std.debug.print("Scratch exposes items: {any}\n", .{store.scratch_exposed_items.items});
+        std.debug.print("Scratch where clauses: {any}\n", .{store.scratch_where_clauses.items});
         std.debug.print("==> IR.NodeStore DEBUG <==\n\n", .{});
     }
 
@@ -686,6 +724,8 @@ pub const NodeStore = struct {
     pub const TypeAnnoIdx = struct { id: u32 };
     /// An index for a AnnoRecordField node. Should not be constructed externally.
     pub const AnnoRecordFieldIdx = struct { id: u32 };
+    /// An index for a WhereClause node.  Should not be constructed externally.
+    pub const WhereClauseIdx = struct { id: u32 };
     /// An index for a Collection node.  Should not be constructed externally.
     pub const CollectionIdx = struct { id: u32 };
 
@@ -907,12 +947,18 @@ pub const NodeStore = struct {
                 node.region = d.region;
                 node.data.lhs = d.header.id;
                 node.data.rhs = d.anno.id;
+                if (d.where) |w| {
+                    node.main_token = w.id;
+                }
             },
             .type_anno => |a| {
                 node.tag = .type_anno;
                 node.region = a.region;
                 node.data.lhs = a.name;
                 node.data.rhs = a.anno.id;
+                if (a.where) |w| {
+                    node.main_token = w.id;
+                }
             },
             .malformed => {
                 @panic("Use addMalformed instead");
@@ -1247,6 +1293,54 @@ pub const NodeStore = struct {
         return .{ .id = @intFromEnum(nid) };
     }
 
+    /// Adds a WhereClause node to the store, returning a type-safe index to the node.
+    pub fn addWhereClause(store: *NodeStore, clause: WhereClause) WhereClauseIdx {
+        var node = Node{
+            .tag = .where_alias,
+            .main_token = 0,
+            .data = .{
+                .lhs = 0,
+                .rhs = 0,
+            },
+            .region = emptyRegion(),
+        };
+
+        switch (clause) {
+            .alias => |c| {
+                node.tag = .where_alias;
+                node.region = c.region;
+                node.main_token = c.var_tok;
+                node.data.lhs = c.alias_tok;
+            },
+            .method => |c| {
+                node.tag = .where_method;
+                node.region = c.region;
+                node.main_token = c.var_tok;
+                const ed_start = store.extra_data.items.len;
+                store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
+                store.extra_data.append(store.gpa, c.args.id) catch |e| exitOnOom(e);
+                store.extra_data.append(store.gpa, c.ret_anno.id) catch |e| exitOnOom(e);
+                node.data.lhs = @intCast(ed_start);
+            },
+            .mod_method => |c| {
+                node.tag = .where_mod_method;
+                node.region = c.region;
+                node.main_token = c.var_tok;
+                const ed_start = store.extra_data.items.len;
+                store.extra_data.append(store.gpa, c.name_tok) catch |e| exitOnOom(e);
+                store.extra_data.append(store.gpa, c.args.id) catch |e| exitOnOom(e);
+                store.extra_data.append(store.gpa, c.ret_anno.id) catch |e| exitOnOom(e);
+                node.data.lhs = @intCast(ed_start);
+            },
+            .malformed => {
+                @panic("Use addMalformed instead");
+            },
+        }
+
+        const nid = store.nodes.append(store.gpa, node);
+        return .{ .id = @intFromEnum(nid) };
+    }
+
     pub fn addTypeAnno(store: *NodeStore, anno: TypeAnno) TypeAnnoIdx {
         var node = Node{
             .tag = .branch,
@@ -1532,6 +1626,7 @@ pub const NodeStore = struct {
                     .region = node.region,
                     .header = .{ .id = node.data.lhs },
                     .anno = .{ .id = node.data.rhs },
+                    .where = if (node.main_token != 0) .{ .id = node.main_token } else null,
                 } };
             },
             .type_anno => {
@@ -1539,6 +1634,7 @@ pub const NodeStore = struct {
                     .region = node.region,
                     .name = node.data.lhs,
                     .anno = .{ .id = node.data.rhs },
+                    .where = if (node.main_token != 0) .{ .id = node.main_token } else null,
                 } };
             },
             .malformed => {
@@ -1863,6 +1959,55 @@ pub const NodeStore = struct {
         };
     }
 
+    /// Get a WhereClause node from the store, using a type-safe index to the node.
+    pub fn getWhereClause(store: *NodeStore, idx: WhereClauseIdx) WhereClause {
+        const node = store.nodes.get(@enumFromInt(idx.id));
+        switch (node.tag) {
+            .where_alias => {
+                return .{ .alias = .{
+                    .region = node.region,
+                    .var_tok = node.main_token,
+                    .alias_tok = node.data.lhs,
+                } };
+            },
+            .where_method => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const name_tok = store.extra_data.items[ed_start];
+                const args = store.extra_data.items[ed_start + 1];
+                const ret_anno = store.extra_data.items[ed_start + 2];
+                return .{ .method = .{
+                    .region = node.region,
+                    .var_tok = node.main_token,
+                    .name_tok = name_tok,
+                    .args = .{ .id = args },
+                    .ret_anno = .{ .id = ret_anno },
+                } };
+            },
+            .where_mod_method => {
+                const ed_start = @as(usize, @intCast(node.data.lhs));
+                const name_tok = store.extra_data.items[ed_start];
+                const args = store.extra_data.items[ed_start + 1];
+                const ret_anno = store.extra_data.items[ed_start + 2];
+                return .{ .mod_method = .{
+                    .region = node.region,
+                    .var_tok = node.main_token,
+                    .name_tok = name_tok,
+                    .args = .{ .id = args },
+                    .ret_anno = .{ .id = ret_anno },
+                } };
+            },
+            .malformed => {
+                return .{ .malformed = .{
+                    .reason = @enumFromInt(node.data.lhs),
+                    .region = node.region,
+                } };
+            },
+            else => {
+                std.debug.panic("Expected a valid where clause node, found {s}", .{@tagName(node.tag)});
+            },
+        }
+    }
+
     pub fn getTypeAnno(store: *NodeStore, anno: TypeAnnoIdx) TypeAnno {
         const node = store.nodes.get(@enumFromInt(anno.id));
 
@@ -2185,11 +2330,13 @@ pub const NodeStore = struct {
         type_decl: struct {
             header: TypeHeaderIdx,
             anno: TypeAnnoIdx,
+            where: ?CollectionIdx,
             region: Region,
         },
         type_anno: struct {
             name: TokenIdx,
             anno: TypeAnnoIdx,
+            where: ?CollectionIdx,
             region: Region,
         },
         malformed: struct {
@@ -2504,6 +2651,36 @@ pub const NodeStore = struct {
         name: TokenIdx,
         ty: TypeAnnoIdx,
         region: Region,
+    };
+
+    // The clause of a `where` constraint
+    //
+    // e.g. `a.hash(hasher) -> hasher`
+    // or   `a.Hash`
+    pub const WhereClause = union(enum) {
+        alias: struct {
+            var_tok: TokenIdx,
+            alias_tok: TokenIdx,
+            region: Region,
+        },
+        method: struct {
+            var_tok: TokenIdx,
+            name_tok: TokenIdx,
+            args: CollectionIdx,
+            ret_anno: TypeAnnoIdx,
+            region: Region,
+        },
+        mod_method: struct {
+            var_tok: TokenIdx,
+            name_tok: TokenIdx,
+            args: CollectionIdx,
+            ret_anno: TypeAnnoIdx,
+            region: Region,
+        },
+        malformed: struct {
+            reason: Diagnostic.Tag,
+            region: Region,
+        },
     };
 
     /// Represents a Pattern used in pattern matching.
@@ -3057,6 +3234,7 @@ pub const NodeStore = struct {
     pub const TypeAnnoSpan = struct { span: DataSpan };
     pub const AnnoRecordFieldSpan = struct { span: DataSpan };
     pub const ExposedItemSpan = struct { span: DataSpan };
+    pub const WhereClauseSpan = struct { span: DataSpan };
 
     /// Returns the start position for a new Span of ExprIdxs in scratch
     pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -3427,6 +3605,43 @@ pub const NodeStore = struct {
     /// Returns a new ExposedItem slice so that the caller can iterate through
     /// all items in the span.
     pub fn exposedItemSlice(store: *NodeStore, span: ExposedItemSpan) []ExposedItemIdx {
+        return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
+    }
+
+    /// Returns the start position for a new Span of whereClauseIdxs in scratch
+    pub fn scratchWhereClauseTop(store: *NodeStore) u32 {
+        return @as(u32, @intCast(store.scratch_where_clauses.items.len));
+    }
+
+    /// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
+    pub fn addScratchWhereClause(store: *NodeStore, idx: WhereClauseIdx) void {
+        store.scratch_where_clauses.append(store.gpa, idx) catch |err| exitOnOom(err);
+    }
+
+    /// Creates a new span starting at start.  Moves the items from scratch
+    /// to extra_data as appropriate.
+    pub fn whereClauseSpanFrom(store: *NodeStore, start: u32) WhereClauseSpan {
+        const end = store.scratch_where_clauses.items.len;
+        defer store.scratch_where_clauses.shrinkRetainingCapacity(start);
+        var i = @as(usize, @intCast(start));
+        const ed_start = @as(u32, @intCast(store.extra_data.items.len));
+        while (i < end) {
+            store.extra_data.append(store.gpa, store.scratch_where_clauses.items[i].id) catch |err| exitOnOom(err);
+            i += 1;
+        }
+        return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
+    }
+
+    /// Clears any WhereClauseIds added to scratch from start until the end.
+    /// Should be used wherever the scratch items will not be used,
+    /// as in when parsing fails.
+    pub fn clearScratchWhereClausesFrom(store: *NodeStore, start: u32) void {
+        store.scratch_where_clauses.shrinkRetainingCapacity(start);
+    }
+
+    /// Returns a new WhereClause slice so that the caller can iterate through
+    /// all items in the span.
+    pub fn whereClauseSlice(store: *NodeStore, span: WhereClauseSpan) []WhereClauseIdx {
         return @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]);
     }
 };
