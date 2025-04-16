@@ -13,6 +13,8 @@ const Ident = base.Ident;
 const Region = base.Region;
 const ModuleWork = base.ModuleWork;
 const RType = type_mod.RType;
+const Prim = type_mod.Prim;
+const TestInt = type_mod.Int;
 
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
@@ -32,7 +34,6 @@ pub fn checkTypes(
 
 test "checkTypes - basic type unification" {
     const gpa = testing.allocator;
-
     var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
         gpa,
         &.{ModuleWork(can.IR){
@@ -51,7 +52,6 @@ test "checkTypes - basic type unification" {
     var env = &can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
     const type_store = type_stores.getWork(@enumFromInt(0));
-
     const type_id_1 = type_store.fresh();
     const type_id_2 = type_store.fresh();
 
@@ -68,11 +68,19 @@ test "checkTypes - basic type unification" {
     try testing.expectEqual(type_store.get(type_id_1).*, a_type);
     try testing.expectEqual(type_store.get(type_id_2).*, int_type);
 
-    // // After unification, both variables should have the rigid type
-    // const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+    std.debug.print("{}\n", .{type_store});
+    const idx1 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    const idx2 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    std.debug.print("{}\n", .{type_store});
+    std.debug.print("{}\n {}\n", .{ idx1, idx2 });
 
-    // try testing.expect(result.mismatches.items.len == 0);
-    // try testing.expect(result.has_changed);
-    // try testing.expectEqual(type_store.get(type_id_1).*, int_type);
-    // try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+    std.debug.print("\n\n\n{}\n\n\n", .{type_store});
+    const new_store = type_store.compact();
+    std.debug.print("\n\n\n{}\n\n\n", .{new_store});
+    // // After unification, both variables should have the rigid type
+    const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+    try testing.expect(result.mismatches.items.len == 0);
+    try testing.expect(result.has_changed);
+    try testing.expectEqual(type_store.get(type_id_1).*, int_type);
+    try testing.expectEqual(type_store.get(type_id_2).*, int_type);
 }

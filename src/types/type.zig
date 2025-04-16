@@ -84,30 +84,25 @@ pub const RType = union(enum) {
         _ = fmt;
         _ = options;
         switch (self) {
-            .Prim.bool => {
-                try writer.writeAll("Bool");
-            },
-            .Apply => {
-                @panic("todo");
-            },
-            .Prim.str => {
-                @panic("todo");
-            },
-            .Prim.int => |i| {
-                switch (i) {
-                    .u8 => try writer.writeAll("U8"),
-                    .i8 => try writer.writeAll("I8"),
-                    .u16 => try writer.writeAll("U16"),
-                    .i16 => try writer.writeAll("I16"),
-                    .u32 => try writer.writeAll("U32"),
-                    .i32 => try writer.writeAll("I32"),
-                    .u64 => try writer.writeAll("U64"),
-                    .i64 => try writer.writeAll("I64"),
-                    .u128 => try writer.writeAll("U128"),
-                    .i128 => try writer.writeAll("I128"),
+            @This().prim => |value| {
+                switch (value) {
+                    Prim.bool => try writer.writeAll("Bool"),
+                    Prim.int => |size| {
+                        switch (size) {
+                            else => {
+                                try writer.writeAll("Int");
+                            },
+                        }
+                    },
+                    Prim.frac => {
+                        @panic("Frac");
+                    },
+                    Prim.str => {
+                        @panic("TODO");
+                    },
                 }
             },
-            .Prim.frac => {
+            .apply => {
                 @panic("todo");
             },
             .flex_var => {
@@ -140,11 +135,11 @@ pub const RType = union(enum) {
             const UNINITIALIZED: Slot = .{ .tag = .root, .value = 0 };
             const List = std.ArrayList(Slot);
 
-            fn root(idx: u31) Slot {
+            fn makeRoot(idx: u31) Slot {
                 return .{ .tag = .root, .value = idx };
             }
 
-            fn redirect(idx: Idx) Slot {
+            fn makeRedirect(idx: Idx) Slot {
                 return .{ .tag = .redirect, .value = @intFromEnum(idx) };
             }
         };
@@ -177,7 +172,7 @@ pub const RType = union(enum) {
                 self.descriptors.append(descriptor) catch exitOnOom(OomErr);
                 const descriptor_idx: u31 = @intCast(self.descriptors.items.len - 1);
 
-                self.setSlot(idx, Slot.root(descriptor_idx));
+                self.setSlot(idx, Slot.makeRoot(descriptor_idx));
             }
         }
 
@@ -200,10 +195,24 @@ pub const RType = union(enum) {
             const from_desc = self.getInitialized(from);
 
             if (to_desc == null or from_desc == null or to_desc != from_desc) {
-                self.setSlot(from, Slot.redirect(to));
+                self.setSlot(from, Slot.makeRedirect(to));
             }
 
             self.set(to, desc);
+        }
+
+        ///If two `Slot`s own the same type, make one a reference to the other
+        pub fn compact(self: *Store) *Store {
+            for (self.slots.items, 0..) |typeA, i| {
+                for (self.slots.items[i..], 0..) |typeB, ii| {
+                    if (typeA.value == typeB.value and typeA.tag == .redirect and typeB.tag == .root) {
+                        var newType = typeB;
+                        newType.tag = .redirect;
+                        self.setSlot(@enumFromInt(i + ii), newType);
+                    } else {}
+                }
+            }
+            return self;
         }
 
         /// Returns a pointer to a descriptor or null if uninitialized
@@ -231,6 +240,12 @@ pub const RType = union(enum) {
         pub fn fresh(self: *Store) Idx {
             defer self.pending += 1;
             return @enumFromInt(self.slots.items.len + self.pending);
+        }
+        pub fn addTestType(self: *Store, newType: RType) Idx {
+            const idx = self.fresh();
+            const typeDesc = toDesc(newType);
+            self.set(idx, typeDesc);
+            return idx;
         }
     };
 };

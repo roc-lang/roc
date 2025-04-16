@@ -4,6 +4,7 @@ const base = @import("../../base.zig");
 
 const roc_type = @import("../../types/type.zig");
 const RType = roc_type.RType;
+const Prim = roc_type.Prim;
 const Mark = roc_type.Mark;
 const Rank = roc_type.Rank;
 const Descriptor = roc_type.Descriptor;
@@ -36,9 +37,12 @@ pub fn unify(
         return result;
     }
 
+    var env = ModuleEnv.init(allocator);
+    defer env.deinit();
     var ctx = Context{
         .allocator = allocator,
-        .env = ModuleEnv,
+        .typeStore = type_store,
+        .env = &env,
         .first = first,
         .first_desc = first_desc,
         .second = second,
@@ -52,7 +56,8 @@ pub fn unify(
 }
 
 const Context = struct {
-    allocator: Allocator,
+    allocator: Allocator, //TODO this probably should be merged with `env`
+    typeStore: *RType.Store,
     env: *ModuleEnv,
     first: RType.Idx,
     first_desc: *const Descriptor,
@@ -62,31 +67,24 @@ const Context = struct {
 
     fn unify(self: *Context) !void {
         switch (self.first_desc.type) {
-            .bool => {
-                @panic("todo");
-            },
-            .apply => {
-                @panic("todo");
-            },
-            .str => {
-                @panic("todo");
-            },
-            .int => |i| {
-                switch (i) {
-                    .u8 => @panic("todo"),
-                    .i8 => @panic("todo"),
-                    .u16 => @panic("todo"),
-                    .i16 => @panic("todo"),
-                    .u32 => @panic("todo"),
-                    .i32 => @panic("todo"),
-                    .u64 => @panic("todo"),
-                    .i64 => @panic("todo"),
-                    .u128 => @panic("todo"),
-                    .i128 => @panic("todo"),
+            .prim => |prim| {
+                switch (prim) {
+                    Prim.bool => {
+                        try self.unifyBase();
+                    },
+                    Prim.str => {
+                        try self.unifyBase();
+                    },
+                    Prim.int => {
+                        try self.unifyBase();
+                    },
+                    Prim.frac => {
+                        try self.unifyBase();
+                    },
                 }
             },
-            .frac => {
-                @panic("todo");
+            .apply => {
+                @panic("TODO");
             },
             .flex_var => |opt_name| self.unifyFlex(opt_name),
             .rigid_var => {
@@ -100,6 +98,13 @@ const Context = struct {
             },
         }
     }
+    fn unifyBase(self: *Context) !void {
+        if (@intFromEnum(self.first_desc.type) == @intFromEnum(self.second_desc.type)) {
+            self.merge(self.first_desc.type);
+        } else {
+            @panic("TODO");
+        }
+    }
 
     fn unifyFlex(self: *Context, opt_name: ?Ident.Idx) void {
         switch (self.second_desc.type) {
@@ -108,34 +113,14 @@ const Context = struct {
                 const name = other_name orelse opt_name;
                 self.merge(.{ .flex_var = name });
             },
-            .bool => {
-                @panic("todo");
+            .prim => |_| {
+                self.merge(self.second_desc.type);
             },
             .apply => {
                 @panic("todo");
             },
-            .str => {
-                @panic("todo");
-            },
-            .int => |i| {
-                switch (i) {
-                    .u8 => @panic("todo"),
-                    .i8 => @panic("todo"),
-                    .u16 => @panic("todo"),
-                    .i16 => @panic("todo"),
-                    .u32 => @panic("todo"),
-                    .i32 => @panic("todo"),
-                    .u64 => @panic("todo"),
-                    .i64 => @panic("todo"),
-                    .u128 => @panic("todo"),
-                    .i128 => @panic("todo"),
-                }
-            },
-            .frac => {
-                @panic("todo");
-            },
             .rigid_var => {
-                @panic("todo");
+                self.merge(self.second_desc.type);
             },
             .func => {
                 @panic("todo");
@@ -154,7 +139,7 @@ const Context = struct {
             .type = ty,
         };
 
-        self.env.type_store.merge(self.first, self.second, desc);
+        self.typeStore.merge(self.first, self.second, desc);
         self.result.has_changed = true;
     }
 };
