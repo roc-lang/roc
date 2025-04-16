@@ -953,6 +953,7 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                 const statement_idx = self.store.addStatement(.{ .type_anno = .{
                     .anno = anno,
                     .name = start,
+                    .where = self.parseWhereConstraint(),
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -973,6 +974,7 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                 const statement_idx = self.store.addStatement(.{ .type_decl = .{
                     .header = header,
                     .anno = anno,
+                    .where = self.parseWhereConstraint(),
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
@@ -994,6 +996,34 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
         self.advance();
     }
     return statement_idx;
+}
+
+fn parseWhereConstraint(self: *Parser) ?IR.NodeStore.CollectionIdx {
+    self.expect(.KwWhere) catch {
+        return null;
+    };
+    const start = self.pos;
+    const where_clauses_top = self.store.scratchWhereClauseTop();
+    while (self.peek() != .Comma and self.peek() != .EndOfFile) {
+        const curr = self.peek();
+        const next = self.peekNext();
+        const valid_lookahead = curr == .KwModule or (curr == .LowerIdent and (next == .NoSpaceDotLowerIdent or next == .DotLowerIdent or next == .NoSpaceDotUpperIdent or next == .DotUpperIdent));
+        if (!valid_lookahead) {
+            break;
+        }
+        const clause = self.parseWhereClause();
+        self.store.addScratchWhereClause(clause);
+        if (self.peek() != .Comma) {
+            break;
+        }
+        self.advance();
+    }
+    const where_clauses = self.store.whereClauseSpanFrom(where_clauses_top);
+    const coll_id = self.store.addCollection(.collection_where_clause, .{
+        .region = .{ .start = start, .end = self.pos },
+        .span = where_clauses.span,
+    });
+    return coll_id;
 }
 
 /// Whether Pattern Alternatives are allowed in the current context
@@ -1860,6 +1890,164 @@ pub fn parseAnnoRecordField(self: *Parser) IR.NodeStore.AnnoRecordFieldIdx {
         .name = name,
         .ty = ty,
     });
+}
+
+pub fn parseWhereClause(self: *Parser) IR.NodeStore.WhereClauseIdx {
+    const start = self.pos;
+    if (self.peek() == .KwModule) {
+        // Parsing a mod_method clause
+        self.advance();
+        self.expect(.NoSpaceOpenRound) catch {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_mod_open,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        const var_tok = self.pos;
+        self.expect(.LowerIdent) catch {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_var,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        self.expect(.CloseRound) catch {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_mod_close,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        const name_tok = self.pos;
+        if (self.peek() != .NoSpaceDotLowerIdent and self.peek() != .DotLowerIdent) {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_method_or_alias_name,
+                .{ .start = start, .end = self.pos },
+            );
+        }
+        self.advance();
+        const arg_start = self.pos;
+        self.expect(.NoSpaceOpenRound) catch {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_arg_open,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        const ty_anno_top = self.store.scratchTypeAnnoTop();
+        const arg_end = self.parseCollectionSpan(
+            IR.NodeStore.TypeAnnoIdx,
+            .CloseRound,
+            IR.NodeStore.addScratchTypeAnno,
+            Parser.parseTypeAnnoInCollection,
+        ) catch {
+            self.store.clearScratchTypeAnnosFrom(ty_anno_top);
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_arg_close,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
+        const args = self.store.addCollection(
+            .collection_ty_anno,
+            .{
+                .region = .{ .start = arg_start, .end = arg_end },
+                .span = arg_span.span,
+            },
+        );
+        self.expect(.OpArrow) catch {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_method_arrow,
+                .{ .start = start, .end = self.pos },
+            );
+        };
+        const ret_ty_anno = self.parseTypeAnnoInCollection();
+        return self.store.addWhereClause(.{ .mod_method = .{
+            .region = .{ .start = start, .end = self.pos },
+            .name_tok = name_tok,
+            .var_tok = var_tok,
+            .args = args,
+            .ret_anno = ret_ty_anno,
+        } });
+    } else if (self.peek() == .LowerIdent) {
+        // Parsing either an alias or method clause
+        const var_tok = self.pos;
+        self.advance();
+        const name_tok = self.pos;
+        if (self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
+            self.advance();
+            const arg_start = self.pos;
+            self.expect(.NoSpaceOpenRound) catch {
+                return self.store.addMalformed(
+                    IR.NodeStore.WhereClauseIdx,
+                    .where_expected_arg_open,
+                    .{ .start = start, .end = self.pos },
+                );
+            };
+            const ty_anno_top = self.store.scratchTypeAnnoTop();
+            const arg_end = self.parseCollectionSpan(
+                IR.NodeStore.TypeAnnoIdx,
+                .CloseRound,
+                IR.NodeStore.addScratchTypeAnno,
+                Parser.parseTypeAnnoInCollection,
+            ) catch {
+                self.store.clearScratchTypeAnnosFrom(ty_anno_top);
+                return self.store.addMalformed(
+                    IR.NodeStore.WhereClauseIdx,
+                    .where_expected_arg_close,
+                    .{ .start = start, .end = self.pos },
+                );
+            };
+            const arg_span = self.store.typeAnnoSpanFrom(ty_anno_top);
+            const args = self.store.addCollection(
+                .collection_ty_anno,
+                .{
+                    .region = .{ .start = arg_start, .end = arg_end },
+                    .span = arg_span.span,
+                },
+            );
+            self.expect(.OpArrow) catch {
+                return self.store.addMalformed(
+                    IR.NodeStore.WhereClauseIdx,
+                    .where_expected_method_arrow,
+                    .{ .start = start, .end = self.pos },
+                );
+            };
+            const ret_ty_anno = self.parseTypeAnnoInCollection();
+            return self.store.addWhereClause(.{ .method = .{
+                .region = .{ .start = start, .end = self.pos },
+                .name_tok = name_tok,
+                .var_tok = var_tok,
+                .args = args,
+                .ret_anno = ret_ty_anno,
+            } });
+        } else if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+            const alias_tok = self.pos;
+            self.advance();
+            return self.store.addWhereClause(.{ .alias = .{
+                .region = .{ .start = start, .end = alias_tok },
+                .var_tok = var_tok,
+                .alias_tok = alias_tok,
+            } });
+        } else {
+            return self.store.addMalformed(
+                IR.NodeStore.WhereClauseIdx,
+                .where_expected_method_or_alias_name,
+                .{ .start = start, .end = self.pos },
+            );
+        }
+    } else {
+        // malformed
+        return self.store.addMalformed(
+            IR.NodeStore.WhereClauseIdx,
+            .where_expected_var_or_module,
+            .{ .start = start, .end = self.pos },
+        );
+    }
 }
 
 /// todo
