@@ -44,6 +44,9 @@ pub fn SafeList(comptime T: type) type {
         /// An index for an item in the list.
         pub const Idx = enum(u32) { _ };
 
+        /// A non-type-safe slice of the list.
+        pub const Slice = std.ArrayListUnmanaged(T).Slice;
+
         /// A type-safe range of the list.
         pub const Range = SafeRange(Idx);
 
@@ -93,6 +96,17 @@ pub fn SafeList(comptime T: type) type {
             }
             const end_length = self.len();
             return Range{ .start = @enumFromInt(start_length), .end = @enumFromInt(end_length) };
+        }
+
+        /// Convert a range to a slice
+        pub fn rangeToSlice(self: *const SafeList(T), range: *const Range) Slice {
+            const start: usize = @intFromEnum(range.start);
+            const end: usize = @intFromEnum(range.end);
+
+            std.debug.assert(start <= end);
+            std.debug.assert(end <= self.items.items.len);
+
+            return self.items.items[@intFromEnum(range.start)..@intFromEnum(range.end)];
         }
 
         /// Get an item from this list without worrying about out-of-bounds errors.
@@ -261,7 +275,7 @@ test "SafeList(32) inserting and getting" {
     try testing.expectEqual(item.*, 1);
 }
 
-test "SafeList(u8) appendSlice returns correct range" {
+test "SafeList(u8) appendSlice" {
     const gpa = testing.allocator;
 
     var list = SafeList(u8){};
@@ -274,4 +288,21 @@ test "SafeList(u8) appendSlice returns correct range" {
     const rangeB = list.appendSlice(gpa, &[_]u8{ 'd', 'e', 'f', 'g' });
     try testing.expectEqual(4, @intFromEnum(rangeB.start));
     try testing.expectEqual(8, @intFromEnum(rangeB.end));
+}
+
+test "SafeList(u8) rangeToSlice" {
+    const gpa = testing.allocator;
+
+    var list = SafeList(u8){};
+    defer list.deinit(gpa);
+
+    const rangeA = list.appendSlice(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
+    const sliceA = list.rangeToSlice(&rangeA);
+    try testing.expectEqual('a', sliceA[0]);
+    try testing.expectEqual('d', sliceA[3]);
+
+    const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .end = @enumFromInt(4) };
+    const sliceB = list.rangeToSlice(&rangeB);
+    try testing.expectEqual('c', sliceB[0]);
+    try testing.expectEqual('d', sliceB[1]);
 }
