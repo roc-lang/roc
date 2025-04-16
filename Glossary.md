@@ -32,7 +32,29 @@ Implementation:
 - old compiler:
   - [module folder](crates/compiler/module)
 
+## IR
+
+(Intermediate Representation)
+
+## Interning
+
 ## Identifier
+
+Any text in a Roc source file that has significant content, but is not a Roc Str like "Hello".
+Used for variable names, record field names, type names, etc. .
+
+During [tokenization](#tokenization) all identifiers are put into a deduplicated collection and given an ID.
+That ID is used in [IRs](#ir) instead of the actual text to save memory.
+
+Identifier in the compiler:
+- new compiler:
+    - [Ident](src/base/Ident.zig)
+    - [Ident tokenization](src/check/parse/tokenize.zig): check the functions `chompIdentLower` and `chompIdentGeneral`, and their uses.
+    - [Ident parsing](src/check/parse/Parser.zig): search `Ident`
+- old compiler:
+    - [IdentStr](crates/compiler/ident/src/lib.rs)
+    - [module/ident.rs](crates/compiler/module/src/ident.rs)
+    - [parsing](crates/compiler/parse/src/expr.rs): search "identifier" (case-insensitive)
 
 ## Keyword
 
@@ -46,7 +68,29 @@ Keywords in the compiler:
 
 ## Operator
 
+An operator is a [symbol](#symbol) or [keyword](#keyword) that performs a specific operation on one or more operands (values or variables) to produce a result.
+Some examples: `+`, `=`, `==`, `>`. [A table of all operators in Roc](https://www.roc-lang.org/tutorial#operator-desugaring-table).
+`+` is an example of binary operator because it works with two operands, e.g. `1 + 1`. Similarly `!` (e.g. `!Bool.false`) is a unary operator.
+
+Operators in the compiler:
+- New compiler: search `Op` in [tokenize.zig](src/check/parse/tokenize.zig)
+- Old compiler: search `operator_help` in [expr.rs](crates/compiler/parse/src/expr.rs)
+
 ## Syntax
+
+## Syntactic Sugar
+
+[Syntax](#syntax) within a programming language that is designed to make things easier to read or express.
+It allows developers to write code in a more concise, readable, or convenient way without adding new functionality
+to the language itself.
+
+Desugaring converts syntax sugar (like `x + 1`) into more fundamental operations (like `Num.add(x, 1)`).
+
+[A table of all operators in Roc and what they desugar to](https://www.roc-lang.org/tutorial#operator-desugaring-table)
+
+Desugaring in the compiler:
+- New compiler: [canonicalize.zig (WIP)](src/check/canonicalize.zig)
+- Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
 
 ## Compiler Phase
 

@@ -70,8 +70,8 @@ procedure Num.51 (#Attr.2, #Attr.3):
     ret Num.285;
 
 procedure Str.3 (#Attr.2, #Attr.3):
-    let Str.386 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
-    ret Str.386;
+    let Str.389 : Str = lowlevel StrConcat #Attr.2 #Attr.3;
+    ret Str.389;
 
 procedure Test.1 ():
     let Test.21 : Str = "lllllllllllllllllllllooooooooooong";
