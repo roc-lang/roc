@@ -5,7 +5,7 @@ module [Foo]
 
 Foo(a,b) : (a,b,Str,U64)
 ~~~PROBLEMS
-PARSER: expr_unexpected_token
+NIL
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -13,18 +13,18 @@ UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7)
 ~~~PARSE
 (file
     (module (1:1-1:13) (exposed_item (upper_ident "Foo")))
-    (apply (3:1-3:9)
-        (tag (3:1-3:4) "Foo")
-        (ident (3:5-3:6) "" "a")
-        (ident (3:7-3:8) "" "b"))
-    (malformed_expr (3:10-3:11) "expr_unexpected_token")
-    (tuple (3:12-3:25)
-        (ident (3:13-3:14) "" "a")
-        (ident (3:15-3:16) "" "b")
-        (tag (3:17-3:20) "Str")
-        (tag (3:21-3:24) "U64")))
+    (type_decl (3:1-3:25)
+        (header
+            "Foo"
+            (ty_var (3:5-3:6) "a")
+            (ty_var (3:7-3:8) "b"))
+        (tuple (3:12-3:25)
+            (ty_var (3:13-3:14) "a")
+            (ty_var (3:15-3:16) "b")
+            (ty "Str")
+            (ty "U64"))))
 ~~~FORMATTED
 module [Foo]
 
-Foo(a, b)(a, b, Str, U64)
+Foo(a, b) : (a, b, Str, U64)
 ~~~END
