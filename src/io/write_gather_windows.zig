@@ -22,9 +22,32 @@ pub const WindowsAlignedBuffer = struct {
     /// Original allocation size
     original_size: usize,
 
+    /// Gets the required alignment (sector size) for a given file handle.
+    /// WriteFileGather requires buffer pointers to be both aligned to the sector size,
+    /// and also have sizes that are multiples of the sector size.
+    pub fn getRequiredAlignment(file_handle: std.fs.File) usize {
+        var bytes_per_sector: DWORD = undefined;
+        var sectors_per_cluster: DWORD = undefined;
+        var number_of_free_clusters: DWORD = undefined;
+        var total_number_of_clusters: DWORD = undefined;
+
+        // Get volume information to determine sector size
+        if (windows.kernel32.GetDiskFreeSpaceW(
+            file_handle.handle,
+            &sectors_per_cluster,
+            &bytes_per_sector,
+            &number_of_free_clusters,
+            &total_number_of_clusters,
+        ) == 0) {
+            // Default to 512 bytes in case of an error
+            return 512;
+        }
+
+        return @intCast(bytes_per_sector);
+    }
+
     /// Initializes a new WindowsAlignedBuffer with proper alignment
-    pub fn init(allocator: Allocator, size: usize, file_handle: std.fs.File) Allocator.Error!WindowsAlignedBuffer {
-        const sector_size = getSectorSize(file_handle);
+    pub fn init(allocator: Allocator, size: usize, sector_size: usize) Allocator.Error!WindowsAlignedBuffer {
         const aligned_size = std.mem.alignForward(usize, size, sector_size);
 
         // Allocate enough extra space to ensure we can align the pointer
@@ -48,34 +71,6 @@ pub const WindowsAlignedBuffer = struct {
         allocator.free(self.original_ptr[0..self.original_size]);
     }
 };
-
-/// Gets the sector size for a given file handle. WriteFileGather
-/// requires buffer pointers to be both aligned to the sector size, and also have sizes
-/// that are multiples of the sector size.
-///
-/// Note: This function never fails - it returns a default sector size (512 bytes) if
-/// the actual sector size cannot be determined.
-pub fn getSectorSize(file_handle: std.fs.File) usize {
-    var bytes_per_sector: DWORD = undefined;
-    var sectors_per_cluster: DWORD = undefined;
-    var number_of_free_clusters: DWORD = undefined;
-    var total_number_of_clusters: DWORD = undefined;
-
-    // Get volume information to determine sector size
-    if (windows.kernel32.GetDiskFreeSpaceW(
-        file_handle.handle,
-        &sectors_per_cluster,
-        &bytes_per_sector,
-        &number_of_free_clusters,
-        &total_number_of_clusters,
-    ) == 0) {
-        // Handle couldn't get the sector size directly, try fallback approach
-        // Default to 512 bytes, which is the minimum sector size on most disks
-        return 512;
-    }
-
-    return @intCast(bytes_per_sector);
-}
 
 /// Validates that buffers meet the Windows WriteFileGather requirements:
 /// - Each buffer must be aligned to the sector size

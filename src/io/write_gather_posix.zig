@@ -9,18 +9,13 @@ const write_gather = @import("write_gather.zig");
 const WriteGatherError = write_gather.WriteGatherError;
 
 pub const PosixAlignedBuffer = struct {
-    base: [*]const u8,
-    len: usize,
-    /// The original buffer allocation for deallocation
+    /// The buffer slice
     buffer: []u8,
 
     /// Initializes a new PosixAlignedBuffer
-    pub fn init(allocator: Allocator, size: usize, _: std.fs.File) Allocator.Error!PosixAlignedBuffer {
-        // On POSIX, no special alignment is necessary
+    pub fn init(allocator: Allocator, size: usize) Allocator.Error!PosixAlignedBuffer {
         const buffer = try allocator.alloc(u8, size);
         return PosixAlignedBuffer{
-            .base = buffer.ptr,
-            .len = buffer.len,
             .buffer = buffer,
         };
     }
@@ -31,18 +26,27 @@ pub const PosixAlignedBuffer = struct {
     }
 };
 
-/// Implementation of writeGather for POSIX using pwritev directly with PosixAlignedBuffer
-/// which is already in the correct format for iovec
+/// Implementation of writeGather for POSIX using pwritev
 pub fn writeGather(
     file_handle: std.fs.File,
     buffers: []*const PosixAlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
-    // PosixAlignedBuffer is already in the right format to be used with iovec
-    // so just reinterpret the buffers array directly
-    const iovecs = @as([*]const posix.iovec_const, @ptrCast(buffers.ptr))[0..buffers.len];
+    // Create iovecs from the buffers
+    var iovecs = std.heap.page_allocator.alloc(posix.iovec_const, buffers.len) catch {
+        return WriteGatherError.OutOfMemory;
+    };
+    defer std.heap.page_allocator.free(iovecs);
 
-    // Use posix.pwritev directly with our buffer array
+    // Fill in iovecs from the buffer data
+    for (buffers, 0..) |buf, i| {
+        iovecs[i] = .{
+            .base = buf.buffer.ptr,
+            .len = buf.buffer.len,
+        };
+    }
+
+    // Use pwritev with the created iovec array
     const result = posix.pwritev(file_handle.handle, iovecs, offset) catch |err|
         return translateError(err);
 
