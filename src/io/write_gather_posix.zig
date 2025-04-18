@@ -29,13 +29,9 @@ pub const PosixAlignedBuffer = struct {
 /// Implementation of writeGather for POSIX using pwritev
 pub fn writeGather(
     file_handle: std.fs.File,
-    buffers: []*const PosixAlignedBuffer,
+    buffers: []const write_gather.AlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
-    std.debug.print("POSIX writeGather: buffers.len = {d}\n", .{buffers.len});
-    for (buffers, 0..) |buf, i| {
-        std.debug.print("  Buffer {d}: len = {d}, first char = '{c}'\n", .{i, buf.buffer.len, buf.buffer[0]});
-    }
 
     // Create iovecs from the buffers
     var iovecs = std.heap.page_allocator.alloc(posix.iovec_const, buffers.len) catch {
@@ -46,18 +42,15 @@ pub fn writeGather(
     // Fill in iovecs from the buffer data
     for (buffers, 0..) |buf, i| {
         iovecs[i] = .{
-            .base = buf.buffer.ptr,
-            .len = buf.buffer.len,
+            .base = buf.impl.buffer.ptr,
+            .len = buf.impl.buffer.len,
         };
     }
 
     // Use pwritev with the created iovec array
     const result = posix.pwritev(file_handle.handle, iovecs, offset) catch |err| {
-        std.debug.print("POSIX writeGather error: {any}\n", .{err});
         return translateError(err);
     };
-
-    std.debug.print("POSIX writeGather result: {d}\n", .{result});
     return @intCast(result);
 }
 

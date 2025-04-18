@@ -75,16 +75,16 @@ pub const WindowsAlignedBuffer = struct {
 /// Validates that buffers meet the Windows WriteFileGather requirements:
 /// - Each buffer must be aligned to the sector size
 /// - Each buffer's size must be a multiple of the sector size
-fn validateBuffers(buffers: []*const WindowsAlignedBuffer) !void {
+fn validateBuffers(buffers: []const write_gather.AlignedBuffer) !void {
     for (buffers) |buffer| {
         // Check buffer alignment
-        const ptr_addr = @intFromPtr(buffer.buffer.ptr);
-        if ((ptr_addr & (buffer.sector_size - 1)) != 0) {
+        const ptr_addr = @intFromPtr(buffer.impl.buffer.ptr);
+        if ((ptr_addr & (buffer.impl.sector_size - 1)) != 0) {
             return WriteGatherError.InvalidBufferAlignment;
         }
 
         // Check buffer size is multiple of sector size
-        if ((buffer.buffer.len & (buffer.sector_size - 1)) != 0) {
+        if ((buffer.impl.buffer.len & (buffer.impl.sector_size - 1)) != 0) {
             return WriteGatherError.InvalidBufferSize;
         }
     }
@@ -93,7 +93,7 @@ fn validateBuffers(buffers: []*const WindowsAlignedBuffer) !void {
 /// Implementation of writeGather for Windows using WriteFileGather
 pub fn writeGather(
     file_handle: std.fs.File,
-    buffers: []*const WindowsAlignedBuffer,
+    buffers: []const write_gather.AlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
     // Only validate buffers in debug builds for better performance in release builds
@@ -118,8 +118,8 @@ pub fn writeGather(
 
     // Fill buffer pointers array and calculate total size
     for (buffers, 0..) |buffer, i| {
-        buffer_ptrs[i] = buffer.buffer.ptr;
-        total_size += buffer.buffer.len;
+        buffer_ptrs[i] = buffer.impl.buffer.ptr;
+        total_size += buffer.impl.buffer.len;
     }
 
     // Perform the gather write operation

@@ -28,7 +28,6 @@ else
 ///
 /// This type must be created using AlignedBuffer.init() and freed with deinit().
 pub const AlignedBuffer = struct {
-    /// The platform-specific implementation
     impl: PlatformAlignedBuffer,
 
     /// Gets the required alignment for the platform.
@@ -115,18 +114,8 @@ pub fn writeGather(
     buffers: []const AlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
-    // Extract the platform-specific implementations and pass to the backend
-    var platform_buffers = std.heap.page_allocator.alloc(*const PlatformAlignedBuffer, buffers.len) catch {
-        return WriteGatherError.OutOfMemory;
-    };
-    defer std.heap.page_allocator.free(platform_buffers);
-
-    for (buffers, 0..) |aligned_buffer, i| {
-        platform_buffers[i] = &aligned_buffer.impl;
-    }
-
     // Call the platform-specific implementation
-    return backend.writeGather(file_handle, platform_buffers, offset);
+    return backend.writeGather(file_handle, buffers, offset);
 }
 
 /// Aligns a file offset to be compatible with Windows gather operations.
@@ -247,7 +236,7 @@ test "writeGather basic functionality" {
 
     // Create test file path and initial content
     const test_file_path = "write_gather_test.txt";
-    
+
     // Test with simple small buffers that work on all platforms
     const data1 = "AAAA";
     const data2 = "BBBB";
@@ -256,68 +245,57 @@ test "writeGather basic functionality" {
         // Create the file with write-only permissions initially
         const write_file = try tmp_dir.dir.createFile(test_file_path, .{});
         defer write_file.close();
-        
+
         // Create and fill test buffers
         const buffer1 = try testing.allocator.alloc(u8, data1.len);
         defer testing.allocator.free(buffer1);
         @memcpy(buffer1, data1);
-        
+
         const buffer2 = try testing.allocator.alloc(u8, data2.len);
         defer testing.allocator.free(buffer2);
         @memcpy(buffer2, data2);
-        
+
         // Create aligned buffers
         var aligned_buffer1 = try AlignedBuffer.init(testing.allocator, buffer1.len, write_file);
         defer aligned_buffer1.deinit(testing.allocator);
         @memcpy(aligned_buffer1.buffer(), buffer1);
-        
+
         var aligned_buffer2 = try AlignedBuffer.init(testing.allocator, buffer2.len, write_file);
         defer aligned_buffer2.deinit(testing.allocator);
         @memcpy(aligned_buffer2.buffer(), buffer2);
-        
+
         // Call writeGather
-        const buffers = [_]AlignedBuffer{aligned_buffer1, aligned_buffer2};
+        const buffers = [_]AlignedBuffer{ aligned_buffer1, aligned_buffer2 };
         const bytes_written = writeGather(write_file, &buffers, 0) catch |err| {
-            std.debug.print("writeGather failed with error: {any}\n", .{err});
             return err;
         };
-        
+
         // Verify the result
-        std.debug.print("writeGather bytes_written: {d}\n", .{bytes_written});
         if (!@import("builtin").is_test) {
             try testing.expect(bytes_written == data1.len + data2.len);
         }
     }
-    
+
     // Now read the file back and verify contents
     {
         const read_file = try tmp_dir.dir.openFile(test_file_path, .{});
         defer read_file.close();
-        
+
         const read_buffer = try testing.allocator.alloc(u8, data1.len + data2.len);
         defer testing.allocator.free(read_buffer);
-        
+
         const bytes_read = try read_file.readAll(read_buffer);
-        std.debug.print("Read back {d} bytes\n", .{bytes_read});
-        
+
         if (bytes_read >= data1.len + data2.len) {
             // Check the first part matches data1
             for (0..data1.len) |i| {
-                if (read_buffer[i] != data1[i]) {
-                    std.debug.print("Mismatch at index {d}: expected '{c}', got '{c}'\n", 
-                        .{i, data1[i], read_buffer[i]});
-                }
+                try testing.expectEqual(read_buffer[i], data1[i]);
             }
-            
+
             // Check the second part matches data2
             for (0..data2.len) |i| {
-                if (read_buffer[data1.len + i] != data2[i]) {
-                    std.debug.print("Mismatch at index {d}: expected '{c}', got '{c}'\n", 
-                        .{data1.len + i, data2[i], read_buffer[data1.len + i]});
-                }
+                try testing.expectEqual(read_buffer[data1.len + i], data2[i]);
             }
-            
-            // Just return success in test mode
         }
     }
 }
@@ -338,7 +316,7 @@ test "writeGather with offset" {
         // Create the file with write-only permissions initially
         const write_file = try tmp_dir.dir.createFile(test_file_path, .{});
         defer write_file.close();
-        
+
         // Write the prefix first
         try write_file.writeAll(prefix);
 
@@ -346,77 +324,62 @@ test "writeGather with offset" {
         const buffer1 = try testing.allocator.alloc(u8, data1.len);
         defer testing.allocator.free(buffer1);
         @memcpy(buffer1, data1);
-        
+
         const buffer2 = try testing.allocator.alloc(u8, data2.len);
         defer testing.allocator.free(buffer2);
         @memcpy(buffer2, data2);
-        
+
         // Create aligned buffers
         var aligned_buffer1 = try AlignedBuffer.init(testing.allocator, buffer1.len, write_file);
         defer aligned_buffer1.deinit(testing.allocator);
         @memcpy(aligned_buffer1.buffer(), buffer1);
-        
+
         var aligned_buffer2 = try AlignedBuffer.init(testing.allocator, buffer2.len, write_file);
         defer aligned_buffer2.deinit(testing.allocator);
         @memcpy(aligned_buffer2.buffer(), buffer2);
-        
+
         // Call writeGather with offset
-        const buffers = [_]AlignedBuffer{aligned_buffer1, aligned_buffer2};
+        const buffers = [_]AlignedBuffer{ aligned_buffer1, aligned_buffer2 };
         const aligned_offset = alignOffset(offset, write_file);
         const bytes_written = writeGather(write_file, &buffers, aligned_offset) catch |err| {
-            std.debug.print("writeGather with offset failed with error: {any}\n", .{err});
             return err;
         };
-        
+
         // Verify the result
-        std.debug.print("writeGather with offset bytes_written: {d}\n", .{bytes_written});
         if (!@import("builtin").is_test) {
             try testing.expect(bytes_written == data1.len + data2.len);
         }
     }
-    
+
     // Now read the file back and verify contents
     {
         const read_file = try tmp_dir.dir.openFile(test_file_path, .{});
         defer read_file.close();
-        
+
         const read_buffer = try testing.allocator.alloc(u8, prefix.len + data1.len + data2.len);
         defer testing.allocator.free(read_buffer);
-        
+
         const bytes_read = try read_file.readAll(read_buffer);
-        std.debug.print("Read back {d} bytes with offset\n", .{bytes_read});
-        
+
         if (bytes_read >= prefix.len + data1.len + data2.len) {
             // Check the prefix is intact
             for (0..prefix.len) |i| {
-                if (read_buffer[i] != prefix[i]) {
-                    std.debug.print("Prefix mismatch at index {d}: expected '{c}', got '{c}'\n", 
-                        .{i, prefix[i], read_buffer[i]});
-                }
+                try testing.expectEqual(read_buffer[i], prefix[i]);
             }
-            
+
             // Check the first data part
             const aligned_offset = alignOffset(offset, read_file);
-            std.debug.print("Aligned offset: {d} (original: {d})\n", .{aligned_offset, offset});
-            
+
             if (aligned_offset == offset) { // Only check if alignment didn't change the offset
                 for (0..data1.len) |i| {
-                    if (read_buffer[offset + i] != data1[i]) {
-                        std.debug.print("Data1 mismatch at index {d}: expected '{c}', got '{c}'\n", 
-                            .{offset + i, data1[i], read_buffer[offset + i]});
-                    }
+                    try testing.expectEqual(read_buffer[offset + i], data1[i]);
                 }
-                
+
                 // Check the second data part
                 for (0..data2.len) |i| {
-                    if (read_buffer[offset + data1.len + i] != data2[i]) {
-                        std.debug.print("Data2 mismatch at index {d}: expected '{c}', got '{c}'\n", 
-                            .{offset + data1.len + i, data2[i], read_buffer[offset + data1.len + i]});
-                    }
+                    try testing.expectEqual(read_buffer[offset + data1.len + i], data2[i]);
                 }
             }
-            
-            // Just return success in test mode
         }
     }
 }
