@@ -52,8 +52,8 @@ pub const WindowsAlignedBuffer = struct {
 /// Gets the sector size for a given file handle. WriteFileGather
 /// requires buffer pointers to be both aligned to the sector size, and also have sizes
 /// that are multiples of the sector size.
-/// 
-/// Note: This function never fails - it returns a default sector size (512 bytes) if 
+///
+/// Note: This function never fails - it returns a default sector size (512 bytes) if
 /// the actual sector size cannot be determined.
 pub fn getSectorSize(file_handle: std.fs.File) usize {
     var bytes_per_sector: DWORD = undefined;

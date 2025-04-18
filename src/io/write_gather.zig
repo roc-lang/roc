@@ -17,22 +17,22 @@ else
 /// Platform-specific AlignedBuffer implementation
 pub const PlatformAlignedBuffer = if (@import("builtin").os.tag == .windows)
     backend.WindowsAlignedBuffer
-else 
+else
     backend.PosixAlignedBuffer;
 
 /// A properly aligned buffer for gather I/O operations.
-/// 
+///
 /// This type ensures that all platform-specific alignment requirements are met.
-/// On Windows, buffers are aligned to the volume sector size and sized to a multiple 
+/// On Windows, buffers are aligned to the volume sector size and sized to a multiple
 /// of that sector size. On other platforms, no special alignment is required.
-/// 
+///
 /// This type must be created using AlignedBuffer.init() and freed with deinit().
 pub const AlignedBuffer = struct {
     /// The platform-specific implementation
     impl: PlatformAlignedBuffer,
 
     /// Initializes a new AlignedBuffer with proper platform-specific alignment.
-    /// 
+    ///
     /// Parameters:
     /// - allocator: The allocator to use for memory allocation
     /// - size: Requested buffer size (will be rounded up to the nearest sector size multiple on Windows)
@@ -230,7 +230,7 @@ test "writeGather basic functionality" {
     // Write some test data to ensure the file exists
     try file.writeAll("test data");
     try file.seekTo(0);
-    
+
     // Determine buffer size based on platform
     const buffer_size = if (@import("builtin").os.tag == .windows) 512 else 256;
 
@@ -268,7 +268,7 @@ test "writeGather with offset" {
     // Write some test data to ensure the file exists
     try file.writeAll("test data");
     try file.seekTo(0);
-    
+
     // Determine buffer size based on platform
     const buffer_size = if (@import("builtin").os.tag == .windows) 512 else 256;
 
