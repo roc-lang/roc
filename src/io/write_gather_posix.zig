@@ -33,10 +33,10 @@ pub fn getSectorSize(file_handle: std.fs.File) usize {
 }
 
 /// Convert BufferVec array to iovec array for POSIX writev
-fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec) void {
+fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec_const) void {
     for (buffers, 0..) |buffer, i| {
         iovecs[i] = .{
-            .base = @constCast(buffer.ptr),
+            .base = buffer.ptr,
             .len = buffer.len,
         };
     }
@@ -44,11 +44,12 @@ fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec) void {
 
 /// Check if the platform supports pwritev function
 fn hasPwritev() bool {
+    const builtin = @import("builtin");
     // Check if Linux - which supports pwritev
-    if (std.Target.current.os.tag == .linux) return true;
+    if (builtin.os.tag == .linux) return true;
     
     // Check if FreeBSD - which also supports pwritev
-    if (std.Target.current.os.tag == .freebsd) return true;
+    if (builtin.os.tag == .freebsd) return true;
     
     // On other platforms, we'll use lseek + writev instead
     return false;
@@ -61,7 +62,7 @@ pub fn writeGather(
     offset: u64,
 ) WriteGatherError!usize {
     // For POSIX, we need to convert BufferVec to iovec
-    const iovecs = std.heap.page_allocator.alloc(posix.iovec, buffers.len) catch {
+    const iovecs = std.heap.page_allocator.alloc(posix.iovec_const, buffers.len) catch {
         return WriteGatherError.OutOfMemory;
     };
     defer std.heap.page_allocator.free(iovecs);
@@ -72,7 +73,7 @@ pub fn writeGather(
     // Platform has pwritev (Linux, FreeBSD) - use it to avoid changing file position
     if (hasPwritev()) {
         // Implement platform-specific pwritev call
-        const result = switch (std.Target.current.os.tag) {
+        const result = switch (@import("builtin").os.tag) {
             .linux => std.os.linux.pwritev(file_handle.handle, iovecs, offset),
             .freebsd => std.os.freebsd.pwritev(file_handle.handle, iovecs, offset),
             else => unreachable, // Should be caught by hasPwritev
@@ -81,28 +82,32 @@ pub fn writeGather(
         return @intCast(result);
     } else {
         // Fall back to lseek + writev for platforms without pwritev
-        const original_position = posix.lseek(file_handle.handle, 0, posix.SEEK.CUR) catch {
+        // Find the current position directly using C functions
+        const SEEK_CUR = 1; // C constant for current position
+        const original_position = std.c.lseek(file_handle.handle, 0, SEEK_CUR);
+        if (original_position < 0) {
             return WriteGatherError.InputOutput;
-        };
-    
+        }
+        
         // Seek to the requested position
-        _ = posix.lseek(file_handle.handle, @intCast(offset), posix.SEEK.SET) catch {
+        const SEEK_SET = 0; // C constant for beginning of file
+        const seekResult = std.c.lseek(file_handle.handle, @intCast(offset), SEEK_SET);
+        if (seekResult < 0) {
             return WriteGatherError.InputOutput;
-        };
+        }
     
         // Perform the gather write operation
         const bytes_written = posix.writev(file_handle.handle, iovecs) catch |err| {
             // Try to restore the original position (best effort)
-            _ = posix.lseek(file_handle.handle, original_position, posix.SEEK.SET) catch {};
+            _ = std.c.lseek(file_handle.handle, original_position, SEEK_SET);
         
             return translateError(err);
         };
     
         // Restore the original position
-        _ = posix.lseek(file_handle.handle, original_position, posix.SEEK.SET) catch {
-            // If we can't restore the position but the write succeeded, we'll still return success
-            // but future operations on this file handle might be affected
-        };
+        _ = std.c.lseek(file_handle.handle, original_position, SEEK_SET);
+        // If we can't restore the position but the write succeeded, we'll still return success
+        // but future operations on this file handle might be affected
     
         return @intCast(bytes_written);
     }
