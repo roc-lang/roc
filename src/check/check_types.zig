@@ -12,15 +12,17 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleWork = base.ModuleWork;
-const Type = type_mod.Type;
+const RType = type_mod.RType;
+const Prim = type_mod.Prim;
+const TestInt = type_mod.Int;
 
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
-    type_store: *Type.Store,
+    type_store: *RType.Store,
     resolve_ir: *const resolve.IR,
     other_modules: *const ModuleWork(resolve.IR).Store,
-    other_typestores: *const ModuleWork(Type.Store).Store,
+    other_typestores: *const ModuleWork(RType.Store).Store,
 ) void {
     _ = type_store;
     _ = resolve_ir;
@@ -32,7 +34,6 @@ pub fn checkTypes(
 
 test "checkTypes - basic type unification" {
     const gpa = testing.allocator;
-
     var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
         gpa,
         &.{ModuleWork(can.IR){
@@ -43,25 +44,23 @@ test "checkTypes - basic type unification" {
     );
     defer can_irs.deinit(gpa);
 
-    var type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
+    var type_stores = ModuleWork(RType.Store).Store.initFromCanIrs(gpa, &can_irs);
     defer type_stores.deinit(gpa);
 
     var resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
     defer resolve_irs.deinit(gpa);
-
     var env = &can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
     const type_store = type_stores.getWork(@enumFromInt(0));
-
     const type_id_1 = type_store.fresh();
     const type_id_2 = type_store.fresh();
 
     checkTypes(type_store, resolve_ir, &resolve_irs, &type_stores);
 
     // Test that we can perform basic type unification
-    const a_type = Type{ .flex_var = null };
+    const a_type = type_mod.toDesc(RType{ .flex_var = null });
     const int_name = env.idents.insert(env.gpa, Ident.for_text("Int"), Region.zero());
-    const int_type = Type{ .rigid_var = int_name };
+    const int_type = type_mod.toDesc(RType{ .rigid_var = int_name });
 
     type_store.set(type_id_1, a_type);
     type_store.set(type_id_2, int_type);
@@ -69,11 +68,19 @@ test "checkTypes - basic type unification" {
     try testing.expectEqual(type_store.get(type_id_1).*, a_type);
     try testing.expectEqual(type_store.get(type_id_2).*, int_type);
 
-    // // After unification, both variables should have the rigid type
-    // const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+    std.debug.print("{}\n", .{type_store});
+    const idx1 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    const idx2 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    std.debug.print("{}\n", .{type_store});
+    std.debug.print("{}\n {}\n", .{ idx1, idx2 });
 
-    // try testing.expect(result.mismatches.items.len == 0);
-    // try testing.expect(result.has_changed);
-    // try testing.expectEqual(type_store.get(type_id_1).*, int_type);
-    // try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+    std.debug.print("\n\n\n{}\n\n\n", .{type_store});
+    const new_store = type_store.compact();
+    std.debug.print("\n\n\n{}\n\n\n", .{new_store});
+    // // After unification, both variables should have the rigid type
+    const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+    try testing.expect(result.mismatches.items.len == 0);
+    try testing.expect(result.has_changed);
+    try testing.expectEqual(type_store.get(type_id_1).*, int_type);
+    try testing.expectEqual(type_store.get(type_id_2).*, int_type);
 }

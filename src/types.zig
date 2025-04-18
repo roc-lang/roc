@@ -1,6 +1,6 @@
 pub const num = @import("types/num.zig");
 
-pub const Type = @import("types/type.zig").Type;
+pub const Type = @import("types/type.zig").RType;
 
 // todo -- we probably don't need this anymmore.. remove in follow-up PR
 /// Lowest level of the type system, representing the most fundamental or atomic types
