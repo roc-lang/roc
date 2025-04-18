@@ -1,3 +1,3 @@
 //! Cross-platform abstractions for input/output operations.
 
-pub const scatter_gather = @import("io/scatter_gather.zig");
+pub const write_gather = @import("io/write_gather.zig");

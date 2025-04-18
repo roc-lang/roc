@@ -2,12 +2,12 @@
 
 This directory contains cross-platform abstractions for I/O operations in Roc.
 
-## Scatter/Gather I/O
+## Gather I/O
 
-The `scatter_gather.zig` module provides a cross-platform abstraction over:
+The `write_gather.zig` module provides a cross-platform abstraction over:
 
-- `ReadFileScatter` and `WriteFileGather` on Windows
-- `readv` and `writev` on POSIX systems
+- `WriteFileGather` on Windows
+- `writev` on POSIX systems
 
 ### Key Features
 
@@ -17,9 +17,9 @@ The `scatter_gather.zig` module provides a cross-platform abstraction over:
 
 ### Alignment and Size Requirements
 
-When working with scatter/gather I/O, be aware of the following cross-platform requirements:
+When working with gather I/O, be aware of the following cross-platform requirements:
 
-1. **Buffer Alignment**: On Windows, buffers must be aligned to the volume's sector size (typically 512 bytes). The POSIX `readv`/`writev` functions don't have this requirement, but our cross-platform API enforces it for consistency.
+1. **Buffer Alignment**: On Windows, buffers must be aligned to the volume's sector size (typically 512 bytes). The POSIX `writev` function doesn't have this requirement, but our cross-platform API enforces it for consistency.
 
 2. **Buffer Size**: On Windows, buffer sizes must be multiples of the volume's sector size. Again, this isn't required by POSIX, but our API enforces it.
 
@@ -30,23 +30,14 @@ When working with scatter/gather I/O, be aware of the following cross-platform r
 To simplify working with these requirements, the API provides helper functions:
 
 - `getSectorSize`: Returns the appropriate sector size for a given file handle
-- `allocateAlignedBuffer`: Allocates properly aligned memory suitable for scatter/gather operations
+- `allocateAlignedBuffer`: Allocates properly aligned memory suitable for gather operations
 - `freeAlignedBuffer`: Properly frees memory allocated with `allocateAlignedBuffer`
-
-### Implementation Details
-
-The cross-platform implementation is split into three files:
-
-1. `scatter_gather.zig`: The main API that users interact with
-2. `scatter_gather_windows.zig`: Windows-specific implementation
-3. `scatter_gather_posix.zig`: POSIX-specific implementation
-
-At compile time, the appropriate backend is selected based on the target platform.
+- `alignOffset`: Ensures file offsets are properly aligned for Windows requirements
 
 ### Performance Considerations
 
 - In debug builds, buffer alignment and size validation are performed to ensure compliance with platform requirements
 - In release builds, these validations are skipped for better performance
-- On Linux and FreeBSD, the implementation uses `preadv`/`pwritev` directly to avoid the overhead of seeking
-- On other POSIX platforms, the implementation uses temporary position adjustments with `lseek` followed by `readv`/`writev`
+- On Linux and FreeBSD, the implementation uses `pwritev` directly to avoid the overhead of seeking
+- On other POSIX platforms, the implementation uses temporary position adjustments with `lseek` followed by `writev`
 - Applications should still ensure they're using properly aligned buffers even in release builds, as failing to do so can cause undefined behavior on Windows
