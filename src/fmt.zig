@@ -1393,27 +1393,9 @@ const Formatter = struct {
 
     fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) !void {
         const h = fmt.ast.store.getTypeHeader(header);
-        const multiline = fmt.ast.regionIsMultiline(h.region);
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {
-            if (multiline) {
-                fmt.curr_indent += 1;
-            } else {
-                try fmt.push(' ');
-            }
-            var i: usize = 0;
-            for (fmt.ast.store.tokenSlice(h.args)) |arg| {
-                if (multiline) {
-                    _ = try fmt.flushCommentsBefore(arg);
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                try fmt.pushTokenText(arg);
-                if (!multiline and i < (h.args.span.len - 1)) {
-                    try fmt.push(' ');
-                }
-                i += 1;
-            }
+            try fmt.formatCollection(h.region, .round, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
         }
     }
 
@@ -2238,12 +2220,12 @@ test "Where clauses" {
     try moduleFmtsSame(
         \\module [Hash]
         \\
-        \\Hash a : a
+        \\Hash(a) : a
         \\    where
         \\        a.hash(hasher) -> hasher,
         \\        hasher.Hasher,
         \\
-        \\Decode a : a
+        \\Decode(a) : a
         \\    where
         \\        module(a).decode(List(U8)) -> a,
     );
@@ -2260,7 +2242,7 @@ test "Where clauses" {
     try moduleFmtsSame(
         \\module [Hash]
         \\
-        \\Hash a # After header
+        \\Hash(a) # After header
         \\    : # After colon
         \\        a # After var
         \\            where # After where
@@ -2269,7 +2251,7 @@ test "Where clauses" {
         \\                        hasher, # After first clause
         \\                hasher.Hasher,
         \\
-        \\Decode a : a
+        \\Decode(a) : a
         \\    where
         \\        module(a).decode( # After method args open
         \\            List(U8), # After method arg
@@ -2312,18 +2294,19 @@ test "Syntax grab bag" {
         \\        as
         \\        GoodNameMultiline
         \\
-        \\Map a b : List(a), (a -> b) -> List(b)
-        \\MapML # Comment here
-        \\    a # And here
-        \\    b # And after the last arg
-        \\        : # And after the colon
-        \\            List( # Inside Tag args
-        \\                a, # After tag arg
-        \\            ),
-        \\            (a -> b) -> # After arrow
-        \\                List( # Inside tag args
-        \\                    b,
-        \\                ) # And after the type decl
+        \\Map(a, b) : List(a), (a -> b) -> List(b)
+        \\MapML( # Comment here
+        \\    a, # And here
+        \\    b,
+        \\) # And after the last arg
+        \\    : # And after the colon
+        \\        List( # Inside Tag args
+        \\            a, # After tag arg
+        \\        ),
+        \\        (a -> b) -> # After arrow
+        \\            List( # Inside tag args
+        \\                b,
+        \\            ) # And after the type decl
         \\
         \\Foo : (Bar, Baz)
         \\
@@ -2332,27 +2315,27 @@ test "Syntax grab bag" {
         \\    Baz, # Another after pattern tuple item
         \\) # Comment after pattern tuple close
         \\
-        \\Some a : { foo : Ok(a), bar : Something }
-        \\SomeMl a : { # After record open
+        \\Some(a) : { foo : Ok(a), bar : Something }
+        \\SomeMl(a) : { # After record open
         \\    foo : Ok(a), # After field
         \\    bar : Something, # After last field
         \\}
         \\
-        \\SomeMultiline a : { # Comment after pattern record open
+        \\SomeMultiline(a) : { # Comment after pattern record open
         \\    foo # After field name
         \\        : # Before field anno
         \\            Ok(a), # Comment after pattern record field
         \\    bar : Something, # Another after pattern record field
         \\} # Comment after pattern record close
         \\
-        \\Maybe a : [Some(a), None]
+        \\Maybe(a) : [Some(a), None]
         \\
-        \\MaybeMultiline a : [ # Comment after tag union open
+        \\MaybeMultiline(a) : [ # Comment after tag union open
         \\    Some(a), # Comment after tag union member
         \\    None, # Another after tag union member
         \\] # Comment after tag union close
         \\
-        \\SomeFunc a : Maybe(a), a -> Maybe(a)
+        \\SomeFunc(a) : Maybe(a), a -> Maybe(a)
         \\
         \\add_one_oneline = |num| if num 2 else 5
         \\

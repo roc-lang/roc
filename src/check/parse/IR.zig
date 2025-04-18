@@ -161,6 +161,8 @@ pub const Diagnostic = struct {
         where_expected_method_arrow,
         where_expected_method_or_alias_name,
         where_expected_var_or_module,
+        import_must_be_top_level,
+        invalid_type_arg,
     };
 };
 
@@ -2417,8 +2419,10 @@ pub const NodeStore = struct {
 
                         header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
 
-                        for (ir.store.tokenSlice(ty_header.args)) |b| {
-                            header.appendStringChild(env.gpa, ir.resolve(b));
+                        for (ir.store.typeAnnoSlice(ty_header.args)) |b| {
+                            const anno = ir.store.getTypeAnno(b);
+                            var anno_sexpr = anno.toSExpr(env, ir, line_starts);
+                            header.appendNodeChild(env.gpa, &anno_sexpr);
                         }
 
                         node.appendNodeChild(env.gpa, &header);
@@ -2483,7 +2487,7 @@ pub const NodeStore = struct {
 
     pub const TypeHeader = struct {
         name: TokenIdx,
-        args: TokenSpan,
+        args: TypeAnnoSpan,
         region: Region,
     };
 
