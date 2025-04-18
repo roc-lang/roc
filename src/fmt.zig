@@ -837,9 +837,9 @@ const Formatter = struct {
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                        try fmt.pushAll("->");
+                        try fmt.pushAll("=>");
                     } else {
-                        try fmt.pushAll(" ->");
+                        try fmt.pushAll(" =>");
                     }
                     const body_region = fmt.nodeRegion(branch.body.id);
                     flushed = try fmt.flushCommentsBefore(body_region.start);
@@ -2357,7 +2357,7 @@ test "Syntax grab bag" {
         \\    b,
         \\| # After args
         \\    match a {
-        \\        Blue | Green | Red -> {
+        \\        Blue | Green | Red => {
         \\            x = 12
         \\            x
         \\        }
@@ -2365,22 +2365,22 @@ test "Syntax grab bag" {
         \\        | # Before pattern in alt
         \\            Green
         \\        | Red # After alt pattern
-        \\            -> {
+        \\            => {
         \\                x = 12
         \\                x
         \\            }
         \\        lower # After pattern comment
-        \\            -> 1
-        \\        "foo" -> # After arrow comment
+        \\            => 1
+        \\        "foo" => # After arrow comment
         \\            100
-        \\        "foo" | "bar" -> 200
+        \\        "foo" | "bar" => 200
         \\        [1, 2, 3, .. as rest] # After pattern comment
-        \\            -> # After arrow comment
+        \\            => # After arrow comment
         \\                123 # After branch comment
         \\
         \\        # Just a random comment
         \\
-        \\        [1, 2 | 5, 3, .. as rest] -> 123
+        \\        [1, 2 | 5, 3, .. as rest] => 123
         \\        [
         \\            1,
         \\            2 | 5,
@@ -2388,12 +2388,12 @@ test "Syntax grab bag" {
         \\            .. # After DoubleDot
         \\                as # Before alias
         \\                    rest, # After last pattern in list
-        \\        ] -> 123
-        \\        3.14 -> 314
-        \\        3.14 | 6.28 -> 314
-        \\        (1, 2, 3) -> 123
-        \\        (1, 2 | 5, 3) -> 123
-        \\        { foo: 1, bar: 2, ..rest } -> 12
+        \\        ] => 123
+        \\        3.14 => 314
+        \\        3.14 | 6.28 => 314
+        \\        (1, 2, 3) => 123
+        \\        (1, 2 | 5, 3) => 123
+        \\        { foo: 1, bar: 2, ..rest } => 12
         \\        { # After pattern record open
         \\            foo # After pattern record field name
         \\                : # Before pattern record field value
@@ -2401,15 +2401,15 @@ test "Syntax grab bag" {
         \\            bar: 2,
         \\            .. # After spread operator
         \\                rest, # After last field
-        \\        } -> 12
-        \\        { foo: 1, bar: 2 | 7 } -> 12
+        \\        } => 12
+        \\        { foo: 1, bar: 2 | 7 } => 12
         \\        {
         \\            foo: 1,
         \\            bar: 2 | 7, # After last record field
-        \\        } -> 12
-        \\        Ok(123) -> 123
-        \\        Ok(Some(dude)) -> dude
-        \\        TwoArgs("hello", Some("world")) -> 1000
+        \\        } => 12
+        \\        Ok(123) => 123
+        \\        Ok(Some(dude)) => dude
+        \\        TwoArgs("hello", Some("world")) => 1000
         \\    }
         \\
         \\expect # Comment after expect keyword
