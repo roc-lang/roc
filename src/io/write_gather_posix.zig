@@ -7,7 +7,6 @@ const Allocator = std.mem.Allocator;
 
 const write_gather = @import("write_gather.zig");
 const WriteGatherError = write_gather.WriteGatherError;
-const BufferVec = write_gather.BufferVec;
 
 /// POSIX-specific implementation of AlignedBuffer (simpler, no special alignment needed)
 pub const PosixAlignedBuffer = struct {
@@ -27,40 +26,27 @@ pub const PosixAlignedBuffer = struct {
     pub fn deinit(self: PosixAlignedBuffer, allocator: Allocator) void {
         allocator.free(self.buffer);
     }
-
-    /// Converts this PosixAlignedBuffer to a BufferVec
-    pub fn toBufferVec(self: PosixAlignedBuffer) BufferVec {
-        return BufferVec{
-            .ptr = self.buffer.ptr,
-            .len = self.buffer.len,
-        };
-    }
 };
-
-/// Convert BufferVec array to iovec array for POSIX writev
-fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec_const) void {
-    for (buffers, 0..) |buffer, i| {
-        iovecs[i] = .{
-            .base = buffer.ptr,
-            .len = buffer.len,
-        };
-    }
-}
 
 /// Implementation of writeGather for POSIX using pwritev
 pub fn writeGather(
     file_handle: std.fs.File,
-    buffers: []const BufferVec,
+    buffers: []*const PosixAlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
-    // For POSIX, we need to convert BufferVec to iovec
+    // For POSIX, we need to convert to iovec
     const iovecs = std.heap.page_allocator.alloc(posix.iovec_const, buffers.len) catch {
         return WriteGatherError.OutOfMemory;
     };
     defer std.heap.page_allocator.free(iovecs);
 
-    // Convert BufferVec array to iovec array
-    toIovecs(buffers, iovecs);
+    // Fill the iovec structs directly from AlignedBuffer
+    for (buffers, 0..) |buffer, i| {
+        iovecs[i] = .{
+            .base = buffer.buffer.ptr,
+            .len = buffer.buffer.len,
+        };
+    }
 
     // Directly use posix.pwritev without any platform-specific checks
     const result = posix.pwritev(file_handle.handle, iovecs, offset) catch |err|

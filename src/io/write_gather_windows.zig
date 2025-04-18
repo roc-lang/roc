@@ -10,7 +10,6 @@ const Allocator = std.mem.Allocator;
 
 const write_gather = @import("write_gather.zig");
 const WriteGatherError = write_gather.WriteGatherError;
-const BufferVec = write_gather.BufferVec;
 
 /// Windows-specific implementation of AlignedBuffer
 pub const WindowsAlignedBuffer = struct {
@@ -48,14 +47,6 @@ pub const WindowsAlignedBuffer = struct {
     pub fn deinit(self: WindowsAlignedBuffer, allocator: Allocator) void {
         allocator.free(self.original_ptr[0..self.original_size]);
     }
-
-    /// Converts this WindowsAlignedBuffer to a BufferVec
-    pub fn toBufferVec(self: WindowsAlignedBuffer) BufferVec {
-        return BufferVec{
-            .ptr = self.buffer.ptr,
-            .len = self.buffer.len,
-        };
-    }
 };
 
 /// Gets the sector size for a given file handle. WriteFileGather
@@ -89,19 +80,16 @@ pub fn getSectorSize(file_handle: std.fs.File) usize {
 /// Validates that buffers meet the Windows WriteFileGather requirements:
 /// - Each buffer must be aligned to the sector size
 /// - Each buffer's size must be a multiple of the sector size
-fn validateBuffers(file_handle: std.fs.File, buffers: []const BufferVec) !void {
-    const sector_size = getSectorSize(file_handle);
-    const sector_size_mask = sector_size - 1;
-
+fn validateBuffers(buffers: []*const WindowsAlignedBuffer) !void {
     for (buffers) |buffer| {
         // Check buffer alignment
-        const ptr_addr = @intFromPtr(buffer.ptr);
-        if ((ptr_addr & sector_size_mask) != 0) {
+        const ptr_addr = @intFromPtr(buffer.buffer.ptr);
+        if ((ptr_addr & (buffer.sector_size - 1)) != 0) {
             return WriteGatherError.InvalidBufferAlignment;
         }
 
         // Check buffer size is multiple of sector size
-        if ((buffer.len & sector_size_mask) != 0) {
+        if ((buffer.buffer.len & (buffer.sector_size - 1)) != 0) {
             return WriteGatherError.InvalidBufferSize;
         }
     }
@@ -110,12 +98,12 @@ fn validateBuffers(file_handle: std.fs.File, buffers: []const BufferVec) !void {
 /// Implementation of writeGather for Windows using WriteFileGather
 pub fn writeGather(
     file_handle: std.fs.File,
-    buffers: []const BufferVec,
+    buffers: []*const WindowsAlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
     // Only validate buffers in debug builds for better performance in release builds
     if (std.debug.runtime_safety) {
-        try validateBuffers(file_handle, buffers);
+        try validateBuffers(buffers);
     }
 
     // Prepare OVERLAPPED structure with the file offset
@@ -135,8 +123,8 @@ pub fn writeGather(
 
     // Fill buffer pointers array and calculate total size
     for (buffers, 0..) |buffer, i| {
-        buffer_ptrs[i] = buffer.ptr;
-        total_size += buffer.len;
+        buffer_ptrs[i] = buffer.buffer.ptr;
+        total_size += buffer.buffer.len;
     }
 
     // Perform the gather write operation
