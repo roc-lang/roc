@@ -188,7 +188,7 @@
                 sha256 = "sha256-DqqkA5iASoK68XBFKv6Gbrso4687smKz8PqVUL2rRsE=";
               };
               entryPoint = "./examples/HelloWorld/main.roc";
-              outputHash = "sha256-L5RBS/zMDcbsARaINp9lY4LVp76TqR68c3uyp1r9DJg=";
+              outputHash = "sha256-Hg1K3tNE2hdz9o9f2HEB0aEuBIBoXrlpb70h6uyOABo=";
             };
           in
           pkgs.runCommand "build helloworld" { } ''

@@ -17,6 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - run: nix flake check
+
       - name: test building default.nix
         run: nix-build
 
@@ -47,6 +49,3 @@ jobs:
 
       - name: test building wasm repl
         run: nix develop -c ./ci/www-repl.sh
-
-      - name: run flake checks
-        run: nix flake check
