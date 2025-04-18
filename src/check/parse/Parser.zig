@@ -1589,7 +1589,7 @@ pub fn parseRecordField(self: *Parser) IR.NodeStore.RecordFieldIdx {
 pub fn parseBranch(self: *Parser) IR.NodeStore.WhenBranchIdx {
     const start = self.pos;
     const p = self.parsePattern(.alternatives_allowed);
-    if (self.peek() == .OpArrow) {
+    if (self.peek() == .OpFatArrow) {
         self.advance();
     }
     const b = self.parseExpr();
