@@ -174,7 +174,7 @@ pub fn parseFile(self: *Parser) void {
 
     while (self.peek() != .EndOfFile) {
         const current_scratch_top = self.store.scratchStatementTop();
-        if (self.parseStmt()) |idx| {
+        if (self.parseTopLevelStatement()) |idx| {
             std.debug.assert(self.store.scratchStatementTop() == current_scratch_top);
             self.store.addScratchStatement(idx);
         } else {
@@ -823,12 +823,31 @@ pub fn parseExposedItem(self: *Parser) IR.NodeStore.ExposedItemIdx {
     }
 }
 
+const StatementType = enum { top_level, in_body };
+
+/// Parse a top level roc statement
+///
+/// e.g. `import Foo`
+pub fn parseTopLevelStatement(self: *Parser) ?IR.NodeStore.StatementIdx {
+    return self.parseStmtByType(.top_level);
+}
+
+/// parse a in-body roc statement
+///
+/// e.g. `foo = 2 + x`
+pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
+    return self.parseStmtByType(.in_body);
+}
+
 /// parse a roc statement
 ///
 /// e.g. `import Foo`, or `foo = 2 + x`
-pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
+fn parseStmtByType(self: *Parser, statementType: StatementType) ?IR.NodeStore.StatementIdx {
     switch (self.peek()) {
         .KwImport => {
+            if (statementType != .top_level) {
+                return self.pushMalformed(IR.NodeStore.StatementIdx, .import_must_be_top_level, self.pos);
+            }
             const start = self.pos;
             self.advance(); // Advance past KwImport
             var qualifier: ?TokenIdx = null;
@@ -964,7 +983,7 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
         // Expect to parse a Type Annotation, e.g. `Foo a : (a,a)`
         .UpperIdent => {
             const start = self.pos;
-            if (self.peekNext() == .OpColon or self.peekNext() == .LowerIdent) {
+            if (statementType == .top_level) {
                 const header = self.parseTypeHeader();
                 if (self.peek() != .OpColon) {
                     return self.pushMalformed(IR.NodeStore.StatementIdx, .expected_colon_after_type_annotation, start);
@@ -978,8 +997,6 @@ pub fn parseStmt(self: *Parser) ?IR.NodeStore.StatementIdx {
                     .region = .{ .start = start, .end = self.pos },
                 } });
                 return statement_idx;
-            } else {
-                // continue to parse final expression
             }
         },
         else => {},
@@ -1657,7 +1674,7 @@ pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {
     const start = self.pos;
     std.debug.assert(self.peek() == .UpperIdent);
     self.advance(); // Advance past UpperIdent
-    if (self.peek() != .LowerIdent) {
+    if (self.peek() != .NoSpaceOpenRound and self.peek() != .OpenRound) {
         return self.store.addTypeHeader(.{
             .name = start,
             .args = .{ .span = .{
@@ -1667,19 +1684,30 @@ pub fn parseTypeHeader(self: *Parser) IR.NodeStore.TypeHeaderIdx {
             .region = .{ .start = start, .end = start },
         });
     }
-    const scratch_top = self.store.scratchTokenTop();
-    var end = self.pos;
-    while (self.peek() == .LowerIdent) {
-        self.store.addScratchToken(self.pos);
-        end = self.pos;
-        self.advance(); // Advance past LowerIdent
-    }
-    const args = self.store.tokenSpanFrom(scratch_top);
+    self.advance();
+    const scratch_top = self.store.scratchTypeAnnoTop();
+    const end = self.parseCollectionSpan(IR.NodeStore.TypeAnnoIdx, .CloseRound, IR.NodeStore.addScratchTypeAnno, Parser.parseTypeIdent) catch {
+        self.store.clearScratchTypeAnnosFrom(scratch_top);
+        return self.pushMalformed(IR.NodeStore.TypeHeaderIdx, .expected_ty_anno_end, start);
+    };
+    const args = self.store.typeAnnoSpanFrom(scratch_top);
     return self.store.addTypeHeader(.{
         .name = start,
         .args = args,
         .region = .{ .start = start, .end = end },
     });
+}
+
+fn parseTypeIdent(self: *Parser) IR.NodeStore.TypeAnnoIdx {
+    if (self.peek() == .LowerIdent) {
+        const tok = self.pos;
+        self.advance();
+        return self.store.addTypeAnno(.{ .ty_var = .{
+            .region = .{ .start = tok, .end = tok },
+            .tok = tok,
+        } });
+    }
+    return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .invalid_type_arg, self.pos);
 }
 
 const TyFnArgs = enum {

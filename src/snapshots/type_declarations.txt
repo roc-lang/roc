@@ -17,7 +17,20 @@ MyType : U64
 
 MyType2 : Module.Thingy
 ~~~PROBLEMS
-NIL
+PARSER: expected_colon_after_type_annotation
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
+PARSER: expr_unexpected_token
+PARSER: expected_colon_after_type_annotation
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -44,8 +57,9 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
         (exposed_item (upper_ident "SomeFunc"))
         (exposed_item (lower_ident "add_one"))
         (exposed_item (lower_ident "main!")))
-    (type_decl (3:1-5:4)
-        (header "Map" "a" "b")
+    (malformed_stmt (3:1-3:6) "expected_colon_after_type_annotation")
+    (type_anno (3:7-5:4)
+        "b"
         (fn (3:11-3:39)
             (apply (3:32-3:39)
                 (ty "List")
@@ -61,28 +75,42 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
         (tuple (5:7-5:17)
             (ty "Bar")
             (ty "Baz")))
-    (type_decl (7:1-9:6)
-        (header "Some" "a")
-        (record (7:10-7:42) "<field>" "<field>"))
-    (type_decl (9:1-11:9)
-        (header "Maybe" "a")
-        (tag_union (9:11-9:26) "TODO tags" "TODO open_anno"))
-    (type_decl (11:1-13:7)
-        (header "SomeFunc" "a")
-        (fn (11:14-11:37)
-            (apply (11:29-11:37)
-                (ty "Maybe")
-                (ty_var (11:35-11:36) "a"))
-            (apply (11:14-11:22)
-                (ty "Maybe")
-                (ty_var (11:20-11:21) "a"))
-            (ty_var (11:24-11:25) "a")))
-    (type_decl (13:1-15:8)
-        (header "MyType")
-        (ty "U64"))
-    (type_decl (15:1-15:24)
-        (header "MyType2")
-        (mod_ty "Module" ".Thingy")))
+    (malformed_stmt (7:1-7:7) "expected_colon_after_type_annotation")
+    (malformed_expr (7:8-7:9) "expr_unexpected_token")
+    (record (7:10-7:42)
+        (field
+            "foo"
+            (apply (7:18-7:23)
+                (tag (7:18-7:20) "Ok")
+                (ident (7:21-7:22) "" "a")))
+        (field "bar" (tag (7:31-7:40) "Something")))
+    (malformed_stmt (9:1-9:8) "expected_colon_after_type_annotation")
+    (malformed_expr (9:9-9:10) "expr_unexpected_token")
+    (list (9:11-9:26)
+        (apply (9:12-9:19)
+            (tag (9:12-9:16) "Some")
+            (ident (9:17-9:18) "" "a"))
+        (tag (9:21-9:25) "None"))
+    (malformed_stmt (11:1-11:11) "expected_colon_after_type_annotation")
+    (malformed_expr (11:12-11:13) "expr_unexpected_token")
+    (malformed_stmt (11:14-11:23) "expected_colon_after_type_annotation")
+    (ident (11:24-11:25) "" "a")
+    (malformed_expr (11:26-11:28) "expr_unexpected_token")
+    (malformed_stmt (11:29-13:7) "expected_colon_after_type_annotation")
+    (malformed_expr (13:8-13:9) "expr_unexpected_token")
+    (malformed_stmt (13:10-15:8) "expected_colon_after_type_annotation")
+    (malformed_expr (15:9-15:10) "expr_unexpected_token")
+    (malformed_stmt (15:11-15:24) "expected_colon_after_type_annotation"))
 ~~~FORMATTED
-NO CHANGE
+module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
+
+b : List(a), (a -> b) -> List(b)
+
+Foo : (Bar, Baz)
+
+{ foo: Ok(a), bar: Something }
+
+[Some(a), None]
+
+a
 ~~~END
