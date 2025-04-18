@@ -7,9 +7,9 @@ const HANDLE = windows.HANDLE;
 const OVERLAPPED = windows.OVERLAPPED;
 const DWORD = windows.DWORD;
 
-const io = @import("../io.zig");
-const WriteGatherError = io.write_gather.WriteGatherError;
-const BufferVec = io.write_gather.BufferVec;
+const write_gather = @import("write_gather.zig");
+const WriteGatherError = write_gather.WriteGatherError;
+const BufferVec = write_gather.BufferVec;
 
 /// Gets the sector size for a given file handle. WriteFileGather
 /// requires buffer pointers to be both aligned to the sector size, and also have sizes

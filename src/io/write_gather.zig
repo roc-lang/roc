@@ -8,7 +8,7 @@ const std = @import("std");
 const utils = @import("../collections/utils.zig");
 
 /// Platform-specific implementation details for gather I/O.
-const backend = if (std.Target.current.os.tag == .windows) 
+const backend = if (@import("builtin").os.tag == .windows) 
     @import("write_gather_windows.zig") 
     else 
     @import("write_gather_posix.zig");
@@ -102,23 +102,44 @@ pub fn writeGather(
 /// - size: Requested buffer size (will be rounded up to the nearest sector size multiple)
 /// - file_handle: Optional file handle used to determine the appropriate sector size
 ///
-/// Returns a slice to the allocated memory. The caller owns the memory and must free it.
+/// Returns a slice to the allocated memory. The caller owns the memory and must free it with freeAlignedBuffer.
 pub fn allocateAlignedBuffer(allocator: std.mem.Allocator, size: usize, file_handle: ?std.fs.File) ![]u8 {
     const sector_size = if (file_handle) |handle| getSectorSize(handle) else 512;
     
     // Round up to the nearest sector size multiple
-    const aligned_size = std.mem.alignForward(size, sector_size);
+    const aligned_size = std.mem.alignForward(usize, size, sector_size);
     
-    // Allocate aligned memory
-    return allocator.alignedAlloc(u8, sector_size, aligned_size) catch |err| switch (err) {
-        error.OutOfMemory => return WriteGatherError.OutOfMemory,
-        else => return WriteGatherError.Unexpected,
-    };
+    // We need to allocate enough extra space to ensure we can align the pointer
+    const ptr = try allocator.alloc(u8, aligned_size + sector_size);
+    
+    // Calculate aligned start address
+    const addr = @intFromPtr(ptr.ptr);
+    const aligned_addr = std.mem.alignForward(usize, addr, sector_size);
+    const offset = aligned_addr - addr;
+    
+    // Return the aligned slice
+    return ptr[offset..offset + aligned_size];
 }
 
 /// Frees a buffer previously allocated with allocateAlignedBuffer.
 pub fn freeAlignedBuffer(allocator: std.mem.Allocator, buffer: []u8) void {
-    allocator.free(buffer);
+    // We allocated extra space at the beginning to ensure alignment
+    // So we need to get back the original allocation pointer
+    const addr = @intFromPtr(buffer.ptr);
+    const alignment = 512; // Same as in allocateAlignedBuffer
+    const remainder = addr % alignment;
+    
+    var original_ptr: [*]u8 = undefined;
+    if (remainder == 0) {
+        // The buffer was already aligned at allocation time (lucky!)
+        original_ptr = buffer.ptr;
+    } else {
+        // Go back to the original allocation which is before our aligned buffer
+        original_ptr = @ptrFromInt(addr - remainder);
+    }
+    
+    // Free the original allocation
+    allocator.free(original_ptr[0..(buffer.len + alignment)]);
 }
 
 /// Aligns a file offset to be compatible with both Windows and POSIX gather operations.
@@ -143,12 +164,8 @@ test "alignOffset aligns correctly" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     
-    const file_path = "test_file.txt";
-    const tmp_file_path = try std.fs.path.join(testing.allocator, &.{ tmp_dir.dir.path, file_path });
-    defer testing.allocator.free(tmp_file_path);
-    
-    // Create a test file
-    const file = try std.fs.createFileAbsolute(tmp_file_path, .{ .read = true, .write = true });
+    // Create a test file directly in the tmp_dir
+    const file = try tmp_dir.dir.createFile("test_file.txt", .{});
     defer file.close();
     
     const sector_size = getSectorSize(file);
@@ -194,12 +211,8 @@ test "writeGather basic functionality" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     
-    const file_path = "gather_test_file.txt";
-    const tmp_file_path = try std.fs.path.join(testing.allocator, &.{ tmp_dir.dir.path, file_path });
-    defer testing.allocator.free(tmp_file_path);
-    
-    // Create a test file
-    const file = try std.fs.createFileAbsolute(tmp_file_path, .{ .read = true, .write = true });
+    // Create a test file with read access
+    const file = try tmp_dir.dir.createFile("gather_test_file.txt", .{ .read = true });
     defer file.close();
     
     const sector_size = getSectorSize(file);
@@ -251,12 +264,8 @@ test "writeGather with offset" {
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
     
-    const file_path = "gather_test_file_offset.txt";
-    const tmp_file_path = try std.fs.path.join(testing.allocator, &.{ tmp_dir.dir.path, file_path });
-    defer testing.allocator.free(tmp_file_path);
-    
-    // Create a test file
-    const file = try std.fs.createFileAbsolute(tmp_file_path, .{ .read = true, .write = true });
+    // Create a test file with read access
+    const file = try tmp_dir.dir.createFile("gather_test_file_offset.txt", .{ .read = true });
     defer file.close();
     
     const sector_size = getSectorSize(file);

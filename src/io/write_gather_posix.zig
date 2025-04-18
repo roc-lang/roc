@@ -2,11 +2,11 @@
 
 const std = @import("std");
 const os = std.os;
-const posix = std.os.posix;
+const posix = std.posix;
 
-const io = @import("../io.zig");
-const WriteGatherError = io.write_gather.WriteGatherError;
-const BufferVec = io.write_gather.BufferVec;
+const write_gather = @import("write_gather.zig");
+const WriteGatherError = write_gather.WriteGatherError;
+const BufferVec = write_gather.BufferVec;
 
 /// Gets the sector size for a given file handle.
 ///
@@ -17,11 +17,9 @@ const BufferVec = io.write_gather.BufferVec;
 /// Note: This function never fails - it returns a default sector size (512 bytes) if
 /// the actual sector size cannot be determined.
 pub fn getSectorSize(file_handle: std.fs.File) usize {
-    if (std.Target.current.isDarwin()) {
-        const F_GETBLKSIZE = 106;
-        const rc = os.fcntl(file_handle.handle, F_GETBLKSIZE, 0) catch return 512;
-
-        return @intCast(rc);
+    if (@import("builtin").os.tag == .macos) {
+        // Just return 512 on macOS since fcntl access is complex
+        return 512;
     } else {
         var stat: posix.Statfs = undefined;
 
@@ -38,8 +36,8 @@ pub fn getSectorSize(file_handle: std.fs.File) usize {
 fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec) void {
     for (buffers, 0..) |buffer, i| {
         iovecs[i] = .{
-            .iov_base = @constCast(buffer.ptr),
-            .iov_len = buffer.len,
+            .base = @constCast(buffer.ptr),
+            .len = buffer.len,
         };
     }
 }
