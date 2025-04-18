@@ -32,6 +32,11 @@ pub fn writeGather(
     buffers: []*const PosixAlignedBuffer,
     offset: u64,
 ) WriteGatherError!usize {
+    std.debug.print("POSIX writeGather: buffers.len = {d}\n", .{buffers.len});
+    for (buffers, 0..) |buf, i| {
+        std.debug.print("  Buffer {d}: len = {d}, first char = '{c}'\n", .{i, buf.buffer.len, buf.buffer[0]});
+    }
+
     // Create iovecs from the buffers
     var iovecs = std.heap.page_allocator.alloc(posix.iovec_const, buffers.len) catch {
         return WriteGatherError.OutOfMemory;
@@ -47,9 +52,12 @@ pub fn writeGather(
     }
 
     // Use pwritev with the created iovec array
-    const result = posix.pwritev(file_handle.handle, iovecs, offset) catch |err|
+    const result = posix.pwritev(file_handle.handle, iovecs, offset) catch |err| {
+        std.debug.print("POSIX writeGather error: {any}\n", .{err});
         return translateError(err);
+    };
 
+    std.debug.print("POSIX writeGather result: {d}\n", .{result});
     return @intCast(result);
 }
 
