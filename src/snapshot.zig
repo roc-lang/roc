@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
+const can = @import("check/canonicalize.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 
@@ -149,6 +150,7 @@ const Section = union(enum) {
     source,
     formatted,
     parse,
+    canonicalize,
     tokens,
     problems,
 
@@ -156,6 +158,7 @@ const Section = union(enum) {
     pub const SOURCE = "~~~SOURCE";
     pub const FORMATTED = "~~~FORMATTED";
     pub const PARSE = "~~~PARSE";
+    pub const CANONICALIZE = "~~~CANONICALIZE";
     pub const TOKENS = "~~~TOKENS";
     pub const PROBLEMS = "~~~PROBLEMS";
 
@@ -166,7 +169,8 @@ const Section = union(enum) {
             .problems => .formatted,
             .formatted => .tokens,
             .tokens => .parse,
-            .parse => .null,
+            .parse => .canonicalize,
+            .canonicalize => .null,
         };
     }
 
@@ -175,6 +179,7 @@ const Section = union(enum) {
         if (std.mem.eql(u8, str, SOURCE)) return .source;
         if (std.mem.eql(u8, str, FORMATTED)) return .formatted;
         if (std.mem.eql(u8, str, PARSE)) return .parse;
+        if (std.mem.eql(u8, str, CANONICALIZE)) return .canonicalize;
         if (std.mem.eql(u8, str, TOKENS)) return .tokens;
         if (std.mem.eql(u8, str, PROBLEMS)) return .problems;
         return null;
@@ -186,6 +191,7 @@ const Section = union(enum) {
             .source => SOURCE,
             .formatted => FORMATTED,
             .parse => PARSE,
+            .canonicalize => CANONICALIZE,
             .tokens => TOKENS,
             .problems => PROBLEMS,
             .None => "",
@@ -216,12 +222,14 @@ const Content = struct {
     meta: []const u8,
     source: []const u8,
     formatted: ?[]const u8,
+    has_canonicalize: bool,
 
-    fn init(meta: []const u8, source: []const u8, formatted: ?[]const u8) Content {
+    fn init(meta: []const u8, source: []const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
         return .{
             .meta = meta,
             .source = source,
             .formatted = formatted,
+            .has_canonicalize = has_canonicalize,
         };
     }
 
@@ -229,6 +237,7 @@ const Content = struct {
         var meta: []const u8 = undefined;
         var source: []const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
+        var has_canonicalize: bool = false;
 
         if (ranges.get(.meta)) |value| {
             meta = value.extract(content);
@@ -248,10 +257,15 @@ const Content = struct {
             formatted = null;
         }
 
+        if (ranges.get(.canonicalize)) |_| {
+            has_canonicalize = true;
+        }
+
         return Content.init(
             meta,
             source,
             formatted,
+            has_canonicalize,
         );
     }
     pub fn format(self: Content, comptime fmt_str: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
@@ -408,6 +422,19 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             try file.writer().writeAll("NO CHANGE");
             try file.writer().writeAll("\n");
         }
+    }
+
+    // Write CANONICALIZE SECTION
+    if (content.has_canonicalize) {
+        var can_ir = can.IR.init(gpa);
+        defer can_ir.deinit();
+        parse_ast.store.emptyScratch();
+        can.canonicalize(&can_ir, &parse_ast);
+
+        var canonicalized = std.ArrayList(u8).init(gpa);
+        defer canonicalized.deinit();
+
+        try can_ir.toSExprStr(&module_env, canonicalized.writer().any());
     }
 
     try file.writer().writeAll("~~~END");
