@@ -5,6 +5,7 @@
 //! while satisfying the requirements of both Windows and POSIX implementations.
 
 const std = @import("std");
+const Allocator = std.mem.Allocator;
 const utils = @import("../collections/utils.zig");
 
 /// Platform-specific implementation details for gather I/O.
@@ -12,6 +13,81 @@ const backend = if (@import("builtin").os.tag == .windows)
     @import("write_gather_windows.zig")
 else
     @import("write_gather_posix.zig");
+
+/// A properly aligned buffer for gather I/O operations.
+/// 
+/// This type ensures that all platform-specific alignment requirements are met.
+/// On Windows, buffers are aligned to the volume sector size and sized to a multiple 
+/// of that sector size. On other platforms, no special alignment is required.
+/// 
+/// This type must be created using AlignedBuffer.init() and freed with deinit().
+pub const AlignedBuffer = struct {
+    /// The aligned buffer slice
+    buffer: []u8,
+    /// The sector size used for alignment (relevant for Windows)
+    sector_size: usize,
+    /// Original allocation pointer (if different from buffer.ptr)
+    original_ptr: ?[*]u8,
+    /// Original allocation size
+    original_size: usize,
+
+    /// Initializes a new AlignedBuffer with proper platform-specific alignment.
+    /// 
+    /// Parameters:
+    /// - allocator: The allocator to use for memory allocation
+    /// - size: Requested buffer size (will be rounded up to the nearest sector size multiple on Windows)
+    /// - file_handle: File handle used to determine the appropriate sector size on Windows
+    ///   (ignored on non-Windows platforms)
+    pub fn init(allocator: Allocator, size: usize, file_handle: std.fs.File) Allocator.Error!AlignedBuffer {
+        if (@import("builtin").os.tag == .windows) {
+            const sector_size = backend.getSectorSize(file_handle);
+            const aligned_size = std.mem.alignForward(usize, size, sector_size);
+
+            // Allocate enough extra space to ensure we can align the pointer
+            const ptr = try allocator.alloc(u8, aligned_size + sector_size);
+
+            // Align the pointer
+            const addr = @intFromPtr(ptr.ptr);
+            const aligned_addr = std.mem.alignForward(usize, addr, sector_size);
+            const offset = aligned_addr - addr;
+
+            return AlignedBuffer{
+                .buffer = ptr[offset .. offset + aligned_size],
+                .sector_size = sector_size,
+                .original_ptr = ptr.ptr,
+                .original_size = ptr.len,
+            };
+        } else {
+            // On non-Windows platforms, no alignment is necessary
+            const buffer = try allocator.alloc(u8, size);
+            return AlignedBuffer{
+                .buffer = buffer,
+                .sector_size = 0, // Not relevant on non-Windows
+                .original_ptr = null, // Not needed as the buffer is the original allocation
+                .original_size = buffer.len,
+            };
+        }
+    }
+
+    /// Frees the aligned buffer
+    pub fn deinit(self: AlignedBuffer, allocator: Allocator) void {
+        if (@import("builtin").os.tag == .windows and self.original_ptr != null) {
+            // Free the original allocation on Windows
+            allocator.free(self.original_ptr.?[0..self.original_size]);
+        } else {
+            // On non-Windows platforms, just free the buffer directly
+            allocator.free(self.buffer);
+        }
+    }
+
+    /// Converts this AlignedBuffer to a BufferVec for use with writeGather
+    pub fn toBufferVec(self: AlignedBuffer) BufferVec {
+        return BufferVec{
+            .ptr = self.buffer.ptr,
+            .len = self.buffer.len,
+        };
+    }
+};
 
 /// A buffer descriptor that works across platforms.
 /// This represents a single contiguous region of memory for gather operations.
@@ -61,9 +137,8 @@ pub const WriteGatherError = error{
 ///
 /// Requirements:
 /// - The file must be opened with write permission.
-/// - On Windows, all buffers must be aligned to the volume sector size (typically 512 bytes)
-///   and their sizes must be a multiple of that sector size.
-/// - The offset must be aligned to the volume sector size on Windows.
+/// - All buffers should be created using AlignedBuffer.init() to ensure proper alignment.
+/// - The offset must be aligned to the volume sector size on Windows. Use alignOffset.
 ///
 /// This is a wrapper around writev() on POSIX and WriteFileGather on Windows.
 ///
@@ -77,68 +152,6 @@ pub fn writeGather(
     offset: u64,
 ) WriteGatherError!usize {
     return backend.writeGather(file_handle, buffers, offset);
-}
-
-/// Allocates a buffer suitable for gather I/O on all platforms.
-/// The buffer will be properly aligned and sized to meet Windows requirements if on Windows.
-/// On non-Windows platforms, no special alignment is applied.
-///
-/// Parameters:
-/// - allocator: The allocator to use for memory allocation
-/// - size: Requested buffer size (will be rounded up to the nearest sector size multiple on Windows)
-/// - file_handle: File handle used to determine the appropriate sector size on Windows
-///   (ignored on non-Windows platforms)
-///
-/// Returns a slice to the allocated memory. The caller owns the memory and must free it with freeAlignedBuffer.
-pub fn allocateAlignedBuffer(allocator: std.mem.Allocator, size: usize, file_handle: std.fs.File) ![]u8 {
-    if (@import("builtin").os.tag == .windows) {
-        // On Windows, get the actual sector size
-        const sector_size = backend.getSectorSize(file_handle);
-
-        // Round up to the nearest sector size multiple
-        const aligned_size = std.mem.alignForward(usize, size, sector_size);
-
-        // We need to allocate enough extra space to ensure we can align the pointer
-        const ptr = try allocator.alloc(u8, aligned_size + sector_size);
-
-        // Calculate aligned start address
-        const addr = @intFromPtr(ptr.ptr);
-        const aligned_addr = std.mem.alignForward(usize, addr, sector_size);
-        const offset = aligned_addr - addr;
-
-        // Return the aligned slice
-        return ptr[offset .. offset + aligned_size];
-    } else {
-        // On non-Windows platforms, no alignment is necessary
-        return allocator.alloc(u8, size);
-    }
-}
-
-/// Frees a buffer previously allocated with allocateAlignedBuffer.
-pub fn freeAlignedBuffer(allocator: std.mem.Allocator, buffer: []u8) void {
-    if (@import("builtin").os.tag == .windows) {
-        // For Windows, we need to recover the original allocation
-        const addr = @intFromPtr(buffer.ptr);
-        // Use a reasonable sector size for alignment recovery
-        // This assumes all standard Windows drives have at least this alignment
-        const min_sector_size = 512;
-        const remainder = addr % min_sector_size;
-
-        var original_ptr: [*]u8 = undefined;
-        if (remainder == 0) {
-            // The buffer was already aligned at allocation time (lucky!)
-            original_ptr = buffer.ptr;
-        } else {
-            // Go back to the original allocation which is before our aligned buffer
-            original_ptr = @ptrFromInt(addr - remainder);
-        }
-
-        // Free the original allocation
-        allocator.free(original_ptr[0..(buffer.len + min_sector_size)]);
-    } else {
-        // On non-Windows platforms, just free the buffer directly
-        allocator.free(buffer);
-    }
 }
 
 /// Aligns a file offset to be compatible with Windows gather operations.
@@ -200,7 +213,7 @@ test "alignOffset aligns correctly" {
     }
 }
 
-test "allocateAlignedBuffer and freeAlignedBuffer" {
+test "AlignedBuffer init and deinit" {
     const allocator = testing.allocator;
     var tmp_dir = testing.tmpDir(.{});
     defer tmp_dir.cleanup();
@@ -211,38 +224,39 @@ test "allocateAlignedBuffer and freeAlignedBuffer" {
 
     // Test allocating a buffer
     const buffer_size = 100;
-    const buffer1 = try allocateAlignedBuffer(allocator, buffer_size, file);
-    defer freeAlignedBuffer(allocator, buffer1);
+    var aligned_buffer = try AlignedBuffer.init(allocator, buffer_size, file);
+    defer aligned_buffer.deinit(allocator);
 
     if (@import("builtin").os.tag == .windows) {
         // On Windows, should be aligned and sized to sector multiple
         const sector_size = backend.getSectorSize(file);
-        try testing.expect(buffer1.len >= sector_size);
+        try testing.expect(aligned_buffer.buffer.len >= sector_size);
+        try testing.expectEqual(aligned_buffer.sector_size, sector_size);
 
         // Test that the buffer address is aligned to sector size
-        const addr = @intFromPtr(buffer1.ptr);
+        const addr = @intFromPtr(aligned_buffer.buffer.ptr);
         try testing.expect(addr % sector_size == 0);
     } else {
         // On non-Windows, should be exactly the requested size
-        try testing.expectEqual(buffer1.len, buffer_size);
+        try testing.expectEqual(aligned_buffer.buffer.len, buffer_size);
     }
 
     // Test that we can write to the entire buffer
-    @memset(buffer1, 0xAA);
-    for (buffer1) |byte| {
+    @memset(aligned_buffer.buffer, 0xAA);
+    for (aligned_buffer.buffer) |byte| {
         try testing.expectEqual(byte, 0xAA);
     }
 
     // Test allocating a larger buffer
-    const buffer2 = try allocateAlignedBuffer(allocator, 1000, file);
-    defer freeAlignedBuffer(allocator, buffer2);
+    var aligned_buffer2 = try AlignedBuffer.init(allocator, 1000, file);
+    defer aligned_buffer2.deinit(allocator);
 
     if (@import("builtin").os.tag == .windows) {
         const sector_size = backend.getSectorSize(file);
         const expected_min_size = std.mem.alignForward(usize, 1000, sector_size);
-        try testing.expect(buffer2.len >= expected_min_size);
+        try testing.expect(aligned_buffer2.buffer.len >= expected_min_size);
     } else {
-        try testing.expectEqual(buffer2.len, 1000); // Exact size on non-Windows
+        try testing.expectEqual(aligned_buffer2.buffer.len, 1000); // Exact size on non-Windows
     }
 }
 
@@ -257,32 +271,32 @@ test "writeGather basic functionality" {
     // Determine buffer size based on platform
     const buffer_size = if (@import("builtin").os.tag == .windows) 512 else 256;
 
-    // Allocate buffers
-    const buffer1 = try allocateAlignedBuffer(testing.allocator, buffer_size, file);
-    defer freeAlignedBuffer(testing.allocator, buffer1);
+    // Allocate AlignedBuffers
+    var aligned_buffer1 = try AlignedBuffer.init(testing.allocator, buffer_size, file);
+    defer aligned_buffer1.deinit(testing.allocator);
 
-    const buffer2 = try allocateAlignedBuffer(testing.allocator, buffer_size, file);
-    defer freeAlignedBuffer(testing.allocator, buffer2);
+    var aligned_buffer2 = try AlignedBuffer.init(testing.allocator, buffer_size, file);
+    defer aligned_buffer2.deinit(testing.allocator);
 
     // Fill buffers with test data
-    @memset(buffer1, 'A');
-    @memset(buffer2, 'B');
+    @memset(aligned_buffer1.buffer, 'A');
+    @memset(aligned_buffer2.buffer, 'B');
 
-    // Create BufferVec array
+    // Create BufferVec array from AlignedBuffers
     const buffers = [_]BufferVec{
-        .{ .ptr = buffer1.ptr, .len = buffer1.len },
-        .{ .ptr = buffer2.ptr, .len = buffer2.len },
+        aligned_buffer1.toBufferVec(),
+        aligned_buffer2.toBufferVec(),
     };
 
     // Write the data using writeGather
     const bytes_written = try writeGather(file, &buffers, 0);
-    try testing.expectEqual(bytes_written, buffer1.len + buffer2.len);
+    try testing.expectEqual(bytes_written, aligned_buffer1.buffer.len + aligned_buffer2.buffer.len);
 
     // Reset file position
     try file.seekTo(0);
 
     // Read the data back to verify
-    const total_size = buffer1.len + buffer2.len;
+    const total_size = aligned_buffer1.buffer.len + aligned_buffer2.buffer.len;
     const read_buffer = try testing.allocator.alloc(u8, total_size);
     defer testing.allocator.free(read_buffer);
 
@@ -290,12 +304,12 @@ test "writeGather basic functionality" {
     try testing.expectEqual(bytes_read, total_size);
 
     // Verify first buffer content
-    for (read_buffer[0..buffer1.len]) |byte| {
+    for (read_buffer[0..aligned_buffer1.buffer.len]) |byte| {
         try testing.expectEqual(byte, 'A');
     }
 
     // Verify second buffer content
-    for (read_buffer[buffer1.len..]) |byte| {
+    for (read_buffer[aligned_buffer1.buffer.len..]) |byte| {
         try testing.expectEqual(byte, 'B');
     }
 }
@@ -311,37 +325,40 @@ test "writeGather with offset" {
     // Determine buffer size based on platform
     const buffer_size = if (@import("builtin").os.tag == .windows) 512 else 256;
 
-    // Allocate buffers
-    const buffer1 = try allocateAlignedBuffer(testing.allocator, buffer_size, file);
-    defer freeAlignedBuffer(testing.allocator, buffer1);
+    // Allocate AlignedBuffers
+    var padding_buffer = try AlignedBuffer.init(testing.allocator, buffer_size, file);
+    defer padding_buffer.deinit(testing.allocator);
 
-    const buffer2 = try allocateAlignedBuffer(testing.allocator, buffer_size, file);
-    defer freeAlignedBuffer(testing.allocator, buffer2);
+    var aligned_buffer1 = try AlignedBuffer.init(testing.allocator, buffer_size, file);
+    defer aligned_buffer1.deinit(testing.allocator);
+
+    var aligned_buffer2 = try AlignedBuffer.init(testing.allocator, buffer_size, file);
+    defer aligned_buffer2.deinit(testing.allocator);
 
     // Fill first half of the file with padding
-    @memset(buffer1, 'X');
-    try file.writeAll(buffer1);
+    @memset(padding_buffer.buffer, 'X');
+    try file.writeAll(padding_buffer.buffer);
 
     // Fill buffers with test data
-    @memset(buffer1, 'C');
-    @memset(buffer2, 'D');
+    @memset(aligned_buffer1.buffer, 'C');
+    @memset(aligned_buffer2.buffer, 'D');
 
-    // Create BufferVec array
+    // Create BufferVec array from AlignedBuffers
     const buffers = [_]BufferVec{
-        .{ .ptr = buffer1.ptr, .len = buffer1.len },
-        .{ .ptr = buffer2.ptr, .len = buffer2.len },
+        aligned_buffer1.toBufferVec(),
+        aligned_buffer2.toBufferVec(),
     };
 
     // Write the data at an offset (aligned on Windows, as-is on other platforms)
     const offset = alignOffset(buffer_size, file);
     const bytes_written = try writeGather(file, &buffers, offset);
-    try testing.expectEqual(bytes_written, buffer1.len + buffer2.len);
+    try testing.expectEqual(bytes_written, aligned_buffer1.buffer.len + aligned_buffer2.buffer.len);
 
     // Reset file position
     try file.seekTo(0);
 
     // Read the complete file content
-    const total_size = offset + buffer1.len + buffer2.len;
+    const total_size = offset + aligned_buffer1.buffer.len + aligned_buffer2.buffer.len;
     const read_buffer = try testing.allocator.alloc(u8, total_size);
     defer testing.allocator.free(read_buffer);
 
@@ -354,12 +371,12 @@ test "writeGather with offset" {
     }
 
     // Verify first buffer content
-    for (read_buffer[offset .. offset + buffer1.len]) |byte| {
+    for (read_buffer[offset .. offset + aligned_buffer1.buffer.len]) |byte| {
         try testing.expectEqual(byte, 'C');
     }
 
     // Verify second buffer content
-    for (read_buffer[offset + buffer1.len ..]) |byte| {
+    for (read_buffer[offset + aligned_buffer1.buffer.len ..]) |byte| {
         try testing.expectEqual(byte, 'D');
     }
 }
