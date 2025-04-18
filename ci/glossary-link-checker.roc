@@ -2,10 +2,27 @@ app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/down
 
 import cli.Stdout
 import cli.Path
+import "../Glossary.md" as glossary_as_str : Str
+
+# This script checks if all markdown links that point to files or dirs are valid for the file Glossary.md
+# TODO check links to other markdown headers as well, e.g. #tokenization
 
 main! = |_args|
-    check_link!("ci/write_version.sh")?
-    Stdout.line!("Done")
+    glossary_as_str
+    |> extract_md_links
+    |> List.for_each_try!(
+        |link_str|
+            check_res = check_link!(link_str)
+
+            when check_res is
+                Ok(_) ->
+                    # Stdout.line!("Check successful for $(link_str)")?
+                    Ok({})
+                Err(BadLink(bad_link_str)) ->
+                    Stdout.line!("I could not find the path: $(bad_link_str). If you recently modified this path, please update $(bad_link_str) in Glossary.md at the root of the repo.")
+    )?
+    
+    Stdout.line!("Check Successful.")
 
 expect
     md_text = "foo [bar](src/baz.md)..."
@@ -48,8 +65,6 @@ expect
     links == ["src/baz.md", "boz.md", "crates/check/can_solo/src/desugar.rs"]
 
 
-
-
 check_link! : Str => Result {} [BadLink Str]
 check_link! = |link_str|
     if Str.starts_with(link_str, "http") || Str.starts_with(link_str, "#") then
@@ -58,7 +73,8 @@ check_link! = |link_str|
         path = Path.from_str(link_str)
 
         when Path.type!(path) is
-            Ok(_) -> Ok({})
+            Ok(_) ->
+                Ok({})
             Err(_) ->
                 Err(BadLink(link_str))
         
