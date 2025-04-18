@@ -17,7 +17,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - run: nix flake check
+      - run: nix flake check --impure
 
       - name: test building default.nix
         run: nix-build
