@@ -781,7 +781,7 @@ The answer is that the first one returns `Ok "b"` and the second one returns `Er
 Here's how calling `List.get` can look in practice:
 
 ```roc
-when List.get(["a", "b", "c"]) index is
+when List.get(["a", "b", "c"], index) is
     Ok(str) -> "I got this string: ${str}"
     Err(OutOfBounds) -> "That index was out of bounds, sorry!"
 ```
