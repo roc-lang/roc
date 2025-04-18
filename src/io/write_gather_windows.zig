@@ -6,10 +6,57 @@ const WINAPI = windows.WINAPI;
 const HANDLE = windows.HANDLE;
 const OVERLAPPED = windows.OVERLAPPED;
 const DWORD = windows.DWORD;
+const Allocator = std.mem.Allocator;
 
 const write_gather = @import("write_gather.zig");
 const WriteGatherError = write_gather.WriteGatherError;
 const BufferVec = write_gather.BufferVec;
+
+/// Windows-specific implementation of AlignedBuffer
+pub const WindowsAlignedBuffer = struct {
+    /// The aligned buffer slice
+    buffer: []u8,
+    /// The sector size used for alignment
+    sector_size: usize,
+    /// Original allocation pointer (if different from buffer.ptr)
+    original_ptr: [*]u8,
+    /// Original allocation size
+    original_size: usize,
+
+    /// Initializes a new WindowsAlignedBuffer with proper alignment
+    pub fn init(allocator: Allocator, size: usize, file_handle: std.fs.File) Allocator.Error!WindowsAlignedBuffer {
+        const sector_size = getSectorSize(file_handle);
+        const aligned_size = std.mem.alignForward(usize, size, sector_size);
+
+        // Allocate enough extra space to ensure we can align the pointer
+        const ptr = try allocator.alloc(u8, aligned_size + sector_size);
+
+        // Align the pointer
+        const addr = @intFromPtr(ptr.ptr);
+        const aligned_addr = std.mem.alignForward(usize, addr, sector_size);
+        const offset = aligned_addr - addr;
+
+        return WindowsAlignedBuffer{
+            .buffer = ptr[offset .. offset + aligned_size],
+            .sector_size = sector_size,
+            .original_ptr = ptr.ptr,
+            .original_size = ptr.len,
+        };
+    }
+
+    /// Frees the aligned buffer
+    pub fn deinit(self: WindowsAlignedBuffer, allocator: Allocator) void {
+        allocator.free(self.original_ptr[0..self.original_size]);
+    }
+
+    /// Converts this WindowsAlignedBuffer to a BufferVec
+    pub fn toBufferVec(self: WindowsAlignedBuffer) BufferVec {
+        return BufferVec{
+            .ptr = self.buffer.ptr,
+            .len = self.buffer.len,
+        };
+    }
+};
 
 /// Gets the sector size for a given file handle. WriteFileGather
 /// requires buffer pointers to be both aligned to the sector size, and also have sizes

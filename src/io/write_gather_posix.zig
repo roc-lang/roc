@@ -3,10 +3,39 @@
 const std = @import("std");
 const os = std.os;
 const posix = std.posix;
+const Allocator = std.mem.Allocator;
 
 const write_gather = @import("write_gather.zig");
 const WriteGatherError = write_gather.WriteGatherError;
 const BufferVec = write_gather.BufferVec;
+
+/// POSIX-specific implementation of AlignedBuffer (simpler, no special alignment needed)
+pub const PosixAlignedBuffer = struct {
+    /// The buffer slice
+    buffer: []u8,
+
+    /// Initializes a new PosixAlignedBuffer
+    pub fn init(allocator: Allocator, size: usize, _: std.fs.File) Allocator.Error!PosixAlignedBuffer {
+        // On POSIX, no special alignment is necessary
+        const buffer = try allocator.alloc(u8, size);
+        return PosixAlignedBuffer{
+            .buffer = buffer,
+        };
+    }
+
+    /// Frees the buffer
+    pub fn deinit(self: PosixAlignedBuffer, allocator: Allocator) void {
+        allocator.free(self.buffer);
+    }
+
+    /// Converts this PosixAlignedBuffer to a BufferVec
+    pub fn toBufferVec(self: PosixAlignedBuffer) BufferVec {
+        return BufferVec{
+            .ptr = self.buffer.ptr,
+            .len = self.buffer.len,
+        };
+    }
+};
 
 /// Convert BufferVec array to iovec array for POSIX writev
 fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec_const) void {
