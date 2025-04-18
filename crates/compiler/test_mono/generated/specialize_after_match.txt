@@ -1,10 +1,10 @@
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.284 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.24 (#Attr.2, #Attr.3):
-    let Num.285 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
-    ret Num.285;
+    let Num.291 : Int1 = lowlevel NumGt #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Test.2 (Test.9, Test.10):
     let Test.38 : U8 = 1i64;

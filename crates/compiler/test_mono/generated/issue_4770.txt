@@ -119,24 +119,24 @@ procedure List.80 (Bool.25, Bool.26, Bool.27, Bool.28, Bool.29):
     inc Bool.25;
     jump List.691 Bool.25 Bool.26 Bool.27 Bool.28 Bool.29;
 
-procedure Num.148 (Num.226, Num.227):
-    let Num.290 : Int1 = CallByName Num.22 Num.226 Num.227;
-    if Num.290 then
-        ret Num.226;
+procedure Num.148 (Num.232, Num.233):
+    let Num.296 : Int1 = CallByName Num.22 Num.232 Num.233;
+    if Num.296 then
+        ret Num.232;
     else
-        ret Num.227;
+        ret Num.233;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.288 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.288;
+    let Num.294 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.294;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.286 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.286;
+    let Num.292 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Test.1 (Bool.24):
     joinpoint Test.26 Test.6:

@@ -22,8 +22,8 @@ procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
     ret List.680;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.283 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.2 (Test.3):
     let Test.6 : U64 = 0i64;

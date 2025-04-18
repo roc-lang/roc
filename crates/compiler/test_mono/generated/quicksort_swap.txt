@@ -38,8 +38,8 @@ procedure List.67 (#Attr.2, #Attr.3, #Attr.4):
     ret List.680;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.285 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.285;
+    let Num.291 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Test.1 (Test.2):
     let Test.28 : U64 = 0i64;

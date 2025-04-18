@@ -702,3 +702,27 @@ pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
 pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
     return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }
+
+pub fn f32ToBits(self: f32) callconv(.C) u32 {
+    return @as(u32, @bitCast(self));
+}
+
+pub fn f64ToBits(self: f64) callconv(.C) u64 {
+    return @as(u64, @bitCast(self));
+}
+
+pub fn i128ToBits(self: i128) callconv(.C) u128 {
+    return @as(u128, @bitCast(self));
+}
+
+pub fn f32FromBits(bits: u32) callconv(.C) f32 {
+    return @as(f32, @bitCast(bits));
+}
+
+pub fn f64FromBits(bits: u64) callconv(.C) f64 {
+    return @as(f64, @bitCast(bits));
+}
+
+pub fn i128FromBits(bits: u128) callconv(.C) i128 {
+    return @as(i128, @bitCast(bits));
+}

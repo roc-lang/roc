@@ -1271,6 +1271,36 @@ pub(crate) fn run_low_level<'a, 'ctx>(
             let fn_name = bitcode::NUM_F64_FROM_PARTS;
             call_bitcode_fn_with_record_arg(env, arg, fn_name)
         }
+        NumF32ToBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_TO_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
+        NumF64ToBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_TO_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
+        NumDecToBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_I128_TO_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
+        NumF32FromBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F32_FROM_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
+        NumF64FromBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_F64_FROM_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
+        NumDecFromBits => {
+            arguments!(arg);
+            let fn_name = bitcode::NUM_I128_FROM_BITS;
+            call_bitcode_fn(env, &[arg], fn_name)
+        }
         Eq => {
             arguments_with_layouts!((lhs_arg, lhs_layout), (rhs_arg, rhs_layout));
 

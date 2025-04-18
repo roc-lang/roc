@@ -155,6 +155,12 @@ module [
     f64_to_parts,
     f32_from_parts,
     f64_from_parts,
+    f32_to_bits,
+    f64_to_bits,
+    dec_to_bits,
+    f32_from_bits,
+    f64_from_bits,
+    dec_from_bits,
     from_bool,
     nan_f32,
     nan_f64,
@@ -1444,19 +1450,61 @@ without_decimal_point : Dec -> I128
 with_decimal_point : I128 -> Dec
 
 ## Splits a [F32] into its components according to IEEE 754 standard.
+##
+## This function is deprecated due to common pitfalls when working with float components
+## using Roc’s fixed-size integer types. Please use [Num.f32_to_bits] instead and extract the
+## [IEEE 754 parts](https://en.wikipedia.org/wiki/Single-precision_floating-point_format#IEEE_754_standard:_binary32)
+## manually from the resulting [U32].
 f32_to_parts : F32 -> { sign : Bool, exponent : U8, fraction : U32 }
 
 ## Splits a [F64] into its components according to IEEE 754 standard.
+##
+## This function is deprecated due to common pitfalls when working with float components
+## using Roc’s fixed-size integer types. Please use [Num.f64_to_bits] instead and extract the
+## [IEEE 754 parts](https://en.wikipedia.org/wiki/Double-precision_floating-point_format#IEEE_754_double-precision_binary_floating-point_format:_binary64)
+## manually from the resulting [U64].
 f64_to_parts : F64 -> { sign : Bool, exponent : U16, fraction : U64 }
 
 ## Combine parts of a [F32] according to IEEE 754 standard.
 ## The fraction should not be bigger than 0x007F_FFFF, any bigger value will be truncated.
+##
+## This function is deprecated due to common pitfalls when working with float components
+## using Roc’s fixed-size integer types. Please combine the
+## [IEEE 754 parts](https://en.wikipedia.org/wiki/Single-precision_floating-point_format#IEEE_754_standard:_binary32)
+## manually into a [U32] and use [Num.f32_from_bits] to create the [F32] instead.
 f32_from_parts : { sign : Bool, exponent : U8, fraction : U32 } -> F32
 
 ## Combine parts of a [F64] according to IEEE 754 standard.
 ## The fraction should not be bigger than 0x000F_FFFF_FFFF_FFFF, any bigger value will be truncated.
 ## The exponent should not be bigger than 0x07FF, any bigger value will be truncated.
+##
+## This function is deprecated due to common pitfalls when working with float components
+## using Roc’s fixed-size integer types. Please combine the
+## [IEEE 754 parts](https://en.wikipedia.org/wiki/Double-precision_floating-point_format#IEEE_754_double-precision_binary_floating-point_format:_binary64)
+## manually into a [U64] and use [Num.f64_from_bits] to create the [F64] instead.
 f64_from_parts : { sign : Bool, exponent : U16, fraction : U64 } -> F64
+
+## Returns a [U32] containing the raw bits of a [F32], as defined by the IEEE 754 standard.
+f32_to_bits : F32 -> U32
+
+## Returns a [U64] containing the raw bits of a [F64], as defined by the IEEE 754 standard.
+f64_to_bits : F64 -> U64
+
+## Returns a [U128] containing the raw bits of a [Dec], which corresponds to the raw bits
+## of its [I128] representation.
+dec_to_bits : Dec -> U128
+
+## Interprets a [U32] as the binary representation of a 32-bit floating-point value according
+## to the IEEE 754 standard and returns the corresponding [F32].
+f32_from_bits : U32 -> F32
+
+## Interprets a [U64] as the binary representation of a 64-bit floating-point value according
+## to the IEEE 754 standard and returns the corresponding [F64].
+f64_from_bits : U64 -> F64
+
+## Interprets a [U128] as the raw bits of the internal [I128] representation of a fixed-point
+## decimal value and returns the corresponding [Dec].
+dec_from_bits : U128 -> Dec
 
 ## Convert a `Bool` to a `Num`
 ## ```roc

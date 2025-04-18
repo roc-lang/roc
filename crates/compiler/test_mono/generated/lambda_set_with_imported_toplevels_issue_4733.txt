@@ -7,12 +7,12 @@ procedure Bool.9 (#Attr.2, #Attr.3):
     ret Bool.21;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.284 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : U64 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Test.0 (Test.8):
     let Test.20 : Int1 = CallByName Bool.2;

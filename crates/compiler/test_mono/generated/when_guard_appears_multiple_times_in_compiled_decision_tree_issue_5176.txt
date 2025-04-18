@@ -3,8 +3,8 @@ procedure Bool.2 ():
     ret Bool.23;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U8 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.1 (Test.2):
     joinpoint Test.12:
