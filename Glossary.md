@@ -11,7 +11,7 @@ Command Line Interface. The entrypoint of the compiler that brings together all
 functionality in the Roc toolset and makes it accessible to the user through the
 terminal, e.g. `roc build main.roc`.
 
-- new compiler: [src/main.zig](src/main.zig)
+- new compiler: [src/main.zig](src/mai.zig)
 - old compiler: [crates/cli/src/main.rs](crates/cli/src/main.rs)
 
 ## Module

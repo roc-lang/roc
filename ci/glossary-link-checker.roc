@@ -1,6 +1,7 @@
 app [main!] { cli: platform "https://github.com/roc-lang/basic-cli/releases/download/0.19.0/Hj-J_zxz7V9YurCSTFcFdu6cQJie4guzsPMUi5kBYUk.tar.br" }
 
 import cli.Stdout
+import cli.Stderr
 import cli.Path
 import "../Glossary.md" as glossary_as_str : Str
 
@@ -8,21 +9,30 @@ import "../Glossary.md" as glossary_as_str : Str
 # TODO check links to other markdown headers as well, e.g. #tokenization
 
 main! = |_args|
-    glossary_as_str
-    |> extract_md_links
-    |> List.for_each_try!(
-        |link_str|
-            check_res = check_link!(link_str)
+    md_links =
+        glossary_as_str
+        |> extract_md_links
 
-            when check_res is
-                Ok(_) ->
-                    # Stdout.line!("Check successful for $(link_str)")?
-                    Ok({})
-                Err(BadLink(bad_link_str)) ->
-                    Stdout.line!("I could not find the path: $(bad_link_str). If you recently modified this path, please update $(bad_link_str) in Glossary.md at the root of the repo.")
-    )?
-    
-    Stdout.line!("Check Successful.")
+    full_check_res =
+        md_links
+        |> List.for_each_try!(
+            |link_str|
+                check_res = check_link!(link_str)
+
+                when check_res is
+                    Ok(_) ->
+                        # Stdout.line!("Check successful for $(link_str)")?
+                        Ok({})
+                    Err(BadLink(bad_link_str)) ->
+                        Stderr.line!("I could not find the path: '$(bad_link_str)'. If you recently modified this path, please update '$(bad_link_str)' in Glossary.md at the root of the repo.\n")?
+                        Err(LinkCheckFailed)
+        )
+
+    when full_check_res is
+            Ok(_) ->
+                Stdout.line!("Successfuly checked $(List.len(md_links) |> Num.to_str) links.")
+            Err(_) ->
+                Err(Exit(1, "Link check failed. Please check the above errors."))
 
 expect
     md_text = "foo [bar](src/baz.md)..."
@@ -68,6 +78,7 @@ expect
 check_link! : Str => Result {} [BadLink Str]
 check_link! = |link_str|
     if Str.starts_with(link_str, "http") || Str.starts_with(link_str, "#") then
+        # TODO check links to other markdown headers as well, e.g. #tokenization
         Ok({})
     else
         path = Path.from_str(link_str)
