@@ -186,7 +186,7 @@ test "alignOffset aligns correctly" {
     if (@import("builtin").os.tag == .windows) {
         // On Windows, should align to sector size
         const sector_size = 512; // Use a fixed value for testing
-        
+
         try testing.expectEqual(alignOffset(0, file), 0);
         try testing.expectEqual(alignOffset(1, file), 0);
         try testing.expectEqual(alignOffset(sector_size - 1, file), 0);

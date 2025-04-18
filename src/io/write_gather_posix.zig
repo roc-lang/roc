@@ -42,19 +42,6 @@ fn toIovecs(buffers: []const BufferVec, iovecs: []posix.iovec_const) void {
     }
 }
 
-/// Check if the platform supports pwritev function
-fn hasPwritev() bool {
-    const builtin = @import("builtin");
-    // Check if Linux - which supports pwritev
-    if (builtin.os.tag == .linux) return true;
-    
-    // Check if FreeBSD - which also supports pwritev
-    if (builtin.os.tag == .freebsd) return true;
-    
-    // On other platforms, we'll use lseek + writev instead
-    return false;
-}
-
 /// Implementation of writeGather for POSIX using pwritev when available, falling back to writev
 pub fn writeGather(
     file_handle: std.fs.File,
@@ -70,47 +57,23 @@ pub fn writeGather(
     // Convert BufferVec array to iovec array
     toIovecs(buffers, iovecs);
 
-    // Platform has pwritev (Linux, FreeBSD) - use it to avoid changing file position
-    if (hasPwritev()) {
-        // Implement platform-specific pwritev call
-        const result = switch (@import("builtin").os.tag) {
-            .linux => std.os.linux.pwritev(file_handle.handle, iovecs, offset),
-            .freebsd => std.os.freebsd.pwritev(file_handle.handle, iovecs, offset),
-            else => unreachable, // Should be caught by hasPwritev
-        } catch |err| return translateError(err);
-    
-        return @intCast(result);
-    } else {
-        // Fall back to lseek + writev for platforms without pwritev
-        // Find the current position directly using C functions
-        const SEEK_CUR = 1; // C constant for current position
-        const original_position = std.c.lseek(file_handle.handle, 0, SEEK_CUR);
-        if (original_position < 0) {
-            return WriteGatherError.InputOutput;
-        }
-        
-        // Seek to the requested position
-        const SEEK_SET = 0; // C constant for beginning of file
-        const seekResult = std.c.lseek(file_handle.handle, @intCast(offset), SEEK_SET);
-        if (seekResult < 0) {
-            return WriteGatherError.InputOutput;
-        }
-    
-        // Perform the gather write operation
-        const bytes_written = posix.writev(file_handle.handle, iovecs) catch |err| {
-            // Try to restore the original position (best effort)
-            _ = std.c.lseek(file_handle.handle, original_position, SEEK_SET);
-        
-            return translateError(err);
-        };
-    
-        // Restore the original position
-        _ = std.c.lseek(file_handle.handle, original_position, SEEK_SET);
-        // If we can't restore the position but the write succeeded, we'll still return success
-        // but future operations on this file handle might be affected
-    
-        return @intCast(bytes_written);
-    }
+    const result = switch (@import("builtin").os.tag) {
+        .linux => std.os.linux.pwritev(file_handle.handle, iovecs, offset),
+        .freebsd => std.os.freebsd.pwritev(file_handle.handle, iovecs, offset),
+        else => blk: {
+            // For platforms that are not explicitly listed, use pwritev
+            // from std.posix if available, or make a specific OS implementation
+            //
+            // Note: This assumes all platforms support pwritev in some form
+            if (@hasDecl(std.posix, "pwritev")) {
+                break :blk std.posix.pwritev(file_handle.handle, iovecs, offset);
+            } else {
+                @compileError("pwritev not available for this platform. Update code to add support.");
+            }
+        },
+    } catch |err| return translateError(err);
+
+    return @intCast(result);
 }
 
 /// Translates POSIX-specific errors to WriteGatherError
