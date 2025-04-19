@@ -75,13 +75,13 @@
         "rust-overlay": "rust-overlay"
       },
       "locked": {
-        "lastModified": 1738668249,
-        "narHash": "sha256-VsJbSkTfh9gooNfEWEfrvfcukdg5xKpUXr186T0dtUI=",
-        "path": "/home/username/gitrepos/roc",
+        "lastModified": 1744991948,
+        "narHash": "sha256-YJ66VPH3Cm5vL356CNkAbFsoOB+uAeK9ZTSCcMOBFrU=",
+        "path": "/home/username/gitrepos/forks/nxy7/roc",
         "type": "path"
       },
       "original": {
-        "path": "/home/username/gitrepos/roc",
+        "path": "/home/username/gitrepos/forks/nxy7/roc",
         "type": "path"
       }
     },

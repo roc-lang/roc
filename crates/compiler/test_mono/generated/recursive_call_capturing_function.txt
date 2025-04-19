@@ -3,8 +3,8 @@ procedure Bool.2 ():
     ret Bool.21;
 
 procedure Num.19 (#Attr.2, #Attr.3):
-    let Num.283 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U32 = lowlevel NumAdd #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.1 (Test.2):
     let Test.8 : U32 = 0i64;

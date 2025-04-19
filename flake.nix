@@ -2,7 +2,8 @@
   description = "Roc flake";
 
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
+    nixpkgs.url =
+      "github:nixos/nixpkgs?rev=184957277e885c06a505db112b35dfbec7c60494";
 
     # rust from nixpkgs has some libc problems, this is patched in the rust-overlay
     rust-overlay = {
@@ -21,29 +22,34 @@
 
   outputs = { self, nixpkgs, rust-overlay, flake-utils, ... }@inputs:
     let
-      supportedSystems = [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
+      supportedSystems =
+        [ "x86_64-linux" "x86_64-darwin" "aarch64-darwin" "aarch64-linux" ];
 
       templates = import ./nix/templates { };
-    in {
+      buildRocPackage = import ./nix/buildRocPackage.nix;
+    in
+    {
       inherit templates;
-      lib = { buildRocPackage = import ./nix/buildRocPackage.nix; };
-    } //
-    flake-utils.lib.eachSystem supportedSystems (system:
+      lib = { inherit buildRocPackage; };
+    } // flake-utils.lib.eachSystem supportedSystems (system:
       let
 
-        overlays = [ (import rust-overlay) ]
-        ++ [(final: prev: {
-          # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
-          # the server is used for local testing of the roc website
-          simple-http-server = final.callPackage ./nix/simple-http-server.nix { };
-        })];
+        overlays = [ (import rust-overlay) ] ++ [
+          (final: prev: {
+            # using a custom simple-http-server fork because of github.com/TheWaWaR/simple-http-server/issues/111
+            # the server is used for local testing of the roc website
+            simple-http-server =
+              final.callPackage ./nix/simple-http-server.nix { };
+          })
+        ];
         pkgs = import nixpkgs { inherit system overlays; };
 
         rocBuild = import ./nix { inherit pkgs; };
 
         compile-deps = rocBuild.compile-deps;
-        inherit (compile-deps) zigPkg llvmPkgs llvmVersion
-          llvmMajorMinorStr glibcPath libGccSPath darwinInputs;
+        inherit (compile-deps)
+          zigPkg llvmPkgs llvmVersion llvmMajorMinorStr glibcPath libGccSPath
+          darwinInputs;
 
         # DevInputs are not necessary to build roc as a user
         linuxDevInputs = with pkgs;
@@ -55,10 +61,10 @@
 
         # DevInputs are not necessary to build roc as a user
         darwinDevInputs = with pkgs;
-          lib.optionals stdenv.isDarwin
-            (with pkgs.darwin.apple_sdk.frameworks; [
-              curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
-            ]);
+          lib.optionals stdenv.isDarwin (with pkgs.darwin.apple_sdk.frameworks;
+          [
+            curl # for wasm-bindgen-cli libcurl (see ./ci/www-repl.sh)
+          ]);
 
         sharedInputs = (with pkgs; [
           # build libraries
@@ -94,7 +100,7 @@
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
           # cargo-udeps # to find unused dependencies
-           
+
           zls # zig language server
           watchexec
           simple-http-server # to view the website locally
@@ -109,8 +115,10 @@
       in
       {
 
-        devShell = pkgs.mkShell {
-          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs ++ darwinDevInputs ++ linuxDevInputs;
+        devShells = {
+          default = pkgs.mkShell {
+          buildInputs = sharedInputs ++ sharedDevInputs ++ darwinInputs
+          ++ darwinDevInputs ++ linuxDevInputs;
 
           # nix does not store libs in /usr/lib or /lib
           # for libgcc_s.so.1
@@ -120,7 +128,7 @@
           NIX_GLIBC_PATH =
             if pkgs.stdenv.isLinux then "${pkgs.glibc.out}/lib" else "";
 
-          LD_LIBRARY_PATH =  with pkgs;
+          LD_LIBRARY_PATH = with pkgs;
             lib.makeLibraryPath
               ([ pkg-config stdenv.cc.cc.lib libffi ncurses zlib ]
               ++ linuxDevInputs);
@@ -134,6 +142,7 @@
             unset NIX_LDFLAGS
           '';
         };
+      };
 
         formatter = pkgs.nixpkgs-fmt;
 
@@ -155,7 +164,43 @@
           default = {
             type = "app";
             program = "${rocBuild.roc-cli}/bin/roc";
+            meta = {
+              description = "Roc CLI";
+              mainProgram = "roc";
+            };
           };
         };
+
+        # test for nix/buildRocPackage.nix
+        checks.canBuildRocPackage =
+          let
+            helloWorldPackage = buildRocPackage {
+              inherit pkgs;
+              roc-cli = rocBuild.roc-cli;
+              linker = "legacy";
+              name = "helloworld";
+              optimize = true;
+              # use `src = ./myfolder;` for local usage
+              src = pkgs.fetchFromGitHub {
+                owner = "roc-lang";
+                repo = "examples";
+                rev = "main";
+                sha256 = "sha256-DqqkA5iASoK68XBFKv6Gbrso4687smKz8PqVUL2rRsE=";
+              };
+              entryPoint = "./examples/HelloWorld/main.roc";
+              outputHash = "sha256-Hg1K3tNE2hdz9o9f2HEB0aEuBIBoXrlpb70h6uyOABo=";
+            };
+          in
+          pkgs.runCommand "build helloworld" { } ''
+            expectedOutput="Hello, World!"
+            actualOutput=$(${helloWorldPackage}/bin/helloworld)
+            if [ "$actualOutput" = "$expectedOutput" ]; then
+              echo "helloworld output is correct."
+              touch $out
+            else
+              echo "helloworld output is incorrect, I expected '$expectedOutput' but got '$actualOutput'" >&2
+              exit 1
+            fi
+          '';
       });
 }

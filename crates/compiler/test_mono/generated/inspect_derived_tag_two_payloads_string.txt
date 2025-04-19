@@ -198,32 +198,32 @@ procedure List.66 (#Attr.2, #Attr.3):
     ret List.685;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.288 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.288;
-
-procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.295 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.295;
-
-procedure Num.23 (#Attr.2, #Attr.3):
-    let Num.292 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
-    ret Num.292;
-
-procedure Num.25 (#Attr.2, #Attr.3):
-    let Num.289 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
-    ret Num.289;
-
-procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.294 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    let Num.294 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
     ret Num.294;
 
+procedure Num.22 (#Attr.2, #Attr.3):
+    let Num.301 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.301;
+
+procedure Num.23 (#Attr.2, #Attr.3):
+    let Num.298 : Int1 = lowlevel NumLte #Attr.2 #Attr.3;
+    ret Num.298;
+
+procedure Num.25 (#Attr.2, #Attr.3):
+    let Num.295 : Int1 = lowlevel NumGte #Attr.2 #Attr.3;
+    ret Num.295;
+
+procedure Num.51 (#Attr.2, #Attr.3):
+    let Num.300 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.300;
+
 procedure Num.53 (#Attr.2, #Attr.3):
-    let Num.291 : U64 = lowlevel NumAddSaturated #Attr.2 #Attr.3;
-    ret Num.291;
+    let Num.297 : U64 = lowlevel NumAddSaturated #Attr.2 #Attr.3;
+    ret Num.297;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.293 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.293;
+    let Num.299 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.299;
 
 procedure Str.20 (#Attr.2):
     let Str.456 : Str = lowlevel StrWithCapacity #Attr.2;

@@ -111,6 +111,12 @@ pub enum LowLevel {
     NumF64ToParts,
     NumF32FromParts,
     NumF64FromParts,
+    NumF32ToBits,
+    NumF64ToBits,
+    NumDecToBits,
+    NumF32FromBits,
+    NumF64FromBits,
+    NumDecFromBits,
     Eq,
     NotEq,
     Not,
@@ -347,6 +353,12 @@ map_symbol_to_lowlevel! {
     NumF64ToParts <= NUM_F64_TO_PARTS;
     NumF32FromParts <= NUM_F32_FROM_PARTS;
     NumF64FromParts <= NUM_F64_FROM_PARTS;
+    NumF32ToBits <= NUM_F32_TO_BITS;
+    NumF64ToBits <= NUM_F64_TO_BITS;
+    NumDecToBits <= NUM_DEC_TO_BITS;
+    NumF32FromBits <= NUM_F32_FROM_BITS;
+    NumF64FromBits <= NUM_F64_FROM_BITS;
+    NumDecFromBits <= NUM_DEC_FROM_BITS;
     Eq <= BOOL_STRUCTURAL_EQ;
     NotEq <= BOOL_STRUCTURAL_NOT_EQ;
     Not <= BOOL_NOT;

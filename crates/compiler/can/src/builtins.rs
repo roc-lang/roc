@@ -213,6 +213,12 @@ map_symbol_to_lowlevel_and_arity! {
     NumF64ToParts; NUM_F64_TO_PARTS; 1,
     NumF32FromParts; NUM_F32_FROM_PARTS; 1,
     NumF64FromParts; NUM_F64_FROM_PARTS; 1,
+    NumF32ToBits; NUM_F32_TO_BITS; 1,
+    NumF64ToBits; NUM_F64_TO_BITS; 1,
+    NumDecToBits; NUM_DEC_TO_BITS; 1,
+    NumF32FromBits; NUM_F32_FROM_BITS; 1,
+    NumF64FromBits; NUM_F64_FROM_BITS; 1,
+    NumDecFromBits; NUM_DEC_FROM_BITS; 1,
 
     Eq; BOOL_STRUCTURAL_EQ; 2,
     NotEq; BOOL_STRUCTURAL_NOT_EQ; 2,

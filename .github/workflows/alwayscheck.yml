@@ -1,0 +1,42 @@
+on:
+  pull_request:
+
+name: SpellCheck+LinkCheck
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Do not add permissions here! Configure them at the job level!
+permissions: {}
+
+env:
+  RUST_BACKTRACE: 1
+
+jobs:
+  spell-link-check:
+    name: spell and md link check
+    runs-on: [ubuntu-24.04]
+    timeout-minutes: 20
+    env:
+      FORCE_COLOR: 1
+    steps:
+      - uses: actions/checkout@v4
+
+      - run: cargo install typos-cli --version 1.0.11
+
+      - name: do spell check with typos-cli 1.0.11
+        run: typos
+
+      - name: setup Roc
+        run: |
+          curl -s -OL https://github.com/roc-lang/roc/releases/download/alpha3-rolling/roc-linux_x86_64-alpha3-rolling.tar.gz
+          tar -xf roc-linux_x86_64-alpha3-rolling.tar.gz
+          rm roc-linux_x86_64-alpha3-rolling.tar.gz
+          cd roc_nightly-*
+          # make roc binary available
+          echo "$(pwd)" >> $GITHUB_PATH
+
+      - run: roc version
+
+      - run: roc ./ci/glossary-link-checker.roc

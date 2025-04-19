@@ -4142,6 +4142,74 @@ fn f64_from_parts() {
 
 #[test]
 #[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_to_bits() {
+    assert_evals_to!(r"Num.f32_to_bits 0", 0, u32);
+    assert_evals_to!(r"Num.f32_to_bits Num.max_f32", 0x7f7fffff, u32);
+    assert_evals_to!(r"Num.f32_to_bits Num.min_f32", 0xff7fffff, u32);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_to_bits() {
+    assert_evals_to!(r"Num.f64_to_bits 0", 0, u64);
+    assert_evals_to!(r"Num.f64_to_bits Num.max_f64", 0x7fefffffffffffff, u64);
+    assert_evals_to!(r"Num.f64_to_bits Num.min_f64", 0xffefffffffffffff, u64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn dec_to_bits() {
+    assert_evals_to!(r"Num.dec_to_bits 0", U128::from(0), U128);
+    assert_evals_to!(
+        r"Num.dec_to_bits 170141183460469231731.687303715884105727",
+        U128::from(170141183460469231731687303715884105727),
+        U128
+    );
+    assert_evals_to!(
+        r"Num.dec_to_bits -170141183460469231731.687303715884105728",
+        U128::from(170141183460469231731687303715884105728),
+        U128
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f32_from_bits() {
+    assert_evals_to!(r"Num.f32_from_bits 0", 0.0, f32);
+    assert_evals_to!(r"Num.f32_from_bits 0x7f7fffff", f32::MAX, f32);
+    assert_evals_to!(r"Num.f32_from_bits 0xff7fffff", f32::MIN, f32);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn f64_from_bits() {
+    assert_evals_to!(r"Num.f64_from_bits 0", 0.0, f64);
+    assert_evals_to!(r"Num.f64_from_bits 0x7fefffffffffffff", f64::MAX, f64);
+    assert_evals_to!(r"Num.f64_from_bits 0xffefffffffffffff", f64::MIN, f64);
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
+fn dec_from_bits() {
+    assert_evals_to!(
+        r"Num.dec_from_bits 0",
+        RocDec::from_str("0").unwrap(),
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.dec_from_bits 170141183460469231731687303715884105727",
+        RocDec::MAX,
+        RocDec
+    );
+    assert_evals_to!(
+        r"Num.dec_from_bits 170141183460469231731687303715884105728",
+        RocDec::MIN,
+        RocDec
+    );
+}
+
+#[test]
+#[cfg(any(feature = "gen-llvm", feature = "gen-dev", feature = "gen-wasm"))]
 fn from_bool_true() {
     assert_evals_to!(
         indoc!(

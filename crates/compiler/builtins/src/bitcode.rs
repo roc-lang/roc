@@ -327,6 +327,12 @@ pub const NUM_F32_TO_PARTS: &str = "roc_builtins.num.f32_to_parts";
 pub const NUM_F64_TO_PARTS: &str = "roc_builtins.num.f64_to_parts";
 pub const NUM_F32_FROM_PARTS: &str = "roc_builtins.num.f32_from_parts";
 pub const NUM_F64_FROM_PARTS: &str = "roc_builtins.num.f64_from_parts";
+pub const NUM_F32_TO_BITS: &str = "roc_builtins.num.f32_to_bits";
+pub const NUM_F64_TO_BITS: &str = "roc_builtins.num.f64_to_bits";
+pub const NUM_I128_TO_BITS: &str = "roc_builtins.num.i128_to_bits";
+pub const NUM_F32_FROM_BITS: &str = "roc_builtins.num.f32_from_bits";
+pub const NUM_F64_FROM_BITS: &str = "roc_builtins.num.f64_from_bits";
+pub const NUM_I128_FROM_BITS: &str = "roc_builtins.num.i128_from_bits";
 
 pub const STR_INIT: &str = "roc_builtins.str.init";
 pub const STR_COUNT_SEGMENTS: &str = "roc_builtins.str.count_segments";

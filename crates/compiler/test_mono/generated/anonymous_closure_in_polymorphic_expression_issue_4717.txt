@@ -79,16 +79,16 @@ procedure List.80 (Bool.22, Bool.23, Bool.24, Bool.25, Bool.26):
     jump List.695 Bool.22 Bool.23 Bool.24 Bool.25 Bool.26;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.286 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.286;
+    let Num.292 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.292;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.285 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.285;
+    let Num.291 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.291;
 
 procedure Num.77 (#Attr.2, #Attr.3):
-    let Num.284 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : U64 = lowlevel NumSubSaturated #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Test.1 (Test.2):
     let Test.13 : U64 = 0i64;
