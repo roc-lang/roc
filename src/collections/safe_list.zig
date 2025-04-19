@@ -99,7 +99,7 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn rangeToSlice(self: *const SafeList(T), range: *const Range) Slice {
+        pub fn rangeToSlice(self: *const SafeList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
             const end: usize = @intFromEnum(range.end);
 
@@ -231,7 +231,7 @@ pub fn SafeMultiList(comptime T: type) type {
         }
 
         /// Convert a range to a slice
-        pub fn rangeToSlice(self: *const SafeMultiList(T), range: *const Range) Slice {
+        pub fn rangeToSlice(self: *const SafeMultiList(T), range: Range) Slice {
             const start: usize = @intFromEnum(range.start);
             const end: usize = @intFromEnum(range.end);
 
@@ -342,12 +342,12 @@ test "SafeList(u8) rangeToSlice" {
     defer list.deinit(gpa);
 
     const rangeA = list.appendSlice(gpa, &[_]u8{ 'a', 'b', 'c', 'd' });
-    const sliceA = list.rangeToSlice(&rangeA);
+    const sliceA = list.rangeToSlice(rangeA);
     try testing.expectEqual('a', sliceA[0]);
     try testing.expectEqual('d', sliceA[3]);
 
     const rangeB = SafeList(u8).Range{ .start = @enumFromInt(2), .end = @enumFromInt(4) };
-    const sliceB = list.rangeToSlice(&rangeB);
+    const sliceB = list.rangeToSlice(rangeB);
     try testing.expectEqual('c', sliceB[0]);
     try testing.expectEqual('d', sliceB[1]);
 }
@@ -380,7 +380,7 @@ test "SafeMultiList(u8) rangeToSlice" {
     defer multilist.deinit(gpa);
 
     const range_a = multilist.appendSlice(gpa, &[_]Struct{ .{ .num = 100, .char = 'a' }, .{ .num = 200, .char = 'b' }, .{ .num = 300, .char = 'c' } });
-    const slice_a = multilist.rangeToSlice(&range_a);
+    const slice_a = multilist.rangeToSlice(range_a);
 
     const num_slice_a = slice_a.items(.num);
     try testing.expectEqual(3, num_slice_a.len);
@@ -395,7 +395,7 @@ test "SafeMultiList(u8) rangeToSlice" {
     try testing.expectEqual('c', char_slice_a[2]);
 
     const range_b = StructMultiList.Range{ .start = @enumFromInt(1), .end = @enumFromInt(2) };
-    const slice_b = multilist.rangeToSlice(&range_b);
+    const slice_b = multilist.rangeToSlice(range_b);
 
     const num_slice_b = slice_b.items(.num);
     try testing.expectEqual(1, num_slice_b.len);

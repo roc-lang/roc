@@ -285,7 +285,7 @@ pub const Expr = union(enum) {
                 var node = sexpr.Expr.init(gpa, "list");
                 appendTypeVarChild(&node, gpa, "elem_var", l.elem_var);
                 var elems_node = sexpr.Expr.init(gpa, "elems");
-                for (ir.exprs_at_regions.rangeToSlice(&l.elems).items(.expr)) |elem| {
+                for (ir.exprs_at_regions.rangeToSlice(l.elems).items(.expr)) |elem| {
                     var elem_sexpr = ir.exprs.get(elem).toSExpr(env, ir);
                     elems_node.appendNodeChild(gpa, &elem_sexpr);
                 }
@@ -311,7 +311,7 @@ pub const Expr = union(enum) {
                 appendTypeVarChild(&node, gpa, "branch_var", i.branch_var);
 
                 var branches_node = sexpr.Expr.init(gpa, "branches");
-                for (ir.if_branches.rangeToSlice(&i.branches).items(.cond), ir.if_branches.rangeToSlice(&i.branches).items(.body)) |cond, body| {
+                for (ir.if_branches.rangeToSlice(i.branches).items(.cond), ir.if_branches.rangeToSlice(i.branches).items(.body)) |cond, body| {
                     var cond_node = cond.toSExpr(env, ir);
                     var body_node = body.toSExpr(env, ir);
                     var branch_node = sexpr.Expr.init(gpa, "branch");
@@ -332,7 +332,7 @@ pub const Expr = union(enum) {
             .let => |l| {
                 var node = sexpr.Expr.init(gpa, "let");
                 var defs_node = sexpr.Expr.init(gpa, "defs");
-                for (ir.defs.rangeToSlice(&l.defs)) |def| {
+                for (ir.defs.rangeToSlice(l.defs)) |def| {
                     var def_sexpr = def.toSExpr(env, ir);
                     defs_node.appendNodeChild(gpa, &def_sexpr);
                 }
@@ -350,7 +350,7 @@ pub const Expr = union(enum) {
                 var node = sexpr.Expr.init(gpa, "call");
                 node.appendStringChild(gpa, "fn=<TODO: store and print fn expr>"); // The called expression needs to be stored
                 var args_node = sexpr.Expr.init(gpa, "args");
-                for (ir.typed_exprs_at_regions.rangeToSlice(&c.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(&c.args).items(.type_var)) |arg, ty_var| {
+                for (ir.typed_exprs_at_regions.rangeToSlice(c.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(c.args).items(.type_var)) |arg, ty_var| {
                     var arg_sexpr = ir.exprs.get(arg).toSExpr(env, ir);
                     var argty_sexpr = sexpr.Expr.init(gpa, "argty");
                     argty_sexpr.appendNodeChild(gpa, &arg_sexpr);
@@ -399,7 +399,7 @@ pub const Expr = union(enum) {
                 appendTypeVarChild(&node, gpa, "tag_union_var", t.tag_union_var);
                 appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 var args_node = sexpr.Expr.init(gpa, "args");
-                for (ir.typed_exprs_at_regions.rangeToSlice(&t.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(&t.args).items(.type_var)) |arg, ty_var| {
+                for (ir.typed_exprs_at_regions.rangeToSlice(t.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(t.args).items(.type_var)) |arg, ty_var| {
                     var arg_sexpr = ir.exprs.get(arg).toSExpr(env, ir);
                     var argty_sexpr = sexpr.Expr.init(gpa, "argty");
                     argty_sexpr.appendNodeChild(gpa, &arg_sexpr);
@@ -842,7 +842,7 @@ pub const Pattern = union(enum) {
                 appendTypeVarChild(&node, gpa, "whole_var", t.whole_var);
                 appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 var args_node = sexpr.Expr.init(gpa, "arguments");
-                for (ir.patterns_at_regions.rangeToSlice(&t.arguments).items(.pattern), ir.typed_patterns_at_regions.rangeToSlice(&t.arguments).items(.type_var)) |arg, type_var| {
+                for (ir.patterns_at_regions.rangeToSlice(t.arguments).items(.pattern), ir.typed_patterns_at_regions.rangeToSlice(t.arguments).items(.type_var)) |arg, type_var| {
                     var arg_sexpr = ir.patterns.get(arg).toSExpr(env, ir);
                     var pat_ty_var = sexpr.Expr.init(gpa, "argty");
                     pat_ty_var.appendNodeChild(gpa, &arg_sexpr);
@@ -872,7 +872,7 @@ pub const Pattern = union(enum) {
                 appendTypeVarChild(&node, gpa, "list_var", l.list_var);
                 appendTypeVarChild(&node, gpa, "elem_var", l.elem_var);
                 var patterns_node = sexpr.Expr.init(gpa, "patterns");
-                for (ir.patterns.rangeToSlice(&l.patterns)) |patt| {
+                for (ir.patterns.rangeToSlice(l.patterns)) |patt| {
                     var patt_sexpr = patt.toSExpr(env, ir);
                     patterns_node.appendNodeChild(gpa, &patt_sexpr);
                 }
