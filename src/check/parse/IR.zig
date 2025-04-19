@@ -606,7 +606,7 @@ pub const NodeStore = struct {
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
-    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         var store: NodeStore = .{
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
@@ -633,12 +633,8 @@ pub const NodeStore = struct {
         return store;
     }
 
-    // This value is based on some observed characteristics of Roc code.
-    // Having an initial capacity of 10 ensures that the scratch slice
-    // will only have to be resized in >90th percentile case.
-    // It is not scientific, and should be tuned when we have enough
-    // Roc code to instrument this and determine a real 90th percentile.
-    const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 10);
+    // TODO: tune this base on real roc code. In general, these arrays are all really small, so oversize it.
+    const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64);
 
     /// Deinitializes all data owned by the store.
     /// A caller should ensure that they have taken
