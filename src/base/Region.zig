@@ -3,7 +3,7 @@
 const std = @import("std");
 const collections = @import("../collections.zig");
 
-const Region = @This();
+const Self = @This();
 
 start: Position,
 end: Position,
@@ -16,23 +16,23 @@ pub const List = collections.SafeList(@This());
 pub const Idx = List.Idx;
 
 /// A slice into a list of regions.
-pub const Slice = List.Slice;
+pub const Range = List.Range;
 
 /// Create an empty `Region`.
-pub fn zero() Region {
-    return Region{
+pub fn zero() Self {
+    return Self{
         .start = Position.zero(),
         .end = Position.zero(),
     };
 }
 
 /// Returns true if the region is empty i.e. all values are zero.
-pub fn isEmpty(self: Region) bool {
+pub fn isEmpty(self: Self) bool {
     return self.start.offset == 0 and self.end.offset == 0;
 }
 
 /// Write the debug format of a region to a writer.
-pub fn format(self: *const Region, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
+pub fn format(self: *const Self, comptime fmt: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
     if (fmt.len != 0) {
         std.fmt.invalidFmtError(fmt, self);
     }

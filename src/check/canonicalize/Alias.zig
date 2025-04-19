@@ -23,8 +23,8 @@ kind: Kind,
 pub const List = collections.SafeMultiList(@This());
 /// An index into a SafeMultiList of aliases.
 pub const Idx = List.Idx;
-/// A slice into a list of aliases.
-pub const Slice = List.Slice;
+/// A range in a list of aliases.
+pub const Range = List.Range;
 
 /// The kind of an alias, as exposed in a siloed module.
 pub const Kind = union(enum) {
@@ -43,12 +43,12 @@ pub const Kind = union(enum) {
 
 /// The data for a nominal alias, e.g. `Foo := [Foo(Str)]`
 pub const Nominal = struct {
-    type_variables: Var.Slice,
+    type_variables: Var.Range,
     recursion_variables: std.AutoHashMap(TypeIdx, Ident.Idx),
 };
 /// The data for a structural alias, e.g. `Foo : { bar : Str }`
 pub const Structural = struct {
-    type_variables: Var.Slice,
+    type_variables: Var.Range,
 };
 /// A malformed alias that can still be referred to by other entities.
 pub const Malformed = struct {
@@ -65,5 +65,5 @@ pub const Var = struct {
     /// A list of alias type variables.
     pub const List = collections.SafeMultiList(@This());
     /// A slice of alias type variables.
-    pub const Slice = Var.List.Slice;
+    pub const Range = Var.List.Range;
 };
