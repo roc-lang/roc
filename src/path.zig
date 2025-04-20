@@ -15,7 +15,7 @@ pub fn makeDirAbsoluteRecursive(path: anytype) std.fs.Dir.MakeError!void {
     } else if (T == [:0]u16) {
         return makeDirRecursiveW(path);
     } else {
-        @compileError("Expected a [:0]u8 (POSIX format) or [:0]u16 (Windows format) path, but got " ++ @typeName(T));
+        @compileError("Expected path's type to be either [:0]u8 (POSIX format) or [:0]u16 (Windows format), but it was " ++ @typeName(T));
     }
 }
 

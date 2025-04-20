@@ -89,7 +89,7 @@ pub fn writeToCache(
     path_buf[hash_sep_pos] = 0;
 
     // Create all parent directories as needed
-    try path_utils.makeDirRecursiveZ(path_buf[0..hash_sep_pos :0]);
+    try path_utils.makeDirAbsoluteRecursive(path_buf[0..hash_sep_pos :0]);
 
     // Restore the original character
     path_buf[hash_sep_pos] = saved_char;
