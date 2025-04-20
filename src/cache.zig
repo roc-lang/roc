@@ -57,7 +57,7 @@ pub fn readCacheInto(
     dest: []align(@alignOf(CacheHeader)) u8,
     abs_cache_dir: []const u8,
     hash: []const u8,
-) !usize {
+) (CacheError || std.fs.File.OpenError || std.fs.File.ReadError)!usize {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
     // Create the full cache path
@@ -77,7 +77,7 @@ pub fn writeToCache(
     abs_cache_dir: []const u8,
     hash: []const u8,
     contents: []const u8, // TODO: convert this to iovecs and use pwritev on POSIX targets. Windows should use memory-mapped writes.
-) !usize {
+) (CacheError || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.File.WriteError)!usize {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
     // Create the full cache path
@@ -100,7 +100,7 @@ pub fn writeToCache(
                     var path_copy: [std.fs.max_path_bytes:0]u8 = undefined;
                     @memcpy(path_copy[0..parent_dir_path.len], parent_dir_path);
                     path_copy[parent_dir_path.len] = 0; // Null-terminate
-                    try path_utils.makeDirRecursive(path_copy[0..parent_dir_path.len :0]);
+                    try path_utils.makeDirRecursiveZ(path_copy[0..parent_dir_path.len :0]);
                 } else if (parent_err != error.PathAlreadyExists) {
                     // If the parent directory already exists, that's fine.
                     // (It must have been created concurrently.)
@@ -204,7 +204,7 @@ fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) 
 fn writeCacheContents(
     file: std.fs.File,
     contents: []const u8,
-) !usize {
+) std.fs.File.WriteError!usize {
     // Create and write header
     var header = CacheHeader{
         .total_cached_bytes = @intCast(contents.len),

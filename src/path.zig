@@ -8,7 +8,7 @@ const std = @import("std");
 /// original characters when done. This avoids the need for a separate allocation,
 /// but does mean this function isn't thread-safe because it temporarily modifies
 /// the given path. (To get thread-safety, clone the path before passing it in.)
-pub fn makeDirRecursiveZ(path: [:0]u8) std.posix.MakeDirError!void {
+pub fn makeDirRecursiveZ(path: [:0]u8) std.fs.Dir.MakeError!void {
     const path_len = path.len;
 
     // First, try to create the directory directly
@@ -64,7 +64,7 @@ pub fn makeDirRecursiveZ(path: [:0]u8) std.posix.MakeDirError!void {
     };
 }
 
-test "makeDirRecursive - basic functionality" {
+test "makeDirRecursiveZ - basic functionality" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -87,7 +87,7 @@ test "makeDirRecursive - basic functionality" {
     defer deepest_dir.close();
 }
 
-test "makeDirRecursive - already existing directory" {
+test "makeDirRecursiveZ - already existing directory" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
@@ -110,7 +110,7 @@ test "makeDirRecursive - already existing directory" {
     defer dir.close();
 }
 
-test "makeDirRecursive - partial existing path" {
+test "makeDirRecursiveZ - partial existing path" {
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
