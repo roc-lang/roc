@@ -102,57 +102,31 @@ pub fn readCacheInto(
     // Get the full path, e.g. "/path/to/roc/cache/0.1.0/abc12345.rcir"
     assert(std.fs.path.isAbsolute(abs_cache_dir));
 
-    // +1 for the separator between the cache dir and the hash.
-    const path_len = abs_cache_dir.len + bytesNeededToHashPath(file_hash) + file_ext.len + 1;
-    var path: [path_len:0]u8 = undefined;
+    var path: [std.fs.max_path_bytes:0]u8 = undefined;
 
     // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
     @memcpy(path[0..abs_cache_dir.len], abs_cache_dir);
     path[abs_cache_dir.len] = std.fs.path.sep;
     const hash_start = abs_cache_dir.len + 1; // +1 for the path separator.
     const hash_len = writeHashToPath(file_hash, path[hash_start..]);
-    @memcpy(path[hash_start + hash_len ..], file_ext);
-    path[path_len - 1] = 0; // Null-terminate
 
-    const file = try std.fs.openFileAbsoluteZ(path, .{});
+    // Make sure we have enough space for the file extension
+    const ext_start = hash_start + hash_len;
+    const ext_end = ext_start + file_ext.len;
+    assert(ext_end < path.len); // Ensure we have enough space
+
+    // Copy the extension
+    for (file_ext, 0..) |c, i| {
+        path[ext_start + i] = c;
+    }
+
+    // Null-terminate
+    path[ext_end] = 0;
+
+    const file = try std.fs.openFileAbsoluteZ(&path, .{});
     defer file.close();
 
     return try file.readAll(buf);
-}
-
-/// Joins path components with separators for the cache file path
-/// Writes the path to the provided buffer and returns a slice of the result
-fn joinPath(buf: []u8, abs_dir: []const u8, version: []const u8, hash: []const u8, ext: []const u8) ![]const u8 {
-    const sep = std.fs.path.sep;
-
-    // Ensure we don't overflow the buffer
-    const needed_len = abs_dir.len + 1 + version.len + 1 + hash.len + ext.len;
-    if (needed_len > buf.len) {
-        return error.PathTooLong;
-    }
-
-    // Copy each component with separators
-    var index: usize = 0;
-
-    @memcpy(buf[index..][0..abs_dir.len], abs_dir);
-    index += abs_dir.len;
-
-    buf[index] = sep;
-    index += 1;
-
-    @memcpy(buf[index..][0..version.len], version);
-    index += version.len;
-
-    buf[index] = sep;
-    index += 1;
-
-    @memcpy(buf[index..][0..hash.len], hash);
-    index += hash.len;
-
-    @memcpy(buf[index..][0..ext.len], ext);
-    index += ext.len;
-
-    return buf[0..index]; // Return a slice of exactly the right length
 }
 
 /// TODO: implement
@@ -257,11 +231,12 @@ test "readCacheInto and initFromBytes integration" {
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    const roc_version = "0.1.0";
-    const file_hash = "abc123456";
+    // Use a test allocator for path operations in the test
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const allocator = arena.allocator();
 
-    // Create the version subdirectory
-    try tmp_dir.dir.makePath(roc_version);
+    const file_hash = "abc123456";
 
     // Create test data
     const test_data = "This is test data for our cache!";
@@ -282,18 +257,36 @@ test "readCacheInto and initFromBytes integration" {
     // Calculate and set the checksum
     header.data_checksum = CacheHeader.checksum(write_buffer[data_start .. data_start + test_data_len]);
 
-    // Construct the cache file path
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try joinPath(&path_buf, abs_cache_dir, roc_version, file_hash, file_ext);
+    // Create the hash directory structure
+    var hash_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const hash_len = writeHashToPath(file_hash, &hash_buf);
+    const hash_path = hash_buf[0..hash_len];
+
+    // Create the directory structure for the hash
+    // Find the position of the separator in the hash path
+    var sep_pos: usize = 0;
+    while (sep_pos < hash_path.len) : (sep_pos += 1) {
+        if (hash_path[sep_pos] == std.fs.path.sep) {
+            break;
+        }
+    }
+    try tmp_dir.dir.makePath(hash_path[0..sep_pos]);
+
+    // Create the full file path
+    const file_path = try std.fs.path.join(allocator, &.{
+        abs_cache_dir,
+        hash_path,
+    });
+    const full_path = try std.fmt.allocPrint(allocator, "{s}{s}", .{ file_path, file_ext });
 
     // Create the cache file and write the data
-    const file = try std.fs.createFileAbsolute(path, .{});
+    const file = try std.fs.createFileAbsolute(full_path, .{});
     defer file.close();
     try file.writeAll(write_buffer[0 .. data_start + test_data_len]);
 
     // Test readCacheInto
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, roc_version, file_hash);
+    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash);
 
     try std.testing.expect(bytes_read >= @sizeOf(CacheHeader));
 
@@ -313,12 +306,11 @@ test "readCacheInto - file not found" {
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    const roc_version = "0.1.0";
     const file_hash = "nonexistent";
 
     // Test readCacheInto with a nonexistent file
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    const result = readCacheInto(&read_buffer, abs_cache_dir, roc_version, file_hash);
+    const result = readCacheInto(&read_buffer, abs_cache_dir, file_hash);
 
     try std.testing.expectError(error.FileNotFound, result);
 }
