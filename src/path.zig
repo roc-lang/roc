@@ -1,31 +1,66 @@
 const std = @import("std");
 
-/// Recursive helper function to create a directory and all of its parent directories,
+/// Helper function to create a directory and all of its parent directories,
 /// similar to `mkdir -p`.
 ///
-/// This function takes a path (not null-terminated) and attempts to create directories
-/// up the hierarchy until successful. It starts by attempting to create the parent directory,
-/// and if that fails with FileNotFound, it recursively creates parent directories.
-pub fn makeDirRecursive(path: []const u8) !void {
-    // Try to create the directory
-    std.fs.makeDirAbsolute(path) catch |err| {
-        // If the directory already exists, that's fine
+/// The argument isn't const because this temporarily writes zeros into it to
+/// null-terminate intermediate directories within the path, then restores the
+/// original characters when done. This avoids the need for a separate allocation,
+/// but does mean this function isn't thread-safe because it temporarily modifies
+/// the given path. (To get thread-safety, clone the path before passing it in.)
+pub fn makeDirRecursive(path: [:0]u8) !void {
+    const path_len = path.len;
+
+    // First, try to create the directory directly
+    std.fs.makeDirAbsoluteZ(path) catch |err| {
+        // If it already exists, we're done
         if (err == error.PathAlreadyExists) return;
 
-        // If the parent directory doesn't exist, recursively create it
-        if (err == error.FileNotFound) {
-            // Find the parent directory path
-            const parent_path = std.fs.path.dirname(path) orelse return err;
+        // If parent directory doesn't exist, we'll need to create it first
+        if (err != error.FileNotFound) return err;
 
-            // Recursively create the parent directory
-            try makeDirRecursive(parent_path);
+        // Create an array to store the indices where we need to split the path
+        var separator_indices: [std.fs.max_path_bytes]usize = undefined;
+        var separator_count: usize = 0;
 
-            // Now try creating the original directory again
-            return std.fs.makeDirAbsolute(path);
+        // Find all path separators working backwards
+        var i = path_len - 1;
+        while (i > 0) : (i -= 1) {
+            if (path[i] == std.fs.path.sep) {
+                separator_indices[separator_count] = i;
+                separator_count += 1;
+            }
         }
 
-        // If any other error occurs, propagate it
-        return err;
+        // Try to create parent directories, starting from the highest level
+        // (e.g., try /a before /a/b before /a/b/c)
+        var created_index: usize = 0;
+        while (created_index < separator_count) : (created_index += 1) {
+            const separator_pos = separator_indices[separator_count - created_index - 1];
+
+            // Save the character at the split position to restore later
+            const save_char = path[separator_pos];
+            // Null-terminate at the separator
+            path[separator_pos] = 0;
+
+            // Try to create this segment of the path
+            std.fs.makeDirAbsoluteZ(path) catch |mk_err| {
+                // If the directory already exists, that's fine, continue to the next segment
+                if (mk_err != error.PathAlreadyExists) {
+                    // Restore the character and propagate any other error
+                    path[separator_pos] = save_char;
+                    return mk_err;
+                }
+            };
+
+            // Restore the character
+            path[separator_pos] = save_char;
+        }
+
+        // Finally try to create the original target directory again.
+        // This time, it should succeed, because all the necessary
+        // ancestor directories exist.
+        try std.fs.makeDirAbsoluteZ(path);
     };
 }
 
@@ -38,15 +73,22 @@ test "makeDirRecursive - basic functionality" {
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a deeply nested directory structure
-    const nested_path = try std.fs.path.join(std.testing.allocator, &.{ base_dir, "a", "b", "c", "d", "e" });
-    defer std.testing.allocator.free(nested_path);
+    // Create a path for a deeply nested directory structure with null-termination
+    var nested_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    _ = try std.fmt.bufPrintZ(&nested_path_buf, "{s}{c}a{c}b{c}c{c}d{c}e", .{
+        base_dir,
+        std.fs.path.sep,
+        std.fs.path.sep,
+        std.fs.path.sep,
+        std.fs.path.sep,
+        std.fs.path.sep,
+    });
 
     // Create the deeply nested directory using our function
-    try makeDirRecursive(nested_path);
+    try makeDirRecursive(&nested_path_buf);
 
     // Verify that all directories were created by checking if the deepest one exists
-    const deepest_dir = try std.fs.openDirAbsolute(nested_path, .{});
+    const deepest_dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
     var deepest_dir_mutable = deepest_dir;
     deepest_dir_mutable.close();
 }
@@ -60,18 +102,21 @@ test "makeDirRecursive - already existing directory" {
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a nested directory
-    const nested_path = try std.fs.path.join(std.testing.allocator, &.{ base_dir, "existing_dir" });
-    defer std.testing.allocator.free(nested_path);
+    // Create a path for a nested directory with null-termination
+    var nested_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    _ = try std.fmt.bufPrintZ(&nested_path_buf, "{s}{c}existing_dir", .{
+        base_dir,
+        std.fs.path.sep,
+    });
 
     // Create the directory first
-    try std.fs.makeDirAbsolute(nested_path);
+    try std.fs.makeDirAbsoluteZ(&nested_path_buf);
 
     // Try creating it again with our function - should not error
-    try makeDirRecursive(nested_path);
+    try makeDirRecursive(&nested_path_buf);
 
     // Verify that the directory still exists
-    const dir = try std.fs.openDirAbsolute(nested_path, .{});
+    const dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
     var dir_mutable = dir;
     dir_mutable.close();
 }
@@ -85,22 +130,32 @@ test "makeDirRecursive - partial existing path" {
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a middle directory
-    const mid_path = try std.fs.path.join(std.testing.allocator, &.{ base_dir, "partial", "path" });
-    defer std.testing.allocator.free(mid_path);
+    // Create a path for a middle directory with null-termination
+    var mid_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    _ = try std.fmt.bufPrintZ(&mid_path_buf, "{s}{c}partial{c}path", .{
+        base_dir,
+        std.fs.path.sep,
+        std.fs.path.sep,
+    });
 
     // Create the middle directory
-    try makeDirRecursive(mid_path);
+    try makeDirRecursive(&mid_path_buf);
 
-    // Create a path for a deeper directory
-    const deep_path = try std.fs.path.join(std.testing.allocator, &.{ base_dir, "partial", "path", "deeper", "directory" });
-    defer std.testing.allocator.free(deep_path);
+    // Create a path for a deeper directory with null-termination
+    var deep_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    _ = try std.fmt.bufPrintZ(&deep_path_buf, "{s}{c}partial{c}path{c}deeper{c}directory", .{
+        base_dir,
+        std.fs.path.sep,
+        std.fs.path.sep,
+        std.fs.path.sep,
+        std.fs.path.sep,
+    });
 
     // Create the deeper directory - should only need to create the new parts
-    try makeDirRecursive(deep_path);
+    try makeDirRecursive(&deep_path_buf);
 
     // Verify that all directories were created
-    const deepest_dir = try std.fs.openDirAbsolute(deep_path, .{});
+    const deepest_dir = try std.fs.openDirAbsoluteZ(&deep_path_buf, .{});
     var deepest_dir_mutable = deepest_dir;
     deepest_dir_mutable.close();
 }
