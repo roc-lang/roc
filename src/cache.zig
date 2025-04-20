@@ -107,7 +107,7 @@ pub fn writeToCache(
                 }
             };
 
-            // Try creating the file again now that directories exist
+            // Try creating the file again now that parent directories exist
             const retry_file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
             defer retry_file.close();
 
@@ -223,7 +223,7 @@ test "CacheHeader.initFromBytes - valid data" {
     const test_data_len = test_data.len;
 
     var buffer: [1024]u8 align(@alignOf(CacheHeader)) = .{0} ** 1024;
-    
+
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
     header.total_cached_bytes = test_data_len;
 
@@ -245,7 +245,7 @@ test "CacheHeader.initFromBytes - buffer too small" {
 
 test "CacheHeader.initFromBytes - insufficient data bytes" {
     var buffer: [128]u8 align(@alignOf(CacheHeader)) = .{0} ** 128;
-    
+
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
 
     // Set header to request more data than is available in the buffer
