@@ -122,6 +122,28 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []con
     @panic("not implemented");
 }
 
+/// Writes the header and content to the provided file.
+/// Returns the total number of bytes written (header + content).
+fn writeCacheContents(
+    file: std.fs.File,
+    contents: []const u8,
+) !usize {
+    // Create and write header
+    var header = CacheHeader{
+        .total_cached_bytes = @intCast(contents.len),
+    };
+
+    // Write the header
+    const header_slice = std.mem.asBytes(&header);
+    try file.writeAll(header_slice);
+
+    // Write the contents
+    try file.writeAll(contents);
+
+    // Return total bytes written
+    return header_slice.len + contents.len;
+}
+
 /// Writes the given content to a cache file for the specified hash.
 ///
 /// This function:
@@ -168,44 +190,20 @@ pub fn writeToCache(
                 }
             };
 
-            // Retry creating the file - this should succeed now
+            // Try creating the file again now that directories exist
             const retry_file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
             defer retry_file.close();
 
-            // Create and write header for the retry
-            var header = CacheHeader{
-                .total_cached_bytes = @intCast(contents.len),
-            };
-
-            // Write the header
-            const header_slice = std.mem.asBytes(&header);
-            try retry_file.writeAll(header_slice);
-
-            // Write the contents
-            try retry_file.writeAll(contents);
-
-            // Return total bytes written
-            return header_slice.len + contents.len;
+            return try writeCacheContents(retry_file, contents);
+        } else {
+            // For any other error besides missing directories, propagate it.
+            return err;
         }
-        // For any other error, propagate it upward
-        return err;
     };
     defer file.close();
 
-    // Create and write header
-    var header = CacheHeader{
-        .total_cached_bytes = @intCast(contents.len),
-    };
-
-    // Write the header
-    const header_slice = std.mem.asBytes(&header);
-    try file.writeAll(header_slice);
-
-    // Write the contents
-    try file.writeAll(contents);
-
-    // Return total bytes written
-    return header_slice.len + contents.len;
+    // Write the header and contents
+    return try writeCacheContents(file, contents);
 }
 
 test "CacheHeader memory layout" {
