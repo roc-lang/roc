@@ -1,15 +1,27 @@
 const std = @import("std");
 
 /// Create a directory and all of its parent directories, similar to `mkdir -p`.
-/// Takes a null-terminated POSIX path. (Use makeDirRecursiveW for Windows.)
+/// Takes a null-terminated path of either u8 (POSIX) or u16 (Windows) characters.
 ///
 /// The argument isn't const because this temporarily writes zeros into it to
 /// null-terminate intermediate directories within the path, then restores the
 /// original characters when done. This avoids the need for a separate allocation,
 /// but does mean this function isn't thread-safe because it temporarily modifies
 /// the given path. (To get thread-safety, clone the path before passing it in.)
-pub fn makeDirRecursiveZ(path: [:0]u8) std.fs.Dir.MakeError!void {
-    std.debug.assert(std.fs.path.isAbsolute(path));
+pub fn makeDirAbsoluteRecursive(path: anytype) std.fs.Dir.MakeError!void {
+    const T = @TypeOf(path);
+    if (T == [:0]u8) {
+        return makeDirRecursiveZ(path);
+    } else if (T == [:0]u16) {
+        return makeDirRecursiveW(path);
+    } else {
+        @compileError("Expected a [:0]u8 (POSIX format) or [:0]u16 (Windows format) path, but got " ++ @typeName(T));
+    }
+}
+
+/// POSIX version of makeDirAbsoluteRecursive
+fn makeDirRecursiveZ(path: [:0]u8) std.fs.Dir.MakeError!void {
+    std.debug.assert(std.fs.path.isAbsolutePosixZ(path));
 
     const path_len = path.len;
 
@@ -154,7 +166,7 @@ test "makeDirRecursiveZ - partial existing path" {
 /// but does mean this function isn't thread-safe because it temporarily modifies
 /// the given path. (To get thread-safety, clone the path before passing it in.)
 pub fn makeDirRecursiveW(path: [:0]u16) std.fs.Dir.MakeError!void {
-    std.debug.assert(std.fs.path.isAbsoluteW(path));
+    std.debug.assert(std.fs.path.isAbsoluteWindowsW(path));
 
     const path_len = path.len;
 
