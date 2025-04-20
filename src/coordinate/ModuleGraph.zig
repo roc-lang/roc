@@ -104,7 +104,7 @@ fn loadOrCompileCanIr(
     const hash_of_contents = utils.blake3Hash(contents);
     const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version);
 
-    return if (cache_lookup) |ir| ir.* else blk: {
+    return if (cache_lookup) |ir| ir else blk: {
         var can_ir = can.IR.init(gpa);
         var parse_ir = parse.parse(&can_ir.env, contents);
         parse_ir.store.emptyScratch();

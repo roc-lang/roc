@@ -1,5 +1,6 @@
 const std = @import("std");
 const base = @import("base.zig");
+const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
 const path_utils = @import("path.zig");
 const Package = base.Package;
@@ -65,16 +66,8 @@ pub fn readCacheInto(
 }
 
 /// Writes the given content to a cache file for the specified hash.
-///
-/// This function:
-/// - Attempts to create the file for writing
-/// - If that fails due to missing directories:
-///   1. First tries to create just the immediate parent directory
-///   2. If that fails, falls back to creating all parent directories recursively
-/// - Writes a CacheHeader with the content length
-/// - Writes the content immediately after the header
-///
-/// Returns the total number of bytes written (header + content).
+/// Creates any missing intermediate directories as necessary.
+/// Returns the size on disk (in bytes) of the cache file it wrote.
 pub fn writeToCache(
     abs_cache_dir: []const u8,
     hash: []const u8,
@@ -133,9 +126,9 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []con
     @panic("not implemented");
 }
 
-/// Get cached CanIR for a given hash and Roc version or return null if not found in cache
-pub fn getCanIrForHashAndRocVersion(hash: *const [32]u8, roc_version: []const u8) ?*@import("check/canonicalize/IR.zig") {
-    _ = hash;
+/// TODO: implement
+pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8) ?canonicalize.IR {
+    _ = file_hash;
     _ = roc_version;
     return null;
 }
@@ -218,13 +211,6 @@ fn writeCacheContents(
 
     // Return total bytes written
     return header_slice.len + contents.len;
-}
-
-test "CacheHeader memory layout" {
-    std.debug.print("\nCacheHeader size: {}\n", .{@sizeOf(CacheHeader)});
-    std.debug.print("CacheHeader alignment: {}\n", .{@alignOf(CacheHeader)});
-
-    std.debug.print("total_cached_bytes offset: {}\n", .{@offsetOf(CacheHeader, "total_cached_bytes")});
 }
 
 test "CacheHeader.initFromBytes - valid data" {
