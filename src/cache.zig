@@ -13,14 +13,26 @@ const Package = base.Package;
 const hash_encoder = std.base64.url_safe_no_pad.Encoder;
 const file_ext = ".rcir";
 
+/// An error when trying to read a file from cache.
+/// The path (after appending the cache filename to the base dir)
+/// can be too long for the OS, or the provided buffer to read
+/// into can be too small, resuling in a partial read.
 pub const CacheError = error{
     PartialRead,
     PathTooLong,
 };
 
+/// The header that gets written to disk right before the cached data.
+/// Having this header makes it possible to read the entire cached file
+/// into a buffer in one syscall, because the header provides all the
+/// information necessary to process the remainder of the information
+/// (e.g. rehydrating pointers).
 pub const CacheHeader = struct {
     total_cached_bytes: u32,
 
+    /// Verify that the given buffer begins with a valid CacheHeader,
+    /// and also that it has a valid number of bytes in it. Returns
+    /// a pointer to the CacheHeader within the buffer.
     pub fn initFromBytes(buf: []align(@alignOf(CacheHeader)) u8) CacheError!*CacheHeader {
         if (buf.len == 0) {
             return CacheError.PartialRead;
