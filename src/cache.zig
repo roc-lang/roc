@@ -101,8 +101,7 @@ pub fn readCacheInto(
     abs_cache_dir: []const u8,
     hash: []const u8,
 ) !usize {
-    // Use our threadlocal scratch path buffer instead of making a fresh allocation.
-    var path_buf = path_utils.scratch_path;
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
     // Create the full cache path
     _ = createCachePath(&path_buf, abs_cache_dir, hash);
@@ -167,8 +166,7 @@ pub fn writeToCache(
     hash: []const u8,
     contents: []const u8,
 ) !usize {
-    // Use our threadlocal scratch path buffer instead of making a fresh allocation.
-    var path_buf = path_utils.scratch_path;
+    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
     // Create the full cache path
     const hash_path_len = createCachePath(&path_buf, abs_cache_dir, hash);
