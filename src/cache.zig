@@ -604,7 +604,7 @@ test "writeHashToPath - success" {
     const hash = "testHash123";
 
     _ = try writeHashToPath(hash, &buf);
-    
+
     // Verify that the separator is at the expected position
     try std.testing.expectEqual(std.fs.path.sep, buf[hash_encoder.calcSize(hash.len / 2)]);
 }
