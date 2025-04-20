@@ -219,24 +219,18 @@ fn writeCacheContents(
 }
 
 test "CacheHeader.initFromBytes - valid data" {
-    // Create a buffer with a valid header and data
     const test_data = "This is test data for our cache!";
     const test_data_len = test_data.len;
 
-    var buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    // Zero out the buffer to ensure predictable content
-    @memset(buffer[0..], 0);
-
+    var buffer: [1024]u8 align(@alignOf(CacheHeader)) = .{0} ** 1024;
+    
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
     header.total_cached_bytes = test_data_len;
 
-    // Copy test data after the header
     const data_start = @sizeOf(CacheHeader);
     @memcpy(buffer[data_start .. data_start + test_data_len], test_data);
 
-    // Test initFromBytes
     const parsed_header = try CacheHeader.initFromBytes(&buffer);
-
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
 }
 
@@ -250,62 +244,46 @@ test "CacheHeader.initFromBytes - buffer too small" {
 }
 
 test "CacheHeader.initFromBytes - insufficient data bytes" {
-    // Create a buffer with a header but insufficient data bytes
-    var buffer: [128]u8 align(@alignOf(CacheHeader)) = undefined;
-    // Zero out the buffer to ensure predictable content
-    @memset(buffer[0..], 0);
-
+    var buffer: [128]u8 align(@alignOf(CacheHeader)) = .{0} ** 128;
+    
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
 
-    // The buffer size is 128 bytes, so any cached_bytes value larger than (128 - @sizeOf(CacheHeader))
-    // should trigger the PartialRead error
+    // Set header to request more data than is available in the buffer
     const available_data_space = buffer.len - @sizeOf(CacheHeader);
-    header.total_cached_bytes = available_data_space + 1; // One byte more than available
+    header.total_cached_bytes = available_data_space + 1;
 
-    // Test that it returns PartialRead error
     const result = CacheHeader.initFromBytes(&buffer);
     try std.testing.expectError(CacheError.PartialRead, result);
 }
 
 test "readCacheInto and initFromBytes integration" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Use a test allocator for path operations in the test
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
     const allocator = arena.allocator();
 
     const file_hash = "abc123456";
-
-    // Create test data
     const test_data = "This is test data for our cache!";
     const test_data_len = test_data.len;
 
-    // Create a buffer for header and data
-    var write_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    // Zero out the buffer to ensure predictable content
-    @memset(write_buffer[0..], 0);
+    var write_buffer: [1024]u8 align(@alignOf(CacheHeader)) = .{0} ** 1024;
 
     var header = @as(*CacheHeader, @ptrCast(&write_buffer[0]));
     header.total_cached_bytes = test_data_len;
 
-    // Copy test data after the header
     const data_start = @sizeOf(CacheHeader);
     @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
 
-    // Create the hash directory structure
     var hash_buf: [std.fs.max_path_bytes]u8 = undefined;
     const hash_len = try writeHashToPath(file_hash, &hash_buf);
     const hash_path = hash_buf[0..hash_len];
 
-    // Create the directory structure for the hash
-    // Find the position of the separator in the hash path
+    // Create parent directory for the hash path
     var sep_pos: usize = 0;
     while (sep_pos < hash_path.len) : (sep_pos += 1) {
         if (hash_path[sep_pos] == std.fs.path.sep) {
@@ -314,46 +292,37 @@ test "readCacheInto and initFromBytes integration" {
     }
     try tmp_dir.dir.makePath(hash_path[0..sep_pos]);
 
-    // Create the full file path
     const file_path = try std.fs.path.join(allocator, &.{
         abs_cache_dir,
         hash_path,
     });
     const full_path = try std.fmt.allocPrint(allocator, "{s}{s}", .{ file_path, file_ext });
 
-    // Create the cache file and write the data
     const file = try std.fs.createFileAbsolute(full_path, .{});
     defer file.close();
     try file.writeAll(write_buffer[0 .. data_start + test_data_len]);
 
-    // Test readCacheInto
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
     const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash);
 
     try std.testing.expect(bytes_read >= @sizeOf(CacheHeader));
 
-    // Test initFromBytes with the read data
     const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
-
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
 
-    // Verify that bytes read match expected total (header + data)
     const expected_total_bytes = @sizeOf(CacheHeader) + parsed_header.total_cached_bytes;
     try std.testing.expectEqual(expected_total_bytes, bytes_read);
 }
 
 test "readCacheInto - file not found" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
     const file_hash = "nonexistent";
 
-    // Test readCacheInto with a nonexistent file
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
     const result = readCacheInto(&read_buffer, abs_cache_dir, file_hash);
 
@@ -361,11 +330,9 @@ test "readCacheInto - file not found" {
 }
 
 test "writeToCache and readCacheInto integration" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
@@ -384,7 +351,6 @@ test "writeToCache and readCacheInto integration" {
     // Verify bytes read matches bytes written
     try std.testing.expectEqual(bytes_written, bytes_read);
 
-    // Parse the header from read buffer
     const header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
     try std.testing.expectEqual(@as(u32, test_data.len), header.total_cached_bytes);
 
@@ -395,11 +361,9 @@ test "writeToCache and readCacheInto integration" {
 }
 
 test "writeToCache in non-existent directory" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
@@ -412,30 +376,23 @@ test "writeToCache in non-existent directory" {
     const file_hash = "ghi345678";
     const test_data = "This should create all parent directories!";
 
-    // Write data to cache (this should create all necessary directories)
     const bytes_written = try writeToCache(nested_dir, file_hash, test_data);
     const expected_bytes = @sizeOf(CacheHeader) + test_data.len;
     try std.testing.expectEqual(expected_bytes, bytes_written);
 
-    // Try to read back the data to confirm it worked
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
     const bytes_read = try readCacheInto(&read_buffer, nested_dir, file_hash);
-
-    // Verify bytes read matches bytes written
     try std.testing.expectEqual(bytes_written, bytes_read);
 
-    // Verify the data content
     const data_start = @sizeOf(CacheHeader);
     const read_data = read_buffer[data_start..bytes_read];
     try std.testing.expectEqualStrings(test_data, read_data);
 }
 
 test "writeToCache with deep nonexistent directory structure" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
@@ -457,85 +414,58 @@ test "writeToCache with deep nonexistent directory structure" {
     const file_hash = "deepnested123";
     const test_data = "Testing a deeply nested directory structure that doesn't exist yet";
 
-    // Write data to cache (this should create all necessary directories)
     const bytes_written = try writeToCache(deep_cache_dir, file_hash, test_data);
     const expected_bytes = @sizeOf(CacheHeader) + test_data.len;
     try std.testing.expectEqual(expected_bytes, bytes_written);
 
-    // Try to read back the data to confirm it worked
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
     const bytes_read = try readCacheInto(&read_buffer, deep_cache_dir, file_hash);
-
-    // Verify bytes read matches bytes written
     try std.testing.expectEqual(bytes_written, bytes_read);
 
-    // Parse the header from read buffer
     const header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
     try std.testing.expectEqual(@as(u32, test_data.len), header.total_cached_bytes);
 
-    // Verify the data content
     const data_start = @sizeOf(CacheHeader);
     const read_data = read_buffer[data_start..bytes_read];
     try std.testing.expectEqualStrings(test_data, read_data);
 
-    // Verify that all the directories were created
-    // Check level1 directory exists
+    // Verify that directories were created
     const level1_path = try std.fs.path.join(std.testing.allocator, &.{ abs_cache_dir, "level1" });
     defer std.testing.allocator.free(level1_path);
-    const level1_dir = std.fs.openDirAbsolute(level1_path, .{}) catch {
-        try std.testing.expect(false); // Should not reach here
-        unreachable;
-    };
-    var level1_dir_mutable = level1_dir;
-    level1_dir_mutable.close();
+    var level1_dir = try std.fs.openDirAbsolute(level1_path, .{});
+    defer level1_dir.close();
 
     // Check level3 directory exists (middle level)
     const level3_path = try std.fs.path.join(std.testing.allocator, &.{ abs_cache_dir, "level1", "level2", "level3" });
     defer std.testing.allocator.free(level3_path);
-    const level3_dir = std.fs.openDirAbsolute(level3_path, .{}) catch {
-        try std.testing.expect(false); // Should not reach here
-        unreachable;
-    };
-    var level3_dir_mutable = level3_dir;
-    level3_dir_mutable.close();
+    var level3_dir = try std.fs.openDirAbsolute(level3_path, .{});
+    defer level3_dir.close();
 }
 
 test "writeToCache with nonexistent parent directories" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create paths for multiple levels of nested directories
     const cache_dir = try std.fs.path.join(std.testing.allocator, &.{ base_dir, "cache_dir" });
     defer std.testing.allocator.free(cache_dir);
 
-    // Create a hash that will require multiple levels of directories
-    // The hash directories are created based on the hash value (split in two parts)
     const file_hash = "abcdefghijklmnopqrstuvwxyz123456";
     const test_data = "Testing directory creation with hash-based directory structure";
 
-    // This will test that all parent directories in the hash-based path are created
-    // automatically, even when none of them exist yet
     const bytes_written = try writeToCache(cache_dir, file_hash, test_data);
     const expected_bytes = @sizeOf(CacheHeader) + test_data.len;
     try std.testing.expectEqual(expected_bytes, bytes_written);
 
-    // Read data back to verify it was written correctly
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
     const bytes_read = try readCacheInto(&read_buffer, cache_dir, file_hash);
-
-    // Verify bytes read matches bytes written
     try std.testing.expectEqual(bytes_written, bytes_read);
 
-    // Parse the header from read buffer
     const header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
     try std.testing.expectEqual(@as(u32, test_data.len), header.total_cached_bytes);
 
-    // Verify the data content
     const data_start = @sizeOf(CacheHeader);
     const read_data = read_buffer[data_start..bytes_read];
     try std.testing.expectEqualStrings(test_data, read_data);
@@ -554,36 +484,25 @@ test "createCachePath" {
     const ext_start = hash_start + hash_path_len;
     const ext_end = ext_start + file_ext.len;
 
-    // Make sure the separator position is correct
     try std.testing.expectEqual(std.fs.path.sep, path_buf[hash_sep_pos]);
-
-    // Check that the hash starts where expected
     try std.testing.expectEqual(abs_cache_dir.len + 1, hash_start);
-
-    // Verify path ends with file extension
     try std.testing.expectEqualStrings(file_ext, path_buf[ext_start .. ext_start + file_ext.len]);
-
-    // Verify null termination
     try std.testing.expectEqual(@as(u8, 0), path_buf[ext_end]);
 }
 
 test "createCachePath - buffer too small" {
-    // Create a small buffer that can't fit the path
     var small_buf: [10]u8 = undefined;
     const abs_cache_dir = "/tmp/cache";
     const hash = "testHash123";
 
-    // Test that it returns PathTooLong error
     const result = createCachePath(&small_buf, abs_cache_dir, hash);
     try std.testing.expectError(CacheError.PathTooLong, result);
 }
 
 test "writeHashToPath - buffer too small" {
-    // Create a small buffer that can't fit the encoded hash
     var small_buf: [5]u8 = undefined;
     const hash = "testHash123";
 
-    // Test that it returns PathTooLong error
     const result = writeHashToPath(hash, &small_buf);
     try std.testing.expectError(CacheError.PathTooLong, result);
 }
@@ -593,7 +512,5 @@ test "writeHashToPath - success" {
     const hash = "testHash123";
 
     _ = try writeHashToPath(hash, &buf);
-
-    // Verify that the separator is at the expected position
     try std.testing.expectEqual(std.fs.path.sep, buf[hash_encoder.calcSize(hash.len / 2)]);
 }
