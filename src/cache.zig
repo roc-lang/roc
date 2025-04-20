@@ -2,45 +2,15 @@ const std = @import("std");
 const base = @import("base.zig");
 const assert = std.debug.assert;
 const path_utils = @import("path.zig");
-
 const Package = base.Package;
 
+const hash_encoder = std.base64.url_safe_no_pad.Encoder;
 const file_ext = ".rcir";
 
 pub const CacheError = error{
     PartialRead,
     PathTooLong,
 };
-
-const hash_encoder = std.base64.url_safe_no_pad.Encoder;
-
-/// Takes the given hash bytes, base64-url encodes them,
-/// and writes them to the given buffer with a directory
-/// separator in the middle (to avoid one giant cache dir.)
-///
-/// Returns the number of bytes written to `out`.
-fn writeHashToPath(hash: []const u8, out: []u8) CacheError!usize {
-    const half_hash_len = hash.len / 2;
-    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
-    const needed_bytes = bytesNeededToHashPath(hash);
-
-    if (out.len < needed_bytes) {
-        return CacheError.PathTooLong;
-    }
-
-    // Encode the bytes with a path separator in the middle.
-    _ = hash_encoder.encode(out[0..half_encoded_len], hash[0..half_hash_len]);
-    out[half_encoded_len] = std.fs.path.sep;
-    _ = hash_encoder.encode(out[half_encoded_len + 1 ..], hash[half_hash_len..hash.len]);
-
-    return (half_encoded_len * 2) + 1;
-}
-
-fn bytesNeededToHashPath(hash: []const u8) usize {
-    // We split the input bytes in half and write a path separator,
-    // so we need +1 to account for the separator.
-    return hash_encoder.calcSize(hash.len) + 1;
-}
 
 pub const CacheHeader = struct {
     total_cached_bytes: u32,
@@ -68,36 +38,6 @@ pub const CacheHeader = struct {
     }
 };
 
-/// Populates the path buffer with the full path to the cache file for the given hash.
-/// Returns the length of the hash path part.
-///
-/// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
-///
-/// All other path-related values can be derived from the returned hash_path_len and other known values.
-fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) CacheError!usize {
-    assert(std.fs.path.isAbsolute(abs_cache_dir));
-
-    // Calculate required space: abs_cache_dir + "/" + hash_path + file_ext + null terminator
-    const required_bytes = abs_cache_dir.len + 1 + bytesNeededToHashPath(hash) + file_ext.len + 1;
-
-    if (path_buf.len < required_bytes) {
-        return CacheError.PathTooLong;
-    }
-
-    // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
-    @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
-    path_buf[abs_cache_dir.len] = std.fs.path.sep;
-    const hash_start = abs_cache_dir.len + 1; // +1 for the path separator
-
-    const hash_path_len = try writeHashToPath(hash, path_buf[hash_start..]);
-    const ext_start = hash_start + hash_path_len;
-    const ext_end = ext_start + file_ext.len;
-    @memcpy(path_buf[ext_start..ext_end], file_ext);
-    path_buf[ext_end] = 0; // Null-terminate
-
-    return hash_path_len;
-}
-
 /// Reads the canonical IR for a given file hash and Roc version into the given buffer.
 ///
 /// If this succeeds, then it's the caller's responsibility to:
@@ -122,43 +62,6 @@ pub fn readCacheInto(
     defer file.close();
 
     return try file.readAll(buf);
-}
-
-/// TODO: implement
-pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []const u8 {
-    _ = url_data;
-    _ = gpa;
-
-    @panic("not implemented");
-}
-
-/// Get cached CanIR for a given hash and Roc version or return null if not found in cache
-pub fn getCanIrForHashAndRocVersion(hash: *const [32]u8, roc_version: []const u8) ?*@import("check/canonicalize/IR.zig") {
-    _ = hash;
-    _ = roc_version;
-    return null;
-}
-
-/// Writes the header and content to the provided file.
-/// Returns the total number of bytes written (header + content).
-fn writeCacheContents(
-    file: std.fs.File,
-    contents: []const u8,
-) !usize {
-    // Create and write header
-    var header = CacheHeader{
-        .total_cached_bytes = @intCast(contents.len),
-    };
-
-    // Write the header
-    const header_slice = std.mem.asBytes(&header);
-    try file.writeAll(header_slice);
-
-    // Write the contents
-    try file.writeAll(contents);
-
-    // Return total bytes written
-    return header_slice.len + contents.len;
 }
 
 /// Writes the given content to a cache file for the specified hash.
@@ -220,6 +123,101 @@ pub fn writeToCache(
 
     // Write the header and contents
     return try writeCacheContents(file, contents);
+}
+
+/// TODO: implement
+pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []const u8 {
+    _ = url_data;
+    _ = gpa;
+
+    @panic("not implemented");
+}
+
+/// Get cached CanIR for a given hash and Roc version or return null if not found in cache
+pub fn getCanIrForHashAndRocVersion(hash: *const [32]u8, roc_version: []const u8) ?*@import("check/canonicalize/IR.zig") {
+    _ = hash;
+    _ = roc_version;
+    return null;
+}
+
+/// Takes the given hash bytes, base64-url encodes them,
+/// and writes them to the given buffer with a directory
+/// separator in the middle (to avoid one giant cache dir.)
+///
+/// Returns the number of bytes written to `out`.
+fn writeHashToPath(hash: []const u8, out: []u8) CacheError!usize {
+    const half_hash_len = hash.len / 2;
+    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
+    const needed_bytes = bytesNeededToHashPath(hash);
+
+    if (out.len < needed_bytes) {
+        return CacheError.PathTooLong;
+    }
+
+    // Encode the bytes with a path separator in the middle.
+    _ = hash_encoder.encode(out[0..half_encoded_len], hash[0..half_hash_len]);
+    out[half_encoded_len] = std.fs.path.sep;
+    _ = hash_encoder.encode(out[half_encoded_len + 1 ..], hash[half_hash_len..hash.len]);
+
+    return (half_encoded_len * 2) + 1;
+}
+
+fn bytesNeededToHashPath(hash: []const u8) usize {
+    // We split the input bytes in half and write a path separator,
+    // so we need +1 to account for the separator.
+    return hash_encoder.calcSize(hash.len) + 1;
+}
+
+/// Populates the path buffer with the full path to the cache file for the given hash.
+/// Returns the length of the hash path part.
+///
+/// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
+///
+/// All other path-related values can be derived from the returned hash_path_len and other known values.
+fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) CacheError!usize {
+    assert(std.fs.path.isAbsolute(abs_cache_dir));
+
+    // Calculate required space: abs_cache_dir + "/" + hash_path + file_ext + null terminator
+    const required_bytes = abs_cache_dir.len + 1 + bytesNeededToHashPath(hash) + file_ext.len + 1;
+
+    if (path_buf.len < required_bytes) {
+        return CacheError.PathTooLong;
+    }
+
+    // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
+    @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
+    path_buf[abs_cache_dir.len] = std.fs.path.sep;
+    const hash_start = abs_cache_dir.len + 1; // +1 for the path separator
+
+    const hash_path_len = try writeHashToPath(hash, path_buf[hash_start..]);
+    const ext_start = hash_start + hash_path_len;
+    const ext_end = ext_start + file_ext.len;
+    @memcpy(path_buf[ext_start..ext_end], file_ext);
+    path_buf[ext_end] = 0; // Null-terminate
+
+    return hash_path_len;
+}
+
+/// Writes the header and content to the provided file.
+/// Returns the total number of bytes written (header + content).
+fn writeCacheContents(
+    file: std.fs.File,
+    contents: []const u8,
+) !usize {
+    // Create and write header
+    var header = CacheHeader{
+        .total_cached_bytes = @intCast(contents.len),
+    };
+
+    // Write the header
+    const header_slice = std.mem.asBytes(&header);
+    try file.writeAll(header_slice);
+
+    // Write the contents
+    try file.writeAll(contents);
+
+    // Return total bytes written
+    return header_slice.len + contents.len;
 }
 
 test "CacheHeader memory layout" {
