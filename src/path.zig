@@ -8,7 +8,7 @@ const std = @import("std");
 /// original characters when done. This avoids the need for a separate allocation,
 /// but does mean this function isn't thread-safe because it temporarily modifies
 /// the given path. (To get thread-safety, clone the path before passing it in.)
-pub fn makeDirRecursive(path: [:0]u8) !void {
+pub fn makeDirRecursiveZ(path: [:0]u8) std.posix.MakeDirError!void {
     const path_len = path.len;
 
     // First, try to create the directory directly
@@ -81,7 +81,7 @@ test "makeDirRecursive - basic functionality" {
         std.fs.path.sep,
     });
 
-    try makeDirRecursive(&nested_path_buf);
+    try makeDirRecursiveZ(&nested_path_buf);
 
     var deepest_dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
     defer deepest_dir.close();
@@ -104,7 +104,7 @@ test "makeDirRecursive - already existing directory" {
     try std.fs.makeDirAbsoluteZ(&nested_path_buf);
 
     // Try creating it again with our function - should not error
-    try makeDirRecursive(&nested_path_buf);
+    try makeDirRecursiveZ(&nested_path_buf);
 
     var dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
     defer dir.close();
@@ -124,7 +124,7 @@ test "makeDirRecursive - partial existing path" {
         std.fs.path.sep,
         std.fs.path.sep,
     });
-    try makeDirRecursive(&mid_path_buf);
+    try makeDirRecursiveZ(&mid_path_buf);
 
     // Create a deeper directory path that builds on the existing structure
     var deep_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
@@ -135,7 +135,7 @@ test "makeDirRecursive - partial existing path" {
         std.fs.path.sep,
         std.fs.path.sep,
     });
-    try makeDirRecursive(&deep_path_buf);
+    try makeDirRecursiveZ(&deep_path_buf);
 
     // Verify the deepest directory was created
     var deepest_dir = try std.fs.openDirAbsoluteZ(&deep_path_buf, .{});
