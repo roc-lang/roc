@@ -76,7 +76,7 @@ pub fn readCacheInto(
 pub fn writeToCache(
     abs_cache_dir: []const u8,
     hash: []const u8,
-    contents: []const u8,
+    contents: []const u8, // TODO: convert this to iovecs and use pwritev on POSIX targets. Windows should use memory-mapped writes.
 ) !usize {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
