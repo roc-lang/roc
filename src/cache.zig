@@ -1,6 +1,5 @@
 const std = @import("std");
 const base = @import("base.zig");
-const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
 const path_utils = @import("path.zig");
 
@@ -77,7 +76,7 @@ pub const CacheHeader = struct {
 pub fn readCacheInto(
     buf: []align(@alignOf(CacheHeader)) u8,
     abs_cache_dir: []const u8,
-    file_hash: []const u8,
+    hash: []const u8,
 ) !usize {
     // Get the full path, e.g. "/path/to/roc/cache/0.1.0/abc12345.rcir"
     assert(std.fs.path.isAbsolute(abs_cache_dir));
@@ -89,7 +88,7 @@ pub fn readCacheInto(
     @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
     path_buf[abs_cache_dir.len] = std.fs.path.sep;
     const hash_start = abs_cache_dir.len + 1; // +1 for the path separator.
-    const ext_start = hash_start + writeHashToPath(file_hash, path_buf[hash_start..]);
+    const ext_start = hash_start + writeHashToPath(hash, path_buf[hash_start..]);
     const ext_end = ext_start + file_ext.len;
     @memcpy(path_buf[ext_start..ext_end], file_ext);
     path_buf[ext_end] = 0; // Null-terminate
