@@ -12,6 +12,33 @@ pub const CacheError = error{
     InvalidChecksum,
 };
 
+const hash_encoder = std.base64.url_safe_no_pad.Encoder;
+
+/// Takes the given hash bytes, base64-url encodes them,
+/// and writes them to the given buffer with a directory
+/// separator in the middle (to avoid one giant cache dir.)
+///
+/// Returns the number of bytes written to `out`.
+fn writeHashToPath(hash: []const u8, out: []u8) usize {
+    const half_hash_len = hash.len / 2;
+    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
+
+    assert(out.len >= bytesNeededToHashPath(hash));
+
+    // Encode the bytes with a path separator in the middle.
+    _ = hash_encoder.encode(out[0..half_encoded_len], hash[0..half_hash_len]);
+    out[half_encoded_len] = std.fs.path.sep;
+    _ = hash_encoder.encode(out[half_encoded_len + 1 ..], hash[half_hash_len..hash.len]);
+
+    return (half_encoded_len * 2) + 1;
+}
+
+fn bytesNeededToHashPath(hash: []const u8) usize {
+    // We split the input bytes in half and write a path separator,
+    // so we need +1 to account for the separator.
+    return hash_encoder.calcSize(hash.len) + 1;
+}
+
 pub const CacheHeader = struct {
     total_cached_bytes: u32,
     data_checksum: u32,
@@ -67,17 +94,27 @@ pub const CacheHeader = struct {
 /// - Truncate the buffer's length based on the total_cached_bytes field of the CacheHeader.
 ///
 /// Returns the number of bytes read or an error if file operations fail.
-pub fn readCacheInto(buf: []align(@alignOf(CacheHeader)) u8, abs_cache_dir: []const u8, roc_version: []const u8, file_hash: []const u8) !usize {
+pub fn readCacheInto(
+    buf: []align(@alignOf(CacheHeader)) u8,
+    abs_cache_dir: []const u8,
+    file_hash: []const u8,
+) !usize {
     // Get the full path, e.g. "/path/to/roc/cache/0.1.0/abc12345.rcir"
     assert(std.fs.path.isAbsolute(abs_cache_dir));
 
-    // Join the path components using our own implementation
-    // to avoid allocations or over-allocating a buffer
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const path = try joinPath(&path_buf, abs_cache_dir, roc_version, file_hash, file_ext);
+    // +1 for the separator between the cache dir and the hash.
+    const path_len = abs_cache_dir.len + bytesNeededToHashPath(file_hash) + file_ext.len + 1;
+    var path: [path_len:0]u8 = undefined;
 
-    // TODO null-terminate the path and use openFileAbsoluteZ instead
-    const file = try std.fs.openFileAbsolute(path, .{});
+    // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
+    @memcpy(path[0..abs_cache_dir.len], abs_cache_dir);
+    path[abs_cache_dir.len] = std.fs.path.sep;
+    const hash_start = abs_cache_dir.len + 1; // +1 for the path separator.
+    const hash_len = writeHashToPath(file_hash, path[hash_start..]);
+    @memcpy(path[hash_start + hash_len ..], file_ext);
+    path[path_len - 1] = 0; // Null-terminate
+
+    const file = try std.fs.openFileAbsoluteZ(path, .{});
     defer file.close();
 
     return try file.readAll(buf);
