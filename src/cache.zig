@@ -65,24 +65,12 @@ pub const CacheHeader = struct {
 };
 
 /// Populates the path buffer with the full path to the cache file for the given hash.
-/// Returns a struct containing information about the path components.
+/// Returns the length of the hash path part.
 ///
 /// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
 ///
-/// The returned struct includes the position of the hash start, the hash path length,
-/// and the positions of path separators to help with directory creation.
-fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) struct {
-    /// The index in path_buf where the hash part begins
-    hash_start: usize,
-    /// The length of the hash path (including the separator)
-    hash_path_len: usize,
-    /// The total path length (including file extension and null terminator)
-    total_len: usize,
-    /// The position where the filename (extension) part begins
-    file_start: usize,
-    /// The full directory path (without filename)
-    dir_path: []const u8,
-} {
+/// All other path-related values can be derived from the returned hash_path_len and other known values.
+fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) usize {
     assert(std.fs.path.isAbsolute(abs_cache_dir));
 
     // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
@@ -96,13 +84,7 @@ fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) 
     @memcpy(path_buf[ext_start..ext_end], file_ext);
     path_buf[ext_end] = 0; // Null-terminate
 
-    return .{
-        .hash_start = hash_start,
-        .hash_path_len = hash_path_len,
-        .total_len = ext_end + 1, // +1 for null terminator
-        .file_start = ext_start,
-        .dir_path = path_buf[0..ext_start],
-    };
+    return hash_path_len;
 }
 
 /// Reads the canonical IR for a given file hash and Roc version into the given buffer.
@@ -144,7 +126,9 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []con
 ///
 /// This function:
 /// - Attempts to create the file for writing
-/// - If that fails due to missing directories, creates them and retries
+/// - If that fails due to missing directories:
+///   1. First tries to create just the immediate parent directory
+///   2. If that fails, falls back to creating all parent directories recursively
 /// - Writes a CacheHeader with the content length
 /// - Writes the content immediately after the header
 ///
@@ -157,15 +141,32 @@ pub fn writeToCache(
     // Use our threadlocal scratch path buffer instead of making a fresh allocation.
     var path_buf = path_utils.scratch_path;
 
-    // Create the full cache path and get path information
-    const path_info = createCachePath(&path_buf, abs_cache_dir, hash);
+    // Create the full cache path
+    const hash_path_len = createCachePath(&path_buf, abs_cache_dir, hash);
 
     // First, try to create the file without creating directories
     const file = std.fs.createFileAbsoluteZ(&path_buf, .{}) catch |err| {
-        // If the error indicates missing directories, create them and retry
+        // If the error indicates missing directories, try creating just the parent directory first
         if (err == error.FileNotFound) {
-            // Use our recursive helper to create all parent directories
-            try path_utils.createDirAndParents(path_info.dir_path);
+            const hash_start = abs_cache_dir.len + 1; // +1 for path separator
+            const hash_sep_pos = hash_start + ((hash_path_len - 1) / 2);
+            const parent_dir_path = path_buf[0..hash_sep_pos];
+
+            std.fs.makeDirAbsolute(parent_dir_path) catch |parent_err| {
+                // If the parent directory couldn't be created due to missing parent directories,
+                // fall back to the recursive approach
+                if (parent_err == error.FileNotFound) {
+                    // If the parent directory couldn't be created, then we might be missing
+                    // the entire cache dir. Recursively create all of them.
+                    try path_utils.createDirAndParents(parent_dir_path);
+                } else if (parent_err != error.PathAlreadyExists) {
+                    // If the parent directory already exists, that's fine.
+                    // (It must have been created concurrently.)
+                    //
+                    // For any other error, propagate it.
+                    return parent_err;
+                }
+            };
 
             // Retry creating the file - this should succeed now
             const retry_file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
@@ -431,19 +432,23 @@ test "createCachePath" {
     const abs_cache_dir = "/tmp/cache";
     const hash = "testHash123";
 
-    const path_info = createCachePath(&path_buf, abs_cache_dir, hash);
-    const hash_sep_pos = path_info.hash_start + ((path_info.hash_path_len - 1) / 2);
+    const hash_path_len = createCachePath(&path_buf, abs_cache_dir, hash);
 
-    // Make sure there's a path separator at the position indicated
+    // Calculate key positions
+    const hash_start = abs_cache_dir.len + 1; // +1 for path separator
+    const hash_sep_pos = hash_start + hash_encoder.calcSize(hash.len / 2);
+    const ext_start = hash_start + hash_path_len;
+    const ext_end = ext_start + file_ext.len;
+
+    // Make sure the separator position is correct
     try std.testing.expectEqual(std.fs.path.sep, path_buf[hash_sep_pos]);
 
     // Check that the hash starts where expected
-    try std.testing.expectEqual(abs_cache_dir.len + 1, path_info.hash_start);
+    try std.testing.expectEqual(abs_cache_dir.len + 1, hash_start);
 
     // Verify path ends with file extension
-    const ext_start = path_info.hash_start + path_info.hash_path_len;
     try std.testing.expectEqualStrings(file_ext, path_buf[ext_start .. ext_start + file_ext.len]);
 
     // Verify null termination
-    try std.testing.expectEqual(@as(u8, 0), path_buf[path_info.total_len - 1]);
+    try std.testing.expectEqual(@as(u8, 0), path_buf[ext_end]);
 }
