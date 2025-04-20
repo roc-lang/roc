@@ -9,17 +9,10 @@ const file_ext = ".rcir";
 
 pub const CacheError = error{
     PartialRead,
-    WrongVersion,
     InvalidChecksum,
 };
 
-const header_version = 1;
-
 pub const CacheHeader = struct {
-    // Store the header version in 1 byte...for now.
-    // We may end up exceeding 256 versions of the header; if that happens,
-    // then we can reserve 255 to mean "this is a multibyte version number" etc.
-    header_version: u8,
     total_cached_bytes: u32,
     data_checksum: u32,
 
@@ -83,6 +76,7 @@ pub fn readCacheInto(buf: []align(@alignOf(CacheHeader)) u8, abs_cache_dir: []co
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const path = try joinPath(&path_buf, abs_cache_dir, roc_version, file_hash, file_ext);
 
+    // TODO null-terminate the path and use openFileAbsoluteZ instead
     const file = try std.fs.openFileAbsolute(path, .{});
     defer file.close();
 
@@ -132,12 +126,23 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []con
     @panic("not implemented");
 }
 
+test "CacheHeader memory layout" {
+    std.debug.print("\nCacheHeader size: {}\n", .{@sizeOf(CacheHeader)});
+    std.debug.print("CacheHeader alignment: {}\n", .{@alignOf(CacheHeader)});
+
+    std.debug.print("total_cached_bytes offset: {}\n", .{@offsetOf(CacheHeader, "total_cached_bytes")});
+    std.debug.print("data_checksum offset: {}\n", .{@offsetOf(CacheHeader, "data_checksum")});
+}
+
 test "CacheHeader.initFromBytes - valid data" {
     // Create a buffer with a valid header and data
     const test_data = "This is test data for our cache!";
     const test_data_len = test_data.len;
 
     var buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
+    // Zero out the buffer to ensure predictable content
+    @memset(buffer[0..], 0);
+
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
     header.total_cached_bytes = test_data_len;
 
@@ -146,13 +151,13 @@ test "CacheHeader.initFromBytes - valid data" {
     @memcpy(buffer[data_start .. data_start + test_data_len], test_data);
 
     // Calculate and set the checksum
-    header.checksum = CacheHeader.checksum(buffer[data_start .. data_start + test_data_len]);
+    header.data_checksum = CacheHeader.checksum(buffer[data_start .. data_start + test_data_len]);
 
     // Test initFromBytes
     const parsed_header = try CacheHeader.initFromBytes(&buffer);
 
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-    try std.testing.expectEqual(header.checksum, parsed_header.checksum);
+    try std.testing.expectEqual(header.data_checksum, parsed_header.data_checksum);
 }
 
 test "CacheHeader.initFromBytes - buffer too small" {
@@ -167,6 +172,9 @@ test "CacheHeader.initFromBytes - buffer too small" {
 test "CacheHeader.initFromBytes - insufficient data bytes" {
     // Create a buffer with a header but insufficient data bytes
     var buffer: [128]u8 align(@alignOf(CacheHeader)) = undefined;
+    // Zero out the buffer to ensure predictable content
+    @memset(buffer[0..], 0);
+
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
 
     // The buffer size is 128 bytes, so any cached_bytes value larger than (128 - @sizeOf(CacheHeader))
@@ -185,6 +193,9 @@ test "CacheHeader.initFromBytes - invalid checksum" {
     const test_data_len = test_data.len;
 
     var buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
+    // Zero out the buffer to ensure predictable content
+    @memset(buffer[0..], 0);
+
     var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
     header.total_cached_bytes = test_data_len;
 
@@ -193,7 +204,7 @@ test "CacheHeader.initFromBytes - invalid checksum" {
     @memcpy(buffer[data_start .. data_start + test_data_len], test_data);
 
     // Set an incorrect checksum
-    header.checksum = 0xDEADBEEF;
+    header.data_checksum = 0xDEADBEEF;
 
     // Test that it returns InvalidChecksum error
     const result = CacheHeader.initFromBytes(&buffer);
@@ -221,6 +232,9 @@ test "readCacheInto and initFromBytes integration" {
 
     // Create a buffer for header and data
     var write_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
+    // Zero out the buffer to ensure predictable content
+    @memset(write_buffer[0..], 0);
+
     var header = @as(*CacheHeader, @ptrCast(&write_buffer[0]));
     header.total_cached_bytes = test_data_len;
 
@@ -229,7 +243,7 @@ test "readCacheInto and initFromBytes integration" {
     @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
 
     // Calculate and set the checksum
-    header.checksum = CacheHeader.checksum(write_buffer[data_start .. data_start + test_data_len]);
+    header.data_checksum = CacheHeader.checksum(write_buffer[data_start .. data_start + test_data_len]);
 
     // Construct the cache file path
     var path_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -250,7 +264,7 @@ test "readCacheInto and initFromBytes integration" {
     const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
 
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-    try std.testing.expectEqual(header.checksum, parsed_header.checksum);
+    try std.testing.expectEqual(header.data_checksum, parsed_header.data_checksum);
 }
 
 test "readCacheInto - file not found" {
