@@ -65,15 +65,12 @@ pub fn makeDirRecursive(path: [:0]u8) !void {
 }
 
 test "makeDirRecursive - basic functionality" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a deeply nested directory structure with null-termination
     var nested_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
     _ = try std.fmt.bufPrintZ(&nested_path_buf, "{s}{c}a{c}b{c}c{c}d{c}e", .{
         base_dir,
@@ -84,25 +81,19 @@ test "makeDirRecursive - basic functionality" {
         std.fs.path.sep,
     });
 
-    // Create the deeply nested directory using our function
     try makeDirRecursive(&nested_path_buf);
 
-    // Verify that all directories were created by checking if the deepest one exists
-    const deepest_dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
-    var deepest_dir_mutable = deepest_dir;
-    deepest_dir_mutable.close();
+    var deepest_dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
+    defer deepest_dir.close();
 }
 
 test "makeDirRecursive - already existing directory" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a nested directory with null-termination
     var nested_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
     _ = try std.fmt.bufPrintZ(&nested_path_buf, "{s}{c}existing_dir", .{
         base_dir,
@@ -115,33 +106,27 @@ test "makeDirRecursive - already existing directory" {
     // Try creating it again with our function - should not error
     try makeDirRecursive(&nested_path_buf);
 
-    // Verify that the directory still exists
-    const dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
-    var dir_mutable = dir;
-    dir_mutable.close();
+    var dir = try std.fs.openDirAbsoluteZ(&nested_path_buf, .{});
+    defer dir.close();
 }
 
 test "makeDirRecursive - partial existing path" {
-    // Create a temporary directory for testing
     var tmp_dir = std.testing.tmpDir(.{});
     defer tmp_dir.cleanup();
 
-    // Get the absolute path of the temp directory
     var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
     const base_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
 
-    // Create a path for a middle directory with null-termination
+    // Create a middle directory path
     var mid_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
     _ = try std.fmt.bufPrintZ(&mid_path_buf, "{s}{c}partial{c}path", .{
         base_dir,
         std.fs.path.sep,
         std.fs.path.sep,
     });
-
-    // Create the middle directory
     try makeDirRecursive(&mid_path_buf);
 
-    // Create a path for a deeper directory with null-termination
+    // Create a deeper directory path that builds on the existing structure
     var deep_path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
     _ = try std.fmt.bufPrintZ(&deep_path_buf, "{s}{c}partial{c}path{c}deeper{c}directory", .{
         base_dir,
@@ -150,12 +135,9 @@ test "makeDirRecursive - partial existing path" {
         std.fs.path.sep,
         std.fs.path.sep,
     });
-
-    // Create the deeper directory - should only need to create the new parts
     try makeDirRecursive(&deep_path_buf);
 
-    // Verify that all directories were created
-    const deepest_dir = try std.fs.openDirAbsoluteZ(&deep_path_buf, .{});
-    var deepest_dir_mutable = deepest_dir;
-    deepest_dir_mutable.close();
+    // Verify the deepest directory was created
+    var deepest_dir = try std.fs.openDirAbsoluteZ(&deep_path_buf, .{});
+    defer deepest_dir.close();
 }

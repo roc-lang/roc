@@ -97,7 +97,10 @@ pub fn writeToCache(
                 if (parent_err == error.FileNotFound) {
                     // If the parent directory couldn't be created, then we might be missing
                     // the entire cache dir. Recursively create all of them.
-                    try path_utils.makeDirRecursive(parent_dir_path);
+                    var path_copy: [std.fs.max_path_bytes:0]u8 = undefined;
+                    @memcpy(path_copy[0..parent_dir_path.len], parent_dir_path);
+                    path_copy[parent_dir_path.len] = 0; // Null-terminate
+                    try path_utils.makeDirRecursive(path_copy[0..parent_dir_path.len :0]);
                 } else if (parent_err != error.PathAlreadyExists) {
                     // If the parent directory already exists, that's fine.
                     // (It must have been created concurrently.)
