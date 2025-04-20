@@ -54,7 +54,7 @@ pub const CacheHeader = struct {
 ///
 /// Returns the number of bytes read or an error if file operations fail.
 pub fn readCacheInto(
-    buf: []align(@alignOf(CacheHeader)) u8,
+    dest: []align(@alignOf(CacheHeader)) u8,
     abs_cache_dir: []const u8,
     hash: []const u8,
 ) !usize {
@@ -67,7 +67,7 @@ pub fn readCacheInto(
     const file = try std.fs.openFileAbsoluteZ(&path_buf, .{});
     defer file.close();
 
-    return try file.readAll(buf);
+    return try file.readAll(dest);
 }
 
 /// Writes the given content to a cache file for the specified hash.
