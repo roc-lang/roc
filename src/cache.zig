@@ -10,7 +10,6 @@ const file_ext = ".rcir";
 
 pub const CacheError = error{
     PartialRead,
-    InvalidChecksum,
 };
 
 const hash_encoder = std.base64.url_safe_no_pad.Encoder;
@@ -42,7 +41,6 @@ fn bytesNeededToHashPath(hash: []const u8) usize {
 
 pub const CacheHeader = struct {
     total_cached_bytes: u32,
-    data_checksum: u32,
 
     pub fn initFromBytes(buf: []align(@alignOf(CacheHeader)) u8) CacheError!*CacheHeader {
         if (buf.len == 0) {
@@ -63,26 +61,7 @@ pub const CacheHeader = struct {
             return CacheError.PartialRead;
         }
 
-        // The data in the buffer might be corrupted (as in, doesn't pass checksum)
-        if (checksum(buf[data_start..data_end]) != header.data_checksum) {
-            return CacheError.InvalidChecksum;
-        }
-
         return header;
-    }
-
-    // Simple Adler-32 checksum calculation
-    fn checksum(data: []const u8) u32 {
-        var a: u32 = 1;
-        var b: u32 = 0;
-        const MOD: u32 = 65521; // Largest prime number less than 2^16
-
-        for (data) |byte| {
-            a = (a + byte) % MOD;
-            b = (b + a) % MOD;
-        }
-
-        return (b << 16) | a;
     }
 };
 
@@ -134,7 +113,6 @@ test "CacheHeader memory layout" {
     std.debug.print("CacheHeader alignment: {}\n", .{@alignOf(CacheHeader)});
 
     std.debug.print("total_cached_bytes offset: {}\n", .{@offsetOf(CacheHeader, "total_cached_bytes")});
-    std.debug.print("data_checksum offset: {}\n", .{@offsetOf(CacheHeader, "data_checksum")});
 }
 
 test "CacheHeader.initFromBytes - valid data" {
@@ -153,14 +131,10 @@ test "CacheHeader.initFromBytes - valid data" {
     const data_start = @sizeOf(CacheHeader);
     @memcpy(buffer[data_start .. data_start + test_data_len], test_data);
 
-    // Calculate and set the checksum
-    header.data_checksum = CacheHeader.checksum(buffer[data_start .. data_start + test_data_len]);
-
     // Test initFromBytes
     const parsed_header = try CacheHeader.initFromBytes(&buffer);
 
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-    try std.testing.expectEqual(header.data_checksum, parsed_header.data_checksum);
 }
 
 test "CacheHeader.initFromBytes - buffer too small" {
@@ -188,30 +162,6 @@ test "CacheHeader.initFromBytes - insufficient data bytes" {
     // Test that it returns PartialRead error
     const result = CacheHeader.initFromBytes(&buffer);
     try std.testing.expectError(CacheError.PartialRead, result);
-}
-
-test "CacheHeader.initFromBytes - invalid checksum" {
-    // Create a buffer with a valid header but invalid checksum
-    const test_data = "This is test data for our cache!";
-    const test_data_len = test_data.len;
-
-    var buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    // Zero out the buffer to ensure predictable content
-    @memset(buffer[0..], 0);
-
-    var header = @as(*CacheHeader, @ptrCast(&buffer[0]));
-    header.total_cached_bytes = test_data_len;
-
-    // Copy test data after the header
-    const data_start = @sizeOf(CacheHeader);
-    @memcpy(buffer[data_start .. data_start + test_data_len], test_data);
-
-    // Set an incorrect checksum
-    header.data_checksum = 0xDEADBEEF;
-
-    // Test that it returns InvalidChecksum error
-    const result = CacheHeader.initFromBytes(&buffer);
-    try std.testing.expectError(CacheError.InvalidChecksum, result);
 }
 
 test "readCacheInto and initFromBytes integration" {
@@ -245,9 +195,6 @@ test "readCacheInto and initFromBytes integration" {
     // Copy test data after the header
     const data_start = @sizeOf(CacheHeader);
     @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
-
-    // Calculate and set the checksum
-    header.data_checksum = CacheHeader.checksum(write_buffer[data_start .. data_start + test_data_len]);
 
     // Create the hash directory structure
     var hash_buf: [std.fs.max_path_bytes]u8 = undefined;
@@ -286,7 +233,10 @@ test "readCacheInto and initFromBytes integration" {
     const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
 
     try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-    try std.testing.expectEqual(header.data_checksum, parsed_header.data_checksum);
+
+    // Verify that bytes read match expected total (header + data)
+    const expected_total_bytes = @sizeOf(CacheHeader) + parsed_header.total_cached_bytes;
+    try std.testing.expectEqual(expected_total_bytes, bytes_read);
 }
 
 test "readCacheInto - file not found" {
