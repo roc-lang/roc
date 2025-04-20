@@ -2,6 +2,7 @@ const std = @import("std");
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
+const path_utils = @import("path.zig");
 
 const Package = base.Package;
 
@@ -102,28 +103,19 @@ pub fn readCacheInto(
     // Get the full path, e.g. "/path/to/roc/cache/0.1.0/abc12345.rcir"
     assert(std.fs.path.isAbsolute(abs_cache_dir));
 
-    var path: [std.fs.max_path_bytes:0]u8 = undefined;
+    // Use our threadlocal scratch path buffer instead of making a fresh allocation.
+    var path_buf = path_utils.scratch_path;
 
     // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
-    @memcpy(path[0..abs_cache_dir.len], abs_cache_dir);
-    path[abs_cache_dir.len] = std.fs.path.sep;
+    @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
+    path_buf[abs_cache_dir.len] = std.fs.path.sep;
     const hash_start = abs_cache_dir.len + 1; // +1 for the path separator.
-    const hash_len = writeHashToPath(file_hash, path[hash_start..]);
-
-    // Make sure we have enough space for the file extension
-    const ext_start = hash_start + hash_len;
+    const ext_start = hash_start + writeHashToPath(file_hash, path_buf[hash_start..]);
     const ext_end = ext_start + file_ext.len;
-    assert(ext_end < path.len); // Ensure we have enough space
+    @memcpy(path_buf[ext_start..ext_end], file_ext);
+    path_buf[ext_end] = 0; // Null-terminate
 
-    // Copy the extension
-    for (file_ext, 0..) |c, i| {
-        path[ext_start + i] = c;
-    }
-
-    // Null-terminate
-    path[ext_end] = 0;
-
-    const file = try std.fs.openFileAbsoluteZ(&path, .{});
+    const file = try std.fs.openFileAbsoluteZ(&path_buf, .{});
     defer file.close();
 
     return try file.readAll(buf);
