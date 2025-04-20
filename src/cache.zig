@@ -1,3 +1,8 @@
+//! Exposes the readCacheInto and writeToCache functions for
+//! serializing IR to and from disk. The caller is responsible for:
+//! - Determining the base directory where the cache files should go.
+//! - Determining what hash should be used as the cache key.
+//! - Providing either the data to write to disk, or a buffer to read into.
 const std = @import("std");
 const base = @import("base.zig");
 const canonicalize = @import("check/canonicalize.zig");
