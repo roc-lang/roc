@@ -60,10 +60,7 @@ pub fn readCacheInto(
 ) (CacheError || std.fs.File.OpenError || std.fs.File.ReadError)!usize {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
-    // Create the full cache path
     _ = try createCachePath(&path_buf, abs_cache_dir, hash);
-
-    // Open and read the file
     const file = try std.fs.openFileAbsoluteZ(&path_buf, .{});
     defer file.close();
 
@@ -80,46 +77,25 @@ pub fn writeToCache(
 ) (CacheError || std.fs.File.OpenError || std.fs.Dir.MakeError || std.fs.File.WriteError)!usize {
     var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
 
-    // Create the full cache path
     const hash_path_len = try createCachePath(&path_buf, abs_cache_dir, hash);
 
-    // First, try to create the file without creating directories
-    const file = std.fs.createFileAbsoluteZ(&path_buf, .{}) catch |err| {
-        // If the error indicates missing directories, try creating just the parent directory first
-        if (err == error.FileNotFound) {
-            const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-            const hash_sep_pos = hash_start + ((hash_path_len - 1) / 2);
-            const parent_dir_path = path_buf[0..hash_sep_pos];
+    // Create the parent directory first
+    const hash_start = abs_cache_dir.len + 1; // +1 for path separator
+    const hash_sep_pos = hash_start + ((hash_path_len - 1) / 2);
 
-            std.fs.makeDirAbsolute(parent_dir_path) catch |parent_err| {
-                // If the parent directory couldn't be created due to missing parent directories,
-                // fall back to the recursive approach
-                if (parent_err == error.FileNotFound) {
-                    // If the parent directory couldn't be created, then we might be missing
-                    // the entire cache dir. Recursively create all of them.
-                    var path_copy: [std.fs.max_path_bytes:0]u8 = undefined;
-                    @memcpy(path_copy[0..parent_dir_path.len], parent_dir_path);
-                    path_copy[parent_dir_path.len] = 0; // Null-terminate
-                    try path_utils.makeDirRecursiveZ(path_copy[0..parent_dir_path.len :0]);
-                } else if (parent_err != error.PathAlreadyExists) {
-                    // If the parent directory already exists, that's fine.
-                    // (It must have been created concurrently.)
-                    //
-                    // For any other error, propagate it.
-                    return parent_err;
-                }
-            };
+    // Save the character at the position where we need to null-terminate
+    const saved_char = path_buf[hash_sep_pos];
+    // Temporarily null-terminate the string at the parent directory position
+    path_buf[hash_sep_pos] = 0;
 
-            // Try creating the file again now that parent directories exist
-            const retry_file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
-            defer retry_file.close();
+    // Create all parent directories as needed
+    try path_utils.makeDirRecursiveZ(path_buf[0..hash_sep_pos :0]);
 
-            return try writeCacheContents(retry_file, contents);
-        } else {
-            // For any other error besides missing directories, propagate it.
-            return err;
-        }
-    };
+    // Restore the original character
+    path_buf[hash_sep_pos] = saved_char;
+
+    // Now create the file (parent directories should exist now)
+    const file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
     defer file.close();
 
     // Write the header and contents
