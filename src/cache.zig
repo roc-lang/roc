@@ -64,6 +64,47 @@ pub const CacheHeader = struct {
     }
 };
 
+/// Populates the path buffer with the full path to the cache file for the given hash.
+/// Returns a struct containing information about the path components.
+///
+/// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
+///
+/// The returned struct includes the position of the hash start, the hash path length,
+/// and the positions of path separators to help with directory creation.
+fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) struct {
+    /// The index in path_buf where the hash part begins
+    hash_start: usize,
+    /// The length of the hash path (including the separator)
+    hash_path_len: usize,
+    /// The total path length (including file extension and null terminator)
+    total_len: usize,
+    /// The position where the filename (extension) part begins
+    file_start: usize,
+    /// The full directory path (without filename)
+    dir_path: []const u8,
+} {
+    assert(std.fs.path.isAbsolute(abs_cache_dir));
+
+    // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
+    @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
+    path_buf[abs_cache_dir.len] = std.fs.path.sep;
+    const hash_start = abs_cache_dir.len + 1; // +1 for the path separator
+
+    const hash_path_len = writeHashToPath(hash, path_buf[hash_start..]);
+    const ext_start = hash_start + hash_path_len;
+    const ext_end = ext_start + file_ext.len;
+    @memcpy(path_buf[ext_start..ext_end], file_ext);
+    path_buf[ext_end] = 0; // Null-terminate
+
+    return .{
+        .hash_start = hash_start,
+        .hash_path_len = hash_path_len,
+        .total_len = ext_end + 1, // +1 for null terminator
+        .file_start = ext_start,
+        .dir_path = path_buf[0..ext_start],
+    };
+}
+
 /// Reads the canonical IR for a given file hash and Roc version into the given buffer.
 ///
 /// If this succeeds, then it's the caller's responsibility to:
@@ -78,21 +119,13 @@ pub fn readCacheInto(
     abs_cache_dir: []const u8,
     hash: []const u8,
 ) !usize {
-    // Get the full path, e.g. "/path/to/roc/cache/0.1.0/abc12345.rcir"
-    assert(std.fs.path.isAbsolute(abs_cache_dir));
-
     // Use our threadlocal scratch path buffer instead of making a fresh allocation.
     var path_buf = path_utils.scratch_path;
 
-    // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
-    @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
-    path_buf[abs_cache_dir.len] = std.fs.path.sep;
-    const hash_start = abs_cache_dir.len + 1; // +1 for the path separator.
-    const ext_start = hash_start + writeHashToPath(hash, path_buf[hash_start..]);
-    const ext_end = ext_start + file_ext.len;
-    @memcpy(path_buf[ext_start..ext_end], file_ext);
-    path_buf[ext_end] = 0; // Null-terminate
+    // Create the full cache path
+    _ = createCachePath(&path_buf, abs_cache_dir, hash);
 
+    // Open and read the file
     const file = try std.fs.openFileAbsoluteZ(&path_buf, .{});
     defer file.close();
 
@@ -105,6 +138,73 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator) []con
     _ = gpa;
 
     @panic("not implemented");
+}
+
+/// Writes the given content to a cache file for the specified hash.
+///
+/// This function:
+/// - Attempts to create the file for writing
+/// - If that fails due to missing directories, creates them and retries
+/// - Writes a CacheHeader with the content length
+/// - Writes the content immediately after the header
+///
+/// Returns the total number of bytes written (header + content).
+pub fn writeToCache(
+    abs_cache_dir: []const u8,
+    hash: []const u8,
+    contents: []const u8,
+) !usize {
+    // Use our threadlocal scratch path buffer instead of making a fresh allocation.
+    var path_buf = path_utils.scratch_path;
+
+    // Create the full cache path and get path information
+    const path_info = createCachePath(&path_buf, abs_cache_dir, hash);
+
+    // First, try to create the file without creating directories
+    const file = std.fs.createFileAbsoluteZ(&path_buf, .{}) catch |err| {
+        // If the error indicates missing directories, create them and retry
+        if (err == error.FileNotFound) {
+            // Use our recursive helper to create all parent directories
+            try path_utils.createDirAndParents(path_info.dir_path);
+
+            // Retry creating the file - this should succeed now
+            const retry_file = try std.fs.createFileAbsoluteZ(&path_buf, .{});
+            defer retry_file.close();
+
+            // Create and write header for the retry
+            var header = CacheHeader{
+                .total_cached_bytes = @intCast(contents.len),
+            };
+
+            // Write the header
+            const header_slice = std.mem.asBytes(&header);
+            try retry_file.writeAll(header_slice);
+
+            // Write the contents
+            try retry_file.writeAll(contents);
+
+            // Return total bytes written
+            return header_slice.len + contents.len;
+        }
+        // For any other error, propagate it upward
+        return err;
+    };
+    defer file.close();
+
+    // Create and write header
+    var header = CacheHeader{
+        .total_cached_bytes = @intCast(contents.len),
+    };
+
+    // Write the header
+    const header_slice = std.mem.asBytes(&header);
+    try file.writeAll(header_slice);
+
+    // Write the contents
+    try file.writeAll(contents);
+
+    // Return total bytes written
+    return header_slice.len + contents.len;
 }
 
 test "CacheHeader memory layout" {
@@ -254,4 +354,96 @@ test "readCacheInto - file not found" {
     const result = readCacheInto(&read_buffer, abs_cache_dir, file_hash);
 
     try std.testing.expectError(error.FileNotFound, result);
+}
+
+test "writeToCache and readCacheInto integration" {
+    // Create a temporary directory for testing
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Get the absolute path of the temp directory
+    var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
+
+    const file_hash = "def789012";
+    const test_data = "This is data written by writeToCache!";
+
+    // Write data to cache
+    const bytes_written = try writeToCache(abs_cache_dir, file_hash, test_data);
+    const expected_bytes = @sizeOf(CacheHeader) + test_data.len;
+    try std.testing.expectEqual(expected_bytes, bytes_written);
+
+    // Read data back from cache
+    var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
+    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash);
+
+    // Verify bytes read matches bytes written
+    try std.testing.expectEqual(bytes_written, bytes_read);
+
+    // Parse the header from read buffer
+    const header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
+    try std.testing.expectEqual(@as(u32, test_data.len), header.total_cached_bytes);
+
+    // Verify the data content
+    const data_start = @sizeOf(CacheHeader);
+    const read_data = read_buffer[data_start..bytes_read];
+    try std.testing.expectEqualStrings(test_data, read_data);
+}
+
+test "writeToCache in non-existent directory" {
+    // Create a temporary directory for testing
+    var tmp_dir = std.testing.tmpDir(.{});
+    defer tmp_dir.cleanup();
+
+    // Get the absolute path of the temp directory
+    var abs_path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_cache_dir = try tmp_dir.dir.realpath(".", &abs_path_buf);
+
+    // Create a deeper path that doesn't exist yet
+    const nested_dir = try std.fs.path.join(std.testing.allocator, &.{
+        abs_cache_dir, "nested", "directories", "for", "testing",
+    });
+    defer std.testing.allocator.free(nested_dir);
+
+    const file_hash = "ghi345678";
+    const test_data = "This should create all parent directories!";
+
+    // Write data to cache (this should create all necessary directories)
+    const bytes_written = try writeToCache(nested_dir, file_hash, test_data);
+    const expected_bytes = @sizeOf(CacheHeader) + test_data.len;
+    try std.testing.expectEqual(expected_bytes, bytes_written);
+
+    // Try to read back the data to confirm it worked
+    var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
+    const bytes_read = try readCacheInto(&read_buffer, nested_dir, file_hash);
+
+    // Verify bytes read matches bytes written
+    try std.testing.expectEqual(bytes_written, bytes_read);
+
+    // Verify the data content
+    const data_start = @sizeOf(CacheHeader);
+    const read_data = read_buffer[data_start..bytes_read];
+    try std.testing.expectEqualStrings(test_data, read_data);
+}
+
+test "createCachePath" {
+    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+    const abs_cache_dir = "/tmp/cache";
+    const hash = "testHash123";
+
+    const path_info = createCachePath(&path_buf, abs_cache_dir, hash);
+    const hash_sep_pos = path_info.hash_start + ((path_info.hash_path_len - 1) / 2);
+
+    // Make sure there's a path separator at the position indicated
+    try std.testing.expectEqual(std.fs.path.sep, path_buf[hash_sep_pos]);
+
+    // Check that the hash starts where expected
+    try std.testing.expectEqual(abs_cache_dir.len + 1, path_info.hash_start);
+
+    // Verify path ends with file extension
+    const ext_start = path_info.hash_start + path_info.hash_path_len;
+    try std.testing.expectEqualStrings(file_ext, path_buf[ext_start .. ext_start + file_ext.len]);
+
+    // Verify null termination
+    try std.testing.expectEqual(@as(u8, 0), path_buf[path_info.total_len - 1]);
 }
