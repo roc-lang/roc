@@ -68,15 +68,15 @@ test "checkTypes - basic type unification" {
     try testing.expectEqual(type_store.get(type_id_1).*, a_type);
     try testing.expectEqual(type_store.get(type_id_2).*, int_type);
 
-    std.debug.print("{}\n", .{type_store});
-    const idx1 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
-    const idx2 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
-    std.debug.print("{}\n", .{type_store});
-    std.debug.print("{}\n {}\n", .{ idx1, idx2 });
+    //std.debug.print("{}\n", .{type_store});
+    //const idx1 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    //const idx2 = type_store.addTestType(RType.primType(.{ .int = TestInt.i32 }));
+    //std.debug.print("{}\n", .{type_store});
+    //std.debug.print("{}\n {}\n", .{ idx1, idx2 });
 
-    std.debug.print("\n\n\n{}\n\n\n", .{type_store});
-    const new_store = type_store.compact();
-    std.debug.print("\n\n\n{}\n\n\n", .{new_store});
+    //std.debug.print("\n\n\n{}\n\n\n", .{type_store});
+    //const new_store = type_store.compact();
+    //std.debug.print("\n\n\n{}\n\n\n", .{new_store});
     // // After unification, both variables should have the rigid type
     const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
     try testing.expect(result.mismatches.items.len == 0);
