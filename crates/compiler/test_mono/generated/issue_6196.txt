@@ -1,6 +1,6 @@
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.1 (Bool.21, Bool.22):
     joinpoint Test.12 Test.2 Test.3:

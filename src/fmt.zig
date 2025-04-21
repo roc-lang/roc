@@ -837,9 +837,9 @@ const Formatter = struct {
                     if (flushed) {
                         fmt.curr_indent += 1;
                         try fmt.pushIndent();
-                        try fmt.pushAll("->");
+                        try fmt.pushAll("=>");
                     } else {
-                        try fmt.pushAll(" ->");
+                        try fmt.pushAll(" =>");
                     }
                     const body_region = fmt.nodeRegion(branch.body.id);
                     flushed = try fmt.flushCommentsBefore(body_region.start);
@@ -1393,27 +1393,9 @@ const Formatter = struct {
 
     fn formatTypeHeader(fmt: *Formatter, header: IR.NodeStore.TypeHeaderIdx) !void {
         const h = fmt.ast.store.getTypeHeader(header);
-        const multiline = fmt.ast.regionIsMultiline(h.region);
         try fmt.pushTokenText(h.name);
         if (h.args.span.len > 0) {
-            if (multiline) {
-                fmt.curr_indent += 1;
-            } else {
-                try fmt.push(' ');
-            }
-            var i: usize = 0;
-            for (fmt.ast.store.tokenSlice(h.args)) |arg| {
-                if (multiline) {
-                    _ = try fmt.flushCommentsBefore(arg);
-                    try fmt.ensureNewline();
-                    try fmt.pushIndent();
-                }
-                try fmt.pushTokenText(arg);
-                if (!multiline and i < (h.args.span.len - 1)) {
-                    try fmt.push(' ');
-                }
-                i += 1;
-            }
+            try fmt.formatCollection(h.region, .round, IR.NodeStore.TypeAnnoIdx, fmt.ast.store.typeAnnoSlice(h.args), Formatter.formatTypeAnno);
         }
     }
 
@@ -2238,12 +2220,12 @@ test "Where clauses" {
     try moduleFmtsSame(
         \\module [Hash]
         \\
-        \\Hash a : a
+        \\Hash(a) : a
         \\    where
         \\        a.hash(hasher) -> hasher,
         \\        hasher.Hasher,
         \\
-        \\Decode a : a
+        \\Decode(a) : a
         \\    where
         \\        module(a).decode(List(U8)) -> a,
     );
@@ -2260,7 +2242,7 @@ test "Where clauses" {
     try moduleFmtsSame(
         \\module [Hash]
         \\
-        \\Hash a # After header
+        \\Hash(a) # After header
         \\    : # After colon
         \\        a # After var
         \\            where # After where
@@ -2269,7 +2251,7 @@ test "Where clauses" {
         \\                        hasher, # After first clause
         \\                hasher.Hasher,
         \\
-        \\Decode a : a
+        \\Decode(a) : a
         \\    where
         \\        module(a).decode( # After method args open
         \\            List(U8), # After method arg
@@ -2312,18 +2294,19 @@ test "Syntax grab bag" {
         \\        as
         \\        GoodNameMultiline
         \\
-        \\Map a b : List(a), (a -> b) -> List(b)
-        \\MapML # Comment here
-        \\    a # And here
-        \\    b # And after the last arg
-        \\        : # And after the colon
-        \\            List( # Inside Tag args
-        \\                a, # After tag arg
-        \\            ),
-        \\            (a -> b) -> # After arrow
-        \\                List( # Inside tag args
-        \\                    b,
-        \\                ) # And after the type decl
+        \\Map(a, b) : List(a), (a -> b) -> List(b)
+        \\MapML( # Comment here
+        \\    a, # And here
+        \\    b,
+        \\) # And after the last arg
+        \\    : # And after the colon
+        \\        List( # Inside Tag args
+        \\            a, # After tag arg
+        \\        ),
+        \\        (a -> b) -> # After arrow
+        \\            List( # Inside tag args
+        \\                b,
+        \\            ) # And after the type decl
         \\
         \\Foo : (Bar, Baz)
         \\
@@ -2332,27 +2315,27 @@ test "Syntax grab bag" {
         \\    Baz, # Another after pattern tuple item
         \\) # Comment after pattern tuple close
         \\
-        \\Some a : { foo : Ok(a), bar : Something }
-        \\SomeMl a : { # After record open
+        \\Some(a) : { foo : Ok(a), bar : Something }
+        \\SomeMl(a) : { # After record open
         \\    foo : Ok(a), # After field
         \\    bar : Something, # After last field
         \\}
         \\
-        \\SomeMultiline a : { # Comment after pattern record open
+        \\SomeMultiline(a) : { # Comment after pattern record open
         \\    foo # After field name
         \\        : # Before field anno
         \\            Ok(a), # Comment after pattern record field
         \\    bar : Something, # Another after pattern record field
         \\} # Comment after pattern record close
         \\
-        \\Maybe a : [Some(a), None]
+        \\Maybe(a) : [Some(a), None]
         \\
-        \\MaybeMultiline a : [ # Comment after tag union open
+        \\MaybeMultiline(a) : [ # Comment after tag union open
         \\    Some(a), # Comment after tag union member
         \\    None, # Another after tag union member
         \\] # Comment after tag union close
         \\
-        \\SomeFunc a : Maybe(a), a -> Maybe(a)
+        \\SomeFunc(a) : Maybe(a), a -> Maybe(a)
         \\
         \\add_one_oneline = |num| if num 2 else 5
         \\
@@ -2374,7 +2357,7 @@ test "Syntax grab bag" {
         \\    b,
         \\| # After args
         \\    match a {
-        \\        Blue | Green | Red -> {
+        \\        Blue | Green | Red => {
         \\            x = 12
         \\            x
         \\        }
@@ -2382,22 +2365,22 @@ test "Syntax grab bag" {
         \\        | # Before pattern in alt
         \\            Green
         \\        | Red # After alt pattern
-        \\            -> {
+        \\            => {
         \\                x = 12
         \\                x
         \\            }
         \\        lower # After pattern comment
-        \\            -> 1
-        \\        "foo" -> # After arrow comment
+        \\            => 1
+        \\        "foo" => # After arrow comment
         \\            100
-        \\        "foo" | "bar" -> 200
+        \\        "foo" | "bar" => 200
         \\        [1, 2, 3, .. as rest] # After pattern comment
-        \\            -> # After arrow comment
+        \\            => # After arrow comment
         \\                123 # After branch comment
         \\
         \\        # Just a random comment
         \\
-        \\        [1, 2 | 5, 3, .. as rest] -> 123
+        \\        [1, 2 | 5, 3, .. as rest] => 123
         \\        [
         \\            1,
         \\            2 | 5,
@@ -2405,12 +2388,12 @@ test "Syntax grab bag" {
         \\            .. # After DoubleDot
         \\                as # Before alias
         \\                    rest, # After last pattern in list
-        \\        ] -> 123
-        \\        3.14 -> 314
-        \\        3.14 | 6.28 -> 314
-        \\        (1, 2, 3) -> 123
-        \\        (1, 2 | 5, 3) -> 123
-        \\        { foo: 1, bar: 2, ..rest } -> 12
+        \\        ] => 123
+        \\        3.14 => 314
+        \\        3.14 | 6.28 => 314
+        \\        (1, 2, 3) => 123
+        \\        (1, 2 | 5, 3) => 123
+        \\        { foo: 1, bar: 2, ..rest } => 12
         \\        { # After pattern record open
         \\            foo # After pattern record field name
         \\                : # Before pattern record field value
@@ -2418,15 +2401,15 @@ test "Syntax grab bag" {
         \\            bar: 2,
         \\            .. # After spread operator
         \\                rest, # After last field
-        \\        } -> 12
-        \\        { foo: 1, bar: 2 | 7 } -> 12
+        \\        } => 12
+        \\        { foo: 1, bar: 2 | 7 } => 12
         \\        {
         \\            foo: 1,
         \\            bar: 2 | 7, # After last record field
-        \\        } -> 12
-        \\        Ok(123) -> 123
-        \\        Ok(Some(dude)) -> dude
-        \\        TwoArgs("hello", Some("world")) -> 1000
+        \\        } => 12
+        \\        Ok(123) => 123
+        \\        Ok(Some(dude)) => dude
+        \\        TwoArgs("hello", Some("world")) => 1000
         \\    }
         \\
         \\expect # Comment after expect keyword

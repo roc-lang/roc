@@ -3,12 +3,12 @@ procedure Bool.9 (#Attr.2, #Attr.3):
     ret Bool.21;
 
 procedure Num.20 (#Attr.2, #Attr.3):
-    let Num.284 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : U8 = lowlevel NumSub #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.21 (#Attr.2, #Attr.3):
-    let Num.283 : U8 = lowlevel NumMul #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U8 = lowlevel NumMul #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.1 (Bool.22, Bool.23):
     joinpoint Test.11 Test.2 Test.3:

@@ -1354,6 +1354,12 @@ define_builtins! {
         167 NUM_INFINITY_F32: "infinity_f32"
         168 NUM_INFINITY_F64: "infinity_f64"
         169 NUM_FROM_BOOL: "from_bool"
+        170 NUM_F32_TO_BITS: "f32_to_bits"
+        171 NUM_F64_TO_BITS: "f64_to_bits"
+        172 NUM_DEC_TO_BITS: "dec_to_bits"
+        173 NUM_F32_FROM_BITS: "f32_from_bits"
+        174 NUM_F64_FROM_BITS: "f64_from_bits"
+        175 NUM_DEC_FROM_BITS: "dec_from_bits"
     }
     4 BOOL: "Bool" => {
         0 BOOL_BOOL: "Bool" exposed_type=true // the Bool.Bool type alias

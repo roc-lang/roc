@@ -2230,6 +2230,36 @@ trait Backend<'a> {
                 self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
             }
 
+            LowLevel::NumF32ToBits => {
+                let intrinsic = bitcode::NUM_F32_TO_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64ToBits => {
+                let intrinsic = bitcode::NUM_F64_TO_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumDecToBits => {
+                let intrinsic = bitcode::NUM_I128_TO_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF32FromBits => {
+                let intrinsic = bitcode::NUM_F32_FROM_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumF64FromBits => {
+                let intrinsic = bitcode::NUM_F64_FROM_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
+            LowLevel::NumDecFromBits => {
+                let intrinsic = bitcode::NUM_I128_FROM_BITS.to_string();
+                self.build_fn_call(sym, intrinsic, args, arg_layouts, ret_layout)
+            }
+
             x => todo!("low level, {:?}", x),
         }
     }

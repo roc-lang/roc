@@ -54,10 +54,10 @@ pub const Type = union(enum) {
     primitive: types_module.Primitive,
     box: Type.Idx,
     list: Type.Idx,
-    @"struct": Type.NonEmptySlice,
-    tag_union: Type.NonEmptySlice,
+    @"struct": Type.NonEmptyRange,
+    tag_union: Type.NonEmptyRange,
     func: struct {
-        ret_then_args: Type.NonEmptySlice,
+        ret_then_args: Type.NonEmptyRange,
     },
 
     /// todo
@@ -65,9 +65,9 @@ pub const Type = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// todo
@@ -77,7 +77,7 @@ pub const Expr = union(enum) {
     number: base.Literal.Num,
     list: struct {
         elem_type: Type.Idx,
-        elems: Expr.Slice,
+        elems: Expr.Range,
     },
     lookup: struct {
         ident: Ident.Idx,
@@ -87,18 +87,18 @@ pub const Expr = union(enum) {
     call: struct {
         fn_type: Type.Idx,
         fn_expr: Expr.Idx,
-        args: Expr.Typed.Slice,
+        args: Expr.Typed.Range,
     },
 
     function_pack: struct {
         ident: Ident.Idx,
         // empty slice means no captures
-        captures: Expr.Slice,
+        captures: Expr.Range,
     },
 
     unit,
 
-    @"struct": Expr.NonEmptySlice,
+    @"struct": Expr.NonEmptyRange,
 
     struct_access: struct {
         record_expr: Expr.Idx,
@@ -110,7 +110,7 @@ pub const Expr = union(enum) {
     tag: struct {
         discriminant: u16,
         tag_union_type: Type.Idx,
-        args: Expr.Typed.Slice,
+        args: Expr.Typed.Range,
     },
 
     when: struct {
@@ -121,7 +121,7 @@ pub const Expr = union(enum) {
         /// The return type of all branches and thus the whole when expression
         branch_type: Type.Idx,
         /// The branches of the when expression
-        branches: WhenBranch.NonEmptySlice,
+        branches: WhenBranch.NonEmptyRange,
     },
     compiler_bug: Problem.Compiler,
     /// todo
@@ -129,9 +129,9 @@ pub const Expr = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
     /// todo
     pub const Typed = struct {
         expr: Expr.Idx,
@@ -139,7 +139,7 @@ pub const Expr = union(enum) {
         /// todo
         pub const List = collections.SafeMultiList(@This());
         /// todo
-        pub const Slice = Typed.List.Slice;
+        pub const Range = Typed.List.Range;
     };
 };
 
@@ -147,19 +147,19 @@ pub const Expr = union(enum) {
 pub const Def = struct {
     pattern: Pattern.Idx,
     /// Named variables in the pattern, e.g. `a` in `Ok a ->`
-    pattern_vars: TypedIdent.Slice,
+    pattern_vars: TypedIdent.Range,
     expr: Expr.Idx,
     expr_type: Type.Idx,
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
 pub const WhenBranch = struct {
     /// The pattern(s) to match the value against
-    patterns: Pattern.NonEmptySlice,
+    patterns: Pattern.NonEmptyRange,
     /// A boolean expression that must be true for this branch to be taken
     guard: ?Expr.Idx,
     /// The expression to produce if the pattern matches
@@ -167,11 +167,11 @@ pub const WhenBranch = struct {
     /// todo
     pub const List = collections.SafeList(@This());
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 /// todo
 pub const Function = struct {
-    args: Pattern.Slice,
+    args: Pattern.Range,
     return_type: Type.Idx,
     expr: Expr.Idx,
 };
@@ -188,7 +188,7 @@ pub const StructDestruct = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 /// todo
 pub const Pattern = union(enum) {
@@ -202,16 +202,16 @@ pub const Pattern = union(enum) {
     applied_tag: struct {
         tag_union_type: Type.Idx,
         tag_name: Ident.Idx,
-        args: Pattern.Slice,
+        args: Pattern.Range,
     },
     struct_destructure: struct {
         struct_type: Type.Idx,
-        destructs: StructDestruct.Slice,
+        destructs: StructDestruct.Range,
         opt_spread: ?Pattern.Typed,
     },
     list: struct {
         elem_type: Type.Idx,
-        patterns: Pattern.Slice,
+        patterns: Pattern.Range,
 
         opt_rest: ?struct {
             offset: u16,
@@ -225,9 +225,9 @@ pub const Pattern = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
     /// todo
     pub const Typed = struct {
         pattern: Pattern.Idx,
@@ -235,7 +235,7 @@ pub const Pattern = union(enum) {
         /// todo
         pub const List = collections.SafeMultiList(@This());
         /// todo
-        pub const Slice = Typed.List.Slice;
+        pub const Range = Typed.List.Range;
     };
 };
 /// todo
@@ -245,5 +245,5 @@ pub const TypedIdent = struct {
     /// todo
     pub const List = collections.SafeMultiList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };

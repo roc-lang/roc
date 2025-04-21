@@ -2,4 +2,4 @@
 # This file is kept to maintain compatibility with tools like lorri until they support flakes (https://github.com/target/lorri/issues/460).
 { system ? builtins.currentSystem }:
 
-(builtins.getFlake (toString ./.)).devShell.${system}
+(builtins.getFlake (toString ./.)).devShells.${system}

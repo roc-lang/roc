@@ -2173,6 +2173,12 @@ impl<'a> LowLevelCall<'a> {
             NumF64ToParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_PARTS),
             NumF32FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_PARTS),
             NumF64FromParts => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_PARTS),
+            NumF32ToBits => self.load_args_and_call_zig(backend, bitcode::NUM_F32_TO_BITS),
+            NumF64ToBits => self.load_args_and_call_zig(backend, bitcode::NUM_F64_TO_BITS),
+            NumDecToBits => self.load_args_and_call_zig(backend, bitcode::NUM_I128_TO_BITS),
+            NumF32FromBits => self.load_args_and_call_zig(backend, bitcode::NUM_F32_FROM_BITS),
+            NumF64FromBits => self.load_args_and_call_zig(backend, bitcode::NUM_F64_FROM_BITS),
+            NumDecFromBits => self.load_args_and_call_zig(backend, bitcode::NUM_I128_FROM_BITS),
             Not => {
                 self.load_args(backend);
                 backend.code_builder.i32_eqz();

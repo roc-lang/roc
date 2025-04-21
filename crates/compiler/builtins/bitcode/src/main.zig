@@ -114,6 +114,12 @@ comptime {
     exportNumFn(num.f64ToParts, "f64_to_parts");
     exportNumFn(num.f32FromParts, "f32_from_parts");
     exportNumFn(num.f64FromParts, "f64_from_parts");
+    exportNumFn(num.f32ToBits, "f32_to_bits");
+    exportNumFn(num.f64ToBits, "f64_to_bits");
+    exportNumFn(num.i128ToBits, "i128_to_bits");
+    exportNumFn(num.f32FromBits, "f32_from_bits");
+    exportNumFn(num.f64FromBits, "f64_from_bits");
+    exportNumFn(num.i128FromBits, "i128_from_bits");
 
     for (INTEGERS, 0..) |T, i| {
         num.exportPow(T, ROC_BUILTINS ++ "." ++ NUM ++ ".pow_int.");

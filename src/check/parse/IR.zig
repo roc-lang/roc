@@ -161,6 +161,8 @@ pub const Diagnostic = struct {
         where_expected_method_arrow,
         where_expected_method_or_alias_name,
         where_expected_var_or_module,
+        import_must_be_top_level,
+        invalid_type_arg,
     };
 };
 
@@ -604,7 +606,7 @@ pub const NodeStore = struct {
     /// Initialize the store with an assumed capacity to
     /// ensure resizing of underlying data structures happens
     /// very rarely.
-    pub fn initWithCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         var store: NodeStore = .{
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
@@ -631,12 +633,8 @@ pub const NodeStore = struct {
         return store;
     }
 
-    // This value is based on some observed characteristics of Roc code.
-    // Having an initial capacity of 10 ensures that the scratch slice
-    // will only have to be resized in >90th percentile case.
-    // It is not scientific, and should be tuned when we have enough
-    // Roc code to instrument this and determine a real 90th percentile.
-    const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 10);
+    // TODO: tune this base on real roc code. In general, these arrays are all really small, so oversize it.
+    const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64);
 
     /// Deinitializes all data owned by the store.
     /// A caller should ensure that they have taken
@@ -2417,8 +2415,10 @@ pub const NodeStore = struct {
 
                         header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
 
-                        for (ir.store.tokenSlice(ty_header.args)) |b| {
-                            header.appendStringChild(env.gpa, ir.resolve(b));
+                        for (ir.store.typeAnnoSlice(ty_header.args)) |b| {
+                            const anno = ir.store.getTypeAnno(b);
+                            var anno_sexpr = anno.toSExpr(env, ir, line_starts);
+                            header.appendNodeChild(env.gpa, &anno_sexpr);
                         }
 
                         node.appendNodeChild(env.gpa, &header);
@@ -2483,7 +2483,7 @@ pub const NodeStore = struct {
 
     pub const TypeHeader = struct {
         name: TokenIdx,
-        args: TokenSpan,
+        args: TypeAnnoSpan,
         region: Region,
     };
 

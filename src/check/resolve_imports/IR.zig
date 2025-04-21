@@ -93,7 +93,7 @@ pub const FunctionDef = struct {
     return_type: Type.Idx,
     fx_type: Type.Idx,
     // early_returns: std.ArrayList(CanIR.EarlyReturn),
-    arguments: Arg.Slice,
+    arguments: Arg.Range,
 
     /// todo
     pub const Arg = struct {
@@ -105,7 +105,7 @@ pub const FunctionDef = struct {
         pub const List = collections.SafeMultiList(@This());
 
         /// todo
-        pub const Slice = Arg.List.Slice;
+        pub const Range = Arg.List.Range;
     };
 
     const List = collections.SafeMultiList(@This());

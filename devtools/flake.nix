@@ -19,7 +19,7 @@
 
         isAarch64Darwin = pkgs.stdenv.hostPlatform.system == "aarch64-darwin";
 
-        rocShell = roc.devShell.${system};
+        rocShell = roc.devShells.${system}.default;
       in
       {
         devShell = pkgs.mkShell {

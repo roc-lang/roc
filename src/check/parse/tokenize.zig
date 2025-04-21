@@ -1024,7 +1024,7 @@ pub const Tokenizer = struct {
         const cursor = Cursor.init(text, messages);
         // TODO: tune this more. Syntax grab bag is 3:1.
         // Generally, roc code will be less dense than that.
-        const output = TokenizedBuffer.initCapacity(env, @max(text.len / 8, 64));
+        const output = TokenizedBuffer.initCapacity(env, text.len);
         return Tokenizer{
             .cursor = cursor,
             .output = output,

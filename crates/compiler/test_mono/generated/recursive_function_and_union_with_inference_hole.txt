@@ -49,12 +49,12 @@ procedure List.71 (#Attr.2, #Attr.3):
     ret List.693;
 
 procedure Num.22 (#Attr.2, #Attr.3):
-    let Num.284 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
-    ret Num.284;
+    let Num.290 : Int1 = lowlevel NumLt #Attr.2 #Attr.3;
+    ret Num.290;
 
 procedure Num.51 (#Attr.2, #Attr.3):
-    let Num.283 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
-    ret Num.283;
+    let Num.289 : U64 = lowlevel NumAddWrap #Attr.2 #Attr.3;
+    ret Num.289;
 
 procedure Test.2 (Test.5):
     let Test.6 : List [<rnnu>C List *self] = UnionAtIndex (Id 0) (Index 0) Test.5;

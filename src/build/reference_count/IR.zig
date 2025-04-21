@@ -43,7 +43,7 @@ pub fn deinit(self: *Self) void {
 
 /// todo
 pub const Procedure = struct {
-    arguments: IdentWithLayout.Slice,
+    arguments: IdentWithLayout.Range,
     body: Stmt.Idx,
     return_layout: Layout.Idx,
 };
@@ -56,8 +56,8 @@ pub const Layout = union(enum) {
     primitive: types.Primitive,
     box: Layout.Idx,
     list: Layout.Idx,
-    @"struct": Layout.NonEmptySlice,
-    tag_union: Layout.NonEmptySlice,
+    @"struct": Layout.NonEmptyRange,
+    tag_union: Layout.NonEmptyRange,
     // probably necessary for returning empty structs, but would be good to remove this if that's not the case
     unit,
     /// todo
@@ -65,9 +65,9 @@ pub const Layout = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 /// todo
 pub const IdentWithLayout = struct {
@@ -78,7 +78,7 @@ pub const IdentWithLayout = struct {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 /// todo
 pub const StmtWithLayout = struct {
@@ -86,7 +86,7 @@ pub const StmtWithLayout = struct {
     layout: Layout.Idx,
 };
 
-// TODO: should these use `NonEmptySlice`s?
+// TODO: should these use `NonEmptyRange`s?
 //
 // Copied (and adapted) from:
 // https://github.com/roc-lang/roc/blob/689c58f35e0a39ca59feba549f7fcf375562a7a6/crates/compiler/mono/src/layout.rs#L733
@@ -109,13 +109,13 @@ pub const Expr = union(enum) {
         // TODO: should this be an index instead?
         tag_layout: UnionLayout,
         tag_id: TagIdIntType,
-        arguments: collections.SafeList(Ident.Idx).Slice,
+        arguments: collections.SafeList(Ident.Idx).Range,
     },
-    @"struct": collections.SafeList(Ident.Idx).NonEmptySlice,
+    @"struct": collections.SafeList(Ident.Idx).NonEmptyRange,
     null_pointer,
     struct_at_index: struct {
         index: u64,
-        field_layouts: Layout.Slice,
+        field_layouts: Layout.Range,
         structure: Ident.Idx,
     },
 
@@ -139,7 +139,7 @@ pub const Expr = union(enum) {
 
     array: struct {
         elem_layout: Layout.Idx,
-        elems: ListLiteralElem.Slice,
+        elems: ListLiteralElem.Range,
     },
 
     empty_array,
@@ -168,9 +168,9 @@ pub const Expr = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// todo
@@ -182,20 +182,20 @@ pub const ListLiteralElem = union(enum) {
     /// todo
     pub const List = collections.SafeList(@This());
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
 };
 
 /// todo
 pub const Call = struct {
     kind: Kind,
-    arguments: IdentWithLayout.Slice,
+    arguments: IdentWithLayout.Range,
 
     /// todo
     pub const Kind = union(enum) {
         by_name: struct {
             ident: Ident.Idx,
             ret_layout: Layout.Idx,
-            arg_layouts: Layout.Slice,
+            arg_layouts: Layout.Range,
         },
         by_pointer: struct {
             pointer: Ident.Idx,
@@ -246,7 +246,7 @@ pub const Stmt = union(enum) {
     /// a join point `join f <params> = <continuation> in remainder`
     join: struct {
         id: JoinPoint.Idx,
-        parameters: IdentWithLayout.Slice,
+        parameters: IdentWithLayout.Range,
         /// body of the join point
         /// what happens after _jumping to_ the join point
         body: Stmt.Idx,
@@ -255,7 +255,7 @@ pub const Stmt = union(enum) {
     },
     jump: struct {
         join_point: JoinPoint.Idx,
-        idents: collections.SafeList(Ident.Idx).Slice,
+        idents: collections.SafeList(Ident.Idx).Range,
     },
     crash: struct {
         message: Ident.Idx,
@@ -266,9 +266,9 @@ pub const Stmt = union(enum) {
     /// todo
     pub const Idx = List.Idx;
     /// todo
-    pub const Slice = List.Slice;
+    pub const Range = List.Range;
     /// todo
-    pub const NonEmptySlice = List.NonEmptySlice;
+    pub const NonEmptyRange = List.NonEmptyRange;
 };
 
 /// todo
