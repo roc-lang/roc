@@ -15,6 +15,7 @@ openDir: *const fn (absolute_path: []const u8) OpenError!Dir,
 dirName: *const fn (absolute_path: []const u8) ?[]const u8,
 baseName: *const fn (absolute_path: []const u8) ?[]const u8,
 canonicalize: *const fn (relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8,
+makeDirRecursive: *const fn (path: []const u8) MakeDirError!void,
 
 // TODO: replace this with a method that gets the right
 // filesystem manager for the current context.
@@ -28,12 +29,16 @@ pub fn default() Self {
         .dirName = &dirNameDefault,
         .baseName = &baseNameDefault,
         .canonicalize = &canonicalizeDefault,
+        .makeDirRecursive = &makeDirRecursiveDefault,
     };
 }
 
 /// The max valid file size.
 /// Anything larger will fail due to us using u32 offsets.
 pub const max_file_size = std.math.maxInt(u32);
+
+/// All errors that can occur when making a directory.
+pub const MakeDirError = std.fs.Dir.MakeDirError || error{FileNotFound};
 
 /// All errors that can occur when reading a file.
 pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.Error || error{StreamTooLong};
@@ -170,6 +175,17 @@ fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) Can
         return switch (err) {
             error.FileNotFound => error.FileNotFound,
             else => error.Unknown,
+        };
+    };
+}
+
+/// Creates a directory and all its parent directories recursively, similar to `mkdir -p`
+fn makeDirRecursiveDefault(path: []const u8) MakeDirError!void {
+    // First ensure the path exists
+    std.fs.cwd().makePath(path) catch |err| {
+        return switch (err) {
+            error.FileNotFound => error.FileNotFound,
+            else => err,
         };
     };
 }

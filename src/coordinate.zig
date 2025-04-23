@@ -2,7 +2,7 @@
 
 const std = @import("std");
 const base = @import("base.zig");
-const cache = @import("cache.zig");
+const cache = @import("coordinate/Cache.zig");
 const types = @import("types.zig");
 const collections = @import("collections.zig");
 const tokenize = @import("check/parse/tokenize.zig");
