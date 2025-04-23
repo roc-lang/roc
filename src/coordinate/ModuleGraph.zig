@@ -5,7 +5,7 @@ const std = @import("std");
 const testing = std.testing;
 const base = @import("../base.zig");
 const utils = @import("utils.zig");
-const cache = @import("../cache.zig");
+const cache = @import("Cache.zig");
 const collections = @import("../collections.zig");
 const can = @import("../check/canonicalize.zig");
 const parse = @import("../check/parse.zig");
@@ -102,7 +102,7 @@ fn loadOrCompileCanIr(
     // traversing the file system earlier.
     const contents = try fs.readFile(abs_file_path, gpa);
     const hash_of_contents = utils.blake3Hash(contents);
-    const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version);
+    const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
 
     return if (cache_lookup) |ir| ir else blk: {
         var can_ir = can.IR.init(gpa);

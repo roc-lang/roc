@@ -337,7 +337,7 @@ fn discoverModulesStartingFromEntry(
 
                 continue;
             };
-            const root_absdir = cache.getPackageRootAbsDir(url_data, gpa);
+            const root_absdir = cache.getPackageRootAbsDir(url_data, gpa, fs);
             defer gpa.free(root_absdir);
 
             var dir = fs.openDir(root_absdir) catch |err| {
