@@ -95,7 +95,7 @@ pub fn writeToCache(
 
     // Create the parent directory first
     const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const hash_sep_pos = hash_start + ((path_result.hash_path_len - 1) / 2);
+    const hash_sep_pos = hash_start + path_result.half_encoded_len;
 
     // Allocate memory for the directory path
     const dir_path = try allocator.allocSentinel(u8, hash_sep_pos, 0);
@@ -157,19 +157,8 @@ pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const 
     return null;
 }
 
-/// Takes the given hash bytes, base64-url encodes them,
-/// and writes them to the given buffer with a directory
-/// separator in the middle (to avoid one giant cache dir.)
-///
-/// Returns the number of bytes written to `out`.
-fn bytesNeededToHashPath(hash: []const u8) usize {
-    // We split the input bytes in half and write a path separator,
-    // so we need +1 to account for the separator.
-    return hash_encoder.calcSize(hash.len) + 1;
-}
-
-/// Populates the path buffer with the full path to the cache file for the given hash.
-/// Returns the length of the hash path part.
+/// Allocates and returns the full path to the cache file for the given hash.
+/// Also returns the length of the hash path part.
 ///
 /// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
 ///
@@ -178,9 +167,10 @@ fn bytesNeededToHashPath(hash: []const u8) usize {
 /// Returns a tuple containing:
 /// - The full path as a null-terminated string
 /// - The hash path length
-fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash: []const u8) CacheError!struct { path: [:0]u8, hash_path_len: usize } {
+fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash: []const u8) CacheError!struct { path: [:0]u8, half_encoded_len: usize } {
     // Calculate required space: abs_cache_dir + "/" + hash_path + file_ext + null terminator
-    const required_bytes = abs_cache_dir.len + 1 + bytesNeededToHashPath(hash) + file_ext.len + 1;
+    // We need hash_encoder.calcSize(hash.len) + 1 bytes for the hash path (+1 for the separator)
+    const required_bytes = abs_cache_dir.len + 1 + hash_encoder.calcSize(hash.len) + 1 + file_ext.len + 1;
 
     // Allocate buffer with null terminator
     var path_buf = try allocator.allocSentinel(u8, required_bytes - 1, 0);
@@ -194,27 +184,25 @@ fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash
     // Inline the writeHashToPath function here with the hash bytes split in half
     const half_hash_len = hash.len / 2;
     const half_encoded_len = hash_encoder.calcSize(half_hash_len);
-    
+
     // Encode the first half of the hash
-    _ = hash_encoder.encode(path_buf[hash_start..hash_start + half_encoded_len], hash[0..half_hash_len]);
-    
+    _ = hash_encoder.encode(path_buf[hash_start .. hash_start + half_encoded_len], hash[0..half_hash_len]);
+
     // Add path separator
     path_buf[hash_start + half_encoded_len] = std.fs.path.sep;
-    
+
     // Encode the second half of the hash
-    _ = hash_encoder.encode(path_buf[hash_start + half_encoded_len + 1..], hash[half_hash_len..hash.len]);
-    
+    _ = hash_encoder.encode(path_buf[hash_start + half_encoded_len + 1 ..], hash[half_hash_len..hash.len]);
+
     const hash_path_len = (half_encoded_len * 2) + 1;
-    
+
     const ext_start = hash_start + hash_path_len;
     const ext_end = ext_start + file_ext.len;
     @memcpy(path_buf[ext_start..ext_end], file_ext);
     // The buffer already has a null terminator from allocSentinel
 
-    return .{ .path = path_buf, .hash_path_len = hash_path_len };
+    return .{ .path = path_buf, .half_encoded_len = half_encoded_len };
 }
-
-
 
 test "CacheHeader.initFromBytes - valid data" {
     const test_data = "This is test data for our cache!";
@@ -286,7 +274,7 @@ test "readCacheInto and initFromBytes integration" {
 
     // Extract just the hash path portion
     const hash_start = abs_cache_dir.len + 1;
-    const hash_path = path_result.path[hash_start .. hash_start + path_result.hash_path_len];
+    const hash_path = path_result.path[hash_start .. hash_start + (path_result.half_encoded_len * 2) + 1];
 
     // Create parent directory for the hash path
     var sep_pos: usize = 0;
@@ -401,7 +389,7 @@ test "createCachePath encoding and separator" {
     const half_hash_len = hash.len / 2;
     const half_encoded_len = hash_encoder.calcSize(half_hash_len);
     const hash_sep_pos = hash_start + half_encoded_len;
-    const ext_start = hash_start + path_result.hash_path_len;
+    const ext_start = hash_start + (path_result.half_encoded_len * 2) + 1;
     // Don't use ext_end for checking null terminator
 
     try std.testing.expectEqual(std.fs.path.sep, path_result.path[hash_sep_pos]);
@@ -411,5 +399,3 @@ test "createCachePath encoding and separator" {
     // The sentinel is always at index path_result.path.len because that's how sentinels work
     try std.testing.expectEqual(@as(u8, 0), path_result.path[path_result.path.len]);
 }
-
-
