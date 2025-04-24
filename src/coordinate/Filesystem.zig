@@ -11,6 +11,7 @@ const Self = @This();
 
 fileExists: *const fn (absolute_path: []const u8) OpenError!bool,
 readFile: *const fn (relative_path: []const u8, allocator: Allocator) ReadError![]const u8,
+readFileInto: *const fn (path: []const u8, buffer: []u8) ReadError!usize,
 openDir: *const fn (absolute_path: []const u8) OpenError!Dir,
 dirName: *const fn (absolute_path: []const u8) ?[]const u8,
 baseName: *const fn (absolute_path: []const u8) ?[]const u8,
@@ -25,6 +26,7 @@ pub fn default() Self {
     return Self{
         .fileExists = &fileExistsDefault,
         .readFile = &readFileDefault,
+        .readFileInto = &readFileIntoDefault,
         .openDir = &openDirDefault,
         .dirName = &dirNameDefault,
         .baseName = &baseNameDefault,
@@ -149,6 +151,15 @@ fn readFileDefault(relative_path: []const u8, allocator: std.mem.Allocator) Read
     const contents = try file.reader().readAllAlloc(allocator, max_file_size);
 
     return contents;
+}
+
+/// Reads the contents of a file at the given path into a pre-allocated buffer.
+/// Returns the number of bytes read.
+fn readFileIntoDefault(path: []const u8, buffer: []u8) ReadError!usize {
+    const file = try std.fs.cwd().openFile(path, .{});
+    defer file.close();
+
+    return try file.reader().readAll(buffer);
 }
 
 fn openDirDefault(absolute_path: []const u8) OpenError!Dir {

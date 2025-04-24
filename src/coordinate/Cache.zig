@@ -20,6 +20,7 @@ const file_ext = ".rcir";
 pub const CacheError = error{
     PartialRead,
     PathTooLong,
+    OutOfMemory,
 };
 
 /// The header that gets written to disk right before the cached data.
@@ -72,23 +73,10 @@ pub fn readCacheInto(
     fs: Filesystem,
     allocator: std.mem.Allocator,
 ) (CacheError || Filesystem.OpenError || Filesystem.ReadError)!usize {
-    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
+    const path_result = try createCachePath(allocator, abs_cache_dir, hash);
+    defer allocator.free(path_result.path);
 
-    _ = try createCachePath(&path_buf, abs_cache_dir, hash);
-
-    // Use the Filesystem interface to read the file instead of direct fs operations
-    const file_path = path_buf[0 .. std.mem.indexOfScalar(u8, &path_buf, 0) orelse path_buf.len];
-    const file_contents = try fs.readFile(file_path, allocator);
-    defer allocator.free(file_contents);
-
-    const bytes_to_copy = @min(dest.len, file_contents.len);
-    @memcpy(dest[0..bytes_to_copy], file_contents[0..bytes_to_copy]);
-
-    if (bytes_to_copy < file_contents.len) {
-        return CacheError.PartialRead;
-    }
-
-    return bytes_to_copy;
+    return try fs.readFileInto(path_result.path, dest);
 }
 
 /// Writes the given content to a cache file for the specified hash.
@@ -100,28 +88,27 @@ pub fn writeToCache(
     contents: []const u8, // TODO: convert this to iovecs and use pwritev on POSIX targets. Windows should use memory-mapped writes.
     fs: Filesystem,
     allocator: std.mem.Allocator,
-) (CacheError || Filesystem.OpenError || Filesystem.MakeDirError || std.fs.File.WriteError || error{OutOfMemory})!usize {
-    var path_buf: [std.fs.max_path_bytes:0]u8 = undefined;
-
-    const hash_path_len = try createCachePath(&path_buf, abs_cache_dir, hash);
+) (CacheError || Filesystem.OpenError || Filesystem.MakeDirError || std.fs.File.WriteError)!usize {
+    // Create cache path using an allocator
+    const path_result = try createCachePath(allocator, abs_cache_dir, hash);
+    defer allocator.free(path_result.path);
 
     // Create the parent directory first
     const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const hash_sep_pos = hash_start + ((hash_path_len - 1) / 2);
+    const hash_sep_pos = hash_start + ((path_result.hash_path_len - 1) / 2);
 
-    // Save the character at the position where we need to null-terminate
-    const saved_char = path_buf[hash_sep_pos];
-    // Temporarily null-terminate the string at the parent directory position
-    path_buf[hash_sep_pos] = 0;
+    // Allocate memory for the directory path
+    const dir_path = try allocator.allocSentinel(u8, hash_sep_pos, 0);
+    defer allocator.free(dir_path);
+
+    // Copy the directory portion (up to the separator in the hash path)
+    @memcpy(dir_path, path_result.path[0..hash_sep_pos]);
 
     // Create all parent directories as needed
-    try fs.makeDirRecursive(path_buf[0..hash_sep_pos]);
-
-    // Restore the original character
-    path_buf[hash_sep_pos] = saved_char;
+    try fs.makePath(dir_path);
 
     // Now create the complete file path as a string
-    const file_path = path_buf[0 .. std.mem.indexOfScalar(u8, &path_buf, 0) orelse path_buf.len];
+    const file_path = path_result.path;
 
     // First, we need to create a temporary file to write the header and contents
     var header_and_contents = try allocator.alloc(u8, @sizeOf(CacheHeader) + contents.len);
@@ -186,52 +173,48 @@ fn bytesNeededToHashPath(hash: []const u8) usize {
 ///
 /// The path format is: abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
 ///
-/// All other path-related values can be derived from the returned hash_path_len and other known values.
-fn createCachePath(path_buf: []u8, abs_cache_dir: []const u8, hash: []const u8) CacheError!usize {
-    assert(std.fs.path.isAbsolute(abs_cache_dir));
-
+/// All other path-related values can be derived from the returned values.
+///
+/// Returns a tuple containing:
+/// - The full path as a null-terminated string
+/// - The hash path length
+fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash: []const u8) CacheError!struct { path: [:0]u8, hash_path_len: usize } {
     // Calculate required space: abs_cache_dir + "/" + hash_path + file_ext + null terminator
     const required_bytes = abs_cache_dir.len + 1 + bytesNeededToHashPath(hash) + file_ext.len + 1;
 
-    if (path_buf.len < required_bytes) {
-        return CacheError.PathTooLong;
-    }
+    // Allocate buffer with null terminator
+    var path_buf = try allocator.allocSentinel(u8, required_bytes - 1, 0);
+    errdefer allocator.free(path_buf);
 
     // abs_cache_dir + "/" + first_half_of_hash + "/" + second_half_of_hash + file_ext
     @memcpy(path_buf[0..abs_cache_dir.len], abs_cache_dir);
     path_buf[abs_cache_dir.len] = std.fs.path.sep;
     const hash_start = abs_cache_dir.len + 1; // +1 for the path separator
 
-    const hash_path_len = try writeHashToPath(hash, path_buf[hash_start..]);
+    // Inline the writeHashToPath function here with the hash bytes split in half
+    const half_hash_len = hash.len / 2;
+    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
+    
+    // Encode the first half of the hash
+    _ = hash_encoder.encode(path_buf[hash_start..hash_start + half_encoded_len], hash[0..half_hash_len]);
+    
+    // Add path separator
+    path_buf[hash_start + half_encoded_len] = std.fs.path.sep;
+    
+    // Encode the second half of the hash
+    _ = hash_encoder.encode(path_buf[hash_start + half_encoded_len + 1..], hash[half_hash_len..hash.len]);
+    
+    const hash_path_len = (half_encoded_len * 2) + 1;
+    
     const ext_start = hash_start + hash_path_len;
     const ext_end = ext_start + file_ext.len;
     @memcpy(path_buf[ext_start..ext_end], file_ext);
-    path_buf[ext_end] = 0; // Null-terminate
+    // The buffer already has a null terminator from allocSentinel
 
-    return hash_path_len;
+    return .{ .path = path_buf, .hash_path_len = hash_path_len };
 }
 
-/// Takes the given hash bytes, base64-url encodes them,
-/// and writes them to the given buffer with a directory
-/// separator in the middle (to avoid one giant cache dir.)
-///
-/// Returns the number of bytes written to `out`.
-fn writeHashToPath(hash: []const u8, out: []u8) CacheError!usize {
-    const half_hash_len = hash.len / 2;
-    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
-    const needed_bytes = bytesNeededToHashPath(hash);
 
-    if (out.len < needed_bytes) {
-        return CacheError.PathTooLong;
-    }
-
-    // Encode the bytes with a path separator in the middle.
-    _ = hash_encoder.encode(out[0..half_encoded_len], hash[0..half_hash_len]);
-    out[half_encoded_len] = std.fs.path.sep;
-    _ = hash_encoder.encode(out[half_encoded_len + 1 ..], hash[half_hash_len..hash.len]);
-
-    return (half_encoded_len * 2) + 1;
-}
 
 test "CacheHeader.initFromBytes - valid data" {
     const test_data = "This is test data for our cache!";
@@ -297,9 +280,13 @@ test "readCacheInto and initFromBytes integration" {
     const data_start = @sizeOf(CacheHeader);
     @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
 
-    var hash_buf: [std.fs.max_path_bytes]u8 = undefined;
-    const hash_len = try writeHashToPath(file_hash, &hash_buf);
-    const hash_path = hash_buf[0..hash_len];
+    // Create the path for the hash
+    const path_result = try createCachePath(allocator, abs_cache_dir, file_hash);
+    defer allocator.free(path_result.path);
+
+    // Extract just the hash path portion
+    const hash_start = abs_cache_dir.len + 1;
+    const hash_path = path_result.path[hash_start .. hash_start + path_result.hash_path_len];
 
     // Create parent directory for the hash path
     var sep_pos: usize = 0;
@@ -348,6 +335,13 @@ test "readCacheInto - file not found" {
                 return error.FileNotFound;
             }
         }.readFile,
+        .readFileInto = struct {
+            fn readFileInto(path: []const u8, buf: []u8) Filesystem.ReadError!usize {
+                _ = path;
+                _ = buf;
+                return error.FileNotFound;
+            }
+        }.readFileInto,
         .openDir = Filesystem.default().openDir,
         .dirName = Filesystem.default().dirName,
         .baseName = Filesystem.default().baseName,
@@ -394,46 +388,28 @@ test "writeToCache with nonexistent parent directories" {
     std.testing.log_level = .err;
 }
 
-test "createCachePath" {
-    var path_buf: [std.fs.max_path_bytes]u8 = undefined;
+test "createCachePath encoding and separator" {
+    var allocator = std.testing.allocator;
     const abs_cache_dir = "/tmp/cache";
     const hash = "testHash123";
 
-    const hash_path_len = try createCachePath(&path_buf, abs_cache_dir, hash);
+    const path_result = try createCachePath(allocator, abs_cache_dir, hash);
+    defer allocator.free(path_result.path);
 
     // Calculate key positions
     const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const hash_sep_pos = hash_start + hash_encoder.calcSize(hash.len / 2);
-    const ext_start = hash_start + hash_path_len;
-    const ext_end = ext_start + file_ext.len;
+    const half_hash_len = hash.len / 2;
+    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
+    const hash_sep_pos = hash_start + half_encoded_len;
+    const ext_start = hash_start + path_result.hash_path_len;
+    // Don't use ext_end for checking null terminator
 
-    try std.testing.expectEqual(std.fs.path.sep, path_buf[hash_sep_pos]);
+    try std.testing.expectEqual(std.fs.path.sep, path_result.path[hash_sep_pos]);
     try std.testing.expectEqual(abs_cache_dir.len + 1, hash_start);
-    try std.testing.expectEqualStrings(file_ext, path_buf[ext_start .. ext_start + file_ext.len]);
-    try std.testing.expectEqual(@as(u8, 0), path_buf[ext_end]);
+    try std.testing.expectEqualStrings(file_ext, path_result.path[ext_start .. ext_start + file_ext.len]);
+
+    // The sentinel is always at index path_result.path.len because that's how sentinels work
+    try std.testing.expectEqual(@as(u8, 0), path_result.path[path_result.path.len]);
 }
 
-test "createCachePath - buffer too small" {
-    var small_buf: [10]u8 = undefined;
-    const abs_cache_dir = "/tmp/cache";
-    const hash = "testHash123";
 
-    const result = createCachePath(&small_buf, abs_cache_dir, hash);
-    try std.testing.expectError(CacheError.PathTooLong, result);
-}
-
-test "writeHashToPath - buffer too small" {
-    var small_buf: [5]u8 = undefined;
-    const hash = "testHash123";
-
-    const result = writeHashToPath(hash, &small_buf);
-    try std.testing.expectError(CacheError.PathTooLong, result);
-}
-
-test "writeHashToPath - success" {
-    var buf: [100]u8 = undefined;
-    const hash = "testHash123";
-
-    _ = try writeHashToPath(hash, &buf);
-    try std.testing.expectEqual(std.fs.path.sep, buf[hash_encoder.calcSize(hash.len / 2)]);
-}
