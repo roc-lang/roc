@@ -4,10 +4,10 @@
 //! - Determining what hash should be used as the cache key.
 //! - Providing either the data to write to disk, or a buffer to read into.
 const std = @import("std");
-const base = @import("../base.zig");
-const canonicalize = @import("../check/canonicalize.zig");
+const base = @import("base.zig");
+const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
-const Filesystem = @import("Filesystem.zig");
+const Filesystem = @import("coordinate/Filesystem.zig");
 const Package = base.Package;
 
 const hash_encoder = std.base64.url_safe_no_pad.Encoder;
@@ -85,7 +85,7 @@ pub fn readCacheInto(
 pub fn writeToCache(
     abs_cache_dir: []const u8,
     hash: []const u8,
-    contents: []const u8, // TODO: convert this to iovecs and use pwritev on POSIX targets. Windows should use memory-mapped writes.
+    contents: []const u8,
     fs: Filesystem,
     allocator: std.mem.Allocator,
 ) (CacheError || Filesystem.WriteError || Filesystem.MakeDirError)!usize {
@@ -322,6 +322,13 @@ test "readCacheInto - file not found" {
                 return error.FileNotFound;
             }
         }.readFileInto,
+        .writeFile = struct {
+            fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
+                _ = path;
+                _ = contents;
+                return;
+            }
+        }.writeFile,
         .openDir = Filesystem.default().openDir,
         .dirName = Filesystem.default().dirName,
         .baseName = Filesystem.default().baseName,
