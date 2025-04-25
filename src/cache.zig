@@ -81,54 +81,23 @@ pub fn readCacheInto(
 
 /// Writes the given content to a cache file for the specified hash.
 /// Creates any missing intermediate directories as necessary.
-/// Returns the size on disk (in bytes) of the cache file it wrote.
 pub fn writeToCache(
-    abs_cache_dir: []const u8,
+    cache_dir_path: []const u8,
     hash: []const u8,
-    contents: []const u8,
+    header: *const CacheHeader, // Must be followed in memory by the contents of the header
     fs: Filesystem,
     allocator: std.mem.Allocator,
-) (CacheError || Filesystem.WriteError || Filesystem.MakeDirError)!usize {
+) (CacheError || Filesystem.WriteError || Filesystem.MakeDirError)!void {
     // Create cache path using an allocator
-    const path_result = try createCachePath(allocator, abs_cache_dir, hash);
-    defer allocator.free(path_result.path);
+    const cache_path = try createCachePath(allocator, cache_dir_path, hash);
+    defer allocator.free(cache_path.path);
 
-    // Create the parent directory first
-    const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const hash_sep_pos = hash_start + path_result.half_encoded_len;
+    // Create enclosing directories as needed.
+    const hash_start = cache_dir_path.len + 1; // +1 for path separator
+    const hash_sep_pos = hash_start + cache_path.half_encoded_len;
+    try fs.makePath(cache_path.path[0..hash_sep_pos]);
 
-    // Allocate memory for the directory path
-    const dir_path = try allocator.allocSentinel(u8, hash_sep_pos, 0);
-    defer allocator.free(dir_path);
-
-    // Copy the directory portion (up to the separator in the hash path)
-    @memcpy(dir_path, path_result.path[0..hash_sep_pos]);
-
-    // Create all parent directories as needed
-    try fs.makePath(dir_path);
-
-    // Now create the complete file path as a string
-    const file_path = path_result.path;
-
-    // Create and write header
-    var header = CacheHeader{
-        .total_cached_bytes = @intCast(contents.len),
-    };
-
-    // Create a buffer to hold the header and contents
-    var header_and_contents = try allocator.alloc(u8, @sizeOf(CacheHeader) + contents.len);
-    defer allocator.free(header_and_contents);
-
-    // Copy the header and contents to our buffer
-    const header_slice = std.mem.asBytes(&header);
-    @memcpy(header_and_contents[0..header_slice.len], header_slice);
-    @memcpy(header_and_contents[header_slice.len..], contents);
-
-    // Write the complete file using Filesystem
-    try fs.writeFile(file_path, header_and_contents);
-
-    // Return total bytes written
-    return header_slice.len + contents.len;
+    try fs.writeFile(cache_path.path, header);
 }
 
 /// TODO: implement
