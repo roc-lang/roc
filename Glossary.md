@@ -36,6 +36,31 @@ Implementation:
 
 (Intermediate Representation)
 
+An abstract code format that sits between the high-level source code and the low-level machine code.
+It is generated after the source code is parsed and before target code is produced. IR makes it easier for the compiler to analyze and optimize programs.
+
+Example for:
+```roc
+module []
+
+foo : U64
+```
+[Token](#tokenization) IR:
+```
+KwModule(1:1-1:7),OpenSquare(1:8-1:9),CloseSquare(1:9-1:10),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(3:1-3:4),OpColon(3:5-3:6),UpperIdent(3:7-3:10),Newline(1:1-1:1)
+```
+[AST](#ast) IR:
+```
+(file
+    (module (1:1-1:10))
+    (type_anno (3:1-4:4)
+        "foo"
+        (tag (3:7-3:10) "U64")))
+```
+
+
 ## Interning
 
 A memory optimization technique where only one copy of each distinct value is stored in memory, regardless of how many times it appears in a program or [IR](#ir). For example, a function named `foo` may be called many times in a Roc file, but we store `foo` once and use an index to refer to `foo` at the call sites. 
