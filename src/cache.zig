@@ -72,7 +72,7 @@ pub fn readCacheInto(
     hash: []const u8,
     fs: Filesystem,
     allocator: std.mem.Allocator,
-) (CacheError || Filesystem.OpenError || Filesystem.ReadError)!usize {
+) (CacheError || Filesystem.ReadError)!usize {
     const path_result = try createCachePath(allocator, abs_cache_dir, hash);
     defer allocator.free(path_result.path);
 
