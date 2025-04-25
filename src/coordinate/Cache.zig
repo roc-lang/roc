@@ -88,7 +88,7 @@ pub fn writeToCache(
     contents: []const u8, // TODO: convert this to iovecs and use pwritev on POSIX targets. Windows should use memory-mapped writes.
     fs: Filesystem,
     allocator: std.mem.Allocator,
-) (CacheError || Filesystem.OpenError || Filesystem.MakeDirError || std.fs.File.WriteError)!usize {
+) (CacheError || Filesystem.WriteError || Filesystem.MakeDirError)!usize {
     // Create cache path using an allocator
     const path_result = try createCachePath(allocator, abs_cache_dir, hash);
     defer allocator.free(path_result.path);
@@ -110,14 +110,14 @@ pub fn writeToCache(
     // Now create the complete file path as a string
     const file_path = path_result.path;
 
-    // First, we need to create a temporary file to write the header and contents
-    var header_and_contents = try allocator.alloc(u8, @sizeOf(CacheHeader) + contents.len);
-    defer allocator.free(header_and_contents);
-
     // Create and write header
     var header = CacheHeader{
         .total_cached_bytes = @intCast(contents.len),
     };
+
+    // Create a buffer to hold the header and contents
+    var header_and_contents = try allocator.alloc(u8, @sizeOf(CacheHeader) + contents.len);
+    defer allocator.free(header_and_contents);
 
     // Copy the header and contents to our buffer
     const header_slice = std.mem.asBytes(&header);
@@ -125,15 +125,7 @@ pub fn writeToCache(
     @memcpy(header_and_contents[header_slice.len..], contents);
 
     // Write the complete file using Filesystem
-    // In a real implementation, you would write to the file here using the Filesystem
-    // This is a mock implementation since Filesystem doesn't have a write method yet
-    // TODO: Replace this with fs.writeFile once that's implemented in the interface
-    const tmp_file_path = try std.fmt.allocPrint(allocator, "{s}.tmp", .{file_path});
-    defer allocator.free(tmp_file_path);
-
-    const file = try std.fs.createFileAbsolute(file_path, .{});
-    defer file.close();
-    try file.writeAll(header_and_contents);
+    try fs.writeFile(file_path, header_and_contents);
 
     // Return total bytes written
     return header_slice.len + contents.len;
@@ -384,18 +376,14 @@ test "createCachePath encoding and separator" {
     const path_result = try createCachePath(allocator, abs_cache_dir, hash);
     defer allocator.free(path_result.path);
 
-    // Calculate key positions
     const hash_start = abs_cache_dir.len + 1; // +1 for path separator
     const half_hash_len = hash.len / 2;
     const half_encoded_len = hash_encoder.calcSize(half_hash_len);
     const hash_sep_pos = hash_start + half_encoded_len;
     const ext_start = hash_start + (path_result.half_encoded_len * 2) + 1;
-    // Don't use ext_end for checking null terminator
 
     try std.testing.expectEqual(std.fs.path.sep, path_result.path[hash_sep_pos]);
     try std.testing.expectEqual(abs_cache_dir.len + 1, hash_start);
     try std.testing.expectEqualStrings(file_ext, path_result.path[ext_start .. ext_start + file_ext.len]);
-
-    // The sentinel is always at index path_result.path.len because that's how sentinels work
     try std.testing.expectEqual(@as(u8, 0), path_result.path[path_result.path.len]);
 }

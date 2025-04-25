@@ -12,6 +12,7 @@ const Self = @This();
 fileExists: *const fn (absolute_path: []const u8) OpenError!bool,
 readFile: *const fn (relative_path: []const u8, allocator: Allocator) ReadError![]const u8,
 readFileInto: *const fn (path: []const u8, buffer: []u8) ReadError!usize,
+writeFile: *const fn (path: []const u8, contents: []const u8) WriteError!void,
 openDir: *const fn (absolute_path: []const u8) OpenError!Dir,
 dirName: *const fn (absolute_path: []const u8) ?[]const u8,
 baseName: *const fn (absolute_path: []const u8) ?[]const u8,
@@ -27,6 +28,7 @@ pub fn default() Self {
         .fileExists = &fileExistsDefault,
         .readFile = &readFileDefault,
         .readFileInto = &readFileIntoDefault,
+        .writeFile = &writeFileDefault,
         .openDir = &openDirDefault,
         .dirName = &dirNameDefault,
         .baseName = &baseNameDefault,
@@ -44,6 +46,9 @@ pub const MakePathError = std.fs.Dir.MakeError || std.fs.Dir.StatFileError;
 
 /// All errors that can occur when reading a file.
 pub const ReadError = std.fs.File.OpenError || std.posix.ReadError || Allocator.Error || error{StreamTooLong};
+
+/// All errors that can occur when writing a file.
+pub const WriteError = std.fs.File.OpenError || std.fs.File.WriteError || error{SystemResources};
 
 /// All errors that can occur when opening a file or directory.
 pub const OpenError = std.fs.File.OpenError || std.fs.Dir.AccessError;
@@ -193,4 +198,13 @@ fn canonicalizeDefault(root_relative_path: []const u8, allocator: Allocator) Can
 /// Creates a directory and all its parent directories recursively, similar to `mkdir -p`
 fn makePathDefault(path: []const u8) MakePathError!void {
     try std.fs.cwd().makePath(path);
+}
+
+/// Writes contents to a file at the given path.
+/// Creates the file if it doesn't exist or truncates it if it does.
+fn writeFileDefault(path: []const u8, contents: []const u8) WriteError!void {
+    const file = try std.fs.cwd().createFile(path, .{});
+    defer file.close();
+
+    try file.writeAll(contents);
 }
