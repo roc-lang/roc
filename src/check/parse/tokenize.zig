@@ -482,6 +482,7 @@ pub const Diagnostic = struct {
         UnclosedSingleQuote,
         OverClosedBrace,
         MismatchedBrace,
+        NonPrintableUnicodeInStrLiteral,
     };
 
     pub fn toStr(self: Diagnostic, gpa: Allocator, source: []const u8, writer: anytype) !void {
@@ -1525,6 +1526,11 @@ pub const Tokenizer = struct {
                     return;
                 } else {
                     escape = c == '\\';
+
+                    if (!std.ascii.isPrint(c)) {
+                        self.cursor.pushMessageHere(.NonPrintableUnicodeInStrLiteral);
+                    }
+
                     self.cursor.pos += 1;
                 }
             }
