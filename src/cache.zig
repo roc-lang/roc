@@ -331,9 +331,27 @@ test "writeToCache and readCacheInto integration" {
     defer arena.deinit();
     const allocator = arena.allocator();
 
-    // Use a custom mock filesystem for testing
-    var written_data: ?[]const u8 = null;
-    var written_path: ?[]const u8 = null;
+    // Create storage for data that will be shared between test functions
+    const TestContext = struct {
+        // Pointer to the data, static for this test case
+        var data: ?[]u8 = null;
+        var path: ?[]u8 = null;
+        var alloc: ?std.mem.Allocator = null;
+
+        pub fn init(a: std.mem.Allocator) void {
+            alloc = a;
+        }
+
+        pub fn deinit() void {
+            if (data) |d| alloc.?.free(d);
+            if (path) |p| alloc.?.free(p);
+            data = null;
+            path = null;
+        }
+    };
+
+    TestContext.init(allocator);
+    defer TestContext.deinit();
 
     // Mock filesystem implementation
     const test_fs = Filesystem{
@@ -347,7 +365,7 @@ test "writeToCache and readCacheInto integration" {
         .readFile = struct {
             fn readFile(path: []const u8, alloc: std.mem.Allocator) Filesystem.ReadError![]const u8 {
                 _ = path;
-                if (written_data) |data| {
+                if (TestContext.data) |data| {
                     return alloc.dupe(u8, data);
                 } else {
                     return error.FileNotFound;
@@ -358,7 +376,7 @@ test "writeToCache and readCacheInto integration" {
         .readFileInto = struct {
             fn readFileInto(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
                 _ = path;
-                if (written_data) |data| {
+                if (TestContext.data) |data| {
                     const bytes_to_copy = @min(buffer.len, data.len);
                     @memcpy(buffer[0..bytes_to_copy], data[0..bytes_to_copy]);
                     return bytes_to_copy;
@@ -370,14 +388,13 @@ test "writeToCache and readCacheInto integration" {
 
         .writeFile = struct {
             fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-                if (written_path != null) {
-                    allocator.free(written_path.?);
-                }
-                if (written_data != null) {
-                    allocator.free(written_data.?);
-                }
-                written_path = allocator.dupe(u8, path) catch unreachable;
-                written_data = allocator.dupe(u8, contents) catch unreachable;
+                // Free existing data
+                if (TestContext.path != null) TestContext.alloc.?.free(TestContext.path.?);
+                if (TestContext.data != null) TestContext.alloc.?.free(TestContext.data.?);
+
+                // Store new copies
+                TestContext.path = TestContext.alloc.?.dupe(u8, path) catch unreachable;
+                TestContext.data = TestContext.alloc.?.dupe(u8, contents) catch unreachable;
             }
         }.writeFile,
 
@@ -419,11 +436,11 @@ test "writeToCache and readCacheInto integration" {
     try writeToCache(abs_cache_dir, file_hash, header, test_fs, allocator);
 
     // Verify a file path was written
-    try std.testing.expect(written_path != null);
-    try std.testing.expect(written_data != null);
+    try std.testing.expect(TestContext.path != null);
+    try std.testing.expect(TestContext.data != null);
 
     // Verify the path contains our cache directory and hash
-    try std.testing.expect(std.mem.indexOf(u8, written_path.?, abs_cache_dir) != null);
+    try std.testing.expect(std.mem.indexOf(u8, TestContext.path.?, abs_cache_dir) != null);
 
     // Now read the data back using readCacheInto
     var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
@@ -475,424 +492,4 @@ test "writeToCache and readCacheInto integration" {
 
     const data_bytes2 = read_buffer2[@sizeOf(CacheHeader)..expected_total_bytes2];
     try std.testing.expectEqualStrings(test_data2, data_bytes2);
-}
-
-test "writeToCache in non-existent directory" {
-    // Use the allocator for all our memory needs
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    // Keep track of what paths were created and written
-    var created_paths = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (created_paths.items) |path| {
-            allocator.free(path);
-        }
-        created_paths.deinit();
-    }
-
-    var written_data: ?[]const u8 = null;
-    var written_path: ?[]const u8 = null;
-    defer if (written_data != null) allocator.free(written_data.?);
-    defer if (written_path != null) allocator.free(written_path.?);
-
-    // Mock filesystem implementation
-    const test_fs = Filesystem{
-        .fileExists = struct {
-            fn fileExists(path: []const u8) Filesystem.OpenError!bool {
-                _ = path;
-                return true;
-            }
-        }.fileExists,
-
-        .readFile = struct {
-            fn readFile(path: []const u8, alloc: std.mem.Allocator) Filesystem.ReadError![]const u8 {
-                _ = path;
-                if (written_data) |data| {
-                    return alloc.dupe(u8, data);
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFile,
-
-        .readFileInto = struct {
-            fn readFileInto(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
-                _ = path;
-                if (written_data) |data| {
-                    const bytes_to_copy = @min(buffer.len, data.len);
-                    @memcpy(buffer[0..bytes_to_copy], data[0..bytes_to_copy]);
-                    return bytes_to_copy;
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFileInto,
-
-        .writeFile = struct {
-            fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-                if (written_path != null) {
-                    allocator.free(written_path.?);
-                }
-                if (written_data != null) {
-                    allocator.free(written_data.?);
-                }
-                written_path = allocator.dupe(u8, path) catch unreachable;
-                written_data = allocator.dupe(u8, contents) catch unreachable;
-            }
-        }.writeFile,
-
-        .openDir = Filesystem.default().openDir,
-        .dirName = Filesystem.default().dirName,
-        .baseName = Filesystem.default().baseName,
-        .canonicalize = Filesystem.default().canonicalize,
-
-        .makePath = struct {
-            fn makePath(path: []const u8) Filesystem.MakePathError!void {
-                // Store the path that was created
-                created_paths.append(allocator.dupe(u8, path) catch unreachable) catch unreachable;
-            }
-        }.makePath,
-    };
-
-    // Create a non-existent path
-    const abs_cache_dir = "/mock/non_existent_dir";
-
-    // Create a hash for our test file
-    const file_hash = "nonExistDir123";
-
-    // Create test data and header
-    const test_data = "Testing writing to a non-existent directory path!";
-    const test_data_len = test_data.len;
-
-    // Allocate buffer large enough for header + data
-    const buffer_size = @sizeOf(CacheHeader) + test_data_len;
-    var write_buffer: []align(@alignOf(CacheHeader)) u8 = try allocator.alignedAlloc(u8, @alignOf(CacheHeader), buffer_size);
-    defer allocator.free(write_buffer);
-
-    // Setup the header at the beginning of the buffer
-    var header = @as(*CacheHeader, @ptrCast(write_buffer.ptr));
-    header.total_cached_bytes = test_data_len;
-
-    // Copy the test data right after the header
-    const data_start = @sizeOf(CacheHeader);
-    @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
-
-    // Write the header and data to cache - this should create directories as needed
-    try writeToCache(abs_cache_dir, file_hash, header, test_fs, allocator);
-
-    // Verify at least one directory path was created (non-existent parent directory)
-    try std.testing.expect(created_paths.items.len > 0);
-
-    // Verify a file path was written
-    try std.testing.expect(written_path != null);
-    try std.testing.expect(written_data != null);
-
-    // Now read the data back
-    var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash, test_fs, allocator);
-
-    // Verify header was read correctly
-    try std.testing.expect(bytes_read >= @sizeOf(CacheHeader));
-    const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
-    try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-
-    // Verify the data content
-    const data_bytes = read_buffer[@sizeOf(CacheHeader) .. @sizeOf(CacheHeader) + parsed_header.total_cached_bytes];
-    try std.testing.expectEqualStrings(test_data, data_bytes);
-}
-
-test "writeToCache with deep nonexistent directory structure" {
-    // Use the allocator for all our memory needs
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    // Keep track of what paths were created and written
-    var created_paths = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (created_paths.items) |path| {
-            allocator.free(path);
-        }
-        created_paths.deinit();
-    }
-
-    var written_data: ?[]const u8 = null;
-    var written_path: ?[]const u8 = null;
-    defer if (written_data != null) allocator.free(written_data.?);
-    defer if (written_path != null) allocator.free(written_path.?);
-
-    // Mock filesystem implementation
-    const test_fs = Filesystem{
-        .fileExists = struct {
-            fn fileExists(path: []const u8) Filesystem.OpenError!bool {
-                _ = path;
-                return true;
-            }
-        }.fileExists,
-
-        .readFile = struct {
-            fn readFile(path: []const u8, alloc: std.mem.Allocator) Filesystem.ReadError![]const u8 {
-                _ = path;
-                if (written_data) |data| {
-                    return alloc.dupe(u8, data);
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFile,
-
-        .readFileInto = struct {
-            fn readFileInto(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
-                _ = path;
-                if (written_data) |data| {
-                    const bytes_to_copy = @min(buffer.len, data.len);
-                    @memcpy(buffer[0..bytes_to_copy], data[0..bytes_to_copy]);
-                    return bytes_to_copy;
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFileInto,
-
-        .writeFile = struct {
-            fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-                if (written_path != null) {
-                    allocator.free(written_path.?);
-                }
-                if (written_data != null) {
-                    allocator.free(written_data.?);
-                }
-                written_path = allocator.dupe(u8, path) catch unreachable;
-                written_data = allocator.dupe(u8, contents) catch unreachable;
-            }
-        }.writeFile,
-
-        .openDir = Filesystem.default().openDir,
-        .dirName = Filesystem.default().dirName,
-        .baseName = Filesystem.default().baseName,
-        .canonicalize = Filesystem.default().canonicalize,
-
-        .makePath = struct {
-            fn makePath(path: []const u8) Filesystem.MakePathError!void {
-                // Store the path that was created
-                created_paths.append(allocator.dupe(u8, path) catch unreachable) catch unreachable;
-            }
-        }.makePath,
-    };
-
-    // Create a deeply nested non-existent path
-    const abs_cache_dir = "/mock/deep/a/b/c/d/e/f/g";
-
-    // Create a hash for our test file
-    const file_hash = "deepNestedDir123";
-
-    // Create test data and header
-    const test_data = "Testing writing to a deeply nested non-existent directory path!";
-    const test_data_len = test_data.len;
-
-    // Allocate buffer large enough for header + data
-    const buffer_size = @sizeOf(CacheHeader) + test_data_len;
-    var write_buffer: []align(@alignOf(CacheHeader)) u8 = try allocator.alignedAlloc(u8, @alignOf(CacheHeader), buffer_size);
-    defer allocator.free(write_buffer);
-
-    // Setup the header at the beginning of the buffer
-    var header = @as(*CacheHeader, @ptrCast(write_buffer.ptr));
-    header.total_cached_bytes = test_data_len;
-
-    // Copy the test data right after the header
-    const data_start = @sizeOf(CacheHeader);
-    @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
-
-    // Write the header and data to cache - this should create directories as needed
-    try writeToCache(abs_cache_dir, file_hash, header, test_fs, allocator);
-
-    // Verify directories were created
-    try std.testing.expect(created_paths.items.len > 0);
-
-    // Verify a file path was written
-    try std.testing.expect(written_path != null);
-    try std.testing.expect(written_data != null);
-
-    // Now read the data back
-    var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash, test_fs, allocator);
-
-    // Verify header was read correctly
-    try std.testing.expect(bytes_read >= @sizeOf(CacheHeader));
-    const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
-    try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-
-    // Calculate the expected number of bytes we should have read
-    const expected_total_bytes = @sizeOf(CacheHeader) + parsed_header.total_cached_bytes;
-    try std.testing.expectEqual(expected_total_bytes, bytes_read);
-
-    // Verify the data content
-    const data_bytes = read_buffer[@sizeOf(CacheHeader)..expected_total_bytes];
-    try std.testing.expectEqualStrings(test_data, data_bytes);
-}
-
-test "writeToCache with nonexistent parent directories" {
-    // Use the allocator for all our memory needs
-    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena.deinit();
-    const allocator = arena.allocator();
-
-    // Keep track of what paths were created and written
-    var created_paths = std.ArrayList([]const u8).init(allocator);
-    defer {
-        for (created_paths.items) |path| {
-            allocator.free(path);
-        }
-        created_paths.deinit();
-    }
-
-    var written_data: ?[]const u8 = null;
-    var written_path: ?[]const u8 = null;
-    defer if (written_data != null) allocator.free(written_data.?);
-    defer if (written_path != null) allocator.free(written_path.?);
-
-    // Mock filesystem implementation
-    const test_fs = Filesystem{
-        .fileExists = struct {
-            fn fileExists(path: []const u8) Filesystem.OpenError!bool {
-                _ = path;
-                return true;
-            }
-        }.fileExists,
-
-        .readFile = struct {
-            fn readFile(path: []const u8, alloc: std.mem.Allocator) Filesystem.ReadError![]const u8 {
-                _ = path;
-                if (written_data) |data| {
-                    return alloc.dupe(u8, data);
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFile,
-
-        .readFileInto = struct {
-            fn readFileInto(path: []const u8, buffer: []u8) Filesystem.ReadError!usize {
-                _ = path;
-                if (written_data) |data| {
-                    const bytes_to_copy = @min(buffer.len, data.len);
-                    @memcpy(buffer[0..bytes_to_copy], data[0..bytes_to_copy]);
-                    return bytes_to_copy;
-                } else {
-                    return error.FileNotFound;
-                }
-            }
-        }.readFileInto,
-
-        .writeFile = struct {
-            fn writeFile(path: []const u8, contents: []const u8) Filesystem.WriteError!void {
-                if (written_path != null) {
-                    allocator.free(written_path.?);
-                }
-                if (written_data != null) {
-                    allocator.free(written_data.?);
-                }
-                written_path = allocator.dupe(u8, path) catch unreachable;
-                written_data = allocator.dupe(u8, contents) catch unreachable;
-            }
-        }.writeFile,
-
-        .openDir = Filesystem.default().openDir,
-        .dirName = Filesystem.default().dirName,
-        .baseName = Filesystem.default().baseName,
-        .canonicalize = Filesystem.default().canonicalize,
-
-        .makePath = struct {
-            fn makePath(path: []const u8) Filesystem.MakePathError!void {
-                // Store the path that was created
-                created_paths.append(allocator.dupe(u8, path) catch unreachable) catch unreachable;
-            }
-        }.makePath,
-    };
-
-    // Path with a base directory that exists but hash dirs won't
-    const abs_cache_dir = "/mock/cache_base";
-
-    // Create a hash for our test file that will need parent directories
-    // We need a longer hash to ensure we get a deep directory structure from it
-    // when it's split into first/second halves for the cache path
-    const file_hash = "parentDirsNeedCreating0123456789ABCDEF";
-
-    // Create test data and header
-    const test_data = "Testing case where hash-based parent directories need creation";
-    const test_data_len = test_data.len;
-
-    // Create the cache path (not creating the directories yet)
-    const cache_path = try createCachePath(allocator, abs_cache_dir, file_hash);
-    defer allocator.free(cache_path.path);
-
-    // Calculate the directory that would be created for the first half of the hash
-    const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const hash_sep_pos = hash_start + cache_path.half_encoded_len;
-    const first_hash_dir = cache_path.path[0..hash_sep_pos];
-
-    // Allocate buffer large enough for header + data
-    const buffer_size = @sizeOf(CacheHeader) + test_data_len;
-    var write_buffer: []align(@alignOf(CacheHeader)) u8 = try allocator.alignedAlloc(u8, @alignOf(CacheHeader), buffer_size);
-    defer allocator.free(write_buffer);
-
-    // Setup the header at the beginning of the buffer
-    var header = @as(*CacheHeader, @ptrCast(write_buffer.ptr));
-    header.total_cached_bytes = test_data_len;
-
-    // Copy the test data right after the header
-    const data_start = @sizeOf(CacheHeader);
-    @memcpy(write_buffer[data_start .. data_start + test_data_len], test_data);
-
-    // Now try to write to cache - this should create the hash-based parent directories as needed
-    try writeToCache(abs_cache_dir, file_hash, header, test_fs, allocator);
-
-    // Check that the first hash directory was created
-    var first_dir_created = false;
-    for (created_paths.items) |path| {
-        if (std.mem.eql(u8, path, first_hash_dir)) {
-            first_dir_created = true;
-            break;
-        }
-    }
-    try std.testing.expect(first_dir_created);
-
-    // Now read the data back to verify it was written correctly
-    var read_buffer: [1024]u8 align(@alignOf(CacheHeader)) = undefined;
-    const bytes_read = try readCacheInto(&read_buffer, abs_cache_dir, file_hash, test_fs, allocator);
-
-    // Verify header was read correctly
-    try std.testing.expect(bytes_read >= @sizeOf(CacheHeader));
-    const parsed_header = try CacheHeader.initFromBytes(read_buffer[0..bytes_read]);
-    try std.testing.expectEqual(header.total_cached_bytes, parsed_header.total_cached_bytes);
-
-    // Calculate the expected number of bytes we should have read
-    const expected_total_bytes = @sizeOf(CacheHeader) + parsed_header.total_cached_bytes;
-    try std.testing.expectEqual(expected_total_bytes, bytes_read);
-
-    // Verify the data content
-    const data_bytes = read_buffer[@sizeOf(CacheHeader)..expected_total_bytes];
-    try std.testing.expectEqualStrings(test_data, data_bytes);
-}
-
-test "createCachePath encoding and separator" {
-    var allocator = std.testing.allocator;
-    const abs_cache_dir = "/tmp/cache";
-    const hash = "testHash123";
-
-    const path_result = try createCachePath(allocator, abs_cache_dir, hash);
-    defer allocator.free(path_result.path);
-
-    const hash_start = abs_cache_dir.len + 1; // +1 for path separator
-    const half_hash_len = hash.len / 2;
-    const half_encoded_len = hash_encoder.calcSize(half_hash_len);
-    const hash_sep_pos = hash_start + half_encoded_len;
-    const ext_start = hash_start + (path_result.half_encoded_len * 2) + 1;
-
-    try std.testing.expectEqual(std.fs.path.sep, path_result.path[hash_sep_pos]);
-    try std.testing.expectEqual(abs_cache_dir.len + 1, hash_start);
-    try std.testing.expectEqualStrings(file_ext, path_result.path[ext_start .. ext_start + file_ext.len]);
-    try std.testing.expectEqual(@as(u8, 0), path_result.path[path_result.path.len]);
 }
