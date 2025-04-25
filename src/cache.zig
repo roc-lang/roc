@@ -97,13 +97,10 @@ pub fn writeToCache(
     const hash_sep_pos = hash_start + cache_path.half_encoded_len;
     try fs.makePath(cache_path.path[0..hash_sep_pos]);
 
-    // Write both the header and the cached data to the file
-    const header_size = @sizeOf(CacheHeader);
-    const total_bytes = header_size + header.total_cached_bytes;
-
-    // Create a slice that covers both the header and the data after it
-    const bytes_to_write = @as([*]const u8, @ptrCast(header))[0..total_bytes];
-    try fs.writeFile(cache_path.path, bytes_to_write);
+    // Write to the file both the header and the cache data immediately following it in memory
+    const total_bytes = @sizeOf(CacheHeader) + header.total_cached_bytes;
+    const header_and_content = @as([*]const u8, @ptrCast(header))[0..total_bytes];
+    try fs.writeFile(cache_path.path, header_and_content);
 }
 
 /// TODO: implement
@@ -139,7 +136,6 @@ fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash
     // We need hash_encoder.calcSize(hash.len) + 1 bytes for the hash path (+1 for the separator)
     const required_bytes = abs_cache_dir.len + 1 + hash_encoder.calcSize(hash.len) + 1 + file_ext.len + 1;
 
-    // Allocate buffer with null terminator
     var path_buf = try allocator.allocSentinel(u8, required_bytes - 1, 0);
     errdefer allocator.free(path_buf);
 
@@ -166,7 +162,6 @@ fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash
     const ext_start = hash_start + hash_path_len;
     const ext_end = ext_start + file_ext.len;
     @memcpy(path_buf[ext_start..ext_end], file_ext);
-    // The buffer already has a null terminator from allocSentinel
 
     return .{ .path = path_buf, .half_encoded_len = half_encoded_len };
 }
