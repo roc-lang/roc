@@ -110,6 +110,12 @@ Operators in the compiler:
 
 ## Syntax
 
+The set of rules that define the correct structure and format of statements, expressions, and code blocks. It specifies how code should be written so that it can be interpreted and executed correctly. In other words, syntax determines how symbols, keywords, and punctuation must be arranged to form valid source code.
+
+Syntax in the compiler:
+- New compiler: determined by the [tokenizer and parser](src/check/parse).
+- Old compiler: determined by the [parser](crates/compiler/parse).
+
 ## Syntactic Sugar
 
 [Syntax](#syntax) within a programming language that is designed to make things easier to read or express.
