@@ -103,7 +103,7 @@ pub fn type_problem<'b>(
             let snippet = alloc.region(lines.convert_region(region), severity);
             let stack = [
                 alloc.text(
-                    "This expression has a type that does not implement the abilities it's expected to:",
+                    "The expression below has a type that does not implement the required abilities.",
                 ),
                 snippet,
                 note

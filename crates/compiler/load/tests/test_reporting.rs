@@ -9335,7 +9335,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     15│          not_yet: hash (A 1),
                                 ^^^
@@ -9348,7 +9348,7 @@ All branches in an `if` must have the same type!
 
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     14│          nope: hash (@User {}),
                              ^^^^^^^^
@@ -9769,7 +9769,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     3│  main = Encode.to_encoder \x -> x
                                  ^^^^^^^
@@ -9797,7 +9797,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     4│  main = Encode.to_encoder { x: @A {} }
                                  ^^^^^^^^^^^^
@@ -11227,7 +11227,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     6│  my_decoder = decoder
                      ^^^^^^^
@@ -11260,7 +11260,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     8│  my_decoder = decoder
                      ^^^^^^^
@@ -11492,7 +11492,7 @@ All branches in an `if` must have the same type!
     @r###"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     48│          Ok rcd -> rcd.first rcd.second
                            ^^^^^^^^^
@@ -11522,7 +11522,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     6│  my_decoder = decoder
                      ^^^^^^^
@@ -12042,7 +12042,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo (\x -> x)
                     ^^^^^^^
@@ -12069,7 +12069,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo (A (\x -> x) B)
                     ^^^^^^^^^^^^^
@@ -12115,7 +12115,7 @@ All branches in an `if` must have the same type!
         @r#"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo ("", \{} -> {})
                    ^^^^^^^^^^^^^^^
@@ -12428,7 +12428,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo (\x -> x)
                     ^^^^^^^
@@ -12455,7 +12455,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo (A (\x -> x) B)
                     ^^^^^^^^^^^^^
@@ -12484,7 +12484,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     4│      (\x -> x) == (\x -> x)
              ^^^^^^^
@@ -12507,7 +12507,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     4│      (\x -> x) == (\x -> x)
              ^^^^^^^
@@ -12547,7 +12547,7 @@ All branches in an `if` must have the same type!
         @r#"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = foo ("", 1.0f64)
                    ^^^^^^^^^^^^
@@ -12627,7 +12627,7 @@ All branches in an `if` must have the same type!
     @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  f : F ({} -> {})
                ^^^^^^^^
@@ -13623,7 +13623,7 @@ All branches in an `if` must have the same type!
     @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     4│  f = \l -> if l == l then l else l
                      ^
@@ -13736,7 +13736,7 @@ All branches in an `if` must have the same type!
     @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = n == 1f64
                     ^^^^
@@ -14134,7 +14134,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     6│  my_decoder = decoder
                      ^^^^^^^
@@ -14174,7 +14174,7 @@ All branches in an `if` must have the same type!
         @r"
     ── TYPE MISMATCH in /code/proj/Main.roc ────────────────────────────────────────
 
-    This expression has a type that does not implement the abilities it's expected to:
+    The expression below has a type that does not implement the required abilities.
 
     5│  main = Encode.to_encoder x
                                  ^
