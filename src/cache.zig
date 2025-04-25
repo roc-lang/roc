@@ -9,19 +9,10 @@ const canonicalize = @import("check/canonicalize.zig");
 const assert = std.debug.assert;
 const Filesystem = @import("coordinate/Filesystem.zig");
 const Package = base.Package;
+const Allocator = std.mem.Allocator;
 
 const hash_encoder = std.base64.url_safe_no_pad.Encoder;
 const file_ext = ".rcir";
-
-/// An error when trying to read a file from cache.
-/// The path (after appending the cache filename to the base dir)
-/// can be too long for the OS, or the provided buffer to read
-/// into can be too small, resuling in a partial read.
-pub const CacheError = error{
-    PartialRead,
-    PathTooLong,
-    OutOfMemory,
-};
 
 /// The header that gets written to disk right before the cached data.
 /// Having this header makes it possible to read the entire cached file
@@ -31,17 +22,24 @@ pub const CacheError = error{
 pub const CacheHeader = struct {
     total_cached_bytes: u32,
 
+    /// Error specific to initializing a CacheHeader from bytes.
+    /// Returned when the buffer is too small to contain a complete header
+    /// or the complete data that the header specifies.
+    pub const InitError = error{
+        PartialRead,
+    };
+
     /// Verify that the given buffer begins with a valid CacheHeader,
     /// and also that it has a valid number of bytes in it. Returns
     /// a pointer to the CacheHeader within the buffer.
-    pub fn initFromBytes(buf: []align(@alignOf(CacheHeader)) u8) CacheError!*CacheHeader {
+    pub fn initFromBytes(buf: []align(@alignOf(CacheHeader)) u8) InitError!*CacheHeader {
         if (buf.len == 0) {
-            return CacheError.PartialRead;
+            return InitError.PartialRead;
         }
 
         // The buffer might not contain a complete header.
         if (buf.len < @sizeOf(CacheHeader)) {
-            return CacheError.PartialRead;
+            return InitError.PartialRead;
         }
 
         const header = @as(*CacheHeader, @ptrCast(buf.ptr));
@@ -50,7 +48,7 @@ pub const CacheHeader = struct {
 
         // The buffer might not contain complete data after the header.
         if (buf.len < data_end) {
-            return CacheError.PartialRead;
+            return InitError.PartialRead;
         }
 
         return header;
@@ -71,11 +69,10 @@ pub fn readCacheInto(
     abs_cache_dir: []const u8,
     hash: []const u8,
     fs: Filesystem,
-    allocator: std.mem.Allocator,
-) (CacheError || Filesystem.ReadError)!usize {
+    allocator: Allocator,
+) (Filesystem.ReadError || Allocator.Error)!usize {
     const path_result = try createCachePath(allocator, abs_cache_dir, hash);
     defer allocator.free(path_result.path);
-
     return try fs.readFileInto(path_result.path, dest);
 }
 
@@ -86,8 +83,8 @@ pub fn writeToCache(
     hash: []const u8,
     header: *const CacheHeader, // Must be followed in memory by the contents of the header
     fs: Filesystem,
-    allocator: std.mem.Allocator,
-) (CacheError || Filesystem.WriteError || Filesystem.MakePathError)!void {
+    allocator: Allocator,
+) (Filesystem.WriteError || Filesystem.MakePathError || Allocator.Error)!void {
     // Create cache path using an allocator
     const cache_path = try createCachePath(allocator, cache_dir_path, hash);
     defer allocator.free(cache_path.path);
@@ -104,7 +101,7 @@ pub fn writeToCache(
 }
 
 /// TODO: implement
-pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator, fs: Filesystem) []const u8 {
+pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: Allocator, fs: Filesystem) []const u8 {
     _ = url_data;
     _ = gpa;
     _ = fs;
@@ -113,7 +110,7 @@ pub fn getPackageRootAbsDir(url_data: Package.Url, gpa: std.mem.Allocator, fs: F
 }
 
 /// TODO: implement
-pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8, fs: Filesystem, allocator: std.mem.Allocator) ?canonicalize.IR {
+pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const u8, fs: Filesystem, allocator: Allocator) ?canonicalize.IR {
     _ = file_hash;
     _ = roc_version;
     _ = fs;
@@ -131,7 +128,7 @@ pub fn getCanIrForHashAndRocVersion(file_hash: []const u8, roc_version: []const 
 /// Returns a tuple containing:
 /// - The full path as a null-terminated string
 /// - The hash path length
-fn createCachePath(allocator: std.mem.Allocator, abs_cache_dir: []const u8, hash: []const u8) CacheError!struct { path: [:0]u8, half_encoded_len: usize } {
+fn createCachePath(allocator: Allocator, abs_cache_dir: []const u8, hash: []const u8) Allocator.Error!struct { path: [:0]u8, half_encoded_len: usize } {
     // Calculate required space: abs_cache_dir + "/" + hash_path + file_ext + null terminator
     // We need hash_encoder.calcSize(hash.len) + 1 bytes for the hash path (+1 for the separator)
     const required_bytes = abs_cache_dir.len + 1 + hash_encoder.calcSize(hash.len) + 1 + file_ext.len + 1;
@@ -188,7 +185,7 @@ test "CacheHeader.initFromBytes - buffer too small" {
 
     // Test that it returns PartialRead error
     const result = CacheHeader.initFromBytes(&small_buffer);
-    try std.testing.expectError(CacheError.PartialRead, result);
+    try std.testing.expectError(CacheHeader.InitError.PartialRead, result);
 }
 
 test "CacheHeader.initFromBytes - insufficient data bytes" {
@@ -201,7 +198,7 @@ test "CacheHeader.initFromBytes - insufficient data bytes" {
     header.total_cached_bytes = available_data_space + 1;
 
     const result = CacheHeader.initFromBytes(&buffer);
-    try std.testing.expectError(CacheError.PartialRead, result);
+    try std.testing.expectError(CacheHeader.InitError.PartialRead, result);
 }
 
 test "readCacheInto and initFromBytes integration" {
