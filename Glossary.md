@@ -136,6 +136,10 @@ A compiler phase is a distinct stage in the process the compiler goes through to
 
 ## Compiler Pass
 
+A single traversal through a program's [IR](#ir) that performs a specific transformation or analysis. [`insert_reset_reuse_operations`](https://github.com/roc-lang/roc/blob/1a9b4255407e7bec33c81d80057c5a8c2f70ead5/crates/compiler/mono/src/reset_reuse.rs#L29) is an example of a compiler pass, it analyzes and modifies the [IR](#IR) to detect when memory is no longer used and allows us to re-use that memory for other things.
+
+Note the difference with a compiler phase; a phase is a larger logical unit of compilation that may include multiple passes.
+
 ## Tokenization
 
 The process of breaking down source code into smaller units called tokens. These tokens are the basic building blocks of a programming language, such as [keywords](#Keyword), [identifiers](#identifier), [operators](#operator), and [symbols](#symbol). The input code is scanned character by character and is grouped into meaningful sequences based on the language's syntax rules.
