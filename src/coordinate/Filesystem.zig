@@ -37,6 +37,23 @@ pub fn default() Self {
     };
 }
 
+/// Get a testing filesystem manager where all functions will
+/// cause the test to fail if called. Can be used to create test-specific
+/// mocks by overriding only the functions you expect to be called.
+pub fn testing() Self {
+    return Self{
+        .fileExists = &fileExistsTesting,
+        .readFile = &readFileTesting,
+        .readFileInto = &readFileIntoTesting,
+        .writeFile = &writeFileTesting,
+        .openDir = &openDirTesting,
+        .dirName = &dirNameTesting,
+        .baseName = &baseNameTesting,
+        .canonicalize = &canonicalizeTesting,
+        .makePath = &makePathTesting,
+    };
+}
+
 /// The max valid file size.
 /// Anything larger will fail due to us using u32 offsets.
 pub const max_file_size = std.math.maxInt(u32);
@@ -137,6 +154,8 @@ pub const Dir = struct {
     }
 };
 
+// Default implementations
+
 fn fileExistsDefault(absolute_path: []const u8) OpenError!bool {
     std.fs.accessAbsolute(absolute_path, .{}) catch |err| {
         switch (err) {
@@ -207,4 +226,55 @@ fn writeFileDefault(path: []const u8, contents: []const u8) WriteError!void {
     defer file.close();
 
     try file.writeAll(contents);
+}
+
+// Testing implementations that fail tests if called
+
+fn fileExistsTesting(absolute_path: []const u8) OpenError!bool {
+    _ = absolute_path;
+    @panic("fileExists should not be called in this test");
+}
+
+fn readFileTesting(relative_path: []const u8, allocator: Allocator) ReadError![]const u8 {
+    _ = relative_path;
+    _ = allocator;
+    @panic("readFile should not be called in this test");
+}
+
+fn readFileIntoTesting(path: []const u8, buffer: []u8) ReadError!usize {
+    _ = path;
+    _ = buffer;
+    @panic("readFileInto should not be called in this test");
+}
+
+fn writeFileTesting(path: []const u8, contents: []const u8) WriteError!void {
+    _ = path;
+    _ = contents;
+    @panic("writeFile should not be called in this test");
+}
+
+fn openDirTesting(absolute_path: []const u8) OpenError!Dir {
+    _ = absolute_path;
+    @panic("openDir should not be called in this test");
+}
+
+fn dirNameTesting(absolute_path: []const u8) ?[]const u8 {
+    _ = absolute_path;
+    @panic("dirName should not be called in this test");
+}
+
+fn baseNameTesting(absolute_path: []const u8) ?[]const u8 {
+    _ = absolute_path;
+    @panic("baseName should not be called in this test");
+}
+
+fn canonicalizeTesting(root_relative_path: []const u8, allocator: Allocator) CanonicalizeError![]const u8 {
+    _ = root_relative_path;
+    _ = allocator;
+    @panic("canonicalize should not be called in this test");
+}
+
+fn makePathTesting(path: []const u8) MakePathError!void {
+    _ = path;
+    @panic("makePath should not be called in this test");
 }
