@@ -201,6 +201,12 @@ Old compiler:
 
 ## Parsing
 
+The step where the compiler checks if the source code follows the correct structure or “grammar” of the programming language. It takes the tokens produced by [tokenization](#tokenization) and organizes them to see if they make sense together, like checking the structure of sentences in a language. If the code is correct, the parser builds a tree-like structure ([AST](#ast)) that shows how the code is organized. If not, it reports errors.
+
+Parser implementation:
+- new compiler: [src/check/parse](src/check/parse)
+- old compiler: [crates/compiler/parse](crates/compiler/parse) (tokenization is not a separate step here)
+
 ## Symbol
 
 ## Closure
