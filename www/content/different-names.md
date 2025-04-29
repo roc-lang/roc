@@ -33,7 +33,7 @@ To help with this, here are some Roc operations along with some names found in o
             </td>
         </tr>
         <tr>
-            <td><a href="/builtins/List#walkBackwards">List.walkBackwards</a></td>
+            <td><a href="/builtins/List#walk_backwards">List.walk_backwards</a></td>
             <td>
                 <ul>
                     <li>foldr</li>
@@ -56,7 +56,7 @@ To help with this, here are some Roc operations along with some names found in o
             </td>
         </tr>
         <tr>
-            <td><a href="/builtins/List#keepIf">List.keepIf</a></td>
+            <td><a href="/builtins/List#keep_if">List.keep_if</a></td>
             <td>
                 <ul>
                     <li>filter</li>
@@ -67,7 +67,7 @@ To help with this, here are some Roc operations along with some names found in o
             </td>
         </tr>
         <tr>
-            <td><a href="/builtins/List#dropIf">List.dropIf</a></td>
+            <td><a href="/builtins/List#drop_if">List.drop_if</a></td>
             <td>
                 <ul>
                     <li>reject</li>
@@ -88,7 +88,7 @@ To help with this, here are some Roc operations along with some names found in o
             </td>
         </tr>
         <tr>
-            <td><a href="/builtins/List#joinMap">List.joinMap</a></td>
+            <td><a href="/builtins/List#join_map">List.join_map</a></td>
             <td>
                 <ul>
                     <li>concatMap</li>
@@ -98,7 +98,7 @@ To help with this, here are some Roc operations along with some names found in o
             </td>
         </tr>
         <tr>
-            <td><a href="/builtins/List#keepOks">List.keepOks</a></td>
+            <td><a href="/builtins/List#keep_oks">List.keep_oks</a></td>
             <td>
                 <ul>
                     <li>compact</li>

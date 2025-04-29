@@ -209,6 +209,12 @@ Parser implementation:
 
 ## Symbol
 
+A symbol points to a specific [identifier](#identifier) with an `ident_id` and a `module_id` ([see module](#module)).
+
+Symbol implementation:
+- new compiler: Not yet implemented.
+- old compiler: [symbol.rs](crates/compiler/module/src/symbol.rs)
+
 ## Closure
 
 ## Canonicalization

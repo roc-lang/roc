@@ -777,8 +777,8 @@ mod cli_tests {
             );
 
             let cli_dev_out = cli_dev.run();
-            // TODO enable or delete this based on https://roc.zulipchat.com/#narrow/channel/304641-ideas/topic/roc.20dev.20expect.20failure/near/477682063
-            //cli_dev_out.assert_nonzero_exit();
+
+            cli_dev_out.assert_nonzero_exit();
 
             insta::assert_snapshot!(cli_dev_out.normalize_stdout_and_stderr());
         }
