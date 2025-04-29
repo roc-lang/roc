@@ -1426,6 +1426,10 @@ fn roc_dev_native(
                         .unwrap();
 
                         memory.reset();
+
+                        // If we're in this block that means an expect failed while using the dev(default) command.
+                        // So we should exit with a non-zero exit code.
+                        break 1;
                     }
                 }
             };

@@ -22,6 +22,8 @@ poly_dbg = \x ->
 main =
     str = "this will for sure be a large string so when we split it it will use seamless slices which affect printing"
     words = Str.split_on(str, " ")
+
+    # we expect this to fail
     expect words == []
 
     x = 42
