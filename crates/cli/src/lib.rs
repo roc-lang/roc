@@ -1398,39 +1398,37 @@ fn roc_dev_native(
             signal_hook::flag::register(signal_hook::consts::SIGCHLD, Arc::clone(&sigchld))
                 .unwrap();
 
-            let exit_code = loop {
-                match memory.wait_for_child(sigchld.clone()) {
-                    ChildProcessMsg::Terminate => {
-                        let mut status = 0;
-                        let options = 0;
-                        unsafe { libc::waitpid(pid, &mut status, options) };
+            let exit_code = match memory.wait_for_child(sigchld.clone()) {
+                ChildProcessMsg::Terminate => {
+                    let mut status = 0;
+                    let options = 0;
+                    unsafe { libc::waitpid(pid, &mut status, options) };
 
-                        // if `WIFEXITED` returns false, `WEXITSTATUS` will just return junk
-                        break if libc::WIFEXITED(status) {
-                            libc::WEXITSTATUS(status)
-                        } else {
-                            // we don't have an exit code, but something went wrong if we're in this else
-                            1
-                        };
+                    // if `WIFEXITED` returns false, `WEXITSTATUS` will just return junk
+                    if libc::WIFEXITED(status) {
+                        libc::WEXITSTATUS(status)
+                    } else {
+                        // we don't have an exit code, but something went wrong if we're in this else
+                        1
                     }
-                    ChildProcessMsg::Expect => {
-                        let mut writer = std::io::stdout();
-                        roc_repl_expect::run::render_expects_in_memory(
-                            &mut writer,
-                            arena,
-                            &mut expectations,
-                            &interns,
-                            &layout_interner,
-                            &memory,
-                        )
-                        .unwrap();
+                }
+                ChildProcessMsg::Expect => {
+                    let mut writer = std::io::stdout();
+                    roc_repl_expect::run::render_expects_in_memory(
+                        &mut writer,
+                        arena,
+                        &mut expectations,
+                        &interns,
+                        &layout_interner,
+                        &memory,
+                    )
+                    .unwrap();
 
-                        memory.reset();
+                    memory.reset();
 
-                        // If we're in this block that means an expect failed while using the dev(default) command.
-                        // So we should exit with a non-zero exit code.
-                        break 1;
-                    }
+                    // If we're in this block that means an expect failed while using the dev(default) command.
+                    // So we should exit with a non-zero exit code.
+                    1
                 }
             };
 
