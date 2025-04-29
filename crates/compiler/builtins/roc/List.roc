@@ -9,6 +9,8 @@ module [
     prepend,
     prepend_if_ok,
     map,
+    map_try,
+    map_try!,
     len,
     with_capacity,
     walk_backwards,
@@ -22,12 +24,19 @@ module [
     contains,
     sum,
     walk,
+    walk!,
+    walk_try,
+    walk_try!,
     last,
     keep_oks,
     keep_errs,
+    for_each!,
+    for_each_try!,
     map_with_index,
     map2,
     map3,
+    map4,
+    join_map,
     product,
     walk_with_index,
     walk_until,
@@ -40,10 +49,6 @@ module [
     drop_at,
     min,
     max,
-    map4,
-    map_try,
-    walk_try,
-    join_map,
     any,
     take_first,
     take_last,
@@ -72,10 +77,6 @@ module [
     count_if,
     chunks_of,
     concat_utf8,
-    for_each!,
-    for_each_try!,
-    walk!,
-    walk_try!,
 ]
 
 import Bool exposing [Bool, Eq]
@@ -131,7 +132,7 @@ import Num exposing [U64, Num, U8]
 ##
 ## Let's turn this example into a function.
 ## ```roc
-## get_ratings = \first ->
+## get_ratings = |first|
 ##     ratings = [first, 4, 3]
 ##
 ##     { foo: ratings, bar: ratings }
@@ -153,7 +154,7 @@ import Num exposing [U64, Num, U8]
 ##
 ## Let's change the last line to be `get_ratings(5).bar` instead of `get_ratings(5)`:
 ## ```roc
-## get_ratings = \first ->
+## get_ratings = |first|
 ##     ratings = [first, 4, 3]
 ##
 ##     { foo: ratings, bar: ratings }
@@ -273,7 +274,7 @@ set = |list, index, value|
 
 ## Updates the element at the given index with the given function.
 ## ```roc
-## List.update([1, 2, 3], 1, (\x -> x + 1))
+## List.update([1, 2, 3], 1, (|x| x + 1))
 ## ```
 ## If the given index is outside the bounds of the list, returns the original
 ## list unmodified.
@@ -644,7 +645,7 @@ all = |list, predicate|
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.true`.
 ## ```roc
-## List.keep_if([1, 2, 3, 4], (\num -> num > 2))
+## List.keep_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
 ## ## Performance Details
 ##
@@ -681,7 +682,7 @@ keep_if_help = |list, predicate, kept, index, length|
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.
 ## ```roc
-## List.drop_if([1, 2, 3, 4], (\num -> num > 2))
+## List.drop_if([1, 2, 3, 4], (|num| num > 2))
 ## ```
 ## ## Performance Details
 ##
@@ -695,7 +696,7 @@ drop_if = |list, predicate|
 ## number of elements for which the function returned `Bool.true`.
 ## ```roc
 ## expect List.count_if([1, -2, -3], Num.is_negative) == 2
-## expect List.count_if([1, 2, 3], (\num -> num > 1)) == 2
+## expect List.count_if([1, 2, 3], (|num| num > 1)) == 2
 ## ```
 count_if : List a, (a -> Bool) -> U64
 count_if = |list, predicate|
@@ -714,13 +715,13 @@ count_if = |list, predicate|
 ##
 ## expect List.keep_oks([["a", "b"], [], ["c", "d", "e"], [] ], List.first) == ["a", "c"]
 ##
-## fn = \str -> if Str.is_empty(str) then Err(StrWasEmpty) else Ok(str)
+## fn = |str| if Str.is_empty(str) then Err(StrWasEmpty) else Ok(str)
 ## expect List.keep_oks(["", "a", "bc", "", "d", "ef", ""], fn) == ["a", "bc", "d", "ef"]
 ## ```
 keep_oks : List before, (before -> Result after *) -> List after
-keep_oks = |list, to_result|
+keep_oks = |list, to_result_fun|
     walker = |accum, element|
-        when to_result(element) is
+        when to_result_fun(element) is
             Ok(keep) -> List.append(accum, keep)
             Err(_drop) -> accum
 
@@ -731,14 +732,14 @@ keep_oks = |list, to_result|
 ## ```roc
 ## List.keep_errs([["a", "b"], [], [], ["c", "d", "e"]], List.last)
 ##
-## fn = \str -> if Str.is_empty(str) then Err(StrWasEmpty) else Okd(Str.len(str))
+## fn = |str| if Str.is_empty(str) then Err(StrWasEmpty) else Okd(Str.len(str))
 ##
 ## List.keep_errs(["", "a", "bc", "", "d", "ef", ""], fn)
 ## ```
 keep_errs : List before, (before -> Result * after) -> List after
-keep_errs = |list, to_result|
+keep_errs = |list, to_result_fun|
     walker = |accum, element|
-        when to_result(element) is
+        when to_result_fun(element) is
             Ok(_drop) -> accum
             Err(keep) -> List.append(accum, keep)
 
@@ -747,7 +748,7 @@ keep_errs = |list, to_result|
 ## Convert each element in the list to something new, by calling a conversion
 ## function on each of them. Then return a new list of the converted values.
 ## ```roc
-## expect List.map([1, 2, 3], (\num -> num + 1)) == [2, 3, 4]
+## expect List.map([1, 2, 3], (|num| num + 1)) == [2, 3, 4]
 ##
 ## expect List.map(["", "a", "bc"], Str.is_empty) == [Bool.true, Bool.false, Bool.false]
 ## ```
@@ -829,7 +830,7 @@ map4_help = |list_a, list_b, list_c, list_d, out, mapper, index, length|
 ## This works like [List.map], except it also passes the index
 ## of the element to the conversion function.
 ## ```roc
-## expect List.map_with_index([10, 20, 30], (\num, index -> num + index)) == [10, 21, 32]
+## expect List.map_with_index([10, 20, 30], (|num, index| num + index)) == [10, 21, 32]
 ## ```
 map_with_index : List a, (a, U64 -> b) -> List b
 map_with_index = |src, func|
@@ -1379,13 +1380,32 @@ chunks_of_help = |list_rest, chunk_size, chunks|
 ## If that function ever returns `Err`, [map_try] immediately returns that `Err`.
 ## If it returns `Ok` for every element, [map_try] returns `Ok` with the transformed list.
 map_try : List elem, (elem -> Result ok err) -> Result (List ok) err
-map_try = |list, to_result|
+map_try = |list, to_result_fun|
     walk_try(
         list,
         [],
         |state, elem|
             Result.map_ok(
-                to_result(elem),
+                to_result_fun(elem),
+                |ok|
+                    List.append(state, ok),
+            ),
+    )
+
+## Like [List.map_try], but with an effectful function.
+## ```
+## file_list = ["a.txt", "b.txt", "c.txt"]
+## file_contents =
+##     List.map_try!(file_list, |file| File.read_utf8!(file))
+## ```
+map_try! : List elem, (elem => Result ok err) => Result (List ok) err
+map_try! = |list, to_result_fun!|
+    walk_try!(
+        list,
+        [],
+        |state, elem|
+            Result.map_ok(
+                to_result_fun!(elem),
                 |ok|
                     List.append(state, ok),
             ),
@@ -1460,7 +1480,7 @@ expect (List.concat_utf8([1, 2, 3, 4], "🐦")) == [1, 2, 3, 4, 240, 159, 144, 1
 ## Run an effectful function for each element on the list.
 ##
 ## ```roc
-## List.for_each!(["Alice", "Bob", "Charlie"], \name ->
+## List.for_each!(["Alice", "Bob", "Charlie"], |name|
 ##     create_account!(name)
 ##     log!("Account created")
 ## )
@@ -1482,7 +1502,7 @@ for_each! = |list, func!|
 ## If the function returns `Err`, the iteration stops and the error is returned.
 ##
 ## ```roc
-## List.for_each_try!(files_to_delete, \path ->
+## List.for_each_try!(files_to_delete, |path|
 ##     File.delete!(path)?
 ##
 ##     Stdout.line!("${path} deleted")
@@ -1505,7 +1525,7 @@ for_each_try! = |list, func!|
 ## Build a value from the contents of a list, using an effectful function.
 ##
 ## ```roc
-## now_multiples = List.walk!([1, 2, 3], [], \nums, i ->
+## now_multiples = List.walk!([1, 2, 3], [], |nums, i|
 ##      now = Utc.now!({}) |> Utc.to_millis_since_epoch
 ##      List.append(nums, now * i)
 ## )
@@ -1531,7 +1551,7 @@ walk! = |list, state, func!|
 ##     List.walk_try!(
 ##         ["First", "Middle", "Last"],
 ##         [],
-##         \accumulator, which ->
+##         |accumulator, which|
 ##             Stdout.write!("${which} name: ")?
 ##             name = Stdin.line!({})?
 ##             Ok(List.append(accumulator, name)),

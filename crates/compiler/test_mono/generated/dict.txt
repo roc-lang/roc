@@ -26,8 +26,8 @@ procedure Dict.52 ():
     ret Dict.744;
 
 procedure List.6 (#Attr.2):
-    let List.675 : U64 = lowlevel ListLenU64 #Attr.2;
-    ret List.675;
+    let List.683 : U64 = lowlevel ListLenU64 #Attr.2;
+    ret List.683;
 
 procedure Num.75 (#Attr.2, #Attr.3):
     let Num.289 : U8 = lowlevel NumSubWrap #Attr.2 #Attr.3;

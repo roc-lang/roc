@@ -181,3 +181,8 @@ fn roc_fx_get_int_help() !i64 {
 
     return std.fmt.parseInt(i64, line, 10);
 }
+
+/// Just return the input for testing purposes
+pub export fn roc_fx_id_effectful(input_num: u64) u64 {
+    return input_num;
+}
