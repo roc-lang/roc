@@ -184,8 +184,8 @@
               src = pkgs.fetchFromGitHub {
                 owner = "roc-lang";
                 repo = "examples";
-                rev = "main";
-                sha256 = "sha256-DqqkA5iASoK68XBFKv6Gbrso4687smKz8PqVUL2rRsE=";
+                rev = "e96ec3a45bc9f4e875cf6142894ee248b0cd468c";
+                sha256 = "sha256-Bz7yYSdGdBN1cxZ3ySKXNVpBLp9pms6UKOcrWD/8gpk=";
               };
               entryPoint = "./examples/HelloWorld/main.roc";
               outputHash = "sha256-Hg1K3tNE2hdz9o9f2HEB0aEuBIBoXrlpb70h6uyOABo=";
