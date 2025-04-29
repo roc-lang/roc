@@ -1955,6 +1955,8 @@ fn unify_record<M: MetaCollector>(
 
     if separate.only_in_1.is_empty() {
         if separate.only_in_2.is_empty() {
+            // exactly_the_same
+
             // these variable will be the empty record, but we must still unify them
             let ext_outcome = unify_pool(env, pool, ext1, ext2, ctx.mode);
 
@@ -1969,6 +1971,7 @@ fn unify_record<M: MetaCollector>(
 
             field_outcome
         } else {
+            // b_extends_a
             let only_in_2 = RecordFields::insert_into_subs(env, separate.only_in_2);
             let flat_type = FlatType::Record(only_in_2, ext2);
             let sub_record = fresh(env, pool, ctx, Structure(flat_type));
@@ -1986,6 +1989,7 @@ fn unify_record<M: MetaCollector>(
             field_outcome
         }
     } else if separate.only_in_2.is_empty() {
+        // a_extends_b
         let only_in_1 = RecordFields::insert_into_subs(env, separate.only_in_1);
         let flat_type = FlatType::Record(only_in_1, ext1);
         let sub_record = fresh(env, pool, ctx, Structure(flat_type));
@@ -2002,6 +2006,7 @@ fn unify_record<M: MetaCollector>(
 
         field_outcome
     } else {
+        // both_extends
         let only_in_1 = RecordFields::insert_into_subs(env, separate.only_in_1);
         let only_in_2 = RecordFields::insert_into_subs(env, separate.only_in_2);
 
