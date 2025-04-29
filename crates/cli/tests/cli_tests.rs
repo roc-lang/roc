@@ -61,14 +61,14 @@ mod cli_tests {
             .status()
             .unwrap();
 
-        let cli_build = ExecCli::new(
+        let cli_dev = ExecCli::new(
             roc_cli::CMD_DEV,
             file_from_root("crates/cli/tests/platform-switching", "roc_loves_rust.roc"),
         );
 
         let expected_output = "Roc <3 Rust!\n";
 
-        let output = cli_build.run();
+        let output = cli_dev.run();
 
         output.assert_clean_stdout(expected_output);
     }
@@ -1021,6 +1021,34 @@ mod cli_tests {
             let expected_output = "✅ 0\n✅ 2\n✅ 4\n✅ 6\n✅ 8\n9 is not even! ABORT!\n";
 
             cli_build.check_build_and_run(expected_output, ALLOW_VALGRIND, None, None);
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_walk_try() {
+            build_platform_host();
+
+            let cli_dev = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful", "walk_try.roc"),
+            );
+
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_clean_success();
+        }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_map_try() {
+            build_platform_host();
+
+            let cli_dev = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root("crates/cli/tests/test-projects/effectful", "map_try.roc"),
+            );
+
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_clean_success();
         }
     }
 
