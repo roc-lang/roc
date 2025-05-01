@@ -21,6 +21,11 @@ const Name = enum(u32) {
 };
 
 /// Represents what the a type *is*
+///
+/// Numbers are special cased here. This means that when constraints, types
+/// like `Num(Int(Unsigned64))` should be reperesntsed as it's specific
+/// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
+/// details
 const Descriptor = union(enum) {
     flex_var,
     structural_alias: StructuralAlias,
@@ -36,6 +41,7 @@ const Descriptor = union(enum) {
     const FlatType = union(enum) {
         type_apply: TypeApply,
         tuple: Tuple,
+        num: Num,
 
         /// Represents a type application, like `List String` or `Result Error Value`.
         ///
@@ -48,6 +54,39 @@ const Descriptor = union(enum) {
         /// Tuples may have up to 12 type elements.
         /// Only the first `arg_count` elements of `elements` are considered valid.
         const Tuple = struct { elem_count: max_elems_type, elems: [MAX_ELEMS]Var };
+
+        /// Represents number
+        ///
+        /// Numbers could be representsed by `type_apply` and phantom types, but
+        /// that ends up being inefficient because every number type requires
+        /// multiple different type entrie.s By special casing them here we can
+        /// ensure that they have more compact representations
+        const Num = union(enum) {
+            flex_var,
+            int: Int,
+            frac: Frac,
+
+            pub const Frac = enum(u2) {
+                flex_var,
+                f32,
+                f64,
+                dec,
+            };
+
+            pub const Int = enum(u4) {
+                flex_var,
+                u8,
+                i8,
+                u16,
+                i16,
+                u32,
+                i32,
+                u64,
+                i64,
+                u128,
+                i128,
+            };
+        };
     };
 
     // a structural alias
@@ -282,6 +321,9 @@ const Solver = struct {
         }
     }
 
+    /// type wrapper around bool to make success/failure more clear
+    pub const DidUnify = enum(u1) { err = 0, ok = 1 };
+
     /// A type to represent a unification error
     ///
     /// Includes a trace of all the intermediate variables that did unify down the recursive stack
@@ -341,15 +383,33 @@ const Solver = struct {
             self.depth = self.depth - 1;
         }
 
+        /// Set the cause and return a unify err
+        /// TODO: inline?
+        pub fn setCauseAndReturnErr(self: *SelfU, cause: UnifyError.Cause) DidUnify {
+            self.cause = cause;
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        /// TODO: inline?
+        pub fn setNumMismatchAndReturnErr(
+            self: *SelfU,
+            a_num: Descriptor.FlatType.Num,
+            b_num: Descriptor.FlatType.Num,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .type_mismatch = .{
+                .left = Descriptor{ .flat_type = Descriptor.FlatType{ .num = a_num } },
+                .right = Descriptor{ .flat_type = Descriptor.FlatType{ .num = b_num } },
+            } };
+            return DidUnify.err;
+        }
+
         /// Get a slice of the trace.
         /// This only lives as long 'self'
         pub fn getTraceSlice(self: *const SelfU) []const TraceVars {
             return self.trace[0..self.depth];
         }
     };
-
-    /// type wrapper around bool to make success/failure more clear
-    pub const DidUnify = enum(u1) { err = 0, ok = 1 };
 
     // Unify two types, updating the error context
     fn unify_help(self: *Self, mb_err: *UnifyError, a_type_var: Var, b_type_var: Var) DidUnify {
@@ -468,6 +528,20 @@ const Solver = struct {
                     },
                 }
             },
+            .num => |a_num| {
+                switch (b_flat_type) {
+                    .num => |b_num| {
+                        return unify_num(mb_err, a_num, b_num);
+                    },
+                    else => |_| {
+                        mb_err.cause = UnifyError.Cause{ .type_mismatch = .{
+                            .left = Descriptor{ .flat_type = a_flat_type },
+                            .right = Descriptor{ .flat_type = b_flat_type },
+                        } };
+                        return DidUnify.err;
+                    },
+                }
+            },
         }
     }
 
@@ -507,6 +581,47 @@ const Solver = struct {
         }
 
         return DidUnify.ok;
+    }
+
+    /// unify numbers
+    ///
+    /// this checks:
+    /// * that the arities are the same
+    /// * that parallel arguments unify
+    fn unify_num(
+        mb_err: *UnifyError,
+        a_num: Descriptor.FlatType.Num,
+        b_num: Descriptor.FlatType.Num,
+    ) DidUnify {
+        switch (a_num) {
+            .flex_var => return DidUnify.ok,
+            .int => |a_int| switch (b_num) {
+                .flex_var => return DidUnify.ok,
+                .frac => return mb_err.setNumMismatchAndReturnErr(a_num, b_num),
+                .int => |b_int| {
+                    if (a_int == .flex_var or b_int == .flex_var) {
+                        return DidUnify.ok;
+                    } else if (a_int == b_int) {
+                        return DidUnify.ok;
+                    } else {
+                        return mb_err.setNumMismatchAndReturnErr(a_num, b_num);
+                    }
+                },
+            },
+            .frac => |a_frac| switch (b_num) {
+                .flex_var => return DidUnify.ok,
+                .int => return mb_err.setNumMismatchAndReturnErr(a_num, b_num),
+                .frac => |b_frac| {
+                    if (a_frac == .flex_var or b_frac == .flex_var) {
+                        return DidUnify.ok;
+                    } else if (a_frac == b_frac) {
+                        return DidUnify.ok;
+                    } else {
+                        return mb_err.setNumMismatchAndReturnErr(a_num, b_num);
+                    }
+                },
+            },
+        }
     }
 
     /// unify tuples
@@ -1244,4 +1359,117 @@ test "unify - nominal_alias vs structural_alias - fails" {
             .right = Descriptor.STR,
         },
     });
+}
+
+// unification - flat type - num
+
+test "unify - num - flex_var unifies with flex_var" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const a = solver.mkRoot(.{ .flat_type = .{ .num = .flex_var } });
+    const b = solver.mkRoot(.{ .flat_type = .{ .num = .flex_var } });
+
+    try std.testing.expectEqual(solver.unify(a, b), null);
+}
+
+test "unify - num - flex_var unifies with int" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const a = solver.mkRoot(.{ .flat_type = .{ .num = .flex_var } });
+    const b = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .i64 } } });
+
+    try std.testing.expectEqual(solver.unify(a, b), null);
+}
+
+test "unify - num - flex_var unifies with frac" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const a = solver.mkRoot(.{ .flat_type = .{ .num = .flex_var } });
+    const b = solver.mkRoot(.{ .flat_type = .{ .num = .{ .frac = .dec } } });
+
+    try std.testing.expectEqual(solver.unify(a, b), null);
+}
+
+test "unify - num - int flex_var unifies with int concrete" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const a = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .flex_var } } });
+    const b = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .i64 } } });
+
+    try std.testing.expectEqual(solver.unify(a, b), null);
+}
+
+test "unify - num - frac flex_var unifies with frac concrete" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const a = solver.mkRoot(.{ .flat_type = .{ .num = .{ .frac = .flex_var } } });
+    const b = solver.mkRoot(.{ .flat_type = .{ .num = .{ .frac = .f32 } } });
+
+    try std.testing.expectEqual(solver.unify(a, b), null);
+}
+
+test "unify - num - int does not unify with frac" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const int_var = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .i32 } } });
+    const frac_var = solver.mkRoot(.{ .flat_type = .{ .num = .{ .frac = .f32 } } });
+
+    const mb_err = solver.unify(int_var, frac_var);
+    try std.testing.expect(mb_err != null);
+
+    const err = mb_err.?;
+    try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
+        .type_mismatch = .{
+            .left = Descriptor{ .flat_type = .{ .num = .{ .int = .i32 } } },
+            .right = Descriptor{ .flat_type = .{ .num = .{ .frac = .f32 } } },
+        },
+    });
+    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqualSlices(
+        Solver.UnifyError.TraceVars,
+        &[_]Solver.UnifyError.TraceVars{
+            .{ .left = int_var, .right = frac_var },
+        },
+        err.getTraceSlice(),
+    );
+}
+
+test "unify - num - i16 does not unify with i32" {
+    const gpa = std.testing.allocator;
+    var solver = Solver.init(gpa);
+    defer solver.deinit();
+
+    const i16_var = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .i16 } } });
+    const i32_var = solver.mkRoot(.{ .flat_type = .{ .num = .{ .int = .i32 } } });
+
+    const mb_err = solver.unify(i16_var, i32_var);
+    try std.testing.expect(mb_err != null);
+
+    const err = mb_err.?;
+    try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
+        .type_mismatch = .{
+            .left = Descriptor{ .flat_type = .{ .num = .{ .int = .i16 } } },
+            .right = Descriptor{ .flat_type = .{ .num = .{ .int = .i32 } } },
+        },
+    });
+    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqualSlices(
+        Solver.UnifyError.TraceVars,
+        &[_]Solver.UnifyError.TraceVars{
+            .{ .left = i16_var, .right = i32_var },
+        },
+        err.getTraceSlice(),
+    );
 }
