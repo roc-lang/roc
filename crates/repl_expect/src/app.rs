@@ -21,8 +21,7 @@ impl ReplAppMemory for ExpectMemory {
         let ptr = unsafe { self.start.add(addr) };
         let value = unsafe { std::ptr::read_unaligned(ptr) };
 
-        // bool values should only ever be 0 or 1
-        debug_assert!(value == 0 || value == 1);
+        assert!(value == 0 || value == 1, "Memory shenanigans detected: bool values should only ever be 0 or 1. This may not be fixed in the old compiler, see also <https://roc.zulipchat.com/#narrow/channel/231634-beginners/topic/Segmentation.20fault.20during.20exercism.20tests.20for.20phone-number/near/515715647>.");
 
         value != 0
     }
