@@ -99,6 +99,7 @@
           wasm-pack # for repl_wasm
           jq # used in several bash scripts
           cargo-nextest # used to give more info for segfaults for gen tests
+          cargo-insta # for snapshot tests like in roc_load::test_reporting
           # cargo-udeps # to find unused dependencies
 
           zls # zig language server
