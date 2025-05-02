@@ -4325,7 +4325,7 @@ mod test_reporting {
             { x,  y }
             "
         ),
-        @r#"
+        @r###"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
     The result of this expression is ignored:
@@ -4340,7 +4340,7 @@ mod test_reporting {
 
     If you still want to ignore it, assign it to `_`, like this:
 
-        _ = File.delete! "data.json"
+        _ = File.delete!("data.json")?
 
     ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
 
@@ -4353,7 +4353,7 @@ mod test_reporting {
     functions.
 
     Did you forget to use its result? If not, feel free to remove it.
-    "#
+    "###
     );
 
     test_report!(
@@ -14729,22 +14729,22 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
-        
-        The result of this expression is ignored:
-        
-        19│      try List.get [1, 2, 3] 5
-                 ^^^^^^^^^^^^^^^^^^^^^^^^
-        
-        Standalone statements are required to produce an empty record, but the
-        type of this one is:
-        
-            Num *
-        
-        If you still want to ignore it, assign it to `_`, like this:
-        
-            _ = File.delete! "data.json"
-        "###
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    19│      try List.get [1, 2, 3] 5
+             ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete!("data.json")?
+    "###
     );
 
     test_report!(
@@ -14774,7 +14774,7 @@ All branches in an `if` must have the same type!
                 Ok {}
             "#
         ),
-        @r#"
+        @r###"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
     The result of this expression is ignored:
@@ -14791,8 +14791,8 @@ All branches in an `if` must have the same type!
 
     If you still want to ignore it, assign it to `_`, like this:
 
-        _ = File.delete! "data.json"
-    "#
+        _ = File.delete!("data.json")?
+    "###
     );
 
     test_report!(
@@ -14852,22 +14852,22 @@ All branches in an `if` must have the same type!
             "#
         ),
         @r###"
-        ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
-        
-        The result of this expression is ignored:
-        
-        9│      try List.get [1, 2, 3] 5
-                ^^^^^^^^^^^^^^^^^^^^^^^^
-        
-        Standalone statements are required to produce an empty record, but the
-        type of this one is:
-        
-            Num *
-        
-        If you still want to ignore it, assign it to `_`, like this:
-        
-            _ = File.delete! "data.json"
-        "###
+    ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
+
+    The result of this expression is ignored:
+
+    9│      try List.get [1, 2, 3] 5
+            ^^^^^^^^^^^^^^^^^^^^^^^^
+
+    Standalone statements are required to produce an empty record, but the
+    type of this one is:
+
+        Num *
+
+    If you still want to ignore it, assign it to `_`, like this:
+
+        _ = File.delete!("data.json")?
+    "###
     );
 
     test_report!(
@@ -14904,7 +14904,7 @@ All branches in an `if` must have the same type!
                 Ok {}
             "#
         ),
-        @r#"
+        @r###"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
     The result of this expression is ignored:
@@ -14921,8 +14921,8 @@ All branches in an `if` must have the same type!
 
     If you still want to ignore it, assign it to `_`, like this:
 
-        _ = File.delete! "data.json"
-    "#
+        _ = File.delete!("data.json")?
+    "###
     );
 
     test_report!(
@@ -14941,7 +14941,7 @@ All branches in an `if` must have the same type!
                 Ok {}
             "#
         ),
-        @r#"
+        @r###"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
     The result of this call to `Num.to_str` is ignored:
@@ -14956,7 +14956,7 @@ All branches in an `if` must have the same type!
 
     If you still want to ignore it, assign it to `_`, like this:
 
-        _ = File.delete! "data.json"
+        _ = File.delete!("data.json")?
 
     ── LEFTOVER STATEMENT in /code/proj/Main.roc ───────────────────────────────────
 
@@ -14969,7 +14969,7 @@ All branches in an `if` must have the same type!
     functions.
 
     Did you forget to use its result? If not, feel free to remove it.
-    "#
+    "###
     );
 
     test_report!(
@@ -15407,7 +15407,7 @@ All branches in an `if` must have the same type!
                 {}
             "#
         ),
-        @r#"
+        @r###"
     ── IGNORED RESULT in /code/proj/Main.roc ───────────────────────────────────────
 
     The result of this call to `Effect.get_line!` is ignored:
@@ -15422,8 +15422,8 @@ All branches in an `if` must have the same type!
 
     If you still want to ignore it, assign it to `_`, like this:
 
-        _ = File.delete! "data.json"
-    "#
+        _ = File.delete!("data.json")?
+    "###
     );
 
     test_report!(

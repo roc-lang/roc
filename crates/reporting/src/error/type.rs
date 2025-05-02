@@ -1935,7 +1935,7 @@ fn to_expr_report<'b>(
                                 alloc.reflow(", like this:"),
                             ]),
                             alloc
-                                .parser_suggestion("_ = File.delete! \"data.json\"")
+                                .parser_suggestion("_ = File.delete!(\"data.json\")?")
                                 .indent(4),
                         ])
                     },
