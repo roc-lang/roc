@@ -1,25 +1,13 @@
 const std = @import("std");
-const exitOnOutOfMemory = @import("./collections.zig").utils.exitOnOom;
+const exitOnOutOfMemory = @import("../collections.zig").utils.exitOnOom;
 
-/// A type variable id
-///
-/// TODO: does this need to be u32? Can we get away with u16?
-const Var = enum(u32) { _ };
+const shared = @import("./shared.zig");
+const FlatType = @import("./flat_type.zig");
 
-/// Represents a type name, like Str, Bool, List
-///
-/// This includes both builtin types as well as user-defined types, and aliases
-///
-/// TODO: Does this need to be u32? Can we get away with u16?
-/// TODO: A mapping from user-defined aliases to Names probably needs to exist somwhere
-const Name = enum(u32) {
-    BOOL = 0,
-    STR = 1,
-    LIST = 2,
-    MAYBE = 3,
-    RESULT = 4,
-    _,
-};
+const TypeName = FlatType.TypeName;
+const Var = shared.Var;
+const ElemsInt = shared.ElemsInt;
+const MAX_ELEMS = shared.MAX_ELEMS;
 
 /// Represents what the a type *is*
 ///
@@ -27,219 +15,145 @@ const Name = enum(u32) {
 /// like `Num(Int(Unsigned64))` should be reperesntsed as it's specific
 /// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
 /// details
-const Descriptor = union(enum) {
+const Desc = union(enum) {
     flex_var,
-    structural_alias: StructuralAlias,
-    nominal_alias: NominalAlias,
-    flat_type: FlatType,
+    structural_alias: Alias,
+    nominal_alias: Alias,
+    flat_type: FlatType.FlatType,
 
-    // TODO: is 16 seems like a reasonable max??
-    pub const max_elems_type = u4;
-    pub const MAX_ELEMS = 16;
-
-    // A "flat" data type
-    // todo: rename?
-    const FlatType = union(enum) {
-        type_apply: TypeApply,
-        tuple: Tuple,
-        num: Num,
-        func: Func,
-
-        /// Represents a type application, like `List String` or `Result Error Value`.
-        ///
-        /// Applications may have up to 16 type arguments.
-        /// Only the first `arg_count` elements of `args` are considered valid.
-        const TypeApply = struct { name: Name, arg_count: max_elems_type, args: [MAX_ELEMS]Var };
-
-        /// Represents a tuple
-        ///
-        /// Tuples may have up to 16 type elements.
-        /// Only the first `arg_count` elements of `elements` are considered valid.
-        const Tuple = struct { elem_count: max_elems_type, elems: [MAX_ELEMS]Var };
-
-        /// Represents number
-        ///
-        /// Numbers could be representsed by `type_apply` and phantom types, but
-        /// that ends up being inefficient because every number type requires
-        /// multiple different type entrie.s By special casing them here we can
-        /// ensure that they have more compact representations
-        const Num = union(enum) {
-            flex_var,
-            int: Int,
-            frac: Frac,
-
-            pub const Frac = enum(u2) {
-                flex_var,
-                f32,
-                f64,
-                dec,
-            };
-
-            pub const Int = enum(u4) {
-                flex_var,
-                u8,
-                i8,
-                u16,
-                i16,
-                u32,
-                i32,
-                u64,
-                i64,
-                u168,
-                i168,
-            };
-        };
-
-        /// Represents a function
-        ///
-        /// Functions may have up to 16 arguments.
-        /// Only the first `arg_count` elements of `args` are considered valid.
-        /// TODO: Should function support more args?
-        const Func = struct {
-            arg_count: max_elems_type,
-            args: [MAX_ELEMS]Var,
-            ret: Var,
-
-            // TODO: These are needed once we have effects & lambda sets
-            // lambda_set: Var,
-            // effect: Var,
-        };
-    };
-
-    // a structural alias
-    const StructuralAlias = struct {
-        name: Name,
-        arg_count: max_elems_type,
-        args: [MAX_ELEMS]Var,
+    // a nominal or structural alias
+    // can hold up to 16 arguments
+    const Alias = struct {
+        name: TypeName,
+        args: ArgsArray,
         backing_var: Var,
-    };
 
-    // a nominal alias (ie opaque)
-    const NominalAlias = struct {
-        name: Name,
-        arg_count: max_elems_type,
-        args: [MAX_ELEMS]Var,
-        backing_var: Var,
+        /// Represents the max capacity of the args array
+        pub const args_array_capacity = 16;
+        /// Bounded array to hold args
+        pub const ArgsArray = std.BoundedArray(Var, args_array_capacity);
     };
 
     const SelfD = @This();
 
     // Constants
 
-    const BOOL: SelfD = SelfD{
-        .flat_type = .{ .type_apply = .{ .name = Name.BOOL, .arg_count = 0, .args = undefined } },
+    const bool_: SelfD = SelfD{
+        .flat_type = .{ .type_apply = .{
+            .name = TypeName.bool_,
+            .args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable,
+        } },
     };
-    const STR: SelfD = SelfD{
-        .flat_type = .{ .type_apply = .{ .name = Name.STR, .arg_count = 0, .args = undefined } },
+    const str: SelfD = SelfD{
+        .flat_type = .{ .type_apply = .{
+            .name = TypeName.str,
+            .args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable,
+        } },
     };
 
     /// make a List with the provided type applied
     pub fn mkList(v: Var) SelfD {
-        var args: [MAX_ELEMS]Var = undefined;
-        args[0] = v;
-        return SelfD{ .flat_type = .{ .type_apply = .{ .name = Name.LIST, .arg_count = 1, .args = args } } };
+        var args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable;
+        args.append(v) catch unreachable;
+        return SelfD{ .flat_type = .{ .type_apply = .{ .name = TypeName.list, .args = args } } };
     }
 
     /// make a Maybe with the provided type applied
     pub fn mkMaybe(v: Var) SelfD {
-        var args: [MAX_ELEMS]Var = undefined;
-        args[0] = v;
-        return SelfD{ .flat_type = .{ .type_apply = .{ .name = Name.MAYBE, .arg_count = 1, .args = args } } };
+        var args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable;
+        args.append(v) catch unreachable;
+        return SelfD{ .flat_type = .{ .type_apply = .{ .name = TypeName.maybe, .args = args } } };
     }
 
     /// make a List with the provided type applied
     pub fn mkResult(ok: Var, err: Var) SelfD {
-        var args: [MAX_ELEMS]Var = undefined;
-        args[0] = ok;
-        args[1] = err;
-        return SelfD{ .flat_type = .{ .type_apply = .{ .name = Name.RESULT, .arg_count = 2, .args = args } } };
+        var args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable;
+        args.append(ok) catch unreachable;
+        args.append(err) catch unreachable;
+        return SelfD{ .flat_type = .{ .type_apply = .{ .name = TypeName.result, .args = args } } };
     }
 
     /// make a List with the provided type applied
     pub fn mkTuple(slice: []const Var) SelfD {
-        std.debug.assert(slice.len < MAX_ELEMS + 1);
-        var elems: [MAX_ELEMS]Var = undefined;
-        for (0..slice.len) |i| {
-            elems[i] = slice[i];
-        }
-        return SelfD{ .flat_type = .{ .tuple = .{ .elem_count = 1, .elems = elems } } };
+        const args = FlatType.Tuple.ElemsArray.fromSlice(slice) catch unreachable;
+        return SelfD{ .flat_type = .{ .tuple = .{ .elems = args } } };
+    }
+};
+
+/// Represents a store of descriptors
+///
+/// Indexes into the list are typesafe
+const DescStore = struct {
+    const Self = @This();
+
+    backing: std.ArrayList(Desc),
+
+    const Idx = enum(usize) { _ };
+
+    fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+        const arr_list = std.ArrayList(Desc).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        return .{ .backing = arr_list };
     }
 
-    /// Represents a store of descriptors
-    const Store = struct {
-        backing: std.ArrayList(SelfD),
+    fn insert(self: *Self, typ: Desc) Idx {
+        const idx: Idx = @enumFromInt(self.backing.items.len);
+        self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
+        return idx;
+    }
 
-        const Idx = enum(usize) { _ };
+    fn deinit(self: *Self) void {
+        self.backing.deinit();
+    }
 
-        const SelfS = @This();
-
-        fn init(gpa: std.mem.Allocator, capacity: usize) SelfS {
-            const arr_list = std.ArrayList(SelfD).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
-            return .{ .backing = arr_list };
-        }
-
-        fn insert(self: *SelfS, typ: SelfD) Idx {
-            const idx: Idx = @enumFromInt(self.backing.items.len);
-            self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
-            return idx;
-        }
-
-        fn deinit(self: *SelfS) void {
-            self.backing.deinit();
-        }
-
-        fn get(self: *const SelfS, idx: Idx) SelfD {
-            return self.backing.items[@intFromEnum(idx)];
-        }
-    };
+    fn get(self: *const Self, idx: Idx) Desc {
+        return self.backing.items[@intFromEnum(idx)];
+    }
 };
 
 // Reperents either type data *or* a symlink to another type variable
 const Binding = union(enum) {
-    root: Descriptor.Store.Idx,
+    root: DescStore.Idx,
     redirect: Var,
+};
 
-    const SelfB = @This();
+/// Represents a store of bindings
+const BindingStore = struct {
+    const Self = @This();
 
-    /// Represents a store of bindings
-    const Store = struct {
-        backing: std.ArrayList(SelfB),
+    backing: std.ArrayList(Binding),
 
-        const SelfS = @This();
+    fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+        const arr_list = std.ArrayList(Binding).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        return .{ .backing = arr_list };
+    }
 
-        fn init(gpa: std.mem.Allocator, capacity: usize) SelfS {
-            const arr_list = std.ArrayList(SelfB).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
-            return .{ .backing = arr_list };
-        }
+    fn deinit(self: *Self) void {
+        self.backing.deinit();
+    }
 
-        fn deinit(self: *SelfS) void {
-            self.backing.deinit();
-        }
+    /// Insert a new binding into the store. The return type is a new `Var`.
+    ///
+    /// It's important to note that this `Var` is an index into the store,
+    /// but it also also the type variable itself
+    fn insert(self: *Self, typ: Binding) Var {
+        const idx: Var = @enumFromInt(self.backing.items.len);
+        self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
+        return idx;
+    }
 
-        /// Insert a new binding into the store. The return type is a new `Var`.
-        ///
-        /// It's important to note that this `Var` is an index into the store,
-        /// but it also also the type variable itself
-        fn insert(self: *SelfS, typ: SelfB) Var {
-            const idx: Var = @enumFromInt(self.backing.items.len);
-            self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
-            return idx;
-        }
+    fn set(self: *Self, idx: Var, val: Binding) void {
+        self.backing.items[@intFromEnum(idx)] = val;
+    }
 
-        fn set(self: *SelfS, idx: Var, val: SelfB) void {
-            self.backing.items[@intFromEnum(idx)] = val;
-        }
-
-        fn get(self: *const SelfS, idx: Var) SelfB {
-            return self.backing.items[@intFromEnum(idx)];
-        }
-    };
+    fn get(self: *const Self, idx: Var) Binding {
+        return self.backing.items[@intFromEnum(idx)];
+    }
 };
 
 /// Type solver
 const Solver = struct {
-    descriptor_store: Descriptor.Store,
-    binding_store: Binding.Store,
+    descriptor_store: DescStore,
+    binding_store: BindingStore,
 
     const Self = @This();
 
@@ -247,8 +161,8 @@ const Solver = struct {
     pub fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determin sensible defaults
         return .{
-            .descriptor_store = Descriptor.Store.init(gpa, 64),
-            .binding_store = Binding.Store.init(gpa, 64),
+            .descriptor_store = DescStore.init(gpa, 64),
+            .binding_store = BindingStore.init(gpa, 64),
         };
     }
 
@@ -260,14 +174,14 @@ const Solver = struct {
 
     /// Create a new unbound, flexible type variable
     pub fn fresh(self: *Self) Var {
-        const flex_var_idx = self.descriptor_store.insert(Descriptor.flex_var);
+        const flex_var_idx = self.descriptor_store.insert(Desc.flex_var);
         const binding_var = self.binding_store.insert(.{ .root = flex_var_idx });
         return binding_var;
     }
 
     /// Create a bound variable with the provided descriptor
     /// Mainly used for tests
-    pub fn mkRoot(self: *Self, desc: Descriptor) Var {
+    pub fn mkRoot(self: *Self, desc: Desc) Var {
         const desc_idx = self.descriptor_store.insert(desc);
         const binding_var = self.binding_store.insert(.{ .root = desc_idx });
         return binding_var;
@@ -282,7 +196,7 @@ const Solver = struct {
 
     const VarAndDesc = struct {
         type_var: Var,
-        type_descriptor: Descriptor,
+        type_descriptor: Desc,
     };
 
     /// Given a type var, follow all redirects until finding the root descriptor, then
@@ -331,137 +245,26 @@ const Solver = struct {
     /// Unify two types
     /// If this returns null, then unification was successful
     pub fn unify(self: *Self, a_type_var: Var, b_type_var: Var) ?UnifyError {
-        var err = UnifyError.init();
-        switch (self.unify_help(&err, a_type_var, b_type_var)) {
-            .ok => return null,
-            .err => return err,
+        var unify_err = UnifyError.init();
+        if (self.unify_help(&unify_err, a_type_var, b_type_var)) |did_unify| {
+            switch (did_unify) {
+                .ok => return null,
+                .err => return unify_err,
+            }
+        } else |err| switch (err) {
+            error.Overflow => {
+                unify_err.cause = UnifyError.Cause{ .overflowed_trace = .{
+                    .left = a_type_var,
+                    .right = b_type_var,
+                } };
+                return unify_err;
+            },
         }
     }
 
-    /// type wrapper around bool to make success/failure more clear
-    pub const DidUnify = enum(u1) { err = 0, ok = 1 };
-
-    /// A type to represent a unification error
-    ///
-    /// Includes a trace of all the intermediate variables that did unify down the recursive stack
-    ///
-    /// TODO: Currently only supports a depth of 8. Is that reasonable? What should happen if it's exceeded?
-    pub const UnifyError = struct {
-        trace: [MaxUnifyTrace]TraceVars,
-        depth: u3,
-        cause: Cause,
-
-        /// Total dept of unification error trace aka 8
-        const MaxUnifyTrace = std.math.maxInt(u3);
-
-        /// Represents a step in the trace
-        pub const TraceVars = struct { left: Var, right: Var };
-
-        /// Represents the cause of a failure in unification
-        pub const LeftRightDesc = struct { left: Descriptor, right: Descriptor };
-        pub const LeftRightName = struct { left: Name, right: Name };
-        pub const LeftRightCount = struct { left: Descriptor.max_elems_type, right: Descriptor.max_elems_type };
-        pub const Cause = union(enum) {
-            // base
-            type_mismatch: LeftRightDesc,
-            // structural aliases
-            structural_alias_name_mismatch: LeftRightName,
-            structural_alias_arity_mismatch: LeftRightCount,
-            // nominal aliases
-            nominal_alias_name_mismatch: LeftRightName,
-            nominal_alias_arity_mismatch: LeftRightCount,
-            unexpected_structural_alias: LeftRightDesc,
-            // flat type - apply
-            apply_name_mismatch: LeftRightName,
-            apply_arity_mismatch: LeftRightCount,
-            // flat type - tuple
-            tuple_arity_mismatch: LeftRightCount,
-            // flat type - funm
-            func_arity_mismatch: LeftRightCount,
-        };
-
-        const SelfU = @This();
-
-        /// Initialize an undefined unify err
-        pub fn init() SelfU {
-            return .{ .trace = undefined, .depth = 0, .cause = undefined };
-        }
-
-        // trace helpers
-
-        /// Append trace variables to the end of the trace list
-        ///
-        /// TODO: What do we do if we exceed depth here? Should we truncate from the beginning?
-        pub fn appendTrace(self: *SelfU, leftTraceVar: Var, rightTraceVar: Var) void {
-            if (self.depth < MaxUnifyTrace) {
-                self.trace[self.depth] = .{ .left = leftTraceVar, .right = rightTraceVar };
-                self.depth = self.depth + 1;
-            }
-        }
-
-        /// Drop the last trtace
-        pub fn dropLastTrace(self: *SelfU) void {
-            self.depth = self.depth - 1;
-        }
-
-        /// Get a slice of the trace.
-        /// This only lives as long 'self'
-        pub fn getTraceSlice(self: *const SelfU) []const TraceVars {
-            return self.trace[0..self.depth];
-        }
-
-        // cause helpers
-        // TODO: these are inlined, but should they be?
-
-        /// Set the cause and return a unify err
-        pub inline fn setCauseAndReturnErr(self: *SelfU, cause: UnifyError.Cause) DidUnify {
-            self.cause = cause;
-            return DidUnify.err;
-        }
-
-        /// Set the cause and return a unify err
-        pub inline fn setTypeMismatchAndReturnErr(
-            self: *SelfU,
-            a_desc: Descriptor,
-            b_desc: Descriptor,
-        ) DidUnify {
-            self.cause = UnifyError.Cause{ .type_mismatch = .{
-                .left = a_desc,
-                .right = b_desc,
-            } };
-            return DidUnify.err;
-        }
-
-        /// Set the cause and return a unify err
-        pub inline fn setFlatTypeMismatchAndReturnErr(
-            self: *SelfU,
-            a_flat_type: Descriptor.FlatType,
-            b_flat_type: Descriptor.FlatType,
-        ) DidUnify {
-            self.cause = UnifyError.Cause{ .type_mismatch = .{
-                .left = Descriptor{ .flat_type = a_flat_type },
-                .right = Descriptor{ .flat_type = b_flat_type },
-            } };
-            return DidUnify.err;
-        }
-
-        /// Set the cause and return a unify err
-        pub inline fn setNumMismatchAndReturnErr(
-            self: *SelfU,
-            a_num: Descriptor.FlatType.Num,
-            b_num: Descriptor.FlatType.Num,
-        ) DidUnify {
-            self.cause = UnifyError.Cause{ .type_mismatch = .{
-                .left = Descriptor{ .flat_type = Descriptor.FlatType{ .num = a_num } },
-                .right = Descriptor{ .flat_type = Descriptor.FlatType{ .num = b_num } },
-            } };
-            return DidUnify.err;
-        }
-    };
-
     // Unify two types, updating the error context
-    fn unify_help(self: *Self, mb_err: *UnifyError, a_type_var: Var, b_type_var: Var) DidUnify {
-        mb_err.appendTrace(a_type_var, b_type_var);
+    fn unify_help(self: *Self, mb_err: *UnifyError, a_type_var: Var, b_type_var: Var) error{Overflow}!DidUnify {
+        try mb_err.appendTrace(a_type_var, b_type_var);
 
         const a_type = self.followRedirectsAndCompress(a_type_var);
         const b_type = self.followRedirectsAndCompress(b_type_var);
@@ -483,7 +286,7 @@ const Solver = struct {
                         return self.unify_structural_alias(mb_err, a_alias, b_alias);
                     },
                     else => {
-                        return self.unify_help(mb_err, a_alias.backing_var, b_type_var);
+                        return try self.unify_help(mb_err, a_alias.backing_var, b_type_var);
                     },
                 }
             },
@@ -496,7 +299,7 @@ const Solver = struct {
                     },
                     .structural_alias => |b_alias| {
                         // if b is a structural alias, then recurse
-                        return self.unify_help(mb_err, a_type.type_var, b_alias.backing_var);
+                        return try self.unify_help(mb_err, a_type.type_var, b_alias.backing_var);
                     },
                     .nominal_alias => |b_alias| {
                         return self.unify_nominal_alias(mb_err, a_alias, b_alias);
@@ -519,7 +322,7 @@ const Solver = struct {
                     },
                     .structural_alias => |b_alias| {
                         // if b is a structural alias, then recurse
-                        return self.unify_help(mb_err, a_type.type_var, b_alias.backing_var);
+                        return try self.unify_help(mb_err, a_type.type_var, b_alias.backing_var);
                     },
                     .nominal_alias => {
                         mb_err.cause = UnifyError.Cause{ .type_mismatch = .{
@@ -546,9 +349,9 @@ const Solver = struct {
     fn unify_flat_type(
         self: *Self,
         mb_err: *UnifyError,
-        a_flat_type: Descriptor.FlatType,
-        b_flat_type: Descriptor.FlatType,
-    ) DidUnify {
+        a_flat_type: FlatType.FlatType,
+        b_flat_type: FlatType.FlatType,
+    ) error{Overflow}!DidUnify {
         switch (a_flat_type) {
             .type_apply => |a_type_apply| {
                 switch (b_flat_type) {
@@ -590,6 +393,40 @@ const Solver = struct {
                     },
                 }
             },
+            .empty_record => {
+                switch (b_flat_type) {
+                    .empty_record => {
+                        // TODO: Rust compiler uses "merge" here. I think this is imporatnt
+                        // for ranked types, but idk
+                        return DidUnify.ok;
+                    },
+                    .record => |b_record| {
+                        if (b_record.areAllFieldsOptional()) {
+                            return DidUnify.ok;
+                        }
+                        return mb_err.setFlatTypeMismatchAndReturnErr(a_flat_type, b_flat_type);
+                    },
+                    else => |_| {
+                        return mb_err.setFlatTypeMismatchAndReturnErr(a_flat_type, b_flat_type);
+                    },
+                }
+            },
+            .record => |a_record| {
+                switch (b_flat_type) {
+                    .empty_record => {
+                        if (a_record.areAllFieldsOptional()) {
+                            return DidUnify.ok;
+                        }
+                        return mb_err.setFlatTypeMismatchAndReturnErr(a_flat_type, b_flat_type);
+                    },
+                    .record => |b_record| {
+                        return self.unify_record(mb_err, a_record, b_record);
+                    },
+                    else => |_| {
+                        return mb_err.setFlatTypeMismatchAndReturnErr(a_flat_type, b_flat_type);
+                    },
+                }
+            },
         }
     }
 
@@ -602,25 +439,25 @@ const Solver = struct {
     fn unify_type_apply(
         self: *Self,
         mb_err: *UnifyError,
-        a_type_apply: Descriptor.FlatType.TypeApply,
-        b_type_apply: Descriptor.FlatType.TypeApply,
-    ) DidUnify {
+        a_type_apply: FlatType.TypeApply,
+        b_type_apply: FlatType.TypeApply,
+    ) error{Overflow}!DidUnify {
         if (a_type_apply.name != b_type_apply.name) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .apply_name_mismatch = .{
                 .left = a_type_apply.name,
                 .right = b_type_apply.name,
             } });
         }
-        if (a_type_apply.arg_count != b_type_apply.arg_count) {
+        if (a_type_apply.args.len != b_type_apply.args.len) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .apply_arity_mismatch = .{
-                .left = a_type_apply.arg_count,
-                .right = b_type_apply.arg_count,
+                .left = a_type_apply.args.len,
+                .right = b_type_apply.args.len,
             } });
         }
 
         var did_unify: DidUnify = undefined;
-        for (0..a_type_apply.arg_count) |i| {
-            did_unify = self.unify_help(mb_err, a_type_apply.args[i], b_type_apply.args[i]);
+        for (0..a_type_apply.args.len) |i| {
+            did_unify = try self.unify_help(mb_err, a_type_apply.args.buffer[i], b_type_apply.args.buffer[i]);
             if (did_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_unify;
         }
 
@@ -635,19 +472,19 @@ const Solver = struct {
     fn unify_tuple(
         self: *Self,
         mb_err: *UnifyError,
-        a_tuple: Descriptor.FlatType.Tuple,
-        b_tuple: Descriptor.FlatType.Tuple,
-    ) DidUnify {
-        if (a_tuple.elem_count != b_tuple.elem_count) {
+        a_tuple: FlatType.Tuple,
+        b_tuple: FlatType.Tuple,
+    ) error{Overflow}!DidUnify {
+        if (a_tuple.elems.len != b_tuple.elems.len) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .tuple_arity_mismatch = .{
-                .left = a_tuple.elem_count,
-                .right = b_tuple.elem_count,
+                .left = a_tuple.elems.len,
+                .right = b_tuple.elems.len,
             } });
         }
 
         var did_unify: DidUnify = undefined;
-        for (0..a_tuple.elem_count) |i| {
-            did_unify = self.unify_help(mb_err, a_tuple.elems[i], b_tuple.elems[i]);
+        for (0..a_tuple.elems.len) |i| {
+            did_unify = try self.unify_help(mb_err, a_tuple.elems.buffer[i], b_tuple.elems.buffer[i]);
             if (did_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_unify;
         }
 
@@ -661,8 +498,8 @@ const Solver = struct {
     /// * that parallel arguments unify
     fn unify_num(
         mb_err: *UnifyError,
-        a_num: Descriptor.FlatType.Num,
-        b_num: Descriptor.FlatType.Num,
+        a_num: FlatType.Num,
+        b_num: FlatType.Num,
     ) DidUnify {
         switch (a_num) {
             .flex_var => return DidUnify.ok,
@@ -704,29 +541,44 @@ const Solver = struct {
     fn unify_func(
         self: *Self,
         mb_err: *UnifyError,
-        a_func: Descriptor.FlatType.Func,
-        b_func: Descriptor.FlatType.Func,
-    ) DidUnify {
-        if (a_func.arg_count != b_func.arg_count) {
+        a_func: FlatType.Func,
+        b_func: FlatType.Func,
+    ) error{Overflow}!DidUnify {
+        if (a_func.args.len != b_func.args.len) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .func_arity_mismatch = .{
-                .left = a_func.arg_count,
-                .right = b_func.arg_count,
+                .left = a_func.args.len,
+                .right = b_func.args.len,
             } });
         }
 
         var did_arg_unify: DidUnify = undefined;
-        for (0..a_func.arg_count) |i| {
-            did_arg_unify = self.unify_help(mb_err, a_func.args[i], b_func.args[i]);
+        for (0..a_func.args.len) |i| {
+            did_arg_unify = try self.unify_help(mb_err, a_func.args.buffer[i], b_func.args.buffer[i]);
             if (did_arg_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_arg_unify;
         }
 
-        const did_ret_unify = self.unify_help(mb_err, a_func.ret, b_func.ret);
+        const did_ret_unify = try self.unify_help(mb_err, a_func.ret, b_func.ret);
         if (did_ret_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_ret_unify;
 
         // TODO: Once we have effects & lambda sets, there's additional
         // unification that needs to happen here
 
         return DidUnify.ok;
+    }
+
+    /// unify records
+    ///
+    /// this checks:
+    /// * that each record field matches
+    /// * that the arities are the same
+    /// * that parallel arguments unify
+    fn unify_record(
+        _: *Self,
+        _: *UnifyError,
+        _: FlatType.Record,
+        _: FlatType.Record,
+    ) error{Overflow}!DidUnify {
+        @panic("TODO");
     }
 
     // structural alias
@@ -739,25 +591,25 @@ const Solver = struct {
     fn unify_structural_alias(
         self: *Self,
         mb_err: *UnifyError,
-        a_alias: Descriptor.StructuralAlias,
-        b_alias: Descriptor.StructuralAlias,
-    ) DidUnify {
+        a_alias: Desc.Alias,
+        b_alias: Desc.Alias,
+    ) error{Overflow}!DidUnify {
         if (a_alias.name != b_alias.name) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .structural_alias_name_mismatch = .{
                 .left = a_alias.name,
                 .right = b_alias.name,
             } });
         }
-        if (a_alias.arg_count != b_alias.arg_count) {
+        if (a_alias.args.len != b_alias.args.len) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .structural_alias_arity_mismatch = .{
-                .left = a_alias.arg_count,
-                .right = b_alias.arg_count,
+                .left = a_alias.args.len,
+                .right = b_alias.args.len,
             } });
         }
 
         var did_unify: DidUnify = undefined;
-        for (0..a_alias.arg_count) |i| {
-            did_unify = self.unify_help(mb_err, a_alias.args[i], b_alias.args[i]);
+        for (0..a_alias.args.len) |i| {
+            did_unify = try self.unify_help(mb_err, a_alias.args.buffer[i], b_alias.args.buffer[i]);
             if (did_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_unify;
         }
 
@@ -774,42 +626,158 @@ const Solver = struct {
     fn unify_nominal_alias(
         self: *Self,
         mb_err: *UnifyError,
-        a_alias: Descriptor.NominalAlias,
-        b_alias: Descriptor.NominalAlias,
-    ) DidUnify {
+        a_alias: Desc.Alias,
+        b_alias: Desc.Alias,
+    ) error{Overflow}!DidUnify {
         if (a_alias.name != b_alias.name) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .nominal_alias_name_mismatch = .{
                 .left = a_alias.name,
                 .right = b_alias.name,
             } });
         }
-        if (a_alias.arg_count != b_alias.arg_count) {
+        if (a_alias.args.len != b_alias.args.len) {
             return mb_err.setCauseAndReturnErr(UnifyError.Cause{ .nominal_alias_arity_mismatch = .{
-                .left = a_alias.arg_count,
-                .right = b_alias.arg_count,
+                .left = a_alias.args.len,
+                .right = b_alias.args.len,
             } });
         }
 
         var did_unify: DidUnify = undefined;
-        for (0..a_alias.arg_count) |i| {
-            did_unify = self.unify_help(mb_err, a_alias.args[i], b_alias.args[i]);
+        for (0..a_alias.args.len) |i| {
+            did_unify = try self.unify_help(mb_err, a_alias.args.buffer[i], b_alias.args.buffer[i]);
             if (did_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_unify;
         }
 
         return DidUnify.ok;
     }
+
+    /// type wrapper around bool to make success/failure more clear
+    pub const DidUnify = enum(u1) { err = 0, ok = 1 };
+
+    /// A type to represent a unification error
+    ///
+    /// Includes a trace of all the intermediate variables that did unify down the recursive stack
+    ///
+    /// TODO: Currently only supports a depth of 8. Is that reasonable? What should happen if it's exceeded?
+    pub const UnifyError = struct {
+        trace: TraceArray,
+        cause: Cause,
+
+        /// Total capacity of the trace array
+        const trace_capacity = 8;
+
+        /// Represents a step in the trace
+        pub const TraceVars = LeftRight(Var);
+
+        /// A bounded array of trace variables
+        pub const TraceArray = std.BoundedArray(TraceVars, trace_capacity);
+
+        pub const Cause = union(enum) {
+            // base
+            type_mismatch: LeftRight(Desc),
+            overflowed_trace: LeftRight(Var),
+
+            // structural aliases
+            structural_alias_name_mismatch: LeftRight(TypeName),
+            structural_alias_arity_mismatch: LeftRight(usize),
+
+            // nominal aliases
+            nominal_alias_name_mismatch: LeftRight(TypeName),
+            nominal_alias_arity_mismatch: LeftRight(usize),
+            unexpected_structural_alias: LeftRight(Desc),
+
+            // flat type - apply
+            apply_name_mismatch: LeftRight(TypeName),
+            apply_arity_mismatch: LeftRight(usize),
+
+            // flat type - tuple
+            tuple_arity_mismatch: LeftRight(usize),
+
+            // flat type - funm
+            func_arity_mismatch: LeftRight(usize),
+        };
+
+        /// Represents two values in unfication
+        pub fn LeftRight(comptime T: type) type {
+            return struct { left: T, right: T };
+        }
+
+        const SelfU = @This();
+
+        /// Initialize an undefined unify err
+        pub fn init() SelfU {
+            return .{ .trace = TraceArray.init(0) catch unreachable, .cause = undefined };
+        }
+
+        // trace helpers
+
+        /// Append trace variables to the end of the trace list
+        pub fn appendTrace(self: *SelfU, leftTraceVar: Var, rightTraceVar: Var) error{Overflow}!void {
+            try self.trace.append(.{ .left = leftTraceVar, .right = rightTraceVar });
+        }
+
+        /// Drop the last trace
+        pub fn dropLastTrace(self: *SelfU) void {
+            _ = self.trace.pop();
+        }
+
+        /// Get a slice of the trace.
+        /// This only lives as long 'self'
+        pub fn getTraceSlice(self: *const SelfU) []const TraceVars {
+            return self.trace.constSlice();
+        }
+
+        // cause helpers
+        // TODO: these are inlined, but should they be?
+
+        /// Set the cause and return a unify err
+        pub inline fn setCauseAndReturnErr(self: *SelfU, cause: UnifyError.Cause) DidUnify {
+            self.cause = cause;
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        pub inline fn setTypeMismatchAndReturnErr(
+            self: *SelfU,
+            a_desc: Desc,
+            b_desc: Desc,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .type_mismatch = .{
+                .left = a_desc,
+                .right = b_desc,
+            } };
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        pub inline fn setFlatTypeMismatchAndReturnErr(
+            self: *SelfU,
+            a_flat_type: FlatType.FlatType,
+            b_flat_type: FlatType.FlatType,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .type_mismatch = .{
+                .left = Desc{ .flat_type = a_flat_type },
+                .right = Desc{ .flat_type = b_flat_type },
+            } };
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        pub inline fn setNumMismatchAndReturnErr(
+            self: *SelfU,
+            a_num: FlatType.Num,
+            b_num: FlatType.Num,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .type_mismatch = .{
+                .left = Desc{ .flat_type = FlatType.FlatType{ .num = a_num } },
+                .right = Desc{ .flat_type = FlatType.FlatType{ .num = b_num } },
+            } };
+            return DidUnify.err;
+        }
+    };
 };
 
 // tests
-
-/// test helper to make constructuring lists easier for
-fn mkElemsArr(comptime T: type, slice: []const T) [Descriptor.MAX_ELEMS]T {
-    var arr: [Descriptor.MAX_ELEMS]T = undefined;
-    for (0..slice.len) |i| {
-        arr[i] = slice[0];
-    }
-    return arr;
-}
 
 // path compression
 
@@ -823,7 +791,7 @@ test "followRedirectsAndCompress - flattens redirect chain to flex_var" {
     const a = solver.mkRedirect(b);
 
     const result = solver.followRedirectsAndCompress(a);
-    try std.testing.expectEqual(result.type_descriptor, Descriptor.flex_var);
+    try std.testing.expectEqual(result.type_descriptor, Desc.flex_var);
     try std.testing.expectEqual(result.type_var, c);
     try std.testing.expectEqual(solver.binding_store.get(a), Binding{ .redirect = c });
     try std.testing.expectEqual(solver.binding_store.get(b), Binding{ .redirect = c });
@@ -834,12 +802,12 @@ test "followRedirectsAndCompress - no-op on already root" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str_desc_idx = solver.descriptor_store.insert(Descriptor.STR);
+    const str_desc_idx = solver.descriptor_store.insert(Desc.str);
     const str_var = solver.binding_store.insert(.{ .root = str_desc_idx });
 
     const result = solver.followRedirectsAndCompress(str_var);
 
-    try std.testing.expectEqual(result.type_descriptor, Descriptor.STR);
+    try std.testing.expectEqual(result.type_descriptor, Desc.str);
     try std.testing.expectEqual(result.type_var, str_var);
     try std.testing.expectEqual(solver.binding_store.get(str_var), Binding{ .root = str_desc_idx });
 }
@@ -849,12 +817,12 @@ test "followRedirectsAndCompress - flattens redirect chain to concrete" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const c = solver.mkRoot(Descriptor.BOOL);
+    const c = solver.mkRoot(Desc.bool_);
     const b = solver.mkRedirect(c);
     const a = solver.mkRedirect(b);
 
     const result = solver.followRedirectsAndCompress(a);
-    try std.testing.expectEqual(result.type_descriptor, Descriptor.BOOL);
+    try std.testing.expectEqual(result.type_descriptor, Desc.bool_);
     try std.testing.expectEqual(result.type_var, c);
     try std.testing.expectEqual(solver.binding_store.get(a), Binding{ .redirect = c });
     try std.testing.expectEqual(solver.binding_store.get(b), Binding{ .redirect = c });
@@ -879,7 +847,7 @@ test "unify - a redirects to b - a is flex_var and b is concrete" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const b = solver.mkRoot(Descriptor.BOOL);
+    const b = solver.mkRoot(Desc.bool_);
     const a = solver.fresh();
 
     try std.testing.expectEqual(solver.unify(a, b), null);
@@ -891,7 +859,7 @@ test "unify - b redirects to a - a concrete and b unknown" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const a = solver.mkRoot(Descriptor.BOOL);
+    const a = solver.mkRoot(Desc.bool_);
     const b = solver.fresh();
 
     try std.testing.expectEqual(solver.unify(a, b), null);
@@ -905,8 +873,8 @@ test "unify - type_apply - eql - both a & b same prim" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const a = solver.mkRoot(Descriptor.BOOL);
-    const b = solver.mkRoot(Descriptor.BOOL);
+    const a = solver.mkRoot(Desc.bool_);
+    const b = solver.mkRoot(Desc.bool_);
 
     try std.testing.expectEqual(solver.unify(a, b), null);
 }
@@ -916,17 +884,17 @@ test "unify - type_apply - not eql - both a & b diff prim" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const a = solver.mkRoot(Descriptor.STR);
-    const b = solver.mkRoot(Descriptor.BOOL);
+    const a = solver.mkRoot(Desc.str);
+    const b = solver.mkRoot(Desc.bool_);
 
     const mb_err = solver.unify(a, b);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     });
-    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqual(1, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
@@ -941,9 +909,9 @@ test "unify - type_apply - eql - both a & b same type with single arg" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const a_list_str = solver.mkRoot(Descriptor.mkList(str));
-    const b_list_str = solver.mkRoot(Descriptor.mkList(str));
+    const str = solver.mkRoot(Desc.str);
+    const a_list_str = solver.mkRoot(Desc.mkList(str));
+    const b_list_str = solver.mkRoot(Desc.mkList(str));
 
     try std.testing.expectEqual(solver.unify(a_list_str, b_list_str), null);
 }
@@ -953,25 +921,25 @@ test "unify - type_apply - eql - both a & b same type with diff arg" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const list_str = solver.mkRoot(Descriptor.mkList(str));
+    const str = solver.mkRoot(Desc.str);
+    const list_str = solver.mkRoot(Desc.mkList(str));
 
-    const bbool = solver.mkRoot(Descriptor.BOOL);
-    const list_bool = solver.mkRoot(Descriptor.mkList(bbool));
+    const bool_ = solver.mkRoot(Desc.bool_);
+    const list_bool = solver.mkRoot(Desc.mkList(bool_));
 
     const mb_err = solver.unify(list_str, list_bool);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     });
-    try std.testing.expectEqual(2, err.depth);
+    try std.testing.expectEqual(2, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = list_str, .right = list_bool },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -982,11 +950,11 @@ test "unify - type_apply - eql - both a & b same type with two args" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a = solver.mkRoot(Descriptor.mkResult(str, bbool));
-    const b = solver.mkRoot(Descriptor.mkResult(str, bbool));
+    const a = solver.mkRoot(Desc.mkResult(str, bool_));
+    const b = solver.mkRoot(Desc.mkResult(str, bool_));
 
     try std.testing.expectEqual(solver.unify(a, b), null);
 }
@@ -996,25 +964,25 @@ test "unify - type_apply - eql - both a & b same type with flipped args" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a = solver.mkRoot(Descriptor.mkResult(str, bbool));
-    const b = solver.mkRoot(Descriptor.mkResult(bbool, str));
+    const a = solver.mkRoot(Desc.mkResult(str, bool_));
+    const b = solver.mkRoot(Desc.mkResult(bool_, str));
 
     const mb_err = solver.unify(a, b);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     });
-    try std.testing.expectEqual(2, err.depth);
+    try std.testing.expectEqual(2, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = a, .right = b },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1025,9 +993,9 @@ test "unify - type_apply - not eql - both a & b diff type with same args" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const list_str = Descriptor.mkList(str);
-    const maybe_str = Descriptor.mkMaybe(str);
+    const str = solver.mkRoot(Desc.str);
+    const list_str = Desc.mkList(str);
+    const maybe_str = Desc.mkMaybe(str);
 
     const a = solver.mkRoot(list_str);
     const b = solver.mkRoot(maybe_str);
@@ -1037,9 +1005,9 @@ test "unify - type_apply - not eql - both a & b diff type with same args" {
 
     const err = mb_err.?;
     try std.testing.expectEqual(Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.LIST, .right = Name.MAYBE },
+        .apply_name_mismatch = .{ .left = TypeName.list, .right = TypeName.maybe },
     }, err.cause);
-    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqual(1, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{.{ .left = a, .right = b }},
@@ -1052,31 +1020,31 @@ test "unify - type_apply - not eql - both a & b same type with diff arg deeply n
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const list_str = solver.mkRoot(Descriptor.mkList(str));
-    const list_list_str = solver.mkRoot(Descriptor.mkList(list_str));
-    const list_list_list_str = solver.mkRoot(Descriptor.mkList(list_list_str));
+    const str = solver.mkRoot(Desc.str);
+    const list_str = solver.mkRoot(Desc.mkList(str));
+    const list_list_str = solver.mkRoot(Desc.mkList(list_str));
+    const list_list_list_str = solver.mkRoot(Desc.mkList(list_list_str));
 
-    const bbool = solver.mkRoot(Descriptor.BOOL);
-    const list_bool = solver.mkRoot(Descriptor.mkList(bbool));
-    const list_list_bool = solver.mkRoot(Descriptor.mkList(list_bool));
-    const list_list_list_bool = solver.mkRoot(Descriptor.mkList(list_list_bool));
+    const bool_ = solver.mkRoot(Desc.bool_);
+    const list_bool = solver.mkRoot(Desc.mkList(bool_));
+    const list_list_bool = solver.mkRoot(Desc.mkList(list_bool));
+    const list_list_list_bool = solver.mkRoot(Desc.mkList(list_list_bool));
 
     const mb_err = solver.unify(list_list_list_str, list_list_list_bool);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     }, err.cause);
-    try std.testing.expectEqual(4, err.depth);
+    try std.testing.expectEqual(4, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = list_list_list_str, .right = list_list_list_bool },
             .{ .left = list_list_str, .right = list_list_bool },
             .{ .left = list_str, .right = list_bool },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1089,11 +1057,11 @@ test "unify - tuple - eql - both a & b are same" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a = solver.mkRoot(Descriptor.mkTuple(&[_]Var{ str, bbool }));
-    const b = solver.mkRoot(Descriptor.mkTuple(&[_]Var{ str, bbool }));
+    const a = solver.mkRoot(Desc.mkTuple(&[_]Var{ str, bool_ }));
+    const b = solver.mkRoot(Desc.mkTuple(&[_]Var{ str, bool_ }));
 
     try std.testing.expectEqual(solver.unify(a, b), null);
 }
@@ -1103,25 +1071,25 @@ test "unify - tuple - eql - both a & b are flipped" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a = solver.mkRoot(Descriptor.mkTuple(&[_]Var{ str, bbool }));
-    const b = solver.mkRoot(Descriptor.mkTuple(&[_]Var{ bbool, str }));
+    const a = solver.mkRoot(Desc.mkTuple(&[_]Var{ str, bool_ }));
+    const b = solver.mkRoot(Desc.mkTuple(&[_]Var{ bool_, str }));
 
     const mb_err = solver.unify(a, b);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     }, err.cause);
-    try std.testing.expectEqual(2, err.depth);
+    try std.testing.expectEqual(2, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = a, .right = b },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1134,13 +1102,12 @@ test "unify - structural_alias - same name and args unifies" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
 
-    const a_desc = Descriptor{
+    const a_desc = Desc{
         .structural_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
@@ -1158,34 +1125,33 @@ test "unify - structural_alias - same name and args do not unify" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a_desc = Descriptor{
+    const a_desc = Desc{
         .structural_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
     const a = solver.mkRoot(a_desc);
 
-    const mb_err = solver.unify(a, bbool);
+    const mb_err = solver.unify(a, bool_);
     try std.testing.expect(mb_err != null);
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .apply_name_mismatch = .{
-            .left = Name.STR,
-            .right = Name.BOOL,
+            .left = TypeName.str,
+            .right = TypeName.bool_,
         },
     });
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
-            .{ .left = a, .right = bbool },
-            .{ .left = str, .right = bbool },
+            .{ .left = a, .right = bool_ },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1196,23 +1162,21 @@ test "unify - structural_alias - diff types do not unify" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a = Descriptor{
+    const a = Desc{
         .structural_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
 
-    const b = Descriptor{
+    const b = Desc{
         .structural_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{bbool}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
             .backing_var = str,
         },
     };
@@ -1226,15 +1190,15 @@ test "unify - structural_alias - diff types do not unify" {
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .apply_name_mismatch = .{
-            .left = Name.STR,
-            .right = Name.BOOL,
+            .left = TypeName.str,
+            .right = TypeName.bool_,
         },
     });
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = a_var, .right = b_var },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1247,13 +1211,12 @@ test "unify - nominal_alias - identical vars unify" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
 
-    const desc = Descriptor{
+    const desc = Desc{
         .nominal_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
@@ -1268,24 +1231,22 @@ test "unify - nominal_alias - diff names do not unify" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
 
-    const a_nominal_name: Name = @enumFromInt(100);
-    const a_nominal = Descriptor{
+    const a_nominal_name: TypeName = @enumFromInt(100);
+    const a_nominal = Desc{
         .nominal_alias = .{
             .name = a_nominal_name,
-            .arg_count = 0,
-            .args = undefined,
+            .args = try Desc.Alias.ArgsArray.init(0),
             .backing_var = str,
         },
     };
 
-    const b_nominal_name: Name = @enumFromInt(200);
-    const b_nominal = Descriptor{
+    const b_nominal_name: TypeName = @enumFromInt(200);
+    const b_nominal = Desc{
         .nominal_alias = .{
             .name = b_nominal_name,
-            .arg_count = 0,
-            .args = undefined,
+            .args = try Desc.Alias.ArgsArray.init(0),
             .backing_var = str,
         },
     };
@@ -1317,24 +1278,22 @@ test "unify - nominal_alias - same name names diff args" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bbool = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_ = solver.mkRoot(Desc.bool_);
 
-    const a_nominal_name: Name = @enumFromInt(100);
-    const a_nominal = Descriptor{
+    const a_nominal_name: TypeName = @enumFromInt(100);
+    const a_nominal = Desc{
         .nominal_alias = .{
             .name = a_nominal_name,
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
 
-    const b_nominal = Descriptor{
+    const b_nominal = Desc{
         .nominal_alias = .{
             .name = a_nominal_name,
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{bbool}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
             .backing_var = str,
         },
     };
@@ -1348,15 +1307,15 @@ test "unify - nominal_alias - same name names diff args" {
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .apply_name_mismatch = .{
-            .left = Name.STR,
-            .right = Name.BOOL,
+            .left = TypeName.str,
+            .right = TypeName.bool_,
         },
     });
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
             .{ .left = a, .right = b },
-            .{ .left = str, .right = bbool },
+            .{ .left = str, .right = bool_ },
         },
         err.getTraceSlice(),
     );
@@ -1367,19 +1326,18 @@ test "unify - nominal_alias vs flat_type - fails" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
 
-    const nominal = Descriptor{
+    const nominal = Desc{
         .nominal_alias = .{
             .name = @enumFromInt(300),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
 
     const nominal_var = solver.mkRoot(nominal);
-    const flat_var = solver.mkRoot(Descriptor.STR);
+    const flat_var = solver.mkRoot(Desc.str);
 
     const mb_err = solver.unify(nominal_var, flat_var);
     try std.testing.expect(mb_err != null);
@@ -1388,7 +1346,7 @@ test "unify - nominal_alias vs flat_type - fails" {
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .type_mismatch = .{
             .left = nominal,
-            .right = Descriptor.STR,
+            .right = Desc.str,
         },
     });
 }
@@ -1398,22 +1356,20 @@ test "unify - nominal_alias vs structural_alias - fails" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
 
-    const nominal = Descriptor{
+    const nominal = Desc{
         .nominal_alias = .{
             .name = @enumFromInt(100),
-            .arg_count = 1,
-            .args = mkElemsArr(Var, &[_]Var{str}),
+            .args = Desc.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
             .backing_var = str,
         },
     };
 
-    const structural = Descriptor{
+    const structural = Desc{
         .structural_alias = .{
             .name = @enumFromInt(200),
-            .arg_count = 0,
-            .args = undefined,
+            .args = try Desc.Alias.ArgsArray.init(0),
             .backing_var = str,
         },
     };
@@ -1428,7 +1384,7 @@ test "unify - nominal_alias vs structural_alias - fails" {
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .type_mismatch = .{
             .left = nominal,
-            .right = Descriptor.STR,
+            .right = Desc.str,
         },
     });
 }
@@ -1504,11 +1460,11 @@ test "unify - num - int does not unify with frac" {
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .type_mismatch = .{
-            .left = Descriptor{ .flat_type = .{ .num = .{ .int = .i32 } } },
-            .right = Descriptor{ .flat_type = .{ .num = .{ .frac = .f32 } } },
+            .left = Desc{ .flat_type = .{ .num = .{ .int = .i32 } } },
+            .right = Desc{ .flat_type = .{ .num = .{ .frac = .f32 } } },
         },
     });
-    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqual(1, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
@@ -1532,11 +1488,11 @@ test "unify - num - i16 does not unify with i32" {
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .type_mismatch = .{
-            .left = Descriptor{ .flat_type = .{ .num = .{ .int = .i16 } } },
-            .right = Descriptor{ .flat_type = .{ .num = .{ .int = .i32 } } },
+            .left = Desc{ .flat_type = .{ .num = .{ .int = .i16 } } },
+            .right = Desc{ .flat_type = .{ .num = .{ .int = .i32 } } },
         },
     });
-    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqual(1, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
@@ -1553,15 +1509,15 @@ test "unify - func - same args and return type unifies" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const ret = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const ret = solver.mkRoot(Desc.bool_);
 
     const a_func = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = ret },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
     } });
 
     const b_func = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = ret },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
     } });
 
     try std.testing.expectEqual(solver.unify(a_func, b_func), null);
@@ -1572,14 +1528,14 @@ test "unify - func - different arity fails" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bool_var = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const bool_var = solver.mkRoot(Desc.bool_);
 
     const one_arg = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = bool_var },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = bool_var },
     } });
     const two_args = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 2, .args = mkElemsArr(Var, &[_]Var{ str, str }), .ret = bool_var },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{ str, str }), .ret = bool_var },
     } });
 
     const mb_err = solver.unify(one_arg, two_args);
@@ -1589,7 +1545,7 @@ test "unify - func - different arity fails" {
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
         .func_arity_mismatch = .{ .left = 1, .right = 2 },
     });
-    try std.testing.expectEqual(1, err.depth);
+    try std.testing.expectEqual(1, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{.{ .left = one_arg, .right = two_args }},
@@ -1602,16 +1558,16 @@ test "unify - func - same arity, differing arg types fails" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const bool_var = solver.mkRoot(Descriptor.BOOL);
-    const ret = solver.mkRoot(Descriptor.STR);
+    const str = solver.mkRoot(Desc.str);
+    const bool_var = solver.mkRoot(Desc.bool_);
+    const ret = solver.mkRoot(Desc.str);
 
     const a = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = ret },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
     } });
 
     const b = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{bool_var}), .ret = ret },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{bool_var}), .ret = ret },
     } });
 
     const mb_err = solver.unify(a, b);
@@ -1619,9 +1575,9 @@ test "unify - func - same arity, differing arg types fails" {
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     });
-    try std.testing.expectEqual(2, err.depth);
+    try std.testing.expectEqual(2, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{
@@ -1637,16 +1593,16 @@ test "unify - func - same args, different return types fails" {
     var solver = Solver.init(gpa);
     defer solver.deinit();
 
-    const str = solver.mkRoot(Descriptor.STR);
-    const ret1 = solver.mkRoot(Descriptor.STR);
-    const ret2 = solver.mkRoot(Descriptor.BOOL);
+    const str = solver.mkRoot(Desc.str);
+    const ret1 = solver.mkRoot(Desc.str);
+    const ret2 = solver.mkRoot(Desc.bool_);
 
     const a = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = ret1 },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret1 },
     } });
 
     const b = solver.mkRoot(.{ .flat_type = .{
-        .func = .{ .arg_count = 1, .args = mkElemsArr(Var, &[_]Var{str}), .ret = ret2 },
+        .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret2 },
     } });
 
     const mb_err = solver.unify(a, b);
@@ -1654,9 +1610,9 @@ test "unify - func - same args, different return types fails" {
 
     const err = mb_err.?;
     try std.testing.expectEqual(err.cause, Solver.UnifyError.Cause{
-        .apply_name_mismatch = .{ .left = Name.STR, .right = Name.BOOL },
+        .apply_name_mismatch = .{ .left = TypeName.str, .right = TypeName.bool_ },
     });
-    try std.testing.expectEqual(2, err.depth);
+    try std.testing.expectEqual(2, err.trace.len);
     try std.testing.expectEqualSlices(
         Solver.UnifyError.TraceVars,
         &[_]Solver.UnifyError.TraceVars{

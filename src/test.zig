@@ -6,5 +6,5 @@ test {
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
 
     // TODO: Remove
-    testing.refAllDeclsRecursive(@import("types_wip.zig"));
+    testing.refAllDeclsRecursive(@import("types_solve/unify.zig"));
 }
