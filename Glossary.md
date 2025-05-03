@@ -217,6 +217,12 @@ Symbol implementation:
 
 ## Closure
 
+A function that remembers and can access variables from its outer (enclosing) scope, even after that scope has finished executing. This means the function "closes over" its environment, retaining access to the variables it was created with.
+
+Closure implementation:
+- new compiler: Not yet implemented
+- old compiler: `ClosureData` in [expr.rs](crates/compiler/can/src/expr.rs). Closures are used all over the place, just search "Closure" (match case).
+
 ## Canonicalization
 
 ## Lambda Set
