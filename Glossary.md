@@ -217,6 +217,28 @@ Symbol implementation:
 
 ## Closure
 
+A function that remembers and can access variables from its outer (enclosing) scope, even after that scope has finished executing. This means the function "closes over" its environment, retaining access to the variables it was created with.
+
+Example of a closure:
+```roc
+# A function that returns a closure
+makeCounter : I64 -> (I64 -> I64)
+makeCounter = |start|
+    # This inner function is a closure - it "closes over" the start variable
+    |increment| 
+        start + increment
+
+# Test the closure with expect
+expect
+    counter = makeCounter(10)
+    result = counter(5)
+    result == 15
+```
+
+Closure implementation:
+- new compiler: Not yet implemented
+- old compiler: `ClosureData` in [expr.rs](crates/compiler/can/src/expr.rs). Closures are used all over the place, just search "Closure" (match case).
+
 ## Canonicalization
 
 ## Lambda Set
