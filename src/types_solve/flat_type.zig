@@ -98,25 +98,100 @@ const RecordFieldName = enum(u32) { _ };
 const RecordFieldType = enum { required, optional };
 
 /// A field on a record
-const RecordField = struct {
+pub const RecordField = struct {
+    const Self = @This();
+
     name: RecordFieldName,
     typ: RecordFieldType,
     type_var: Var,
+
+    /// Type to represent the field diff of 2 records
+    pub const Partitioned = struct {
+        const SelfP = @This();
+
+        only_in_a: RecordFieldArray,
+        only_in_b: RecordFieldArray,
+        in_both: RecordFieldArray,
+
+        /// Create a new `Partitioned` value
+        /// TODO: Should this  be inline? These arrays could be a lot to copy if
+        /// passing by value
+        pub inline fn init() SelfP {
+            // These are unreachable bc RecordFieldArray can hold more than 0 elems
+            return .{
+                .only_in_a = RecordFieldArray.init(0) catch unreachable,
+                .only_in_b = RecordFieldArray.init(0) catch unreachable,
+                .in_both = RecordFieldArray.init(0) catch unreachable,
+            };
+        }
+    };
+
+    /// A function to be pased into std.mem.sort to sort fields by name
+    fn fieldNameAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
+        return @intFromEnum(a.name) < @intFromEnum(b.name);
+    }
+
+    /// Given 2 records, divide the fields by name into groups of
+    /// * in only a
+    /// * in only b
+    /// * in both
+    ///
+    /// This sorts the recored fields in-place if not already sorted
+    ///
+    /// O(n + m)
+    pub fn parition(
+        a_fields_arr: *RecordFieldArray,
+        b_fields_arr: *RecordFieldArray,
+        partitioned: *Partitioned,
+    ) error{Overflow}!void {
+        // First sort the fields
+        const a_fields = a_fields_arr.slice();
+        std.mem.sort(RecordField, a_fields, .{}, comptime fieldNameAsc);
+        const b_fields = b_fields_arr.slice();
+        std.mem.sort(RecordField, b_fields, .{}, comptime fieldNameAsc);
+
+        // Iterate over the fields in order, grouping them
+        var a_i: usize = 0;
+        var b_i: usize = 0;
+        while (a_i < a_fields.len and b_i < b_fields.len) {
+            const a_next = a_fields[a_i];
+            const b_next = b_fields[b_i];
+
+            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
+                try partitioned.in_both.append(a_next);
+                a_i = a_i + 1;
+                b_i = b_i + 1;
+            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
+                try partitioned.only_in_a.append(a_next);
+                a_i = a_i + 1;
+            } else {
+                try partitioned.only_in_b.append(b_next);
+                b_i = b_i + 1;
+            }
+        }
+
+        // If b was shorter, add the extra a elems
+        while (a_i < a_fields.len) {
+            const a_next = a_fields[a_i];
+            try partitioned.only_in_a.append(a_next);
+            a_i = a_i + 1;
+        }
+
+        // If a was shorter, add the extra b elems
+        while (b_i < b_fields.len) {
+            const b_next = b_fields[b_i];
+            try partitioned.only_in_b.append(b_next);
+            b_i = b_i + 1;
+        }
+    }
 };
 
-/// FieldBoundedArray
-/// It has a max size of 16 elements
-pub const RecordFieldBoundedArray = std.BoundedArray(RecordField, 16);
+/// Bounded array of record fields
+pub const RecordFieldArray = std.BoundedArray(RecordField, 32);
 
 /// Represents a record
-///
-/// Records may haev up to 16 fields
-/// Only the first `field_count` elements of `fields` are considered valid.
-/// TODO: Should records support more fields?
 pub const Record = struct {
-    fields: RecordFieldBoundedArray,
-    are_fields_sorted: bool, // are the fields sorted **desc**
-    type_var: Var,
+    fields: RecordFieldArray, // TODO: Should records support more fields?
     ext: Var,
 
     const SelfR = @This();
@@ -130,189 +205,79 @@ pub const Record = struct {
         }
         return true;
     }
-
-    /// A function to be pased into std.mem.sort to sort fields by name
-    pub fn fieldNameAsc(_: @TypeOf(.{}), a: RecordField, b: RecordField) bool {
-        return @intFromEnum(a.name) < @intFromEnum(b.name);
-    }
-
-    /// Type to represent the field diff of 2 records
-    pub const Separated = struct {
-        in_a: RecordFieldBoundedArray,
-        in_b: RecordFieldBoundedArray,
-        in_both: RecordFieldBoundedArray,
-    };
-
-    /// Given 2 records, divide the fields by name into groups of
-    /// * in only a
-    /// * in only b
-    /// * in both
-    ///
-    /// This sorts the recored fields if not already sorted, then walks them grouping
-    /// them according to above. O(n + m)
-    pub fn separateFieldsByName(a_record: *SelfR, b_record: *SelfR) error{Overflow}!Separated {
-        // First make sure the fields are sorted
-        const a_fields = a_record.fields.slice();
-        if (!a_record.are_fields_sorted) {
-            std.mem.sort(RecordField, a_fields, .{}, comptime fieldNameAsc);
-            a_record.are_fields_sorted = true;
-        }
-        const b_fields = b_record.fields.slice();
-        if (!b_record.are_fields_sorted) {
-            std.mem.sort(RecordField, b_fields, .{}, comptime fieldNameAsc);
-            b_record.are_fields_sorted = true;
-        }
-
-        // Create return type
-        var separated: Separated = .{
-            .in_a = try RecordFieldBoundedArray.init(0),
-            .in_b = try RecordFieldBoundedArray.init(0),
-            .in_both = try RecordFieldBoundedArray.init(0),
-        };
-
-        // Iterate over the fields in order, grouping them
-        var a_i: usize = 0;
-        var b_i: usize = 0;
-        while (a_i < a_fields.len and b_i < b_fields.len) {
-            const a_next = a_fields[a_i];
-            const b_next = b_fields[b_i];
-
-            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                try separated.in_both.append(a_next);
-                a_i = a_i + 1;
-                b_i = b_i + 1;
-            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
-                try separated.in_a.append(a_next);
-                a_i = a_i + 1;
-            } else {
-                try separated.in_b.append(b_next);
-                b_i = b_i + 1;
-            }
-        }
-
-        // If b was shorter, add the extra a elems
-        while (a_i < a_fields.len) {
-            const a_next = a_fields[a_i];
-            try separated.in_a.append(a_next);
-            a_i = a_i + 1;
-        }
-
-        // If a was shorter, add the extra b elems
-        while (b_i < b_fields.len) {
-            const b_next = b_fields[b_i];
-            try separated.in_b.append(b_next);
-            b_i = b_i + 1;
-        }
-
-        return separated;
-    }
 };
 
 // tests
 
-test "separateFieldsByName - same record" {
+test "paritionFields - same record" {
     const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
     const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
 
-    var record_a = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ field_x, field_y }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(0),
-        .ext = @enumFromInt(0),
-    };
+    var a_record_fields =
+        RecordFieldArray.fromSlice(&[_]RecordField{ field_x, field_y }) catch unreachable;
+    var b_record_fields = a_record_fields;
 
-    var record_b = record_a;
+    var partitioned = RecordField.Partitioned.init();
+    try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
 
-    const separated = try record_a.separateFieldsByName(&record_b);
-
-    try std.testing.expectEqual(0, separated.in_a.len);
-    try std.testing.expectEqual(0, separated.in_b.len);
-    try std.testing.expectEqual(2, separated.in_both.len);
-    try std.testing.expectEqual(field_x.name, separated.in_both.buffer[0].name);
-    try std.testing.expectEqual(field_y.name, separated.in_both.buffer[1].name);
+    try std.testing.expectEqual(0, partitioned.only_in_a.len);
+    try std.testing.expectEqual(0, partitioned.only_in_b.len);
+    try std.testing.expectEqual(2, partitioned.in_both.len);
+    try std.testing.expectEqual(field_x.name, partitioned.in_both.buffer[0].name);
+    try std.testing.expectEqual(field_y.name, partitioned.in_both.buffer[1].name);
 }
 
-test "separateFieldsByName - disjoint fields" {
+test "paritionFields - disjoint fields" {
     const a1 = RecordField{ .name = @enumFromInt(10), .typ = .required, .type_var = @enumFromInt(0) };
     const a2 = RecordField{ .name = @enumFromInt(20), .typ = .required, .type_var = @enumFromInt(1) };
     const b1 = RecordField{ .name = @enumFromInt(30), .typ = .required, .type_var = @enumFromInt(2) };
 
-    var record_a = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ a1, a2 }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(0),
-        .ext = @enumFromInt(0),
-    };
+    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, a2 }) catch unreachable;
+    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{b1}) catch unreachable;
 
-    var record_b = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{b1}) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(1),
-        .ext = @enumFromInt(0),
-    };
+    var partitioned = RecordField.Partitioned.init();
+    try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
 
-    const separated = try record_a.separateFieldsByName(&record_b);
-
-    try std.testing.expectEqual(2, separated.in_a.len);
-    try std.testing.expectEqual(1, separated.in_b.len);
-    try std.testing.expectEqual(0, separated.in_both.len);
+    try std.testing.expectEqual(2, partitioned.only_in_a.len);
+    try std.testing.expectEqual(1, partitioned.only_in_b.len);
+    try std.testing.expectEqual(0, partitioned.in_both.len);
 }
 
-test "separateFieldsByName - overlapping fields" {
+test "paritionFields - overlapping fields" {
     const a1 = RecordField{ .name = @enumFromInt(10), .typ = .required, .type_var = @enumFromInt(0) };
     const both = RecordField{ .name = @enumFromInt(20), .typ = .optional, .type_var = @enumFromInt(1) };
     const b1 = RecordField{ .name = @enumFromInt(30), .typ = .required, .type_var = @enumFromInt(2) };
 
-    var record_a = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ a1, both }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(0),
-        .ext = @enumFromInt(0),
-    };
+    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, both }) catch unreachable;
+    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ b1, both }) catch unreachable;
 
-    var record_b = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ b1, both }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(1),
-        .ext = @enumFromInt(0),
-    };
+    var partitioned = RecordField.Partitioned.init();
+    try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
 
-    const separated = try record_a.separateFieldsByName(&record_b);
+    try std.testing.expectEqual(1, partitioned.only_in_a.len);
+    try std.testing.expectEqual(1, partitioned.only_in_b.len);
+    try std.testing.expectEqual(1, partitioned.in_both.len);
 
-    try std.testing.expectEqual(1, separated.in_a.len);
-    try std.testing.expectEqual(1, separated.in_b.len);
-    try std.testing.expectEqual(1, separated.in_both.len);
-
-    try std.testing.expectEqual(a1.name, separated.in_a.buffer[0].name);
-    try std.testing.expectEqual(b1.name, separated.in_b.buffer[0].name);
-    try std.testing.expectEqual(both.name, separated.in_both.buffer[0].name);
+    try std.testing.expectEqual(a1.name, partitioned.only_in_a.buffer[0].name);
+    try std.testing.expectEqual(b1.name, partitioned.only_in_b.buffer[0].name);
+    try std.testing.expectEqual(both.name, partitioned.in_both.buffer[0].name);
 }
 
-test "separateFieldsByName - reordering is normalized" {
+test "paritionFields - reordering is normalized" {
     const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
     const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
     const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .type_var = @enumFromInt(2) };
 
-    var record_a = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ f3, f1, f2 }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(0),
-        .ext = @enumFromInt(0),
-    };
+    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ f3, f1, f2 }) catch unreachable;
+    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ f1, f2, f3 }) catch unreachable;
 
-    var record_b = Record{
-        .fields = RecordFieldBoundedArray.fromSlice(&[_]RecordField{ f1, f2, f3 }) catch unreachable,
-        .are_fields_sorted = false,
-        .type_var = @enumFromInt(1),
-        .ext = @enumFromInt(0),
-    };
+    var partitioned = RecordField.Partitioned.init();
+    try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
 
-    const separated = try record_a.separateFieldsByName(&record_b);
-
-    try std.testing.expectEqual(0, separated.in_a.len);
-    try std.testing.expectEqual(0, separated.in_b.len);
-    try std.testing.expectEqual(3, separated.in_both.len);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(1)), separated.in_both.buffer[0].name);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(2)), separated.in_both.buffer[1].name);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(3)), separated.in_both.buffer[2].name);
+    try std.testing.expectEqual(0, partitioned.only_in_a.len);
+    try std.testing.expectEqual(0, partitioned.only_in_b.len);
+    try std.testing.expectEqual(3, partitioned.in_both.len);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(1)), partitioned.in_both.buffer[0].name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(2)), partitioned.in_both.buffer[1].name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(3)), partitioned.in_both.buffer[2].name);
 }

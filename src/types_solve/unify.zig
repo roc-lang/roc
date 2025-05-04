@@ -88,23 +88,28 @@ const DescStore = struct {
 
     backing: std.ArrayList(Desc),
 
+    /// A type-safe index into the store
     const Idx = enum(usize) { _ };
 
+    /// Init & allocated memory
     fn init(gpa: std.mem.Allocator, capacity: usize) Self {
         const arr_list = std.ArrayList(Desc).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
         return .{ .backing = arr_list };
     }
 
+    /// Deinit & free allocated memory
+    fn deinit(self: *Self) void {
+        self.backing.deinit();
+    }
+
+    /// Insert a value into the store
     fn insert(self: *Self, typ: Desc) Idx {
         const idx: Idx = @enumFromInt(self.backing.items.len);
         self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 
-    fn deinit(self: *Self) void {
-        self.backing.deinit();
-    }
-
+    /// Get a value from the store
     fn get(self: *const Self, idx: Idx) Desc {
         return self.backing.items[@intFromEnum(idx)];
     }
@@ -141,10 +146,12 @@ const BindingStore = struct {
         return idx;
     }
 
+    /// Set a value in the store
     fn set(self: *Self, idx: Var, val: Binding) void {
         self.backing.items[@intFromEnum(idx)] = val;
     }
 
+    /// Get a value from the store
     fn get(self: *const Self, idx: Var) Binding {
         return self.backing.items[@intFromEnum(idx)];
     }
@@ -242,6 +249,22 @@ const Solver = struct {
         }
     }
 
+    const AreEqual = union(enum) {
+        are_equiv,
+        are_not_equiv: struct { a: VarAndDesc, b: VarAndDesc },
+    };
+
+    /// Check if two variables are equivalant
+    /// This will follow all redirects and compress the path
+    fn areVarsEquiv(self: *Self, a_var: Var, b_var: Var) AreEqual {
+        const a_val = self.followRedirectsAndCompress(a_var);
+        const b_val = self.followRedirectsAndCompress(b_var);
+        if (a_val.type_var == b_val.type_var) {
+            return .are_equiv;
+        }
+        return .{ .are_not_equiv = .{ .a = a_val, .b = b_val } };
+    }
+
     /// Unify two types
     /// If this returns null, then unification was successful
     pub fn unify(self: *Self, a_type_var: Var, b_type_var: Var) ?UnifyError {
@@ -261,6 +284,14 @@ const Solver = struct {
             },
         }
     }
+
+    // pub fn unify_guarded(self: *Self, a_var: Var, b_var: Var) DidUnify {
+    //     switch (self.areVarsEquiv(a_var, b_var)) {
+    //         .are_equiv => return null,
+    //         .are_not_equiv => |a_data, b_data| => {
+    //         }
+    //     }
+    // }
 
     // Unify two types, updating the error context
     fn unify_help(self: *Self, mb_err: *UnifyError, a_type_var: Var, b_type_var: Var) error{Overflow}!DidUnify {
@@ -567,18 +598,113 @@ const Solver = struct {
     }
 
     /// unify records
+    /// unify records
     ///
     /// this checks:
     /// * that each record field matches
     /// * that the arities are the same
     /// * that parallel arguments unify
     fn unify_record(
-        _: *Self,
-        _: *UnifyError,
-        _: FlatType.Record,
-        _: FlatType.Record,
+        self: *Self,
+        mb_err: *UnifyError,
+        a_record: FlatType.Record,
+        b_record: FlatType.Record,
     ) error{Overflow}!DidUnify {
+        var a_fields = try FlatType.RecordFieldArray.fromSlice(a_record.fields.slice());
+        const a_ext = self.gather_fields(&a_fields, a_record) catch |err| switch (err) {
+            error.Overflow => return mb_err.setRecTooManyFieldsAndReturnErr(a_record, b_record),
+            error.InvalidRecordExtType => return mb_err.setRecInvalidExtAndReturnErr(a_record, b_record),
+        };
+
+        var b_fields = try FlatType.RecordFieldArray.fromSlice(b_record.fields.slice());
+        const b_ext = self.gather_fields(&b_fields, b_record) catch |err| switch (err) {
+            error.Overflow => return mb_err.setRecTooManyFieldsAndReturnErr(a_record, b_record),
+            error.InvalidRecordExtType => return mb_err.setRecInvalidExtAndReturnErr(a_record, b_record),
+        };
+
+        var partitioned = FlatType.RecordField.Partitioned.init();
+        FlatType.RecordField.parition(&a_fields, &b_fields, &partitioned) catch |err| switch (err) {
+            // TODO: Should we throw a different error here? This should be impossible
+            // If there were too many fields, `gather_fields` would've errored before this
+            error.Overflow => return mb_err.setRecTooManyFieldsAndReturnErr(a_record, b_record),
+        };
+
+        // both a and be are the empty record
+        if (partitioned.only_in_a.len == 0 and partitioned.only_in_b.len == 0) {
+            return self.unify_help(mb_err, a_ext.type_var, b_ext.type_var);
+        }
+
+        // a is empty record, b is not
+        if (partitioned.only_in_a.len == 0 and partitioned.only_in_b.len != 0) {
+            const only_b = Desc{
+                .flat_type = FlatType.FlatType{
+                    .record = FlatType.Record{
+                        .fields = partitioned.only_in_b,
+                        .ext = b_ext.type_var,
+                    },
+                },
+            };
+            const only_b_var = self.mkRoot(only_b);
+
+            const did_only_b_unify = try self.unify_help(mb_err, a_ext.type_var, only_b_var);
+            if (did_only_b_unify == DidUnify.ok) mb_err.dropLastTrace() else return did_only_b_unify;
+
+            // TODO
+        }
+
         @panic("TODO");
+    }
+
+    /// Represents possible errors produces by gathering fields
+    const GatherFieldsErr = error{InvalidRecordExtType};
+
+    /// The final ext in an extensible record chain
+    const GatherFieldsOk = struct {
+        type_var: Var,
+        ext: Ext,
+
+        const Ext = enum { flex_var, empty_record };
+    };
+
+    /// Collect all of a record's fields, looping and unwrapping the record's 'extensible'
+    /// type variable.
+    ///
+    /// It returns the final 'ext' of the last record in the chain
+    ///
+    /// Will error if:
+    /// * There are more than 64 record fields
+    /// * The 'ext' type var is invalid
+    fn gather_fields(
+        self: *Self,
+        fields: *FlatType.RecordFieldArray,
+        record: FlatType.Record,
+    ) error{ Overflow, InvalidRecordExtType }!GatherFieldsOk {
+        var ext_type = self.followRedirectsAndCompress(record.ext);
+        while (true) {
+            switch (ext_type.type_descriptor) {
+                .flex_var => return .{ .type_var = ext_type.type_var, .ext = .flex_var },
+                .structural_alias => |alias| {
+                    // According to rust compiler: according to elm/compiler: "TODO may be dropping useful alias info here"
+                    ext_type = self.followRedirectsAndCompress(alias.backing_var);
+                },
+                .nominal_alias => |alias| {
+                    // According to rust compiler: according to elm/compiler: "TODO may be dropping useful alias info here"
+                    ext_type = self.followRedirectsAndCompress(alias.backing_var);
+                },
+                .flat_type => |flat_type| switch (flat_type) {
+                    .empty_record => return .{ .type_var = ext_type.type_var, .ext = .empty_record },
+                    .record => |sub_record| {
+                        try fields.appendSlice(sub_record.fields.slice());
+                        ext_type = self.followRedirectsAndCompress(sub_record.ext);
+                    },
+                    // These are listed explicitly for future resiliance
+                    .type_apply => return GatherFieldsErr.InvalidRecordExtType,
+                    .tuple => return GatherFieldsErr.InvalidRecordExtType,
+                    .num => return GatherFieldsErr.InvalidRecordExtType,
+                    .func => return GatherFieldsErr.InvalidRecordExtType,
+                },
+            }
+        }
     }
 
     // structural alias
@@ -693,8 +819,12 @@ const Solver = struct {
             // flat type - tuple
             tuple_arity_mismatch: LeftRight(usize),
 
-            // flat type - funm
+            // flat type - func
             func_arity_mismatch: LeftRight(usize),
+
+            // flat type - record
+            rec_invalid_ext_typ: LeftRight(Desc),
+            rec_gathered_too_many_fields: LeftRight(Desc),
         };
 
         /// Represents two values in unfication
@@ -771,6 +901,32 @@ const Solver = struct {
             self.cause = UnifyError.Cause{ .type_mismatch = .{
                 .left = Desc{ .flat_type = FlatType.FlatType{ .num = a_num } },
                 .right = Desc{ .flat_type = FlatType.FlatType{ .num = b_num } },
+            } };
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        pub inline fn setRecInvalidExtAndReturnErr(
+            self: *SelfU,
+            a_rec: FlatType.Record,
+            b_rec: FlatType.Record,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .rec_invalid_ext_typ = .{
+                .left = Desc{ .flat_type = FlatType.FlatType{ .record = a_rec } },
+                .right = Desc{ .flat_type = FlatType.FlatType{ .record = b_rec } },
+            } };
+            return DidUnify.err;
+        }
+
+        /// Set the cause and return a unify err
+        pub inline fn setRecTooManyFieldsAndReturnErr(
+            self: *SelfU,
+            a_rec: FlatType.Record,
+            b_rec: FlatType.Record,
+        ) DidUnify {
+            self.cause = UnifyError.Cause{ .rec_gathered_too_many_fields = .{
+                .left = Desc{ .flat_type = FlatType.FlatType{ .record = a_rec } },
+                .right = Desc{ .flat_type = FlatType.FlatType{ .record = b_rec } },
             } };
             return DidUnify.err;
         }
