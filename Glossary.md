@@ -130,6 +130,14 @@ Desugaring in the compiler:
 - New compiler: [canonicalize.zig (WIP)](src/check/canonicalize.zig)
 - Old compiler: [desugar.rs](crates/check/can_solo/src/desugar.rs)
 
+## Type Signature
+
+TODO
+
+## Type Alias
+
+TODO
+
 ## Compiler Phase
 
 A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
@@ -239,11 +247,36 @@ Closure implementation:
 - new compiler: Not yet implemented
 - old compiler: `ClosureData` in [expr.rs](crates/compiler/can/src/expr.rs). Closures are used all over the place, just search "Closure" (match case).
 
+## Type Inference
+
+TODO
+
+## Type Solving
+
+TODO
+
 ## Canonicalization
 
-## Lambda Set
+After parsing a Roc program, the obtained [IR](#ir) is transformed into a
+canonical form called CanIR.
 
-## Type Inference
+Canonicalization performs analysis to catch user errors, and sets up the state necessary to figure out
+the types in a program. Among other things, canonicalization;
+- Uniquely identifies names (think variable and function names). Along the way,
+  canonicalization builds a [graph](https://en.wikipedia.org/wiki/Graph_(discrete_mathematics))
+  of all variables' references, and catches unused definitions, undefined definitions, and shadowed definitions.
+- Resolves [type signatures](#type-signature), including [aliases](#type-alias), into a form suitable for [type solving](#type-solving).
+- Determines the order definitions are used in, if they are defined out-of-order.
+- Eliminates syntax sugar (for example, turning `+` into the function call `add`).
+
+Canonicalization occurs on a single module (file) in isolation, so the work can be easily parallelized and cached.
+If the source code for a [module](#module) has not changed, the CanIR can simply be loaded from disk and used immediately.
+
+Implementation of Canonicalization:
+- new compiler: [canonicalize.zig](src/check/canonicalize.zig), [canonicalize folder](https://github.com/roc-lang/roc/tree/main/src/check/canonicalize)
+- old compiler: [can folder](crates/compiler/can)
+
+## Lambda Set
 
 ## Monomorphization
 
