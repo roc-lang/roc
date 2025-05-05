@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const Ident = @import("../base/Ident.zig");
 const shared = @import("./shared.zig");
 
 const Var = shared.Var;
@@ -15,29 +16,26 @@ pub const FlatType = union(enum) {
     tuple: Tuple,
     num: Num,
     func: Func,
-    empty_record,
     record: Record,
+    empty_record,
 };
 
-/// Represents a type name, like Str, Bool, List
-///
-/// This includes both builtin types as well as user-defined types, and aliases
-///
-/// TODO: Does this need to be u32? Can we get away with u16?
-/// TODO: A mapping from user-defined aliases to Names probably needs to exist somwhere
-pub const TypeName = enum(u32) {
-    bool_ = 0,
-    str = 1,
-    list = 2,
-    maybe = 3,
-    result = 4,
-    _,
+/// Represents an ident of a type
+pub const TypeIdent = struct {
+    const Self = @This();
+
+    ident_idx: Ident.Idx,
+    // TODO: Add module ident
+
+    pub fn eql(a: Self, b: Self) bool {
+        return a.ident_idx == b.ident_idx;
+    }
 };
 
 /// Represents a type application, like `List String` or `Result Error Value`.
 /// Applications may have up to 16 type arguments.
 pub const TypeApply = struct {
-    name: TypeName,
+    ident: TypeIdent,
     args: ArgsArray,
 
     /// Represents the max capacity of the args array
