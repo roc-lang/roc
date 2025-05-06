@@ -39,9 +39,9 @@ pub const TypeApply = struct {
     args: ArgsArray,
 
     /// Represents the max capacity of the args array
-    pub const arg_array_capacity = 16;
+    pub const arg_capacity = 16;
     /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, arg_array_capacity);
+    pub const ArgsArray = std.BoundedArray(Var, arg_capacity);
 };
 
 /// Represents a tuple
@@ -50,9 +50,9 @@ pub const Tuple = struct {
     elems: ElemsArray,
 
     /// Represents the max capacity of the elems array
-    pub const elems_array_capacity = 16;
+    pub const elems_capacity = 16;
     /// Bounded array to hold elems
-    pub const ElemsArray = std.BoundedArray(Var, elems_array_capacity);
+    pub const ElemsArray = std.BoundedArray(Var, elems_capacity);
 };
 
 /// Represents number
@@ -62,6 +62,8 @@ pub const Tuple = struct {
 /// multiple different type entrie.s By special casing them here we can
 /// ensure that they have more compact representations
 pub const Num = union(enum) {
+    const Self = @This();
+
     flex_var,
     int: Int,
     frac: Frac,
@@ -69,6 +71,23 @@ pub const Num = union(enum) {
     pub const Frac = enum { flex_var, f32, f64, dec };
     pub const Int = enum { flex_var, u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
 };
+
+pub const num_flex_var: FlatType = .{ .num = Num.flex_var };
+pub const frac_flex_var: FlatType = .{ .num = Num{ .frac = .flex_var } };
+pub const frac_f32: FlatType = .{ .num = Num{ .frac = .f32 } };
+pub const frac_f64: FlatType = .{ .num = Num{ .frac = .f64 } };
+pub const frac_dec: FlatType = .{ .num = Num{ .frac = .dec } };
+pub const int_flex_var: FlatType = .{ .num = Num{ .int = .flex_var } };
+pub const int_u8: FlatType = .{ .num = Num{ .int = .u8 } };
+pub const int_i8: FlatType = .{ .num = Num{ .int = .i8 } };
+pub const int_u16: FlatType = .{ .num = Num{ .int = .u16 } };
+pub const int_i16: FlatType = .{ .num = Num{ .int = .i16 } };
+pub const int_u32: FlatType = .{ .num = Num{ .int = .u32 } };
+pub const int_i32: FlatType = .{ .num = Num{ .int = .i32 } };
+pub const int_u64: FlatType = .{ .num = Num{ .int = .u64 } };
+pub const int_i64: FlatType = .{ .num = Num{ .int = .i64 } };
+pub const int_u128: FlatType = .{ .num = Num{ .int = .u128 } };
+pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 
 /// Represents a function
 /// Functions may have up to 16 arguments.
@@ -82,9 +101,9 @@ pub const Func = struct {
     // effect: Var,
 
     /// Represents the max capacity of the args array
-    pub const arg_array_capacity = 16;
+    pub const arg_capacity = 16;
     /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, arg_array_capacity);
+    pub const ArgsArray = std.BoundedArray(Var, arg_capacity);
 };
 
 /// A record field name

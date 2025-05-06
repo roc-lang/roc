@@ -14,6 +14,10 @@ pub fn unify(table: *UnificationTable, vars: *VarArray, a: Var, b: Var) Result {
     var unifier = Unifier.init(table, vars);
     unifier.unifyGuarded(a, b) catch |err| switch (err) {
         error.TypeMismatch => {
+            table.union_(a, b, .{
+                .content = .err,
+                .rank = Rank.generalized,
+            });
             return Result{ .err = .{ .a = a, .b = b } };
         },
     };
@@ -53,7 +57,8 @@ const Unifier = struct {
 
     // merge helpers
 
-    /// Based on the unify context, update the variables to the new desc
+    /// Link the variables & updated the content in the unification table
+    /// In the old compiler, this function was called "merge"
     fn merge(self: *Self, vars: *const VarDescs, new_content: Content) void {
         self.table.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
@@ -80,8 +85,12 @@ const Unifier = struct {
                     .concrete => |a_flat_type| {
                         try self.unifyConcrete(&vars, a_flat_type, vars.b.desc.content);
                     },
-                    .structural_alias => return error.TypeMismatch,
-                    .opaque_alias => return error.TypeMismatch,
+                    .structural_alias => |a_alias| {
+                        try self.unifyStructuralAlias(&vars, a_alias, vars.b.desc.content);
+                    },
+                    .opaque_alias => |a_alias| {
+                        try self.unifyOpaqueAlias(&vars, a_alias, vars.b.desc.content);
+                    },
                     .err => return error.TypeMismatch,
                 }
             },
@@ -105,6 +114,78 @@ const Unifier = struct {
             .concrete => self.merge(vars, b_content),
             .err => self.merge(vars, .err),
         }
+    }
+
+    // Unify structural alias //
+
+    /// Unify when the a was a structural alias
+    fn unifyStructuralAlias(self: *Self, vars: *const VarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+        switch (b_content) {
+            .flex_var => |_| {
+                self.merge(vars, Content{ .structural_alias = a_alias });
+            },
+            .structural_alias => |b_alias| {
+                if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
+                    try self.unifyTwoAliases(vars, a_alias, b_alias);
+                } else {
+                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
+                }
+            },
+            .opaque_alias => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .concrete => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    /// Unify when the a was a structural alias
+    fn unifyOpaqueAlias(self: *Self, vars: *const VarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+        switch (b_content) {
+            .flex_var => |_| {
+                self.merge(vars, Content{ .structural_alias = a_alias });
+            },
+            .structural_alias => |b_alias| {
+                try self.unifyGuarded(vars.a.var_, b_alias.backing_var);
+            },
+            .opaque_alias => |b_alias| {
+                if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
+                    try self.unifyTwoAliases(vars, a_alias, b_alias);
+                } else {
+                    return error.TypeMismatch;
+                }
+            },
+            .concrete => return error.TypeMismatch,
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    /// Unify two aliases, either structural or opaque
+    ///
+    /// This function assumes the caller has already checked that the alias names match
+    ///
+    /// this checks:
+    /// * that the arities are the same
+    /// * that parallel arguments unify
+    ///
+    /// NOTE: the rust version of this function `unify_two_aliases` is *signifgantly* more
+    /// complicated than the version here
+    fn unifyTwoAliases(self: *Self, vars: *const VarDescs, a_alias: Alias, b_alias: Alias) error{TypeMismatch}!void {
+        if (a_alias.args.len != b_alias.args.len) {
+            return error.TypeMismatch;
+        }
+
+        for (0..a_alias.args.len) |i| {
+            try self.unifyGuarded(a_alias.args.buffer[i], b_alias.args.buffer[i]);
+        }
+
+        // TODO: Here, we'll need some special handling for recursion variables
+        // For each argument variable, we need to prefer recursive vars. Then
+        // we'll build a new structurla alias and pass that to self.merge
+        // See unify_two_aliases and choose_merged_var in the rust compiler for details
+
+        // The rust compiler doesn't report this error, should we?
+        self.unifyGuarded(a_alias.backing_var, b_alias.backing_var) catch {};
+
+        self.merge(vars, vars.b.desc.content);
     }
 
     // Unify concrete //
@@ -160,11 +241,7 @@ const Unifier = struct {
             .num => |a_num| {
                 switch (b_flat_type) {
                     .num => |b_num| {
-                        _ = a_num;
-                        _ = b_num;
-                        // TODO
-                        // try self.unify_num(vars, a_num, b_num);
-                        return error.TypeMismatch;
+                        try self.unify_num(vars, a_num, b_num);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -172,11 +249,7 @@ const Unifier = struct {
             .func => |a_func| {
                 switch (b_flat_type) {
                     .func => |b_func| {
-                        _ = a_func;
-                        _ = b_func;
-                        // TODO
-                        // try self.unify_func(vars, a_func, b_func);
-                        return error.TypeMismatch;
+                        try self.unify_func(vars, a_func, b_func);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -186,9 +259,8 @@ const Unifier = struct {
                     .record => |b_record| {
                         _ = a_record;
                         _ = b_record;
-                        // TODO
                         // try self.unify_record(vars, a_record, b_record);
-                        return error.TypeMismatch;
+                        @panic("Unimplemented");
                     },
                     else => return error.TypeMismatch,
                 }
@@ -197,7 +269,7 @@ const Unifier = struct {
                 switch (b_flat_type) {
                     .empty_record => {
                         // try self.unify_empty_record(vars, a_empty_record, b_empty_record);
-                        return error.TypeMismatch;
+                        @panic("Unimplemented");
                     },
                     else => return error.TypeMismatch,
                 }
@@ -258,6 +330,91 @@ const Unifier = struct {
 
         self.merge(vars, vars.b.desc.content);
     }
+
+    /// unify numbers
+    ///
+    /// this checks:
+    /// * that the arities are the same
+    /// * that parallel arguments unify
+    fn unify_num(
+        self: *Self,
+        vars: *const VarDescs,
+        a_num: FlatType.Num,
+        b_num: FlatType.Num,
+    ) error{TypeMismatch}!void {
+        switch (a_num) {
+            .flex_var => {
+                // if a is flex, update to b's desc
+                self.merge(vars, vars.b.desc.content);
+            },
+            .int => |a_int| switch (b_num) {
+                .flex_var => {
+                    // if b is flex, update to a's desc
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .frac => return error.TypeMismatch,
+                .int => |b_int| {
+                    if (a_int == .flex_var) {
+                        // if a is flex, update to b's desc
+                        self.merge(vars, vars.b.desc.content);
+                    } else if (b_int == .flex_var) {
+                        // if b is flex, update to a's desc
+                        self.merge(vars, vars.a.desc.content);
+                    } else if (a_int == b_int) {
+                        self.merge(vars, vars.b.desc.content);
+                    } else {
+                        return error.TypeMismatch;
+                    }
+                },
+            },
+
+            .frac => |a_frac| switch (b_num) {
+                .flex_var => {
+                    // if b is flex, update to a's desc
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .int => return error.TypeMismatch,
+                .frac => |b_frac| {
+                    if (a_frac == .flex_var) {
+                        // if a is flex, update to b's desc
+                        self.merge(vars, vars.b.desc.content);
+                    } else if (b_frac == .flex_var) {
+                        // if b is flex, update to a's desc
+                        self.merge(vars, vars.a.desc.content);
+                    } else if (a_frac == b_frac) {
+                        self.merge(vars, vars.b.desc.content);
+                    } else {
+                        return error.TypeMismatch;
+                    }
+                },
+            },
+        }
+    }
+
+    /// unify func
+    ///
+    /// this checks:
+    /// * that the arg arities are the same
+    /// * that parallel args unify
+    /// * that ret unifies
+    fn unify_func(
+        self: *Self,
+        vars: *const VarDescs,
+        a_func: FlatType.Func,
+        b_func: FlatType.Func,
+    ) error{TypeMismatch}!void {
+        if (a_func.args.len != b_func.args.len) {
+            return error.TypeMismatch;
+        }
+
+        for (0..a_func.args.len) |i| {
+            try self.unifyGuarded(a_func.args.buffer[i], b_func.args.buffer[i]);
+        }
+
+        try self.unifyGuarded(a_func.ret, b_func.ret);
+
+        self.merge(vars, vars.b.desc.content);
+    }
 };
 
 /// A variable & it's desc info
@@ -307,7 +464,7 @@ const UnificationTable = struct {
         return binding_var;
     }
 
-    /// Union two variables
+    /// Link the variables & updated the content in the unification table
     /// * update b to to the new desc value
     /// * redirect a -> b
     ///
@@ -315,11 +472,11 @@ const UnificationTable = struct {
     // * The elm compiler sets b to redirect to a
     // * The roc compiler sets a to redirect to b (based on the `ena` compiler
     // See the `union` function in subs.rs for details
-    pub fn union_(self: *Self, a_var: Var, b_var: Var, desc: Desc) void {
+    pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) void {
         const b_data = self.resolveAndCompressVar(b_var);
 
         // Update b to be the new desc
-        self.desc_store.set(b_data.desc_idx, desc);
+        self.desc_store.set(b_data.desc_idx, new_desc);
 
         // Update a to point to b
         self.binding_store.set(a_var, .{ .redirect = b_var });
@@ -335,7 +492,7 @@ const UnificationTable = struct {
     fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
         const a = self.resolveAndCompressVar(a_var);
         const b = self.resolveAndCompressVar(b_var);
-        if (a.var_ == b.var_ and a.desc_idx == b.desc_idx) {
+        if (a.desc_idx == b.desc_idx) {
             return .equiv;
         } else {
             return .{ .not_equiv = .{ .a = a, .b = b } };
@@ -377,7 +534,7 @@ const UnificationTable = struct {
 
         // TODO: refactor to remove panic
         switch (redirected_binding) {
-            .redirect => |_| @panic("redirected type was still redriect after following chain"),
+            .redirect => |_| @panic("redirected binding was still redirect after following chain"),
             .root => |desc_idx| {
                 const desc = self.desc_store.get(desc_idx);
                 return .{
@@ -427,7 +584,7 @@ const UnificationTable = struct {
 
         // TODO: refactor to remove panic
         switch (redirected_binding) {
-            .redirect => |_| @panic("redirected type was still redriect after following chain"),
+            .redirect => |_| @panic("redirected binding was still redirect after following chain"),
             .root => |desc_idx| {
                 const desc = self.desc_store.get(desc_idx);
                 return .{
@@ -467,19 +624,21 @@ const Content = union(enum) {
     opaque_alias: Alias,
     concrete: FlatType.FlatType,
     err,
+};
 
-    // a nominal or structural alias
-    // can hold up to 16 arguments
-    const Alias = struct {
-        name: TypeIdent,
-        args: ArgsArray,
-        backing_var: Var,
+// a nominal or structural alias
+// can hold up to 16 arguments
+const Alias = struct {
+    ident: TypeIdent,
+    args: ArgsArray,
+    backing_var: Var,
 
-        /// Represents the max capacity of the args array
-        pub const args_array_capacity = 16;
-        /// Bounded array to hold args
-        pub const ArgsArray = std.BoundedArray(Var, args_array_capacity);
-    };
+    // TODO: In the rust compiler it seems like Args has lambda set variables too?
+
+    /// Represents the max capacity of the args array
+    pub const args_capacity = 16;
+    /// Bounded array to hold args
+    pub const ArgsArray = std.BoundedArray(Var, args_capacity);
 };
 
 // Reperents either type data *or* a symlink to another type variable
@@ -564,10 +723,11 @@ const DescStore = struct {
     }
 };
 
-// tests
+// tests //
 
 // helpers
 
+/// Environment to make setting up tests easier
 const TestEnv = struct {
     const Self = @This();
 
@@ -600,6 +760,33 @@ const TestEnv = struct {
         }
     }
 
+    fn mkTypeIdent(self: *Self, name: []const u8) TypeIdent {
+        const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
+        return FlatType.TypeIdent{ .ident_idx = ident_idx };
+    }
+
+    // helpers - concrete - tuple
+
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
+        std.debug.assert(args.len <= Alias.args_capacity);
+        const args_arr = Alias.ArgsArray.fromSlice(args) catch unreachable;
+        return .{
+            .ident = self.mkTypeIdent(name),
+            .args = args_arr,
+            .backing_var = backing_var,
+        };
+    }
+
+    fn mkAliasFromIdent(type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
+        std.debug.assert(args.len <= Alias.args_capacity);
+        const args_arr = Alias.ArgsArray.fromSlice(args) catch unreachable;
+        return .{
+            .ident = type_ident_idx,
+            .args = args_arr,
+            .backing_var = backing_var,
+        };
+    }
+
     // helpers - concrete - type_apply
 
     fn mkTypeApplyNoArg(self: *Self, name: []const u8) Content {
@@ -627,10 +814,18 @@ const TestEnv = struct {
 
     // helpers - concrete - tuple
 
-    /// make a List with the provided type applied
-    pub fn mkTuple(slice: []const Var) Content {
+    fn mkTuple(slice: []const Var) Content {
+        std.debug.assert(slice.len <= FlatType.Tuple.elems_capacity);
         const args = FlatType.Tuple.ElemsArray.fromSlice(slice) catch unreachable;
         return Content{ .concrete = .{ .tuple = .{ .elems = args } } };
+    }
+
+    // helpers - concrete - func
+
+    fn mkFunc(args: []const Var, ret: Var) Content {
+        std.debug.assert(args.len <= FlatType.Func.arg_capacity);
+        const args_arr = FlatType.Func.ArgsArray.fromSlice(args) catch unreachable;
+        return Content{ .concrete = .{ .func = .{ .args = args_arr, .ret = ret } } };
     }
 };
 
@@ -735,7 +930,146 @@ test "unify - a is flex_var and b is not" {
     try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
 }
 
-// unification - concrete/flex_var
+// unification - aliases
+
+test "unify - structural alias with same args" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.table.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{ str, bool_ }));
+    const alias = Content{ .structural_alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
+
+    const a = env.table.freshFromContent(alias);
+    const b = env.table.freshFromContent(alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(alias, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - structural aliases with different names but same backing" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{str}));
+    const a_alias = Content{ .structural_alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
+    const b_alias = Content{ .structural_alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
+
+    const a = env.table.freshFromContent(a_alias);
+    const b = env.table.freshFromContent(b_alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
+    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - structural alias with different args (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.table.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{ str, bool_ }));
+
+    const alias_ident = env.mkTypeIdent("Alias");
+    const a_alias = Content{ .structural_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+    const b_alias = Content{ .structural_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+
+    const a = env.table.freshFromContent(a_alias);
+    const b = env.table.freshFromContent(b_alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - structural vs opaque alias with same name and args (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{str}));
+
+    const alias_ident = env.mkTypeIdent("Thing");
+    const a_alias = Content{ .structural_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+    const b_alias = Content{ .opaque_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+
+    const a = env.table.freshFromContent(a_alias);
+    const b = env.table.freshFromContent(b_alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - opaque alias with different args (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.table.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{ str, bool_ }));
+
+    const alias_ident = env.mkTypeIdent("Alias");
+    const a_alias = Content{ .opaque_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+    const b_alias = Content{ .opaque_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+
+    const a = env.table.freshFromContent(a_alias);
+    const b = env.table.freshFromContent(b_alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - opaque alias with sam args" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.table.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const backing = env.table.freshFromContent(TestEnv.mkTuple(&[_]Var{ str, bool_ }));
+
+    const alias_ident = env.mkTypeIdent("Alias");
+    const a_alias = Content{ .opaque_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+    const b_alias = Content{ .opaque_alias = TestEnv.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+
+    const a = env.table.freshFromContent(a_alias);
+    const b = env.table.freshFromContent(b_alias);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - concrete/flex_vars
 
 test "unify - a is type_apply and b is flex_var" {
     const gpa = std.testing.allocator;
@@ -793,7 +1127,7 @@ test "unify - a & b are same type_apply" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are diff type_apply" {
+test "unify - a & b are diff type_apply (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
@@ -808,8 +1142,8 @@ test "unify - a & b are diff type_apply" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(bool_, (try env.getDescForRootVar(a)).content);
-    try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
 test "unify - a & b are same type_apply with 1 args" {
@@ -857,7 +1191,7 @@ test "unify - a & b are same type_apply with 2 args" {
     try std.testing.expectEqual(result_str_bool, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are same type_apply with flipped args" {
+test "unify - a & b are same type_apply with flipped args (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
@@ -878,13 +1212,11 @@ test "unify - a & b are same type_apply with flipped args" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(result_str_bool, (try env.getDescForRootVar(a)).content);
-    try std.testing.expectEqual(result_bool_str, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - concrete/concrete - type_apply
-
-// unification - tuple
+// unification - concrete/concrete - tuple
 
 test "unify - a & b are same tuple" {
     const gpa = std.testing.allocator;
@@ -910,7 +1242,7 @@ test "unify - a & b are same tuple" {
     try std.testing.expectEqual(tuple_str_bool, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are tuples with args flipped" {
+test "unify - a & b are tuples with args flipped (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
@@ -931,8 +1263,223 @@ test "unify - a & b are tuples with args flipped" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(tuple_str_bool, (try env.getDescForRootVar(a)).content);
-    try std.testing.expectEqual(tuple_bool_str, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - concrete/concrete - num
+
+test "unify - num flex_var with int concrete" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const flex = Content{ .concrete = FlatType.num_flex_var };
+    const int_i32 = Content{ .concrete = FlatType.int_i32 };
+
+    const a = env.table.freshFromContent(flex);
+    const b = env.table.freshFromContent(int_i32);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int(flex_var) with int concrete" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a_content = Content{ .concrete = FlatType.int_flex_var };
+    const b_content = Content{ .concrete = FlatType.int_i64 };
+
+    const a = env.table.freshFromContent(a_content);
+    const b = env.table.freshFromContent(b_content);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num frac(flex_var) with frac concrete" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a_content = Content{ .concrete = FlatType.frac_flex_var };
+    const b_content = Content{ .concrete = FlatType.frac_f64 };
+
+    const a = env.table.freshFromContent(a_content);
+    const b = env.table.freshFromContent(b_content);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int concrete == int concrete" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const i64a = Content{ .concrete = FlatType.int_i64 };
+    const i64b = Content{ .concrete = FlatType.int_i64 };
+
+    const a = env.table.freshFromContent(i64a);
+    const b = env.table.freshFromContent(i64b);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(i64b, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num frac concrete != frac concrete (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a_content = Content{ .concrete = FlatType.frac_f32 };
+    const b_content = Content{ .concrete = FlatType.frac_f64 };
+
+    const a = env.table.freshFromContent(a_content);
+    const b = env.table.freshFromContent(b_content);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int concrete != int concrete (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a_content = Content{ .concrete = FlatType.int_i32 };
+    const b_content = Content{ .concrete = FlatType.int_i64 };
+
+    const a = env.table.freshFromContent(a_content);
+    const b = env.table.freshFromContent(b_content);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int vs frac (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_desc = Content{ .concrete = FlatType.int_i32 };
+    const frac_desc = Content{ .concrete = FlatType.frac_f32 };
+
+    const a = env.table.freshFromContent(int_desc);
+    const b = env.table.freshFromContent(frac_desc);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num frac(flex_var) with frac(flex_var)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a_content = Content{ .concrete = FlatType.frac_flex_var };
+    const b_content = Content{ .concrete = FlatType.frac_flex_var };
+
+    const a = env.table.freshFromContent(a_content);
+    const b = env.table.freshFromContent(b_content);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - concrete/concrete - func
+
+test "unify - func are same" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
+    const num = env.table.freshFromContent(Content{ .concrete = FlatType.num_flex_var });
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const func = TestEnv.mkFunc(&[_]Var{ str, num }, int_i32);
+
+    const a = env.table.freshFromContent(func);
+    const b = env.table.freshFromContent(func);
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - funcs have diff return args (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const a = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{int_i32}, str));
+    const b = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, str));
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - funcs have diff return types (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
+    const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const a = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, int_i32));
+    const b = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, str));
+
+    const result = unify(&env.table, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -950,7 +1497,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const a_content = Content{
 //         .structural_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -974,7 +1521,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const a_content = Content{
 //         .structural_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1011,7 +1558,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const a = Content{
 //         .structural_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1019,7 +1566,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const b = Content{
 //         .structural_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1059,7 +1606,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const desc = Content{
 //         .opaque_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1080,7 +1627,7 @@ test "unify - a & b are tuples with args flipped" {
 //     const a_nominal_name: TypeNameOld = @enumFromInt(100);
 //     const a_nominal = Content{
 //         .opaque_alias = .{
-//             .name = a_nominal_name,
+//             .ident = a_nominal_name,
 //             .args = try Content.Alias.ArgsArray.init(0),
 //             .backing_var = str,
 //         },
@@ -1089,7 +1636,7 @@ test "unify - a & b are tuples with args flipped" {
 //     const b_nominal_name: TypeNameOld = @enumFromInt(200);
 //     const b_nominal = Content{
 //         .opaque_alias = .{
-//             .name = b_nominal_name,
+//             .ident = b_nominal_name,
 //             .args = try Content.Alias.ArgsArray.init(0),
 //             .backing_var = str,
 //         },
@@ -1128,7 +1675,7 @@ test "unify - a & b are tuples with args flipped" {
 //     const a_nominal_name: TypeNameOld = @enumFromInt(100);
 //     const a_nominal = Content{
 //         .opaque_alias = .{
-//             .name = a_nominal_name,
+//             .ident = a_nominal_name,
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1136,7 +1683,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const b_nominal = Content{
 //         .opaque_alias = .{
-//             .name = a_nominal_name,
+//             .ident = a_nominal_name,
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1174,7 +1721,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const nominal = Content{
 //         .opaque_alias = .{
-//             .name = @enumFromInt(300),
+//             .ident = @enumFromInt(300),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1204,7 +1751,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const nominal = Content{
 //         .opaque_alias = .{
-//             .name = @enumFromInt(100),
+//             .ident = @enumFromInt(100),
 //             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
 //             .backing_var = str,
 //         },
@@ -1212,7 +1759,7 @@ test "unify - a & b are tuples with args flipped" {
 
 //     const structural = Content{
 //         .structural_alias = .{
-//             .name = @enumFromInt(200),
+//             .ident = @enumFromInt(200),
 //             .args = try Content.Alias.ArgsArray.init(0),
 //             .backing_var = str,
 //         },
@@ -1231,119 +1778,6 @@ test "unify - a & b are tuples with args flipped" {
 //             .right = Content.str_old,
 //         },
 //     });
-// }
-
-// // unification - flat type - num
-
-// test "unify - num - flex_var unifies with flex_var" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const a = solver.freshFromContent(.{ .concrete = .{ .num = .flex_var } });
-//     const b = solver.freshFromContent(.{ .concrete = .{ .num = .flex_var } });
-
-//     try std.testing.expectEqual(solver.unify_old(a, b), null);
-// }
-
-// test "unify - num - flex_var unifies with int" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const a = solver.freshFromContent(.{ .concrete = .{ .num = .flex_var } });
-//     const b = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .i64 } } });
-
-//     try std.testing.expectEqual(solver.unify_old(a, b), null);
-// }
-
-// test "unify - num - flex_var unifies with frac" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const a = solver.freshFromContent(.{ .concrete = .{ .num = .flex_var } });
-//     const b = solver.freshFromContent(.{ .concrete = .{ .num = .{ .frac = .dec } } });
-
-//     try std.testing.expectEqual(solver.unify_old(a, b), null);
-// }
-
-// test "unify - num - int flex_var unifies with int concrete" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const a = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .flex_var } } });
-//     const b = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .i64 } } });
-
-//     try std.testing.expectEqual(solver.unify_old(a, b), null);
-// }
-
-// test "unify - num - frac flex_var unifies with frac concrete" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const a = solver.freshFromContent(.{ .concrete = .{ .num = .{ .frac = .flex_var } } });
-//     const b = solver.freshFromContent(.{ .concrete = .{ .num = .{ .frac = .f32 } } });
-
-//     try std.testing.expectEqual(solver.unify_old(a, b), null);
-// }
-
-// test "unify - num - int does not unify with frac" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const int_var = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .i32 } } });
-//     const frac_var = solver.freshFromContent(.{ .concrete = .{ .num = .{ .frac = .f32 } } });
-
-//     const mb_err = solver.unify_old(int_var, frac_var);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, UnificationTable.UnifyError.Cause{
-//         .type_mismatch = .{
-//             .left = Content{ .concrete = .{ .num = .{ .int = .i32 } } },
-//             .right = Content{ .concrete = .{ .num = .{ .frac = .f32 } } },
-//         },
-//     });
-//     // try std.testing.expectEqual(1, err.trace.len);
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = int_var, .right = frac_var },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - num - i16 does not unify with i32" {
-//     const gpa = std.testing.allocator;
-//     var solver = UnificationTable.init(gpa);
-//     defer solver.deinit();
-
-//     const i16_var = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .i16 } } });
-//     const i32_var = solver.freshFromContent(.{ .concrete = .{ .num = .{ .int = .i32 } } });
-
-//     const mb_err = solver.unify_old(i16_var, i32_var);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, UnificationTable.UnifyError.Cause{
-//         .type_mismatch = .{
-//             .left = Content{ .concrete = .{ .num = .{ .int = .i16 } } },
-//             .right = Content{ .concrete = .{ .num = .{ .int = .i32 } } },
-//         },
-//     });
-//     // try std.testing.expectEqual(1, err.trace.len);
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = i16_var, .right = i32_var },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
 // }
 
 // // unification - flat type - func
