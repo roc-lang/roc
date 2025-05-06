@@ -3,16 +3,24 @@ const std = @import("std");
 const exitOnOutOfMemory = @import("../collections.zig").utils.exitOnOom;
 const Region = @import("../base/Region.zig");
 const Ident = @import("../base/Ident.zig");
-const FlatType = @import("./flat_type.zig");
-const shared = @import("./shared.zig");
+const types = @import("./types.zig");
 
-const TypeIdent = FlatType.TypeIdent;
-const Var = shared.Var;
+const TypeIdent = types.TypeIdent;
+const Var = types.Var;
+const Desc = types.Descriptor;
+const Rank = types.Rank;
+const Content = types.Content;
+const Alias = types.Alias;
+const FlatType = types.FlatType;
+const TypeApply = types.TypeApply;
+const Tuple = types.Tuple;
+const Num = types.Num;
+const Func = types.Func;
 
 /// unify
 pub fn unify(table: *UnificationTable, vars: *VarArray, a: Var, b: Var) Result {
-    var unifier = Unifier.init(table, vars);
-    unifier.unifyGuarded(a, b) catch |err| switch (err) {
+    var unify_pool = UnifyPool.init(table, vars);
+    unify_pool.unifyGuarded(a, b) catch |err| switch (err) {
         error.TypeMismatch => {
             table.union_(a, b, .{
                 .content = .err,
@@ -43,13 +51,13 @@ pub const Result = union(enum) {
 /// A bounded array of variables
 const VarArray = std.BoundedArray(Var, 16);
 
-const Unifier = struct {
+const UnifyPool = struct {
     const Self = @This();
 
     table: *UnificationTable,
     vars: *VarArray,
 
-    /// Init a unifier
+    /// Init a unify_pool
     /// Caller owns the memory of the provided values
     fn init(table: *UnificationTable, vars: *VarArray) Self {
         return .{ .table = table, .vars = vars };
@@ -59,7 +67,7 @@ const Unifier = struct {
 
     /// Link the variables & updated the content in the unification table
     /// In the old compiler, this function was called "merge"
-    fn merge(self: *Self, vars: *const VarDescs, new_content: Content) void {
+    fn merge(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) void {
         self.table.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
@@ -82,14 +90,20 @@ const Unifier = struct {
                     .flex_var => |mb_a_ident| {
                         self.unifyFlex(&vars, mb_a_ident, vars.b.desc.content);
                     },
-                    .concrete => |a_flat_type| {
-                        try self.unifyConcrete(&vars, a_flat_type, vars.b.desc.content);
-                    },
                     .structural_alias => |a_alias| {
                         try self.unifyStructuralAlias(&vars, a_alias, vars.b.desc.content);
                     },
                     .opaque_alias => |a_alias| {
                         try self.unifyOpaqueAlias(&vars, a_alias, vars.b.desc.content);
+                    },
+                    .effectful => {
+                        try self.unifyEffectful(&vars, vars.b.desc.content);
+                    },
+                    .pure => {
+                        try self.unifyPure(&vars, vars.b.desc.content);
+                    },
+                    .concrete => |a_flat_type| {
+                        try self.unifyConcrete(&vars, a_flat_type, vars.b.desc.content);
                     },
                     .err => return error.TypeMismatch,
                 }
@@ -99,8 +113,8 @@ const Unifier = struct {
 
     // Unify flex //
 
-    /// Unify when the a was a flex
-    fn unifyFlex(self: *Self, vars: *const VarDescs, mb_a_ident: ?Ident.Idx, b_content: Content) void {
+    /// Unify when `a` was a flex
+    fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, mb_a_ident: ?Ident.Idx, b_content: Content) void {
         switch (b_content) {
             .flex_var => |mb_b_ident| {
                 if (mb_a_ident) |a_ident| {
@@ -111,6 +125,8 @@ const Unifier = struct {
             },
             .structural_alias => self.merge(vars, b_content),
             .opaque_alias => self.merge(vars, b_content),
+            .effectful => self.merge(vars, b_content),
+            .pure => self.merge(vars, b_content),
             .concrete => self.merge(vars, b_content),
             .err => self.merge(vars, .err),
         }
@@ -118,8 +134,8 @@ const Unifier = struct {
 
     // Unify structural alias //
 
-    /// Unify when the a was a structural alias
-    fn unifyStructuralAlias(self: *Self, vars: *const VarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+    /// Unify when `a` was a structural alias
+    fn unifyStructuralAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .structural_alias = a_alias });
@@ -132,13 +148,15 @@ const Unifier = struct {
                 }
             },
             .opaque_alias => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .effectful => return error.TypeMismatch,
+            .pure => return error.TypeMismatch,
             .concrete => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
             .err => self.merge(vars, .err),
         }
     }
 
-    /// Unify when the a was a structural alias
-    fn unifyOpaqueAlias(self: *Self, vars: *const VarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+    /// Unify when `a` was a structural alias
+    fn unifyOpaqueAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .structural_alias = a_alias });
@@ -153,6 +171,8 @@ const Unifier = struct {
                     return error.TypeMismatch;
                 }
             },
+            .effectful => return error.TypeMismatch,
+            .pure => return error.TypeMismatch,
             .concrete => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
@@ -168,7 +188,7 @@ const Unifier = struct {
     ///
     /// NOTE: the rust version of this function `unify_two_aliases` is *signifgantly* more
     /// complicated than the version here
-    fn unifyTwoAliases(self: *Self, vars: *const VarDescs, a_alias: Alias, b_alias: Alias) error{TypeMismatch}!void {
+    fn unifyTwoAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) error{TypeMismatch}!void {
         if (a_alias.args.len != b_alias.args.len) {
             return error.TypeMismatch;
         }
@@ -188,38 +208,58 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
+    // Unify effectful //
+
+    /// Unify when `a` was a effectful
+    fn unifyEffectful(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
+        _ = self;
+        _ = vars;
+        _ = b_content;
+        @panic("Unimplemetend");
+    }
+
+    // Unify pure //
+
+    /// Unify when `a` was a pure
+    fn unifyPure(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
+        _ = self;
+        _ = vars;
+        _ = b_content;
+        @panic("Unimplemetend");
+    }
+
     // Unify concrete //
 
-    /// Unify when the a is a concrete type
+    /// Unify when `a` is a concrete type
     fn unifyConcrete(
         self: *Self,
-        vars: *const VarDescs,
-        a_flat_type: FlatType.FlatType,
+        vars: *const ResolvedVarDescs,
+        a_flat_type: FlatType,
         b_content: Content,
     ) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .concrete = a_flat_type });
             },
-            .concrete => |b_flat_type| {
-                try self.unifyFlatType(vars, a_flat_type, b_flat_type);
-            },
             .structural_alias => |alias| {
                 try self.unifyGuarded(vars.a.var_, alias.backing_var);
             },
-            .opaque_alias => |_| {
-                return error.TypeMismatch;
+            .opaque_alias => |_| return error.TypeMismatch,
+            .effectful => return error.TypeMismatch,
+            .pure => return error.TypeMismatch,
+            .concrete => |b_flat_type| {
+                try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
             .err => self.merge(vars, .err),
         }
     }
 
-    /// Unify when the a is a concrete type
+    /// Unify when `a` is a concrete type
     fn unifyFlatType(
         self: *Self,
-        vars: *const VarDescs,
-        a_flat_type: FlatType.FlatType,
-        b_flat_type: FlatType.FlatType,
+        vars: *const ResolvedVarDescs,
+        a_flat_type: FlatType,
+        b_flat_type: FlatType,
     ) error{TypeMismatch}!void {
         switch (a_flat_type) {
             .type_apply => |a_type_apply| {
@@ -285,9 +325,9 @@ const Unifier = struct {
     /// * that parallel arguments unify
     fn unify_type_apply(
         self: *Self,
-        vars: *const VarDescs,
-        a_type_apply: FlatType.TypeApply,
-        b_type_apply: FlatType.TypeApply,
+        vars: *const ResolvedVarDescs,
+        a_type_apply: TypeApply,
+        b_type_apply: TypeApply,
     ) error{TypeMismatch}!void {
         if (!TypeIdent.eql(a_type_apply.ident, b_type_apply.ident)) {
             return error.TypeMismatch;
@@ -316,9 +356,9 @@ const Unifier = struct {
     /// * that parallel arguments unify
     fn unify_tuple(
         self: *Self,
-        vars: *const VarDescs,
-        a_tuple: FlatType.Tuple,
-        b_tuple: FlatType.Tuple,
+        vars: *const ResolvedVarDescs,
+        a_tuple: Tuple,
+        b_tuple: Tuple,
     ) error{TypeMismatch}!void {
         if (a_tuple.elems.len != b_tuple.elems.len) {
             return error.TypeMismatch;
@@ -338,9 +378,9 @@ const Unifier = struct {
     /// * that parallel arguments unify
     fn unify_num(
         self: *Self,
-        vars: *const VarDescs,
-        a_num: FlatType.Num,
-        b_num: FlatType.Num,
+        vars: *const ResolvedVarDescs,
+        a_num: Num,
+        b_num: Num,
     ) error{TypeMismatch}!void {
         switch (a_num) {
             .flex_var => {
@@ -399,9 +439,9 @@ const Unifier = struct {
     /// * that ret unifies
     fn unify_func(
         self: *Self,
-        vars: *const VarDescs,
-        a_func: FlatType.Func,
-        b_func: FlatType.Func,
+        vars: *const ResolvedVarDescs,
+        a_func: Func,
+        b_func: Func,
     ) error{TypeMismatch}!void {
         if (a_func.args.len != b_func.args.len) {
             return error.TypeMismatch;
@@ -417,16 +457,18 @@ const Unifier = struct {
     }
 };
 
-/// A variable & it's desc info
-const VarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
+/// A variable & it's descriptor info
+const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
 
 /// Two variables & descs
-const VarDescs = struct { a: VarDesc, b: VarDesc };
+const ResolvedVarDescs = struct { a: ResolvedVarDesc, b: ResolvedVarDesc };
 
 /// Type solver
+///
+/// You use a Var to lookup a Slot, then a Slot to lookup a Decriptor
 const UnificationTable = struct {
+    slot_store: SlotStore,
     desc_store: DescStore,
-    binding_store: BindingStore,
 
     const Self = @This();
 
@@ -435,14 +477,14 @@ const UnificationTable = struct {
         // TODO: eventually use herusitics here to determin sensible defaults
         return .{
             .desc_store = DescStore.init(gpa, 64),
-            .binding_store = BindingStore.init(gpa, 64),
+            .slot_store = SlotStore.init(gpa, 64),
         };
     }
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
         self.desc_store.deinit();
-        self.binding_store.deinit();
+        self.slot_store.deinit();
     }
 
     /// Create a new unbound, flexible type variable without a name
@@ -453,15 +495,15 @@ const UnificationTable = struct {
     /// Create a new variable with the provided desc at the top level
     pub fn freshFromContent(self: *Self, content: Content) Var {
         const desc_idx = self.desc_store.insert(.{ .content = content, .rank = Rank.top_level });
-        const binding_var = self.binding_store.insert(.{ .root = desc_idx });
-        return binding_var;
+        const slot_var = self.slot_store.insert(.{ .root = desc_idx });
+        return slot_var;
     }
 
     /// Create a variable redirecting to the provided var
     /// Used for test
     pub fn freshRedirect(self: *Self, var_: Var) Var {
-        const binding_var = self.binding_store.insert(.{ .redirect = var_ });
-        return binding_var;
+        const slot_var = self.slot_store.insert(.{ .redirect = var_ });
+        return slot_var;
     }
 
     /// Link the variables & updated the content in the unification table
@@ -479,11 +521,11 @@ const UnificationTable = struct {
         self.desc_store.set(b_data.desc_idx, new_desc);
 
         // Update a to point to b
-        self.binding_store.set(a_var, .{ .redirect = b_var });
+        self.slot_store.set(a_var, .{ .redirect = b_var });
     }
 
     /// The result of checking for equivalance
-    const VarEquivResult = union(enum) { equiv, not_equiv: VarDescs };
+    const VarEquivResult = union(enum) { equiv, not_equiv: ResolvedVarDescs };
 
     /// Check if two variables are equivalant
     /// This will follow all redirects and compress the path
@@ -502,15 +544,15 @@ const UnificationTable = struct {
     /// Given a type var, follow all redirects until finding the root descriptor
     /// Will mutate the DescStore in place to compress the path
     /// If the type is not a redirect, the var return will match the one passed in
-    pub fn resolveAndCompressVar(self: *Self, initial_var: Var) VarDesc {
+    pub fn resolveAndCompressVar(self: *Self, initial_var: Var) ResolvedVarDesc {
         // First, we follow the chain down to the concrete type
         var redirected_var = initial_var;
-        var redirected_binding: Binding = self.binding_store.get(initial_var);
+        var redirected_slot: Slot = self.slot_store.get(initial_var);
         while (true) {
-            switch (redirected_binding) {
+            switch (redirected_slot) {
                 .redirect => |redirect_idx| {
                     redirected_var = redirect_idx;
-                    redirected_binding = self.binding_store.get(redirect_idx);
+                    redirected_slot = self.slot_store.get(redirect_idx);
                 },
                 .root => |_| break,
             }
@@ -519,13 +561,13 @@ const UnificationTable = struct {
         // then follow the chain again, but compressing each step to the concrete type
         if (initial_var != redirected_var) {
             var compressed_idx = initial_var;
-            var compressed_typ: Binding = self.binding_store.get(initial_var);
+            var compressed_typ: Slot = self.slot_store.get(initial_var);
             while (true) {
                 switch (compressed_typ) {
                     .redirect => |redirect_idx| {
-                        self.binding_store.set(compressed_idx, Binding{ .redirect = redirected_var });
+                        self.slot_store.set(compressed_idx, Slot{ .redirect = redirected_var });
                         compressed_idx = redirect_idx;
-                        compressed_typ = self.binding_store.get(redirect_idx);
+                        compressed_typ = self.slot_store.get(redirect_idx);
                     },
                     .root => |_| break,
                 }
@@ -533,8 +575,8 @@ const UnificationTable = struct {
         }
 
         // TODO: refactor to remove panic
-        switch (redirected_binding) {
-            .redirect => |_| @panic("redirected binding was still redirect after following chain"),
+        switch (redirected_slot) {
+            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
             .root => |desc_idx| {
                 const desc = self.desc_store.get(desc_idx);
                 return .{
@@ -552,15 +594,15 @@ const UnificationTable = struct {
     /// If the type is not a redirect, the var return will match the one passed in
     ///
     /// TODO: This currently traverses the tree twice to compress, can we improve that?
-    fn followRedirectsAndCompress(self: *Self, initial_var: Var) VarDesc {
+    fn followRedirectsAndCompress(self: *Self, initial_var: Var) ResolvedVarDesc {
         // first, we follow the chain down to the concrete type
         var redirected_var = initial_var;
-        var redirected_binding: Binding = self.binding_store.get(initial_var);
+        var redirected_slot: Slot = self.slot_store.get(initial_var);
         while (true) {
-            switch (redirected_binding) {
+            switch (redirected_slot) {
                 .redirect => |redirect_idx| {
                     redirected_var = redirect_idx;
-                    redirected_binding = self.binding_store.get(redirect_idx);
+                    redirected_slot = self.slot_store.get(redirect_idx);
                 },
                 .root => |_| break,
             }
@@ -569,13 +611,13 @@ const UnificationTable = struct {
         // then follow the chain again, but compressing each step to the concrete type
         if (initial_var != redirected_var) {
             var compressed_idx = initial_var;
-            var compressed_typ: Binding = self.binding_store.get(initial_var);
+            var compressed_typ: Slot = self.slot_store.get(initial_var);
             while (true) {
                 switch (compressed_typ) {
                     .redirect => |redirect_idx| {
-                        self.binding_store.set(compressed_idx, Binding{ .redirect = redirected_var });
+                        self.slot_store.set(compressed_idx, Slot{ .redirect = redirected_var });
                         compressed_idx = redirect_idx;
-                        compressed_typ = self.binding_store.get(redirect_idx);
+                        compressed_typ = self.slot_store.get(redirect_idx);
                     },
                     .root => |_| break,
                 }
@@ -583,8 +625,8 @@ const UnificationTable = struct {
         }
 
         // TODO: refactor to remove panic
-        switch (redirected_binding) {
-            .redirect => |_| @panic("redirected binding was still redirect after following chain"),
+        switch (redirected_slot) {
+            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
             .root => |desc_idx| {
                 const desc = self.desc_store.get(desc_idx);
                 return .{
@@ -597,64 +639,22 @@ const UnificationTable = struct {
     }
 };
 
-// A desc in the store
-pub const Desc = struct { content: Content, rank: Rank };
-
-/// A type variable rank
-pub const Rank = enum(u32) {
-    generalized = 0,
-    top_level = 1,
-    _,
-
-    /// The the lowest rank
-    pub fn min(a: Rank, b: Rank) Rank {
-        return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
-    }
-};
-
-/// Represents what the a type *is*
-///
-/// Numbers are special cased here. This means that when constraints, types
-/// like `Num(Int(Unsigned64))` should be reperesntsed as it's specific
-/// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
-/// details
-const Content = union(enum) {
-    flex_var: ?Ident.Idx,
-    structural_alias: Alias,
-    opaque_alias: Alias,
-    concrete: FlatType.FlatType,
-    err,
-};
-
-// a nominal or structural alias
-// can hold up to 16 arguments
-const Alias = struct {
-    ident: TypeIdent,
-    args: ArgsArray,
-    backing_var: Var,
-
-    // TODO: In the rust compiler it seems like Args has lambda set variables too?
-
-    /// Represents the max capacity of the args array
-    pub const args_capacity = 16;
-    /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, args_capacity);
-};
-
 // Reperents either type data *or* a symlink to another type variable
-const Binding = union(enum) {
+const Slot = union(enum) {
     root: DescStore.Idx,
     redirect: Var,
+
+    const ArrayList = std.ArrayList(Slot);
 };
 
-/// Represents a store of bindings
-const BindingStore = struct {
+/// Represents a store of slots
+const SlotStore = struct {
     const Self = @This();
 
-    backing: std.ArrayList(Binding),
+    backing: Slot.ArrayList,
 
     fn init(gpa: std.mem.Allocator, capacity: usize) Self {
-        const arr_list = std.ArrayList(Binding).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        const arr_list = Slot.ArrayList.initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
         return .{ .backing = arr_list };
     }
 
@@ -662,23 +662,23 @@ const BindingStore = struct {
         self.backing.deinit();
     }
 
-    /// Insert a new binding into the store. The return type is a new `Var`.
+    /// Insert a new slot into the store. The return type is a new `Var`.
     ///
     /// It's important to note that this `Var` is an index into the store,
     /// but it also also the type variable itself
-    fn insert(self: *Self, typ: Binding) Var {
+    fn insert(self: *Self, typ: Slot) Var {
         const idx: Var = @enumFromInt(self.backing.items.len);
         self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 
     /// Set a value in the store
-    fn set(self: *Self, idx: Var, val: Binding) void {
+    fn set(self: *Self, idx: Var, val: Slot) void {
         self.backing.items[@intFromEnum(idx)] = val;
     }
 
     /// Get a value from the store
-    fn get(self: *const Self, idx: Var) Binding {
+    fn get(self: *const Self, idx: Var) Slot {
         return self.backing.items[@intFromEnum(idx)];
     }
 };
@@ -754,7 +754,7 @@ const TestEnv = struct {
 
     /// Get a desc from a root var
     pub fn getDescForRootVar(self: *Self, var_: Var) error{VarIsNotRoot}!Desc {
-        switch (self.table.binding_store.get(var_)) {
+        switch (self.table.slot_store.get(var_)) {
             .root => |desc_idx| return self.table.desc_store.get(desc_idx),
             .redirect => return error.VarIsNotRoot,
         }
@@ -762,7 +762,7 @@ const TestEnv = struct {
 
     fn mkTypeIdent(self: *Self, name: []const u8) TypeIdent {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
-        return FlatType.TypeIdent{ .ident_idx = ident_idx };
+        return TypeIdent{ .ident_idx = ident_idx };
     }
 
     // helpers - concrete - tuple
@@ -793,20 +793,20 @@ const TestEnv = struct {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
         return .{ .concrete = .{ .type_apply = .{
             .ident = .{ .ident_idx = ident_idx },
-            .args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable,
+            .args = TypeApply.ArgsArray.init(0) catch unreachable,
         } } };
     }
 
     fn mkTypeApply1Arg(self: *Self, name: []const u8, arg: Var) Content {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
-        var args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable;
+        var args = TypeApply.ArgsArray.init(0) catch unreachable;
         args.append(arg) catch unreachable;
         return .{ .concrete = .{ .type_apply = .{ .ident = .{ .ident_idx = ident_idx }, .args = args } } };
     }
 
     fn mkTypeApply2Args(self: *Self, name: []const u8, arg1: Var, arg2: Var) Content {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
-        var args = FlatType.TypeApply.ArgsArray.init(0) catch unreachable;
+        var args = TypeApply.ArgsArray.init(0) catch unreachable;
         args.append(arg1) catch unreachable;
         args.append(arg2) catch unreachable;
         return .{ .concrete = .{ .type_apply = .{ .ident = .{ .ident_idx = ident_idx }, .args = args } } };
@@ -815,16 +815,16 @@ const TestEnv = struct {
     // helpers - concrete - tuple
 
     fn mkTuple(slice: []const Var) Content {
-        std.debug.assert(slice.len <= FlatType.Tuple.elems_capacity);
-        const args = FlatType.Tuple.ElemsArray.fromSlice(slice) catch unreachable;
+        std.debug.assert(slice.len <= Tuple.elems_capacity);
+        const args = Tuple.ElemsArray.fromSlice(slice) catch unreachable;
         return Content{ .concrete = .{ .tuple = .{ .elems = args } } };
     }
 
     // helpers - concrete - func
 
     fn mkFunc(args: []const Var, ret: Var) Content {
-        std.debug.assert(args.len <= FlatType.Func.arg_capacity);
-        const args_arr = FlatType.Func.ArgsArray.fromSlice(args) catch unreachable;
+        std.debug.assert(args.len <= Func.arg_capacity);
+        const args_arr = Func.ArgsArray.fromSlice(args) catch unreachable;
         return Content{ .concrete = .{ .func = .{ .args = args_arr, .ret = ret } } };
     }
 };
@@ -844,8 +844,8 @@ test "resolveAndCompressVar - flattens redirect chain to flex_var" {
     const result = env.table.followRedirectsAndCompress(a);
     try std.testing.expectEqual(result.desc.content, Content{ .flex_var = null });
     try std.testing.expectEqual(result.var_, c);
-    try std.testing.expectEqual(env.table.binding_store.get(a), Binding{ .redirect = c });
-    try std.testing.expectEqual(env.table.binding_store.get(b), Binding{ .redirect = c });
+    try std.testing.expectEqual(env.table.slot_store.get(a), Slot{ .redirect = c });
+    try std.testing.expectEqual(env.table.slot_store.get(b), Slot{ .redirect = c });
 }
 
 test "resolveAndCompressVar - no-op on already root" {
@@ -856,13 +856,13 @@ test "resolveAndCompressVar - no-op on already root" {
 
     const str = env.mkTypeApplyNoArg("Str");
     const str_desc_idx = env.table.desc_store.insert(.{ .content = str, .rank = Rank.top_level });
-    const str_var = env.table.binding_store.insert(.{ .root = str_desc_idx });
+    const str_var = env.table.slot_store.insert(.{ .root = str_desc_idx });
 
     const result = env.table.followRedirectsAndCompress(str_var);
 
     try std.testing.expectEqual(result.desc.content, str);
     try std.testing.expectEqual(result.var_, str_var);
-    try std.testing.expectEqual(env.table.binding_store.get(str_var), Binding{ .root = str_desc_idx });
+    try std.testing.expectEqual(env.table.slot_store.get(str_var), Slot{ .root = str_desc_idx });
 }
 
 test "resolveAndCompressVar - flattens redirect chain to concrete" {
@@ -879,8 +879,8 @@ test "resolveAndCompressVar - flattens redirect chain to concrete" {
     const result = env.table.resolveAndCompressVar(a);
     try std.testing.expectEqual(result.desc.content, str);
     try std.testing.expectEqual(result.var_, c);
-    try std.testing.expectEqual(env.table.binding_store.get(a), Binding{ .redirect = c });
-    try std.testing.expectEqual(env.table.binding_store.get(b), Binding{ .redirect = c });
+    try std.testing.expectEqual(env.table.slot_store.get(a), Slot{ .redirect = c });
+    try std.testing.expectEqual(env.table.slot_store.get(b), Slot{ .redirect = c });
 }
 
 // unification - flex_vars
@@ -912,7 +912,7 @@ test "unify - both flex vars" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
 }
 
 test "unify - a is flex_var and b is not" {
@@ -927,7 +927,7 @@ test "unify - a is flex_var and b is not" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
 }
 
 // unification - aliases
@@ -949,7 +949,7 @@ test "unify - structural alias with same args" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(alias, (try env.getDescForRootVar(b)).content);
 }
 
@@ -994,7 +994,7 @@ test "unify - structural alias with different args (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1017,7 +1017,7 @@ test "unify - structural vs opaque alias with same name and args (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1041,7 +1041,7 @@ test "unify - opaque alias with different args (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1065,7 +1065,7 @@ test "unify - opaque alias with sam args" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1085,7 +1085,7 @@ test "unify - a is type_apply and b is flex_var" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1103,7 +1103,7 @@ test "unify - a is flex_var and b is type_apply" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1123,7 +1123,7 @@ test "unify - a & b are same type_apply" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1142,7 +1142,7 @@ test "unify - a & b are diff type_apply (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1163,7 +1163,7 @@ test "unify - a & b are same type_apply with 1 args" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(maybe_str, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1187,7 +1187,7 @@ test "unify - a & b are same type_apply with 2 args" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(result_str_bool, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1212,7 +1212,7 @@ test "unify - a & b are same type_apply with flipped args (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1238,7 +1238,7 @@ test "unify - a & b are same tuple" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(tuple_str_bool, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1263,7 +1263,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1275,8 +1275,8 @@ test "unify - num flex_var with int concrete" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const flex = Content{ .concrete = FlatType.num_flex_var };
-    const int_i32 = Content{ .concrete = FlatType.int_i32 };
+    const flex = Content{ .concrete = types.num_flex_var };
+    const int_i32 = Content{ .concrete = types.int_i32 };
 
     const a = env.table.freshFromContent(flex);
     const b = env.table.freshFromContent(int_i32);
@@ -1284,7 +1284,7 @@ test "unify - num flex_var with int concrete" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1294,8 +1294,8 @@ test "unify - num int(flex_var) with int concrete" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = FlatType.int_flex_var };
-    const b_content = Content{ .concrete = FlatType.int_i64 };
+    const a_content = Content{ .concrete = types.int_flex_var };
+    const b_content = Content{ .concrete = types.int_i64 };
 
     const a = env.table.freshFromContent(a_content);
     const b = env.table.freshFromContent(b_content);
@@ -1303,7 +1303,7 @@ test "unify - num int(flex_var) with int concrete" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1313,8 +1313,8 @@ test "unify - num frac(flex_var) with frac concrete" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = FlatType.frac_flex_var };
-    const b_content = Content{ .concrete = FlatType.frac_f64 };
+    const a_content = Content{ .concrete = types.frac_flex_var };
+    const b_content = Content{ .concrete = types.frac_f64 };
 
     const a = env.table.freshFromContent(a_content);
     const b = env.table.freshFromContent(b_content);
@@ -1322,7 +1322,7 @@ test "unify - num frac(flex_var) with frac concrete" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1332,8 +1332,8 @@ test "unify - num int concrete == int concrete" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const i64a = Content{ .concrete = FlatType.int_i64 };
-    const i64b = Content{ .concrete = FlatType.int_i64 };
+    const i64a = Content{ .concrete = types.int_i64 };
+    const i64b = Content{ .concrete = types.int_i64 };
 
     const a = env.table.freshFromContent(i64a);
     const b = env.table.freshFromContent(i64b);
@@ -1341,7 +1341,7 @@ test "unify - num int concrete == int concrete" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(i64b, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1351,8 +1351,8 @@ test "unify - num frac concrete != frac concrete (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = FlatType.frac_f32 };
-    const b_content = Content{ .concrete = FlatType.frac_f64 };
+    const a_content = Content{ .concrete = types.frac_f32 };
+    const b_content = Content{ .concrete = types.frac_f64 };
 
     const a = env.table.freshFromContent(a_content);
     const b = env.table.freshFromContent(b_content);
@@ -1360,7 +1360,7 @@ test "unify - num frac concrete != frac concrete (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1370,8 +1370,8 @@ test "unify - num int concrete != int concrete (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = FlatType.int_i32 };
-    const b_content = Content{ .concrete = FlatType.int_i64 };
+    const a_content = Content{ .concrete = types.int_i32 };
+    const b_content = Content{ .concrete = types.int_i64 };
 
     const a = env.table.freshFromContent(a_content);
     const b = env.table.freshFromContent(b_content);
@@ -1379,7 +1379,7 @@ test "unify - num int concrete != int concrete (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1389,8 +1389,8 @@ test "unify - num int vs frac (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_desc = Content{ .concrete = FlatType.int_i32 };
-    const frac_desc = Content{ .concrete = FlatType.frac_f32 };
+    const int_desc = Content{ .concrete = types.int_i32 };
+    const frac_desc = Content{ .concrete = types.frac_f32 };
 
     const a = env.table.freshFromContent(int_desc);
     const b = env.table.freshFromContent(frac_desc);
@@ -1398,7 +1398,7 @@ test "unify - num int vs frac (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1408,8 +1408,8 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = FlatType.frac_flex_var };
-    const b_content = Content{ .concrete = FlatType.frac_flex_var };
+    const a_content = Content{ .concrete = types.frac_flex_var };
+    const b_content = Content{ .concrete = types.frac_flex_var };
 
     const a = env.table.freshFromContent(a_content);
     const b = env.table.freshFromContent(b_content);
@@ -1417,7 +1417,7 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1429,8 +1429,8 @@ test "unify - func are same" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
-    const num = env.table.freshFromContent(Content{ .concrete = FlatType.num_flex_var });
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = types.int_i32 });
+    const num = env.table.freshFromContent(Content{ .concrete = types.num_flex_var });
     const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const func = TestEnv.mkFunc(&[_]Var{ str, num }, int_i32);
 
@@ -1440,7 +1440,7 @@ test "unify - func are same" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(true, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1450,7 +1450,7 @@ test "unify - funcs have diff return args (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = types.int_i32 });
     const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const a = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{int_i32}, str));
@@ -1459,7 +1459,7 @@ test "unify - funcs have diff return args (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1469,7 +1469,7 @@ test "unify - funcs have diff return types (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.table.freshFromContent(Content{ .concrete = FlatType.int_i32 });
+    const int_i32 = env.table.freshFromContent(Content{ .concrete = types.int_i32 });
     const str = env.table.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const a = env.table.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, int_i32));
@@ -1478,7 +1478,7 @@ test "unify - funcs have diff return types (fail)" {
     const result = unify(&env.table, &env.vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Binding{ .redirect = b }, env.table.binding_store.get(a));
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.table.slot_store.get(a));
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
@@ -1791,11 +1791,11 @@ test "unify - funcs have diff return types (fail)" {
 //     const ret = solver.freshFromContent(Content.bool_old);
 
 //     const a_func = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
 //     } });
 
 //     const b_func = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
 //     } });
 
 //     try std.testing.expectEqual(solver.unify_old(a_func, b_func), null);
@@ -1810,10 +1810,10 @@ test "unify - funcs have diff return types (fail)" {
 //     const bool_var = solver.freshFromContent(Content.bool_old);
 
 //     const one_arg = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = bool_var },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = bool_var },
 //     } });
 //     const two_args = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{ str, str }), .ret = bool_var },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{ str, str }), .ret = bool_var },
 //     } });
 
 //     const mb_err = solver.unify_old(one_arg, two_args);
@@ -1841,11 +1841,11 @@ test "unify - funcs have diff return types (fail)" {
 //     const ret = solver.freshFromContent(Content.str_old);
 
 //     const a = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
 //     } });
 
 //     const b = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{bool_var}), .ret = ret },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{bool_var}), .ret = ret },
 //     } });
 
 //     const mb_err = solver.unify_old(a, b);
@@ -1876,11 +1876,11 @@ test "unify - funcs have diff return types (fail)" {
 //     const ret2 = solver.freshFromContent(Content.bool_old);
 
 //     const a = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret1 },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret1 },
 //     } });
 
 //     const b = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try FlatType.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret2 },
+//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret2 },
 //     } });
 
 //     const mb_err = solver.unify_old(a, b);

@@ -1,23 +1,38 @@
 const std = @import("std");
-
 const Ident = @import("../base/Ident.zig");
-const shared = @import("./shared.zig");
 
-const Var = shared.Var;
-const MAX_ELEMS = shared.MAX_ELEMS;
-const VarBoundedArray16 = shared.VarBoundedArray16;
+/// A type variable id
+pub const Var = enum(u32) { _ };
 
-// flat types
+// A type descritpro
+pub const Descriptor = struct { content: Content, rank: Rank };
 
-// A "flat" data type
-// todo: rename?
-pub const FlatType = union(enum) {
-    type_apply: TypeApply,
-    tuple: Tuple,
-    num: Num,
-    func: Func,
-    record: Record,
-    empty_record,
+/// A type variable rank
+pub const Rank = enum(u32) {
+    generalized = 0,
+    top_level = 1,
+    _,
+
+    /// Get the lowest rank
+    pub fn min(a: Rank, b: Rank) Rank {
+        return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+    }
+};
+
+/// Represents what the a type *is*
+///
+/// Numbers are special cased here. This means that when constraints, types
+/// like `Num(Int(Unsigned64))` should be reperesntsed as it's specific
+/// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
+/// details
+pub const Content = union(enum) {
+    flex_var: ?Ident.Idx,
+    structural_alias: Alias,
+    opaque_alias: Alias,
+    effectful,
+    pure,
+    concrete: FlatType,
+    err,
 };
 
 /// Represents an ident of a type
@@ -30,6 +45,34 @@ pub const TypeIdent = struct {
     pub fn eql(a: Self, b: Self) bool {
         return a.ident_idx == b.ident_idx;
     }
+};
+
+// a nominal or structural alias
+// can hold up to 16 arguments
+pub const Alias = struct {
+    ident: TypeIdent,
+    args: ArgsArray,
+    backing_var: Var,
+
+    // TODO: In the rust compiler it seems like Args has lambda set variables too?
+
+    /// Represents the max capacity of the args array
+    pub const args_capacity = 16;
+    /// Bounded array to hold args
+    pub const ArgsArray = std.BoundedArray(Var, args_capacity);
+};
+
+// flat types
+
+// A "flat" data type
+// todo: rename?
+pub const FlatType = union(enum) {
+    type_apply: TypeApply,
+    tuple: Tuple,
+    num: Num,
+    func: Func,
+    record: Record,
+    empty_record,
 };
 
 /// Represents a type application, like `List String` or `Result Error Value`.
