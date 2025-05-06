@@ -21,6 +21,10 @@ const TypeApply = types.TypeApply;
 const Tuple = types.Tuple;
 const Num = types.Num;
 const Func = types.Func;
+const Record = types.Record;
+const RecordField = types.RecordField;
+const RecordFieldArray = types.RecordField.Array;
+const RecordFieldsArray = types.RecordFields.Array;
 
 /// Unify two type variables
 ///
@@ -83,6 +87,18 @@ const UnifyPool = struct {
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
         });
+    }
+
+    /// Create a new type variable *in this pool*
+    fn fresh(self: *Self, vars: *const ResolvedVarDescs, new_content: Content) Var {
+        const var_ = self.types_store.register(.{
+            .content = new_content,
+            .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+        });
+        self.vars.append(var_) catch |err| switch (err) {
+            error.Overflow => @panic("Pool var list overflowed"),
+        };
+        return var_;
     }
 
     // unification
@@ -281,7 +297,7 @@ const UnifyPool = struct {
             .type_apply => |a_type_apply| {
                 switch (b_flat_type) {
                     .type_apply => |b_type_apply| {
-                        try self.unify_type_apply(vars, a_type_apply, b_type_apply);
+                        try self.unifyTypeApply(vars, a_type_apply, b_type_apply);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -289,7 +305,7 @@ const UnifyPool = struct {
             .tuple => |a_tuple| {
                 switch (b_flat_type) {
                     .tuple => |b_tuple| {
-                        try self.unify_tuple(vars, a_tuple, b_tuple);
+                        try self.unifyTuple(vars, a_tuple, b_tuple);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -297,7 +313,7 @@ const UnifyPool = struct {
             .num => |a_num| {
                 switch (b_flat_type) {
                     .num => |b_num| {
-                        try self.unify_num(vars, a_num, b_num);
+                        try self.unifyNum(vars, a_num, b_num);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -305,18 +321,22 @@ const UnifyPool = struct {
             .func => |a_func| {
                 switch (b_flat_type) {
                     .func => |b_func| {
-                        try self.unify_func(vars, a_func, b_func);
+                        try self.unifyFunc(vars, a_func, b_func);
                     },
                     else => return error.TypeMismatch,
                 }
             },
             .record => |a_record| {
                 switch (b_flat_type) {
+                    .empty_record => {
+                        if (a_record.areAllFieldsOptional()) {
+                            try self.unifyGuarded(a_record.ext, vars.b.var_);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
                     .record => |b_record| {
-                        _ = a_record;
-                        _ = b_record;
-                        // try self.unify_record(vars, a_record, b_record);
-                        @panic("Unimplemented");
+                        try self.unifyTwoRecords(vars, a_record, b_record);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -324,8 +344,14 @@ const UnifyPool = struct {
             .empty_record => {
                 switch (b_flat_type) {
                     .empty_record => {
-                        // try self.unify_empty_record(vars, a_empty_record, b_empty_record);
-                        @panic("Unimplemented");
+                        self.merge(vars, Content{ .concrete = .empty_record });
+                    },
+                    .record => |b_record| {
+                        if (b_record.areAllFieldsOptional()) {
+                            try self.unifyGuarded(vars.a.var_, b_record.ext);
+                        } else {
+                            return error.TypeMismatch;
+                        }
                     },
                     else => return error.TypeMismatch,
                 }
@@ -339,7 +365,7 @@ const UnifyPool = struct {
     /// * that the type names match
     /// * that the arities are the same
     /// * that parallel arguments unify
-    fn unify_type_apply(
+    fn unifyTypeApply(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_type_apply: TypeApply,
@@ -370,7 +396,7 @@ const UnifyPool = struct {
     /// this checks:
     /// * that the arities are the same
     /// * that parallel arguments unify
-    fn unify_tuple(
+    fn unifyTuple(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_tuple: Tuple,
@@ -392,7 +418,7 @@ const UnifyPool = struct {
     /// this checks:
     /// * that the arities are the same
     /// * that parallel arguments unify
-    fn unify_num(
+    fn unifyNum(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_num: Num,
@@ -453,7 +479,7 @@ const UnifyPool = struct {
     /// * that the arg arities are the same
     /// * that parallel args unify
     /// * that ret unifies
-    fn unify_func(
+    fn unifyFunc(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_func: Func,
@@ -471,6 +497,206 @@ const UnifyPool = struct {
         try self.unifyGuarded(a_func.eff, b_func.eff);
 
         self.merge(vars, vars.b.desc.content);
+    }
+
+    /// unify two records
+    ///
+    /// this:
+    /// * unwraps extensible variable to get all records fields
+    /// * checks that parallel args unify
+    fn unifyTwoRecords(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_record: Record,
+        b_record: Record,
+    ) error{TypeMismatch}!void {
+        // First, unwrap all fields for record a, panicaing with various non-recoverable error
+        // These pancis will likely be changed/removed in the future
+        var a_fields = RecordFieldArray.fromSlice(a_record.fields.slice()) catch unreachable;
+        var a_ext = b_record.ext;
+        switch (self.gatherRecordFields(a_record, &a_fields)) {
+            .ok => |next_ext| {
+                a_ext = next_ext;
+            },
+            .invalid_ext => @panic("unifyTwoRecords: Record a ext was invalid"),
+            .too_many_fields => @panic("unifyTwoRecords: Record a had more than 16 fields"),
+        }
+
+        var b_fields = RecordFieldArray.fromSlice(b_record.fields.slice()) catch unreachable;
+        var b_ext = b_record.ext;
+        switch (self.gatherRecordFields(b_record, &b_fields)) {
+            .ok => |next_ext| {
+                b_ext = next_ext;
+            },
+            .invalid_ext => @panic("unifyTwoRecords: Record a ext was invalid"),
+            .too_many_fields => @panic("unifyTwoRecords: Record a had more than 16 fields"),
+        }
+
+        // Then partition the fields
+        var partitioned = RecordField.Partitioned.init();
+        RecordField.parition(&a_fields, &b_fields, &partitioned) catch |err| switch (err) {
+            error.Overflow => @panic("unifyTwoRecords: Paritioning of records a and b had more than 16 fields"),
+        };
+
+        // Determine how the fields of a & b extend
+        const a_has_uniq_fields = partitioned.only_in_a.len > 0;
+        const b_has_uniq_fields = partitioned.only_in_b.len > 0;
+
+        var fields_ext: FieldsExtension = .exactly_the_same;
+        if (a_has_uniq_fields and b_has_uniq_fields) {
+            fields_ext = .both_extend;
+        } else if (a_has_uniq_fields) {
+            fields_ext = .a_extends_b;
+        } else if (b_has_uniq_fields) {
+            fields_ext = .b_extends_a;
+        }
+
+        // Unify fields
+        switch (fields_ext) {
+            .exactly_the_same => {
+                // Unify exts (these will both be the empty record)
+                try self.unifyGuarded(a_ext, b_ext);
+
+                // Unify shared fields
+                self.unifySharedFields(vars, &partitioned.in_both, null, a_ext) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'exactly_the_same'"),
+                    error.TypeMismatch => return error.TypeMismatch,
+                };
+            },
+            .a_extends_b => {
+                // Create a new variable of a record with only a's uniq fields
+                const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                    .fields = partitioned.only_in_a,
+                    .ext = a_ext,
+                } } });
+
+                // Unify the sub record with b's ext
+                try self.unifyGuarded(only_in_a_var, b_ext);
+
+                // Unify shared fields
+                self.unifySharedFields(vars, &partitioned.in_both, null, only_in_a_var) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'a_extends_b'"),
+                    error.TypeMismatch => return error.TypeMismatch,
+                };
+            },
+            .b_extends_a => {
+                // Create a new variable of a record with only b's uniq fields
+                const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                    .fields = partitioned.only_in_b,
+                    .ext = b_ext,
+                } } });
+
+                // Unify the sub record with a's ext
+                try self.unifyGuarded(a_ext, only_in_b_var);
+
+                // Unify shared fields
+                self.unifySharedFields(vars, &partitioned.in_both, null, only_in_b_var) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'b_extends_a'"),
+                    error.TypeMismatch => return error.TypeMismatch,
+                };
+            },
+            .both_extend => {
+                // Create a new variable of a record with only b's uniq fields
+                const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                    .fields = partitioned.only_in_a,
+                    .ext = a_ext,
+                } } });
+                const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                    .fields = partitioned.only_in_b,
+                    .ext = b_ext,
+                } } });
+                const new_ext_var = self.fresh(vars, .{ .flex_var = null });
+
+                // Unify the sub records with exts
+                try self.unifyGuarded(a_ext, only_in_b_var);
+                try self.unifyGuarded(only_in_a_var, b_ext); // FIXED HERE
+
+                // Create a new array of all non-shared fields
+                var extended_fields = RecordFieldArray.init(0) catch unreachable;
+                extended_fields.appendSlice(partitioned.only_in_a.slice()) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when creating shared fields for 'b_extends_a'"),
+                };
+                extended_fields.appendSlice(partitioned.only_in_b.slice()) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when creating shared fields for 'b_extends_a'"),
+                };
+
+                // Unify shared fields
+                self.unifySharedFields(vars, &partitioned.in_both, &extended_fields, new_ext_var) catch |err| switch (err) {
+                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'b_extends_a'"),
+                    error.TypeMismatch => return error.TypeMismatch,
+                };
+            },
+        }
+    }
+
+    /// Given a list of shared fields & a list of extended fields, unify the shared
+    /// Then merge a new record with both shared+extended fields
+    fn unifySharedFields(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        shared_fields: *RecordFieldsArray,
+        mb_extended_fields: ?*RecordFieldArray,
+        ext: Var,
+    ) error{ Overflow, TypeMismatch }!void {
+        // Create a new array of to hold all fields
+        var combined_fields = try RecordFieldArray.init(0);
+
+        // Unify shared fields and append
+        for (0..shared_fields.len) |i| {
+            const fields = shared_fields.get(i);
+            try self.unifyGuarded(fields.a.var_, fields.b.var_);
+            try combined_fields.append(fields.a);
+        }
+
+        // Append combined fields
+        if (mb_extended_fields) |extended_fields| {
+            try combined_fields.appendSlice(extended_fields.slice());
+        }
+
+        // Merge vars
+        self.merge(vars, Content{ .concrete = FlatType{ .record = .{
+            .fields = combined_fields,
+            .ext = ext,
+        } } });
+    }
+
+    const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
+
+    const GatherFieldsResult = union(enum) { ok: Var, invalid_ext, too_many_fields };
+
+    /// Extend a record's `ext` variable, gathering all fields into an array.
+    /// Gathered fields are appended to the `fields` array
+    fn gatherRecordFields(self: *Self, record: Record, fields: *RecordFieldArray) GatherFieldsResult {
+        var ext_var = record.ext;
+        while (true) {
+            switch (self.types_store.resolveVar(ext_var).desc.content) {
+                // TODO: rigid var!
+                .flex_var => {
+                    return .{ .ok = ext_var };
+                },
+                .structural_alias => |alias| {
+                    ext_var = alias.backing_var;
+                },
+                .opaque_alias => |alias| {
+                    ext_var = alias.backing_var;
+                },
+                .concrete => |flat_type| {
+                    switch (flat_type) {
+                        .record => |ext_record| {
+                            fields.appendSlice(ext_record.fields.slice()) catch |err| switch (err) {
+                                error.Overflow => return .too_many_fields,
+                            };
+                            ext_var = ext_record.ext;
+                        },
+                        .empty_record => {
+                            return .{ .ok = ext_var };
+                        },
+                        else => return .invalid_ext,
+                    }
+                },
+                else => return .invalid_ext,
+            }
+        }
     }
 };
 
@@ -499,13 +725,28 @@ const TestEnv = struct {
         self.types_store.deinit();
     }
 
-    const Error = error{VarIsNotRoot};
+    const Error = error{ VarIsNotRoot, DescIsNotRecord };
 
     /// Get a desc from a root var
     pub fn getDescForRootVar(self: *Self, var_: Var) error{VarIsNotRoot}!Desc {
         switch (self.types_store.getSlot(var_)) {
             .root => |desc_idx| return self.types_store.getDesc(desc_idx),
             .redirect => return error.VarIsNotRoot,
+        }
+    }
+
+    /// Unwrap a record or throw
+    pub fn getRecordOrErr(desc: Desc) error{DescIsNotRecord}!Record {
+        switch (desc.content) {
+            .concrete => |flat_type| {
+                switch (flat_type) {
+                    .record => |record| {
+                        return record;
+                    },
+                    else => return error.DescIsNotRecord,
+                }
+            },
+            else => return error.DescIsNotRecord,
         }
     }
 
@@ -590,6 +831,24 @@ const TestEnv = struct {
     fn mkFuncEff(self: *Self, args: []const Var, ret: Var) Content {
         const eff_var = self.types_store.freshFromContent(.effectful);
         return Self.mkFunc(args, ret, eff_var);
+    }
+
+    // helpers - concrete - func
+
+    fn mkRecord(fields: []const RecordField, ext_var: Var) Content {
+        std.debug.assert(fields.len <= RecordField.array_capacity);
+        const fields_arr = RecordFieldArray.fromSlice(fields) catch unreachable;
+        return Content{ .concrete = .{ .record = .{ .fields = fields_arr, .ext = ext_var } } };
+    }
+
+    fn mkRecordOpen(self: *Self, fields: []const RecordField) Content {
+        const ext_var = self.types_store.freshFromContent(.{ .flex_var = null });
+        return Self.mkRecord(fields, ext_var);
+    }
+
+    fn mkRecordClosed(self: *Self, fields: []const RecordField) Content {
+        const ext_var = self.types_store.freshFromContent(.{ .concrete = .empty_record });
+        return Self.mkRecord(fields, ext_var);
     }
 };
 
@@ -1426,4 +1685,275 @@ test "unify - same funcs first pure, second eff" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - concrete/concrete - records closed
+
+test "unify - identical closed records" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const fields = [_]RecordField{
+        .{ .name = @enumFromInt(1), .var_ = str, .typ = .required },
+    };
+    const record = env.mkRecordClosed(&fields);
+
+    const a = env.types_store.freshFromContent(record);
+    const b = env.types_store.freshFromContent(record);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(record, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - closed record mismatch on diff fields (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+
+    const a = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field1, field2 }));
+    const b = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field1}));
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc_b = try env.getDescForRootVar(b);
+    try std.testing.expectEqual(Content.err, desc_b.content);
+}
+
+// unification - concrete/concrete - records open
+
+test "unify - open record a extends b" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+
+    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only }));
+    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_shared}));
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_record.fields.len);
+    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+
+    try std.testing.expectEqual(1, env.vars.len);
+    try std.testing.expectEqual(env.vars.get(0), b_record.ext);
+
+    const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
+    try std.testing.expectEqual(1, b_ext_record.fields.len);
+    try std.testing.expectEqual(field_a_only, b_ext_record.fields.get(0));
+
+    const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+}
+
+test "unify - open record b extends a" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+
+    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_shared}));
+    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only }));
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_record.fields.len);
+    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+
+    try std.testing.expectEqual(1, env.vars.len);
+    try std.testing.expectEqual(env.vars.get(0), b_record.ext);
+
+    const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
+    try std.testing.expectEqual(1, b_ext_record.fields.len);
+    try std.testing.expectEqual(field_b_only, b_ext_record.fields.get(0));
+
+    const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+}
+
+test "unify - both extend open record" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_, .typ = .required };
+
+    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only }));
+    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only }));
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(3, b_record.fields.len);
+    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+
+    const b_ext = env.types_store.resolveVar(b_record.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+
+    try std.testing.expectEqual(3, env.vars.len);
+
+    const only_a_var = env.vars.get(0);
+    const only_a_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_a_var).desc);
+    try std.testing.expectEqual(1, only_a_record.fields.len);
+    try std.testing.expectEqual(field_a_only, only_a_record.fields.get(0));
+
+    const only_b_var = env.vars.get(1);
+    const only_b_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_b_var).desc);
+    try std.testing.expectEqual(1, only_b_record.fields.len);
+    try std.testing.expectEqual(field_b_only, only_b_record.fields.get(0));
+
+    const ext_var = env.vars.get(2);
+    const ext_content = env.types_store.resolveVar(ext_var).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, ext_content);
+}
+
+test "unify - record mismatch on shared field (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+
+    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_a}));
+    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_b}));
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc_b = try env.getDescForRootVar(b);
+    try std.testing.expectEqual(Content.err, desc_b.content);
+}
+
+// unification - concrete/concrete - records open+closed
+
+test "unify - open record extends closed (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }));
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}));
+
+    const result = unify(&env.types_store, &env.vars, open, closed);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(closed)).content);
+}
+
+test "unify - closed record extends open" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}));
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }));
+
+    const result = unify(&env.types_store, &env.vars, open, closed);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
+}
+
+test "unify - open vs closed with type mismatch (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}));
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}));
+
+    const result = unify(&env.types_store, &env.vars, open, closed);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
+
+    const desc = try env.getDescForRootVar(closed);
+    try std.testing.expectEqual(Content.err, desc.content);
+}
+
+test "unify - closed vs open with type mismatch (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}));
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}));
+
+    const result = unify(&env.types_store, &env.vars, closed, open);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = open }, env.types_store.getSlot(closed));
+
+    const desc = try env.getDescForRootVar(open);
+    try std.testing.expectEqual(Content.err, desc.content);
 }

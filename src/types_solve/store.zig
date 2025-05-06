@@ -60,6 +60,13 @@ pub const Store = struct {
         return self.freshFromContent(Content{ .flex_var = null });
     }
 
+    /// Create a new variable with the given descriptor
+    pub fn register(self: *Self, desc: Desc) Var {
+        const desc_idx = self.desc_store.insert(desc);
+        const slot_idx = self.slot_store.insert(.{ .root = desc_idx });
+        return Self.slotIdxToVar(slot_idx);
+    }
+
     /// Create a new variable with the provided desc at the top level
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
@@ -77,14 +84,61 @@ pub const Store = struct {
 
     // getters //
 
-    /// Get the slot for the provided var
-    pub fn getSlot(self: *Self, var_: Var) Slot {
-        return self.slot_store.get(Self.varToSlotIdx(var_));
+    /// Given a type var, follow all redirects until finding the root descriptor
+    ///
+    /// Will mutate the DescStore in place to compress the path
+    pub fn resolveVarAndCompressPath(self: *Self, initial_var: Var) ResolvedVarDesc {
+        // Resolve the variable
+        const redirected = self.resolveVar(initial_var);
+        const redirected_root_var = redirected.var_;
+
+        // then follow the chain again, but compressing each step to the concrete type
+        if (initial_var != redirected_root_var) {
+            var compressed_slot_idx = Self.varToSlotIdx(initial_var);
+            var compressed_slot: Slot = self.slot_store.get(compressed_slot_idx);
+            while (true) {
+                switch (compressed_slot) {
+                    .redirect => |next_redirect_var| {
+                        self.slot_store.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
+                        compressed_slot_idx = Self.varToSlotIdx(next_redirect_var);
+                        compressed_slot = self.slot_store.get(compressed_slot_idx);
+                    },
+                    .root => |_| break,
+                }
+            }
+        }
+
+        // Compress the path
+        return redirected;
     }
 
-    /// Get the descriptor for the provided idx
-    pub fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
-        return self.desc_store.get(desc_idx);
+    /// Given a type var, follow all redirects until finding the root descriptor
+    pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
+        var redirected_slot_idx = Self.varToSlotIdx(initial_var);
+        var redirected_slot: Slot = self.slot_store.get(redirected_slot_idx);
+        while (true) {
+            switch (redirected_slot) {
+                .redirect => |next_redirect_var| {
+                    redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
+                    redirected_slot = self.slot_store.get(redirected_slot_idx);
+                },
+                .root => |_| break,
+            }
+        }
+        const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
+
+        // TODO: refactor to remove panic?
+        switch (redirected_slot) {
+            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
+            .root => |desc_idx| {
+                const desc = self.desc_store.get(desc_idx);
+                return .{
+                    .var_ = redirected_root_var,
+                    .desc_idx = desc_idx,
+                    .desc = desc,
+                };
+            },
+        }
     }
 
     // equivalance //
@@ -97,8 +151,8 @@ pub const Store = struct {
     ///
     /// If the vars are *not equivalant, then return the resolved vars & descs
     pub fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
-        const a = self.resolveAndCompressVar(a_var);
-        const b = self.resolveAndCompressVar(b_var);
+        const a = self.resolveVarAndCompressPath(a_var);
+        const b = self.resolveVarAndCompressPath(b_var);
         if (a.desc_idx == b.desc_idx) {
             return .equiv;
         } else {
@@ -117,7 +171,7 @@ pub const Store = struct {
     // * The roc compiler sets a to redirect to b (based on the `ena` compiler
     // See the `union` function in subs.rs for details
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) void {
-        const b_data = self.resolveAndCompressVar(b_var);
+        const b_data = self.resolveVarAndCompressPath(b_var);
 
         // Update b to be the new desc
         self.desc_store.set(b_data.desc_idx, new_desc);
@@ -126,57 +180,23 @@ pub const Store = struct {
         self.slot_store.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
     }
 
-    /// Given a type var, follow all redirects until finding the root descriptor
-    /// Will mutate the DescStore in place to compress the path
-    /// If the type is not a redirect, the var return will match the one passed in
-    pub fn resolveAndCompressVar(self: *Self, initial_var: Var) ResolvedVarDesc {
-        const initial_slot_idx = Self.varToSlotIdx(initial_var);
+    // test helpers //
 
-        // First, we follow the chain down to the concrete type
-        var redirected_slot_idx = initial_slot_idx;
-        var redirected_slot: Slot = self.slot_store.get(initial_slot_idx);
-        while (true) {
-            switch (redirected_slot) {
-                .redirect => |next_redirect_var| {
-                    redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
-                    redirected_slot = self.slot_store.get(redirected_slot_idx);
-                },
-                .root => |_| break,
-            }
-        }
-        const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
-
-        // then follow the chain again, but compressing each step to the concrete type
-        if (initial_slot_idx != redirected_slot_idx) {
-            var compressed_slot_idx = initial_slot_idx;
-            var compressed_slot: Slot = self.slot_store.get(compressed_slot_idx);
-            while (true) {
-                switch (compressed_slot) {
-                    .redirect => |next_redirect_var| {
-                        self.slot_store.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
-                        compressed_slot_idx = Self.varToSlotIdx(next_redirect_var);
-                        compressed_slot = self.slot_store.get(compressed_slot_idx);
-                    },
-                    .root => |_| break,
-                }
-            }
-        }
-
-        // TODO: refactor to remove panic
-        switch (redirected_slot) {
-            .redirect => |_| @panic("redirected slot was still redirect after following chain"),
-            .root => |desc_idx| {
-                const desc = self.desc_store.get(desc_idx);
-                return .{
-                    .var_ = redirected_root_var,
-                    .desc_idx = desc_idx,
-                    .desc = desc,
-                };
-            },
-        }
+    /// Get the slot for the provided var
+    /// Used in tests
+    /// If you're reaching for this in non-test code, you probably want
+    /// resolveVar or resolveVarAndCompressPath instead
+    pub fn getSlot(self: *Self, var_: Var) Slot {
+        return self.slot_store.get(Self.varToSlotIdx(var_));
     }
 
-    // getters //
+    /// Get the descriptor for the provided idx
+    /// Used in tests
+    pub fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
+        return self.desc_store.get(desc_idx);
+    }
+
+    // helpers //
 
     fn varToSlotIdx(var_: Var) SlotStore.Idx {
         return @enumFromInt(@intFromEnum(var_));
@@ -265,7 +285,7 @@ const DescStore = struct {
 
 // path compression
 
-test "resolveAndCompressVar - flattens redirect chain to flex_var" {
+test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const gpa = std.testing.allocator;
 
     var store = Store.init(gpa);
@@ -275,14 +295,14 @@ test "resolveAndCompressVar - flattens redirect chain to flex_var" {
     const b = store.freshRedirect(c);
     const a = store.freshRedirect(b);
 
-    const result = store.resolveAndCompressVar(a);
+    const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(Content{ .flex_var = null }, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
 }
 
-test "resolveAndCompressVar - no-op on already root" {
+test "resolveVarAndCompressPath - no-op on already root" {
     const gpa = std.testing.allocator;
 
     var store = Store.init(gpa);
@@ -291,14 +311,14 @@ test "resolveAndCompressVar - no-op on already root" {
     const num = types.Content{ .concrete = types.num_flex_var };
     const num_var = store.freshFromContent(num);
 
-    const result = store.resolveAndCompressVar(num_var);
+    const result = store.resolveVarAndCompressPath(num_var);
 
     try std.testing.expectEqual(num, result.desc.content);
     try std.testing.expectEqual(num_var, result.var_);
     // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
 }
 
-test "resolveAndCompressVar - flattens redirect chain to concrete" {
+test "resolveVarAndCompressPath - flattens redirect chain to concrete" {
     const gpa = std.testing.allocator;
 
     var store = Store.init(gpa);
@@ -309,7 +329,7 @@ test "resolveAndCompressVar - flattens redirect chain to concrete" {
     const b = store.freshRedirect(c);
     const a = store.freshRedirect(b);
 
-    const result = store.resolveAndCompressVar(a);
+    const result = store.resolveVarAndCompressPath(a);
     try std.testing.expectEqual(num, result.desc.content);
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));

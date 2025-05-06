@@ -169,15 +169,20 @@ pub const RecordField = struct {
 
     name: RecordFieldName,
     typ: RecordFieldType,
-    type_var: Var,
+    var_: Var,
+
+    /// Max capacity of fields in a record
+    pub const array_capacity = 16;
+    /// Bounded array of record fields
+    pub const Array = std.BoundedArray(RecordField, array_capacity);
 
     /// Type to represent the field diff of 2 records
     pub const Partitioned = struct {
         const SelfP = @This();
 
-        only_in_a: RecordFieldArray,
-        only_in_b: RecordFieldArray,
-        in_both: RecordFieldArray,
+        only_in_a: Array,
+        only_in_b: Array,
+        in_both: RecordFields.Array,
 
         /// Create a new `Partitioned` value
         /// TODO: Should this  be inline? These arrays could be a lot to copy if
@@ -185,9 +190,9 @@ pub const RecordField = struct {
         pub inline fn init() SelfP {
             // These are unreachable bc RecordFieldArray can hold more than 0 elems
             return .{
-                .only_in_a = RecordFieldArray.init(0) catch unreachable,
-                .only_in_b = RecordFieldArray.init(0) catch unreachable,
-                .in_both = RecordFieldArray.init(0) catch unreachable,
+                .only_in_a = Array.init(0) catch unreachable,
+                .only_in_b = Array.init(0) catch unreachable,
+                .in_both = RecordFields.Array.init(0) catch unreachable,
             };
         }
     };
@@ -206,8 +211,8 @@ pub const RecordField = struct {
     ///
     /// O(n + m)
     pub fn parition(
-        a_fields_arr: *RecordFieldArray,
-        b_fields_arr: *RecordFieldArray,
+        a_fields_arr: *Array,
+        b_fields_arr: *Array,
         partitioned: *Partitioned,
     ) error{Overflow}!void {
         // First sort the fields
@@ -224,7 +229,7 @@ pub const RecordField = struct {
             const b_next = b_fields[b_i];
 
             if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                try partitioned.in_both.append(a_next);
+                try partitioned.in_both.append(.{ .a = a_next, .b = b_next });
                 a_i = a_i + 1;
                 b_i = b_i + 1;
             } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
@@ -252,17 +257,24 @@ pub const RecordField = struct {
     }
 };
 
-/// Bounded array of record fields
-pub const RecordFieldArray = std.BoundedArray(RecordField, 16);
+/// Two record fields
+pub const RecordFields = struct {
+    a: RecordField,
+    b: RecordField,
+
+    /// Bounded array of pairs of record fields
+    pub const Array = std.BoundedArray(RecordFields, RecordField.array_capacity);
+};
 
 /// Represents a record
 pub const Record = struct {
-    fields: RecordFieldArray, // TODO: Should records support more fields?
+    fields: RecordField.Array,
     ext: Var,
 
     const SelfR = @This();
 
     /// Returns true if all fields in a record are optional
+    /// If there are no fields, also returns true
     pub fn areAllFieldsOptional(self: *const SelfR) bool {
         for (0..self.fields.len) |i| {
             if (self.fields.buffer[i].typ != .optional) {
@@ -276,11 +288,11 @@ pub const Record = struct {
 // tests
 
 test "paritionFields - same record" {
-    const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
-    const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
+    const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
 
     var a_record_fields =
-        RecordFieldArray.fromSlice(&[_]RecordField{ field_x, field_y }) catch unreachable;
+        RecordField.Array.fromSlice(&[_]RecordField{ field_x, field_y }) catch unreachable;
     var b_record_fields = a_record_fields;
 
     var partitioned = RecordField.Partitioned.init();
@@ -289,17 +301,19 @@ test "paritionFields - same record" {
     try std.testing.expectEqual(0, partitioned.only_in_a.len);
     try std.testing.expectEqual(0, partitioned.only_in_b.len);
     try std.testing.expectEqual(2, partitioned.in_both.len);
-    try std.testing.expectEqual(field_x.name, partitioned.in_both.buffer[0].name);
-    try std.testing.expectEqual(field_y.name, partitioned.in_both.buffer[1].name);
+    try std.testing.expectEqual(field_x.name, partitioned.in_both.buffer[0].a.name);
+    try std.testing.expectEqual(field_x.name, partitioned.in_both.buffer[0].b.name);
+    try std.testing.expectEqual(field_y.name, partitioned.in_both.buffer[1].a.name);
+    try std.testing.expectEqual(field_y.name, partitioned.in_both.buffer[1].b.name);
 }
 
 test "paritionFields - disjoint fields" {
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
-    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .type_var = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .type_var = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
 
-    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, a2 }) catch unreachable;
-    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{b1}) catch unreachable;
+    var a_record_fields = RecordField.Array.fromSlice(&[_]RecordField{ a1, a2 }) catch unreachable;
+    var b_record_fields = RecordField.Array.fromSlice(&[_]RecordField{b1}) catch unreachable;
 
     var partitioned = RecordField.Partitioned.init();
     try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
@@ -310,12 +324,12 @@ test "paritionFields - disjoint fields" {
 }
 
 test "paritionFields - overlapping fields" {
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
-    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .type_var = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
 
-    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, both }) catch unreachable;
-    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ b1, both }) catch unreachable;
+    var a_record_fields = RecordField.Array.fromSlice(&[_]RecordField{ a1, both }) catch unreachable;
+    var b_record_fields = RecordField.Array.fromSlice(&[_]RecordField{ b1, both }) catch unreachable;
 
     var partitioned = RecordField.Partitioned.init();
     try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
@@ -326,16 +340,17 @@ test "paritionFields - overlapping fields" {
 
     try std.testing.expectEqual(a1.name, partitioned.only_in_a.buffer[0].name);
     try std.testing.expectEqual(b1.name, partitioned.only_in_b.buffer[0].name);
-    try std.testing.expectEqual(both.name, partitioned.in_both.buffer[0].name);
+    try std.testing.expectEqual(both.name, partitioned.in_both.buffer[0].a.name);
+    try std.testing.expectEqual(both.name, partitioned.in_both.buffer[0].b.name);
 }
 
 test "paritionFields - reordering is normalized" {
-    const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
-    const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
-    const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .type_var = @enumFromInt(2) };
+    const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .var_ = @enumFromInt(2) };
 
-    var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ f3, f1, f2 }) catch unreachable;
-    var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ f1, f2, f3 }) catch unreachable;
+    var a_record_fields = RecordField.Array.fromSlice(&[_]RecordField{ f3, f1, f2 }) catch unreachable;
+    var b_record_fields = RecordField.Array.fromSlice(&[_]RecordField{ f1, f2, f3 }) catch unreachable;
 
     var partitioned = RecordField.Partitioned.init();
     try RecordField.parition(&a_record_fields, &b_record_fields, &partitioned);
@@ -343,7 +358,10 @@ test "paritionFields - reordering is normalized" {
     try std.testing.expectEqual(0, partitioned.only_in_a.len);
     try std.testing.expectEqual(0, partitioned.only_in_b.len);
     try std.testing.expectEqual(3, partitioned.in_both.len);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(1)), partitioned.in_both.buffer[0].name);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(2)), partitioned.in_both.buffer[1].name);
-    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(3)), partitioned.in_both.buffer[2].name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(1)), partitioned.in_both.buffer[0].a.name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(1)), partitioned.in_both.buffer[0].b.name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(2)), partitioned.in_both.buffer[1].a.name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(2)), partitioned.in_both.buffer[1].b.name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(3)), partitioned.in_both.buffer[2].a.name);
+    try std.testing.expectEqual(@as(RecordFieldName, @enumFromInt(3)), partitioned.in_both.buffer[2].b.name);
 }
