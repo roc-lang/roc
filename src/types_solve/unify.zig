@@ -61,6 +61,7 @@ pub const Result = union(enum) {
 /// A bounded array of variables
 const VarArray = std.BoundedArray(Var, 16);
 
+/// Unifciation with a pool of variables
 const UnifyPool = struct {
     const Self = @This();
 
@@ -222,20 +223,25 @@ const UnifyPool = struct {
 
     /// Unify when `a` was a effectful
     fn unifyEffectful(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
-        _ = self;
-        _ = vars;
-        _ = b_content;
-        @panic("Unimplemetend");
+        switch (b_content) {
+            .flex_var => self.merge(vars, .effectful),
+            .effectful => self.merge(vars, .effectful),
+            .err => self.merge(vars, .err),
+            else => return error.TypeMismatch,
+        }
     }
 
     // Unify pure //
 
     /// Unify when `a` was a pure
     fn unifyPure(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
-        _ = self;
-        _ = vars;
-        _ = b_content;
-        @panic("Unimplemetend");
+        switch (b_content) {
+            .flex_var => self.merge(vars, .pure),
+            .pure => self.merge(vars, .pure),
+            .effectful => self.merge(vars, .effectful),
+            .err => self.merge(vars, .err),
+            else => return error.TypeMismatch,
+        }
     }
 
     // Unify concrete //
@@ -462,6 +468,7 @@ const UnifyPool = struct {
         }
 
         try self.unifyGuarded(a_func.ret, b_func.ret);
+        try self.unifyGuarded(a_func.eff, b_func.eff);
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -564,10 +571,25 @@ const TestEnv = struct {
 
     // helpers - concrete - func
 
-    fn mkFunc(args: []const Var, ret: Var) Content {
+    fn mkFunc(args: []const Var, ret: Var, eff: Var) Content {
         std.debug.assert(args.len <= Func.arg_capacity);
         const args_arr = Func.ArgsArray.fromSlice(args) catch unreachable;
-        return Content{ .concrete = .{ .func = .{ .args = args_arr, .ret = ret } } };
+        return Content{ .concrete = .{ .func = .{ .args = args_arr, .ret = ret, .eff = eff } } };
+    }
+
+    fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.types_store.freshFromContent(.{ .flex_var = null });
+        return Self.mkFunc(args, ret, eff_var);
+    }
+
+    fn mkFuncPure(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.types_store.freshFromContent(.pure);
+        return Self.mkFunc(args, ret, eff_var);
+    }
+
+    fn mkFuncEff(self: *Self, args: []const Var, ret: Var) Content {
+        const eff_var = self.types_store.freshFromContent(.effectful);
+        return Self.mkFunc(args, ret, eff_var);
     }
 };
 
@@ -636,7 +658,7 @@ test "unify - structural alias with same args" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(alias, (try env.getDescForRootVar(b)).content);
 }
@@ -657,7 +679,7 @@ test "unify - structural aliases with different names but same backing" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
@@ -752,9 +774,159 @@ test "unify - opaque alias with sam args" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - pure/effectful
+
+test "unify - pure with pure" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.pure);
+    const b = env.types_store.freshFromContent(.pure);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.pure, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - effectful with effectful" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.effectful);
+    const b = env.types_store.freshFromContent(.effectful);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - pure with flex_var" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.pure);
+    const b = env.types_store.fresh();
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.pure, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - effectful with flex_var" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.effectful);
+    const b = env.types_store.fresh();
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - pure with effectful" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.pure);
+    const b = env.types_store.freshFromContent(.effectful);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.effectful, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - effectful with pure (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.effectful);
+    const b = env.types_store.freshFromContent(.pure);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - pure with err (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.pure);
+    const b = env.types_store.freshFromContent(.err);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - effectful with err (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a = env.types_store.freshFromContent(.effectful);
+    const b = env.types_store.freshFromContent(.err);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - pure with concrete type fails" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.mkTypeApplyNoArg("Str");
+    const a = env.types_store.freshFromContent(.pure);
+    const b = env.types_store.freshFromContent(str);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "unify - effectful with concrete type fails" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.mkTypeApplyNoArg("Str");
+    const a = env.types_store.freshFromContent(.effectful);
+    const b = env.types_store.freshFromContent(str);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - concrete/flex_vars
@@ -810,7 +982,7 @@ test "unify - a & b are same type_apply" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
@@ -850,7 +1022,7 @@ test "unify - a & b are same type_apply with 1 args" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(maybe_str, (try env.getDescForRootVar(b)).content);
 }
@@ -874,7 +1046,7 @@ test "unify - a & b are same type_apply with 2 args" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(result_str_bool, (try env.getDescForRootVar(b)).content);
 }
@@ -925,7 +1097,7 @@ test "unify - a & b are same tuple" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(tuple_str_bool, (try env.getDescForRootVar(b)).content);
 }
@@ -971,7 +1143,7 @@ test "unify - num flex_var with int concrete" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
 }
@@ -990,7 +1162,7 @@ test "unify - num int(flex_var) with int concrete" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
@@ -1009,7 +1181,7 @@ test "unify - num frac(flex_var) with frac concrete" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
@@ -1028,7 +1200,7 @@ test "unify - num int concrete == int concrete" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(i64b, (try env.getDescForRootVar(b)).content);
 }
@@ -1104,7 +1276,7 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
@@ -1120,14 +1292,14 @@ test "unify - func are same" {
     const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const func = TestEnv.mkFunc(&[_]Var{ str, num }, int_i32);
+    const func = env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
-    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
 }
@@ -1141,8 +1313,8 @@ test "unify - funcs have diff return args (fail)" {
     const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const a = env.types_store.freshFromContent(TestEnv.mkFunc(&[_]Var{int_i32}, str));
-    const b = env.types_store.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, str));
+    const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{int_i32}, str));
+    const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
@@ -1160,8 +1332,8 @@ test "unify - funcs have diff return types (fail)" {
     const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const a = env.types_store.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, int_i32));
-    const b = env.types_store.freshFromContent(TestEnv.mkFunc(&[_]Var{str}, str));
+    const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, int_i32));
+    const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
     const result = unify(&env.types_store, &env.vars, a, b);
 
@@ -1170,421 +1342,88 @@ test "unify - funcs have diff return types (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-////////////////////////////////////////////////////////////////////////////////
-// OLD
-////////////////////////////////////////////////////////////////////////////////
-
-// unification - structural aliases
-
-// test "unify - structural_alias - same name and args unifies" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-
-//     const a_content = Content{
-//         .structural_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const b_content = a_content;
-
-//     const a_var = solver.freshFromContent(a_content);
-//     const b_var = solver.freshFromContent(b_content);
-
-//     try std.testing.expectEqual(solver.unify_old(a_var, b_var), null);
-// }
-
-// test "unify - structural_alias - same name and args do not unify" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const bool_ = solver.freshFromContent(Content.bool_old);
-
-//     const a_content = Content{
-//         .structural_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-//     const a = solver.freshFromContent(a_content);
-
-//     const mb_err = solver.unify_old(a, bool_);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .apply_name_mismatch = .{
-//             .left = TypeNameOld.str,
-//             .right = TypeNameOld.bool_,
-//         },
-//     });
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a, .right = bool_ },
-//     //         .{ .left = str, .right = bool_ },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - structural_alias - diff types do not unify" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const bool_ = solver.freshFromContent(Content.bool_old);
-
-//     const a = Content{
-//         .structural_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const b = Content{
-//         .structural_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const a_var = solver.freshFromContent(a);
-//     const b_var = solver.freshFromContent(b);
-
-//     const mb_err = solver.unify_old(a_var, b_var);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .apply_name_mismatch = .{
-//             .left = TypeNameOld.str,
-//             .right = TypeNameOld.bool_,
-//         },
-//     });
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a_var, .right = b_var },
-//     //         .{ .left = str, .right = bool_ },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// // unification - nominal aliases
-
-// test "unify - nominal_alias - identical vars unify" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-
-//     const desc = Content{
-//         .opaque_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const nominal_var = solver.freshFromContent(desc);
-
-//     try std.testing.expectEqual(solver.unify_old(nominal_var, nominal_var), null);
-// }
-
-// test "unify - nominal_alias - diff names do not unify" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-
-//     const a_nominal_name: TypeNameOld = @enumFromInt(100);
-//     const a_nominal = Content{
-//         .opaque_alias = .{
-//             .ident = a_nominal_name,
-//             .args = try Content.Alias.ArgsArray.init(0),
-//             .backing_var = str,
-//         },
-//     };
-
-//     const b_nominal_name: TypeNameOld = @enumFromInt(200);
-//     const b_nominal = Content{
-//         .opaque_alias = .{
-//             .ident = b_nominal_name,
-//             .args = try Content.Alias.ArgsArray.init(0),
-//             .backing_var = str,
-//         },
-//     };
-
-//     const a = solver.freshFromContent(a_nominal);
-//     const b = solver.freshFromContent(b_nominal);
-
-//     const mb_err = solver.unify_old(a, b);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .nominal_alias_name_mismatch = .{
-//             .left = a_nominal_name,
-//             .right = b_nominal_name,
-//         },
-//     });
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a, .right = b },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - nominal_alias - same name names diff args" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const bool_ = solver.freshFromContent(Content.bool_old);
-
-//     const a_nominal_name: TypeNameOld = @enumFromInt(100);
-//     const a_nominal = Content{
-//         .opaque_alias = .{
-//             .ident = a_nominal_name,
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const b_nominal = Content{
-//         .opaque_alias = .{
-//             .ident = a_nominal_name,
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{bool_}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const a = solver.freshFromContent(a_nominal);
-//     const b = solver.freshFromContent(b_nominal);
-
-//     const mb_err = solver.unify_old(a, b);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .apply_name_mismatch = .{
-//             .left = TypeNameOld.str,
-//             .right = TypeNameOld.bool_,
-//         },
-//     });
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a, .right = b },
-//     //         .{ .left = str, .right = bool_ },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - nominal_alias vs flat_type - fails" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-
-//     const nominal = Content{
-//         .opaque_alias = .{
-//             .ident = @enumFromInt(300),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const nominal_var = solver.freshFromContent(nominal);
-//     const flat_var = solver.freshFromContent(Content.str_old);
-
-//     const mb_err = solver.unify_old(nominal_var, flat_var);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .type_mismatch = .{
-//             .left = nominal,
-//             .right = Content.str_old,
-//         },
-//     });
-// }
-
-// test "unify - nominal_alias vs structural_alias - fails" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-
-//     const nominal = Content{
-//         .opaque_alias = .{
-//             .ident = @enumFromInt(100),
-//             .args = Content.Alias.ArgsArray.fromSlice(&[_]Var{str}) catch unreachable,
-//             .backing_var = str,
-//         },
-//     };
-
-//     const structural = Content{
-//         .structural_alias = .{
-//             .ident = @enumFromInt(200),
-//             .args = try Content.Alias.ArgsArray.init(0),
-//             .backing_var = str,
-//         },
-//     };
-
-//     const nominal_var = solver.freshFromContent(nominal);
-//     const structural_var = solver.freshFromContent(structural);
-
-//     const mb_err = solver.unify_old(nominal_var, structural_var);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .type_mismatch = .{
-//             .left = nominal,
-//             .right = Content.str_old,
-//         },
-//     });
-// }
-
-// // unification - flat type - func
-
-// test "unify - func - same args and return type unifies" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const ret = solver.freshFromContent(Content.bool_old);
-
-//     const a_func = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
-//     } });
-
-//     const b_func = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
-//     } });
-
-//     try std.testing.expectEqual(solver.unify_old(a_func, b_func), null);
-// }
-
-// test "unify - func - different arity fails" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const bool_var = solver.freshFromContent(Content.bool_old);
-
-//     const one_arg = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = bool_var },
-//     } });
-//     const two_args = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{ str, str }), .ret = bool_var },
-//     } });
-
-//     const mb_err = solver.unify_old(one_arg, two_args);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .func_arity_mismatch = .{ .left = 1, .right = 2 },
-//     });
-//     // try std.testing.expectEqual(1, err.trace.len);
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{.{ .left = one_arg, .right = two_args }},
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - func - same arity, differing arg types fails" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const bool_var = solver.freshFromContent(Content.bool_old);
-//     const ret = solver.freshFromContent(Content.str_old);
-
-//     const a = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret },
-//     } });
-
-//     const b = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{bool_var}), .ret = ret },
-//     } });
-
-//     const mb_err = solver.unify_old(a, b);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .apply_name_mismatch = .{ .left = TypeNameOld.str, .right = TypeNameOld.bool_ },
-//     });
-//     // try std.testing.expectEqual(2, err.trace.len);
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a, .right = b },
-//     //         .{ .left = str, .right = bool_var },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
-
-// test "unify - func - same args, different return types fails" {
-//     const gpa = std.testing.allocator;
-//     var solver = store.Store.init(gpa);
-//     defer solver.deinit();
-
-//     const str = solver.freshFromContent(Content.str_old);
-//     const ret1 = solver.freshFromContent(Content.str_old);
-//     const ret2 = solver.freshFromContent(Content.bool_old);
-
-//     const a = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret1 },
-//     } });
-
-//     const b = solver.freshFromContent(.{ .concrete = .{
-//         .func = .{ .args = try types.Func.ArgsArray.fromSlice(&[_]Var{str}), .ret = ret2 },
-//     } });
-
-//     const mb_err = solver.unify_old(a, b);
-//     try std.testing.expect(mb_err != null);
-
-//     const err = mb_err.?;
-//     try std.testing.expectEqual(err.cause, store.Store.UnifyError.Cause{
-//         .apply_name_mismatch = .{ .left = TypeNameOld.str, .right = TypeNameOld.bool_ },
-//     });
-//     // try std.testing.expectEqual(2, err.trace.len);
-//     // try std.testing.expectEqualSlices(
-//     //     Solver.UnifyError.TraceVars,
-//     //     &[_]Solver.UnifyError.TraceVars{
-//     //         .{ .left = a, .right = b },
-//     //         .{ .left = ret1, .right = ret2 },
-//     //     },
-//     //     err.getTraceSlice(),
-//     // );
-// }
+test "unify - same funcs pure" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
+
+    const a = env.types_store.freshFromContent(func);
+    const b = env.types_store.freshFromContent(func);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - same funcs effectful" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+
+    const a = env.types_store.freshFromContent(func);
+    const b = env.types_store.freshFromContent(func);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(func, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - same funcs first eff, second pure (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
+    const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+
+    const a = env.types_store.freshFromContent(eff_func);
+    const b = env.types_store.freshFromContent(pure_func);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - same funcs first pure, second eff" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
+    const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
+
+    const a = env.types_store.freshFromContent(pure_func);
+    const b = env.types_store.freshFromContent(eff_func);
+
+    const result = unify(&env.types_store, &env.vars, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
+}

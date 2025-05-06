@@ -1,6 +1,13 @@
 const std = @import("std");
 const Ident = @import("../base/Ident.zig");
 
+test {
+    // TODO: ADD size assertions here
+    std.debug.print("Size of Descriptor: {} bytes\n", .{@sizeOf(Descriptor)});
+    std.debug.print("Size of FlatType: {} bytes\n", .{@sizeOf(FlatType)});
+    std.debug.print("Size of Record: {} bytes\n", .{@sizeOf(Record)});
+}
+
 /// A type variable id
 pub const Var = enum(u32) { _ };
 
@@ -8,7 +15,7 @@ pub const Var = enum(u32) { _ };
 pub const Descriptor = struct { content: Content, rank: Rank };
 
 /// A type variable rank
-pub const Rank = enum(u32) {
+pub const Rank = enum(u4) {
     generalized = 0,
     top_level = 1,
     _,
@@ -138,10 +145,10 @@ pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 pub const Func = struct {
     args: ArgsArray,
     ret: Var,
+    eff: Var,
 
-    // TODO: These are needed once we have effects & lambda sets
+    // TODO: These are needed once we have lambda sets
     // lambda_set: Var,
-    // effect: Var,
 
     /// Represents the max capacity of the args array
     pub const arg_capacity = 16;
@@ -150,7 +157,6 @@ pub const Func = struct {
 };
 
 /// A record field name
-///
 /// Once this module is used, this should be an index into a FieldName store or something
 const RecordFieldName = enum(u32) { _ };
 
@@ -247,7 +253,7 @@ pub const RecordField = struct {
 };
 
 /// Bounded array of record fields
-pub const RecordFieldArray = std.BoundedArray(RecordField, 32);
+pub const RecordFieldArray = std.BoundedArray(RecordField, 16);
 
 /// Represents a record
 pub const Record = struct {
@@ -288,9 +294,9 @@ test "paritionFields - same record" {
 }
 
 test "paritionFields - disjoint fields" {
-    const a1 = RecordField{ .name = @enumFromInt(10), .typ = .required, .type_var = @enumFromInt(0) };
-    const a2 = RecordField{ .name = @enumFromInt(20), .typ = .required, .type_var = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(30), .typ = .required, .type_var = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
+    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .type_var = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .type_var = @enumFromInt(2) };
 
     var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, a2 }) catch unreachable;
     var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{b1}) catch unreachable;
@@ -304,9 +310,9 @@ test "paritionFields - disjoint fields" {
 }
 
 test "paritionFields - overlapping fields" {
-    const a1 = RecordField{ .name = @enumFromInt(10), .typ = .required, .type_var = @enumFromInt(0) };
-    const both = RecordField{ .name = @enumFromInt(20), .typ = .optional, .type_var = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(30), .typ = .required, .type_var = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .type_var = @enumFromInt(0) };
+    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .type_var = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .type_var = @enumFromInt(2) };
 
     var a_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ a1, both }) catch unreachable;
     var b_record_fields = RecordFieldArray.fromSlice(&[_]RecordField{ b1, both }) catch unreachable;
