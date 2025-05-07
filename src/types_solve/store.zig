@@ -3,13 +3,18 @@
 
 const std = @import("std");
 
-const exitOnOutOfMemory = @import("../collections.zig").utils.exitOnOom;
+const collections = @import("../collections.zig");
 const types = @import("./types.zig");
+
+const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 const Desc = types.Descriptor;
 const Var = types.Var;
+const VarSafeList = types.VarSafeList;
+const RecordFieldSafeList = types.RecordFieldSafeList;
 const Content = types.Content;
 const Rank = types.Rank;
+const RecordField = types.RecordField;
 
 /// A variable & it's descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -32,8 +37,16 @@ pub const Slot = union(enum) {
 ///
 /// Var maps to a SlotStore.Idx internally
 pub const Store = struct {
-    slot_store: SlotStore,
-    desc_store: DescStore,
+    gpa: std.mem.Allocator,
+
+    slots: SlotStore,
+    descs: DescStore,
+
+    alias_args: VarSafeList,
+    tuple_elems: VarSafeList,
+    type_apply_args: VarSafeList,
+    func_args: VarSafeList,
+    record_fields: RecordFieldSafeList,
 
     const Self = @This();
 
@@ -41,15 +54,26 @@ pub const Store = struct {
     pub fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determin sensible defaults
         return .{
-            .desc_store = DescStore.init(gpa, 64),
-            .slot_store = SlotStore.init(gpa, 64),
+            .gpa = gpa,
+            .descs = DescStore.init(gpa, 64),
+            .slots = SlotStore.init(gpa, 64),
+            .alias_args = VarSafeList.initCapacity(gpa, 64),
+            .tuple_elems = VarSafeList.initCapacity(gpa, 64),
+            .type_apply_args = VarSafeList.initCapacity(gpa, 64),
+            .func_args = VarSafeList.initCapacity(gpa, 64),
+            .record_fields = RecordFieldSafeList.initCapacity(gpa, 64),
         };
     }
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
-        self.desc_store.deinit();
-        self.slot_store.deinit();
+        self.descs.deinit();
+        self.slots.deinit();
+        self.alias_args.deinit(self.gpa);
+        self.tuple_elems.deinit(self.gpa);
+        self.type_apply_args.deinit(self.gpa);
+        self.func_args.deinit(self.gpa);
+        self.record_fields.deinit(self.gpa);
     }
 
     // fresh variables //
@@ -62,27 +86,54 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) Var {
-        const desc_idx = self.desc_store.insert(desc);
-        const slot_idx = self.slot_store.insert(.{ .root = desc_idx });
+        const desc_idx = self.descs.insert(desc);
+        const slot_idx = self.slots.insert(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the provided desc at the top level
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
-        const desc_idx = self.desc_store.insert(.{ .content = content, .rank = Rank.top_level });
-        const slot_idx = self.slot_store.insert(.{ .root = desc_idx });
+        const desc_idx = self.descs.insert(.{ .content = content, .rank = Rank.top_level });
+        const slot_idx = self.slots.insert(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) Var {
-        const slot_idx = self.slot_store.insert(.{ .redirect = var_ });
+        const slot_idx = self.slots.insert(.{ .redirect = var_ });
         return Self.slotIdxToVar(slot_idx);
     }
 
-    // getters //
+    // sub list helpers //
+
+    /// Append a slice of alias args to the backing list, returning the range
+    pub fn appendAliasArgs(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.alias_args.appendSlice(self.gpa, slice);
+    }
+
+    /// Append a slice of tuple elems to the backing list, returning the range
+    pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.tuple_elems.appendSlice(self.gpa, slice);
+    }
+
+    /// Append a slice of type apply args to the backing list, returning the range
+    pub fn appendTypeApplyArgs(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.type_apply_args.appendSlice(self.gpa, slice);
+    }
+
+    /// Append a slice of func args to the backing list, returning the range
+    pub fn appendFuncArgs(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.func_args.appendSlice(self.gpa, slice);
+    }
+
+    /// Append a slice of record fields to the backing list, returning the range
+    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeList.Range {
+        return self.record_fields.appendSlice(self.gpa, slice);
+    }
+
+    // resolvers //
 
     /// Given a type var, follow all redirects until finding the root descriptor
     ///
@@ -95,13 +146,13 @@ pub const Store = struct {
         // then follow the chain again, but compressing each step to the concrete type
         if (initial_var != redirected_root_var) {
             var compressed_slot_idx = Self.varToSlotIdx(initial_var);
-            var compressed_slot: Slot = self.slot_store.get(compressed_slot_idx);
+            var compressed_slot: Slot = self.slots.get(compressed_slot_idx);
             while (true) {
                 switch (compressed_slot) {
                     .redirect => |next_redirect_var| {
-                        self.slot_store.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
+                        self.slots.set(compressed_slot_idx, Slot{ .redirect = redirected_root_var });
                         compressed_slot_idx = Self.varToSlotIdx(next_redirect_var);
-                        compressed_slot = self.slot_store.get(compressed_slot_idx);
+                        compressed_slot = self.slots.get(compressed_slot_idx);
                     },
                     .root => |_| break,
                 }
@@ -115,12 +166,12 @@ pub const Store = struct {
     /// Given a type var, follow all redirects until finding the root descriptor
     pub fn resolveVar(self: *const Self, initial_var: Var) ResolvedVarDesc {
         var redirected_slot_idx = Self.varToSlotIdx(initial_var);
-        var redirected_slot: Slot = self.slot_store.get(redirected_slot_idx);
+        var redirected_slot: Slot = self.slots.get(redirected_slot_idx);
         while (true) {
             switch (redirected_slot) {
                 .redirect => |next_redirect_var| {
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
-                    redirected_slot = self.slot_store.get(redirected_slot_idx);
+                    redirected_slot = self.slots.get(redirected_slot_idx);
                 },
                 .root => |_| break,
             }
@@ -131,7 +182,7 @@ pub const Store = struct {
         switch (redirected_slot) {
             .redirect => |_| @panic("redirected slot was still redirect after following chain"),
             .root => |desc_idx| {
-                const desc = self.desc_store.get(desc_idx);
+                const desc = self.descs.get(desc_idx);
                 return .{
                     .var_ = redirected_root_var,
                     .desc_idx = desc_idx,
@@ -174,10 +225,10 @@ pub const Store = struct {
         const b_data = self.resolveVarAndCompressPath(b_var);
 
         // Update b to be the new desc
-        self.desc_store.set(b_data.desc_idx, new_desc);
+        self.descs.set(b_data.desc_idx, new_desc);
 
         // Update a to point to b
-        self.slot_store.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
+        self.slots.set(Self.varToSlotIdx(a_var), .{ .redirect = b_var });
     }
 
     // test helpers //
@@ -187,13 +238,13 @@ pub const Store = struct {
     /// If you're reaching for this in non-test code, you probably want
     /// resolveVar or resolveVarAndCompressPath instead
     pub fn getSlot(self: *Self, var_: Var) Slot {
-        return self.slot_store.get(Self.varToSlotIdx(var_));
+        return self.slots.get(Self.varToSlotIdx(var_));
     }
 
     /// Get the descriptor for the provided idx
     /// Used in tests
     pub fn getDesc(self: *Self, desc_idx: DescStore.Idx) Desc {
-        return self.desc_store.get(desc_idx);
+        return self.descs.get(desc_idx);
     }
 
     // helpers //

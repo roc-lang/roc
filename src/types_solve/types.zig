@@ -1,5 +1,8 @@
 const std = @import("std");
+const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
+
+const SafeList = collections.SafeList;
 
 test {
     // TODO: ADD size assertions here
@@ -8,8 +11,11 @@ test {
     std.debug.print("Size of Record: {} bytes\n", .{@sizeOf(Record)});
 }
 
-/// A type variable id
+/// A type variable
 pub const Var = enum(u32) { _ };
+
+/// A safelist of type variables
+pub const VarSafeList = SafeList(Var);
 
 // A type descritpro
 pub const Descriptor = struct { content: Content, rank: Rank };
@@ -34,8 +40,7 @@ pub const Rank = enum(u4) {
 /// details
 pub const Content = union(enum) {
     flex_var: ?Ident.Idx,
-    structural_alias: Alias,
-    opaque_alias: Alias,
+    alias: Alias,
     effectful,
     pure,
     concrete: FlatType,
@@ -57,16 +62,13 @@ pub const TypeIdent = struct {
 // a nominal or structural alias
 // can hold up to 16 arguments
 pub const Alias = struct {
+    type: Type,
     ident: TypeIdent,
-    args: ArgsArray,
+    args: VarSafeList.Range,
     backing_var: Var,
+    // TODO: lambda sets var
 
-    // TODO: In the rust compiler it seems like Args has lambda set variables too?
-
-    /// Represents the max capacity of the args array
-    pub const args_capacity = 16;
-    /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, args_capacity);
+    pub const Type = enum { opaque_, structural };
 };
 
 // flat types
@@ -86,23 +88,12 @@ pub const FlatType = union(enum) {
 /// Applications may have up to 16 type arguments.
 pub const TypeApply = struct {
     ident: TypeIdent,
-    args: ArgsArray,
-
-    /// Represents the max capacity of the args array
-    pub const arg_capacity = 16;
-    /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, arg_capacity);
+    args: VarSafeList.Range,
 };
 
 /// Represents a tuple
-/// Tuples may have up to 16 type elements.
 pub const Tuple = struct {
-    elems: ElemsArray,
-
-    /// Represents the max capacity of the elems array
-    pub const elems_capacity = 16;
-    /// Bounded array to hold elems
-    pub const ElemsArray = std.BoundedArray(Var, elems_capacity);
+    elems: VarSafeList.Range,
 };
 
 /// Represents number
@@ -143,17 +134,12 @@ pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 /// Functions may have up to 16 arguments.
 /// TODO: Should function support more args?
 pub const Func = struct {
-    args: ArgsArray,
+    args: VarSafeList.Range,
     ret: Var,
     eff: Var,
 
     // TODO: These are needed once we have lambda sets
     // lambda_set: Var,
-
-    /// Represents the max capacity of the args array
-    pub const arg_capacity = 16;
-    /// Bounded array to hold args
-    pub const ArgsArray = std.BoundedArray(Var, arg_capacity);
 };
 
 /// A record field name
@@ -256,6 +242,9 @@ pub const RecordField = struct {
         }
     }
 };
+
+/// A safelist of record fields
+pub const RecordFieldSafeList = SafeList(RecordField);
 
 /// Two record fields
 pub const RecordFields = struct {
