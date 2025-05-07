@@ -132,9 +132,25 @@ Desugaring in the compiler:
 
 ## Type Signature
 
-TODO
+Specifies the type of a variable. For example, the type signature of `Str.concat` is:
+```
+concat : Str, Str -> Str
+```
+Here it specifies `concat` takes two strings as input and produces one as output.
+
+In the compiler, the type signature specified in the source code has priority over the type found by [type inference](#type-inference), although both need to match for your code to compile completely.
+
+Type annotations are basically the same thing as type signatures and both terms are used interchangebly throughout the compiler.
+
+Parsing of type signatures:
+- New compiler: [Parser.zig](src/check/parse/Parser.zig) (search signature)
+- Old compiler: [ast.rs](crates/compiler/parse/src/ast.rs) (search TypeAnnotation)
 
 ## Type Alias
+
+TODO
+
+## Type Variable
 
 TODO
 
