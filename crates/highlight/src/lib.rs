@@ -85,7 +85,7 @@ pub fn highlight(code: &str) -> Vec<String> {
             | Token::Comma
             | Token::Bar
             | Token::Decimal => {
-                buf = push_html_span(buf, current_text, "delimeter");
+                buf = push_html_span(buf, current_text, "delimiter");
             }
             // Types, Tags, and Modules
             Token::UpperIdent | Token::AtSign => {

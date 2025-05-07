@@ -18,7 +18,7 @@ const Self = @This();
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
 bytes: std.ArrayListUnmanaged(u8) = .{},
-/// A deduplicated set of strings indicies referencing into bytes.
+/// A deduplicated set of strings indices referencing into bytes.
 /// The key is the offset into bytes.
 strings: StringIdx.Table = .{},
 /// A unique ID for every string. This is fundamentally an index into bytes.
@@ -29,7 +29,7 @@ regions: std.ArrayListUnmanaged(Region) = .{},
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
 
-/// Intiailize a `SmallStringInterner` with the specified capacity.
+/// Initialize a `SmallStringInterner` with the specified capacity.
 pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Self {
     // TODO: tune this. Rough assumption that average small string is 4 bytes.
     const bytes_per_string = 4;

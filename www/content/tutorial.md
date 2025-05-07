@@ -1468,7 +1468,7 @@ double = |num|
 expect double(0) == 0
 ```
 
-- `roc build` wil run `main`, ignore `expect 1 == 2` and just print `Hi there.`.
+- `roc build` will run `main`, ignore `expect 1 == 2` and just print `Hi there.`.
 - `roc dev` will run `main`, tell you `expect 1 == 2` failed but will still print `Hi there`.
 - `roc test` will run `expect double(0) == 0` followed by `expect num > -1` and will print how many top level expects passed: `0 failed and 1 passed in 100 ms.`.
 
@@ -1863,7 +1863,7 @@ main! = |_args|
 
 (In this particular example, it's very unlikely that this would come up at all, and even if it did, we might not care which one caused the problem. But you can imagine having multiple HTTP requests, or file writes, and wanting to know which of them was the one that failed.)
 
-If an error happended here, we wouldn't know which effectful function was the cause of the failure.
+If an error happened here, we wouldn't know which effectful function was the cause of the failure.
 
 One option is to "tag the error" using `Result.map_err` to wrap the error in a [tag](#tags) like so:
 

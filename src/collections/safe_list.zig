@@ -55,7 +55,7 @@ pub fn SafeList(comptime T: type) type {
             range: Range,
         };
 
-        /// Intialize the `SafeList` with the specified capacity.
+        /// Initialize the `SafeList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) SafeList(T) {
             return .{
                 .items = std.ArrayListUnmanaged(T).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
@@ -190,7 +190,7 @@ pub fn SafeMultiList(comptime T: type) type {
             return self.items.items(field_name)[@as(usize, @intFromEnum(idx))];
         }
 
-        /// Intialize the `SafeMultiList` with the specified capacity.
+        /// Initialize the `SafeMultiList` with the specified capacity.
         pub fn initCapacity(gpa: Allocator, capacity: usize) SafeMultiList(T) {
             var items = std.MultiArrayList(T){};
             items.ensureTotalCapacity(gpa, capacity) catch |err| exitOnOom(err);

@@ -21,7 +21,7 @@ const StatementIdx = NodeStore.StatementIdx;
 
 const FormatFlags = enum { debug_binop, no_debug };
 
-/// Count of successfully formated files along with files that failed to format.
+/// Count of successfully formatted files along with files that failed to format.
 pub const SuccessFailCount = struct { success: usize, failure: usize };
 
 /// Formats all roc files in the specified path.
@@ -2194,13 +2194,13 @@ test "Platform header - nonempty" {
     try moduleFmtsSame(
         \\platform # Comment after platform keyword
         \\    "foo" # Comment after name
-        \\    requires # Coment after requires keyword
+        \\    requires # Comment after requires keyword
         \\        { # Comment after rigids open
         \\            Main, # Comment after rigid member
         \\        } # Comment after rigids close
         \\            { # Comment after signatures open
         \\                main! : List(Str) => {}, # Comment after signature
-        \\            } # Comment after signatures clsoe
+        \\            } # Comment after signatures close
         \\    exposes # Comment after exposes keyword
         \\        [ # Comment after exposes open
         \\            foo, # Comment after exposed item

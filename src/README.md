@@ -8,7 +8,7 @@ This table provides a summary of progress for the zig compiler re-write and shou
 | **Canonicalize**         | 🚧          | 🚧         |         |             |                   |                  |                  |
 | **Resolve Imports**      |             |            |         |             |                   |                  |                  |
 | **Check Types**          |             |            |         |             |                   |                  |                  |
-| **Intepreter**           |             |            |         |             |                   |                  |                  |
+| **Interpreter**          |             |            |         |             |                   |                  |                  |
 | **Specialize Types**     |             |            |         |             |                   |                  |                  |
 | **Lift Functions**       |             |            |         |             |                   |                  |                  |
 | **Solve Functions**      |             |            |         |             |                   |                  |                  |
@@ -45,7 +45,7 @@ This fast config can also be used with `zls`. Simply follow these steps:
 Otherwise, zig commands run manually can lead to the lsp breaking and requiring a restart.
 5. Optionally, add `-Dfuzz` above as well to get type checking of fuzz scripts as well.
 6. Note, I had to fully delete my `.zig-cache` to get `zls` to start.
-Make sure to check the logs if you aren't geting type failures.
+Make sure to check the logs if you aren't getting type failures.
 7. Enjoy better lsp results.
 
 ### Simply testing feedback loop

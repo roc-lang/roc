@@ -81,7 +81,7 @@ roc_linux_x86_64.tar.gz
 # macOS .DS_Store files
 .DS_Store
 
-# files geneated when formatting fails
+# files generated when formatting fails
 *.roc-format-failed
 *.roc-format-failed-ast-after
 *.roc-format-failed-ast-before
