@@ -40,7 +40,7 @@ Using it with roc can be as simple as `flamegraph --root -- ./zig-out/bin/roc fo
 
 If you open the flamegraph in a browser, you can explore where time is spent.
 There is a search button in the top right corner (almost not visible) that enables better discovery of percentage of time used in various functions.
-For example, here is a flamegraph from parsing and formating a roc file.
+For example, here is a flamegraph from parsing and formatting a roc file.
 It was search for `memmove` and shows that 25% of time is spent moving bytes.
 
 ![example flamegraph](example-flamegraph.png)
@@ -63,7 +63,7 @@ On top of that, we can see that 42% of `memmove`s happened during tokenization.
 
 Unlike the above, tracy is not primarily a sampling profiler.
 Instead, tracy focuses on tracing through explicit code annotations.
-Tracy is significantly more complex than the other solutions, but is alway way more powerful.
+Tracy is significantly more complex than the other solutions, but is always way more powerful.
 Tracy has an [~100 page detailed manual](https://github.com/wolfpld/tracy/releases/latest/download/tracy.pdf) and an online interactive demo: https://tracy.nereid.pl/.
 The most important part of the manual to read is probably `Analyzing captured data` (which is about the UI).
 
@@ -74,7 +74,7 @@ As such, I have checked out the tracy github repro to the `v0.11.0` tag in my `~
 
 Then, on my linux machine (which tracy works better on), I run ` zig build -Doptimize=ReleaseFast -Dtracy=$HOME/vendor/tracy roc`.
 This builds tracy with all of the bells and whistles.
-One of those cool features is tracy callstacks. This feature gives much more precision of information, but adds signifcant overhead.
+One of those cool features is tracy callstacks. This feature gives much more precision of information, but adds significant overhead.
 Often times, it is worth profiling once with `-Dtracy-callstack=false` to have much less overhead.
 
 Now that I have the compiler built with tracy, I can launch the tracy server on my mac machine to record the result (you can also run it on the same machine if wanted).

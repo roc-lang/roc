@@ -3449,7 +3449,7 @@ pub const NodeStore = struct {
     /// Clears any WhenBranchIds added to scratch from start until the end.
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
-    pub fn clearScratchWhenBranchsFrom(store: *NodeStore, start: u32) void {
+    pub fn clearScratchWhenBranchesFrom(store: *NodeStore, start: u32) void {
         store.scratch_when_branches.shrinkRetainingCapacity(start);
     }
 

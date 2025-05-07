@@ -326,7 +326,7 @@ fn llvmPaths(
         };
     }
 
-    // No user specified llvm. Go download it from roc-boostrap.
+    // No user specified llvm. Go download it from roc-bootstrap.
     const raw_triple = target.result.linuxTriple(b.allocator) catch @panic("OOM");
     if (!supported_deps_triples.has(raw_triple)) {
         std.log.err("Target triple({s}) not supported by roc-bootstrap.\n", .{raw_triple});

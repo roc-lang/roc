@@ -1820,7 +1820,7 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
                 }
             },
             .Int => {
-                // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more charcters.
+                // To ensure this value when reprinted tokenizes as an int, add a base if the number is 3 or more characters.
                 if (length >= 3) {
                     try buf2.append(alloc, '0');
                     try buf2.append(alloc, 'x');

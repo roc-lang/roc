@@ -947,8 +947,8 @@ code .colon {
 }
 
 /* Delimieters */
-samp .delimeter,
-code .delimeter {
+samp .delimiter,
+code .delimiter {
     color: var(--primary-1);
 }
 

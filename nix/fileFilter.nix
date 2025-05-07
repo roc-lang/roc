@@ -14,7 +14,7 @@ let
     let
       dirFilter = pathStr: (
         let dirName = baseNameOf pathStr; in !(
-          # remove any folder whos name is `tests` or starts with `test_`
+          # remove any folder whose name is `tests` or starts with `test_`
           dirName == "tests"
         )
       );

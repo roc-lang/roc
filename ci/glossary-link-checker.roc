@@ -30,7 +30,7 @@ main! = |_args|
 
     when full_check_res is
             Ok(_) ->
-                Stdout.line!("Successfuly checked $(List.len(md_links) |> Num.to_str) links.")
+                Stdout.line!("Successfully checked $(List.len(md_links) |> Num.to_str) links.")
             Err(_) ->
                 Err(Exit(1, "Link check failed. Please check the above errors."))
 

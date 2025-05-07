@@ -141,7 +141,7 @@ pub const Url = struct {
 
     const MISLEADING_CHARACTERS_IN_URL: [5]u32 = .{
         // Since the TLD (top level domain) `.zip` is now available, there is a new attack
-        // vector where malicous URLs can be used to confuse the reader.
+        // vector where malicious URLs can be used to confuse the reader.
         // Example of a URL which would take you to example.zip:
         // https://github.com∕kubernetes∕kubernetes∕archive∕refs∕tags∕@example.zip
         // roc employs a checksum mechanism to prevent tampering with packages.

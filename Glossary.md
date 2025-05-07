@@ -2,7 +2,7 @@ Here you can find definitions for words that are commonly used in the **compiler
 with links to the codebase. Check https://www.roc-lang.org/tutorial if you want to know 
 about general Roc terms. Feel free to ask for a term to be added or add one yourself!
 
-Contributor note: definitons should be roughly ordered like in a tutorial, e.g.
+Contributor note: definitions should be roughly ordered like in a tutorial, e.g.
 Parser should be explained before Canonicalization. 
 
 ## CLI
@@ -140,7 +140,7 @@ Here it specifies `concat` takes two strings as input and produces one as output
 
 In the compiler, the type signature specified in the source code has priority over the type found by [type inference](#type-inference), although both need to match for your code to compile completely.
 
-Type annotations are basically the same thing as type signatures and both terms are used interchangebly throughout the compiler.
+Type annotations are basically the same thing as type signatures and both terms are used interchangeably throughout the compiler.
 
 Parsing of type signatures:
 - New compiler: [Parser.zig](src/check/parse/Parser.zig) (search signature)

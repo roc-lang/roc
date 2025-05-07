@@ -738,7 +738,7 @@ fn gen_elf_le(
             }
         }
         // To correctly remove the JUMP_SLOT relocations for Roc functions we:
-        //     1. collect the indicies of all of them.
+        //     1. collect the indices of all of them.
         //     2. move them all to the end of the relocation sections.
         //     3. shrink the relocation section to ignore them.
         //     4. update the dynamic section to reflect the shrink as well.

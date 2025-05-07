@@ -962,8 +962,8 @@ code .keyword.operator {
 }
 
 /* Delimieters */
-samp .delimeter,
-code .delimeter {
+samp .delimiter,
+code .delimiter {
   color: var(--gray);
 }
 

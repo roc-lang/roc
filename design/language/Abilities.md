@@ -348,7 +348,7 @@ isNotEq : Dict k v, Dict k v -> Bool
 In this `Eq { isEq, isNotEq }` declaration, I'm saying that `isEq` and `isNotEq` are functions already in scope. I could also choose different names using record literal syntax, e.g. `Eq { isEq: dictIsEq, isNotEq: dictIsNotEq }` - the relevant part is that I'm specifying the names of the functions (which must also be in scope) which specify how `Eq` for Dict should work.
 
 Now that I've specified this, when I use `==` on two `Dict` values, this `isEq` function will get run instead of the default `==` implementation. This solves [Problem #3](#problem-3-decoders-are-still-hard-to-learn)!
-I can also write something like has `Num` and provide the relevant functions to obtain a unit-ful number type - which solves [Problem #2](#problem-2-custom-number-types-cant-use-arithmetic-operators).
+I can also write something like has `Num` and provide the relevant functions to obtain a unit-ful number type, which solves [Problem #2](#problem-2-custom-number-types-cant-use-arithmetic-operators).
 
 ### Default Abilities for Newtypes
 
