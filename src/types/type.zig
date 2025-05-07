@@ -2,11 +2,12 @@ const std = @import("std");
 const testing = std.testing;
 const collections = @import("../collections.zig");
 const base = @import("../base.zig");
+const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 
 const Ident = base.Ident;
 
-/// Represents types
-pub const Type = union(enum) {
+const OomErr = std.mem.Allocator.Error.OutOfMemory;
+pub const Prim = union(enum) {
     /// Builtin `Bool` type
     bool,
 
@@ -18,17 +19,39 @@ pub const Type = union(enum) {
 
     /// Builtin `Float a` type
     frac: Frac,
+};
+pub const Frac = enum {
+    f32,
+    f64,
+    dec,
+};
 
+pub const Int = enum {
+    u8,
+    i8,
+    u16,
+    i16,
+    u32,
+    i32,
+    u64,
+    i64,
+    u128,
+    i128,
+};
+/// Represents types
+pub const RType = union(enum) {
+    ///A primitive type
+    prim: Prim,
     /// A type variable which the user did not name in an annotation
     flex_var: ?Ident.Idx,
 
     /// Name given in a user-written annotation
     rigid_var: Ident.Idx,
 
-    /// Function application
+    /// Function
     func: Func,
 
-    /// Function call
+    /// Type application (e.g List(Str))
     apply: Apply,
 
     /// Type error
@@ -49,25 +72,9 @@ pub const Type = union(enum) {
         arguments: []Idx,
     };
 
-    pub const Frac = enum {
-        f32,
-        f64,
-        dec,
-    };
-
-    pub const Int = enum {
-        u8,
-        i8,
-        u16,
-        i16,
-        u32,
-        i32,
-        u64,
-        i64,
-        u128,
-        i128,
-    };
-
+    pub fn primType(inType: Prim) @This() {
+        return @This(){ .prim = inType };
+    }
     pub fn format(
         self: @This(),
         comptime fmt: []const u8,
@@ -77,30 +84,25 @@ pub const Type = union(enum) {
         _ = fmt;
         _ = options;
         switch (self) {
-            .bool => {
-                try writer.writeAll("Bool");
-            },
-            .apply => {
-                @panic("todo");
-            },
-            .str => {
-                @panic("todo");
-            },
-            .int => |i| {
-                switch (i) {
-                    .u8 => try writer.writeAll("U8"),
-                    .i8 => try writer.writeAll("I8"),
-                    .u16 => try writer.writeAll("U16"),
-                    .i16 => try writer.writeAll("I16"),
-                    .u32 => try writer.writeAll("U32"),
-                    .i32 => try writer.writeAll("I32"),
-                    .u64 => try writer.writeAll("U64"),
-                    .i64 => try writer.writeAll("I64"),
-                    .u128 => try writer.writeAll("U128"),
-                    .i128 => try writer.writeAll("I128"),
+            @This().prim => |value| {
+                switch (value) {
+                    Prim.bool => try writer.writeAll("Bool"),
+                    Prim.int => |size| {
+                        switch (size) {
+                            else => {
+                                try writer.writeAll("Int");
+                            },
+                        }
+                    },
+                    Prim.frac => {
+                        @panic("Frac");
+                    },
+                    Prim.str => {
+                        @panic("TODO");
+                    },
                 }
             },
-            .frac => {
+            .apply => {
                 @panic("todo");
             },
             .flex_var => {
@@ -118,86 +120,213 @@ pub const Type = union(enum) {
         }
     }
 
-    pub const Store = struct {
-        env: *base.ModuleEnv,
-        types: List,
+    pub const Idx = enum(u31) { _ };
 
-        pub const BOOL: Idx = @enumFromInt(0);
-        pub const STR: Idx = @enumFromInt(1);
-        pub const U8: Idx = @enumFromInt(2);
-        pub const I8: Idx = @enumFromInt(3);
-        pub const U16: Idx = @enumFromInt(4);
-        pub const I16: Idx = @enumFromInt(5);
-        pub const U32: Idx = @enumFromInt(6);
-        pub const I32: Idx = @enumFromInt(7);
-        pub const U64: Idx = @enumFromInt(8);
-        pub const I64: Idx = @enumFromInt(9);
-        pub const U128: Idx = @enumFromInt(10);
-        pub const I128: Idx = @enumFromInt(11);
+    pub const Store = struct {
+        /// Slots that haven't been pushed yet
+        pending: usize,
+        slots: Slot.List,
+        descriptors: Descriptor.List,
+
+        const Slot = packed struct {
+            tag: enum(u1) { root, redirect },
+            value: u31,
+
+            const UNINITIALIZED: Slot = .{ .tag = .root, .value = 0 };
+            const List = std.ArrayList(Slot);
+
+            fn makeRoot(idx: u31) Slot {
+                return .{ .tag = .root, .value = idx };
+            }
+
+            fn makeRedirect(idx: Idx) Slot {
+                return .{ .tag = .redirect, .value = @intFromEnum(idx) };
+            }
+        };
 
         pub fn init(env: *base.ModuleEnv) Store {
-            var store = Store{ .env = env, .types = .{} };
+            var store = Store{
+                .pending = 0,
+                .slots = Slot.List.init(env.gpa),
+                .descriptors = Descriptor.List.init(env.gpa),
+            };
 
-            // APPEND THE BUILTINS ORDER MATTERS FOR THE CONSTANTS
-            // DEFINED ABOVE
-
-            _ = store.types.append(env.gpa, .bool);
-            _ = store.types.append(env.gpa, .str);
-            _ = store.types.append(env.gpa, .{ .int = .u8 });
-            _ = store.types.append(env.gpa, .{ .int = .i8 });
-            _ = store.types.append(env.gpa, .{ .int = .u16 });
-            _ = store.types.append(env.gpa, .{ .int = .i16 });
-            _ = store.types.append(env.gpa, .{ .int = .u32 });
-            _ = store.types.append(env.gpa, .{ .int = .i32 });
-            _ = store.types.append(env.gpa, .{ .int = .u64 });
-            _ = store.types.append(env.gpa, .{ .int = .i64 });
-            _ = store.types.append(env.gpa, .{ .int = .u128 });
-            _ = store.types.append(env.gpa, .{ .int = .i128 });
-
-            // TODO other builtins... can we find a nicer solution for managing this?
+            store.descriptors.append(Descriptor.NONE) catch exitOnOom(OomErr);
 
             return store;
         }
 
         pub fn deinit(self: *Store) void {
-            self.types.deinit(self.env.gpa);
+            self.slots.deinit();
+            self.descriptors.deinit();
         }
 
-        pub fn get(self: *const Store, id: Idx) *Type {
-            return self.types.get(id);
+        pub fn get(self: *Store, idx: Idx) *const Descriptor {
+            return self.getInitialized(idx) orelse &Descriptor.NONE;
         }
 
-        pub fn set(self: *const Store, id: Idx, value: Type) void {
-            self.types.set(id, value);
+        pub fn set(self: *Store, idx: Idx, descriptor: Descriptor) void {
+            if (self.getInitialized(idx)) |current| {
+                current.* = descriptor;
+            } else {
+                self.descriptors.append(descriptor) catch exitOnOom(OomErr);
+                const descriptor_idx: u31 = @intCast(self.descriptors.items.len - 1);
+
+                self.setSlot(idx, Slot.makeRoot(descriptor_idx));
+            }
         }
 
-        /// Create a fresh type variable
-        /// Used in canonicalization when creating type slots
+        fn setSlot(self: *Store, idx: Idx, slot: Slot) void {
+            if (self.pending > 0) {
+                const slice = self.slots.addManyAsSlice(self.pending) catch exitOnOom(OomErr);
+                @memset(slice, Slot.UNINITIALIZED);
+
+                // Assuming more than half of slots are redirects
+                self.descriptors.ensureTotalCapacity(self.slots.items.len / 2) catch exitOnOom(OomErr);
+                self.pending = 0;
+            }
+
+            const slot_idx = @intFromEnum(idx);
+            self.slots.items[slot_idx] = slot;
+        }
+
+        pub fn merge(self: *Store, to: Idx, from: Idx, desc: Descriptor) void {
+            const to_desc = self.getInitialized(to);
+            const from_desc = self.getInitialized(from);
+
+            if (to_desc == null or from_desc == null or to_desc != from_desc) {
+                self.setSlot(from, Slot.makeRedirect(to));
+            }
+
+            self.set(to, desc);
+        }
+
+        ///If two `Slot`s own the same type, make one a reference to the other
+        pub fn compact(self: *Store) *Store {
+            for (self.slots.items, 0..) |typeA, i| {
+                for (self.slots.items[i..], 0..) |typeB, ii| {
+                    if (typeA.value == typeB.value and typeA.tag == .redirect and typeB.tag == .root) {
+                        var newType = typeB;
+                        newType.tag = .redirect;
+                        self.setSlot(@enumFromInt(i + ii), newType);
+                    } else {}
+                }
+            }
+            return self;
+        }
+
+        /// Returns a pointer to a descriptor or null if uninitialized
+        fn getInitialized(self: *Store, idx: Idx) ?*Descriptor {
+            const slot_idx = @intFromEnum(idx);
+            if (slot_idx >= self.slots.items.len) {
+                return null;
+            }
+
+            var slot = self.slots.items[slot_idx];
+
+            while (slot.tag == .redirect) {
+                slot = self.slots.items[@as(usize, slot.value)];
+            }
+            // TODO compacting
+
+            if (slot.value == Slot.UNINITIALIZED.value) {
+                return null;
+            }
+
+            return &self.descriptors.items[slot.value];
+        }
+
+        /// Create a slot for a type without initializing it
         pub fn fresh(self: *Store) Idx {
-            return self.types.append(self.env.gpa, .{ .flex_var = null });
+            defer self.pending += 1;
+            return @enumFromInt(self.slots.items.len + self.pending);
+        }
+        pub fn addTestType(self: *Store, newType: RType) Idx {
+            const idx = self.fresh();
+            const typeDesc = toDesc(newType);
+            self.set(idx, typeDesc);
+            return idx;
         }
     };
-
-    pub const List = collections.SafeList(Type);
-    pub const Idx = List.Idx;
 };
 
-test "formatting" {
-    const gpa = testing.allocator;
+pub const Rank = struct {
+    rank: u32,
+    pub const GENERALIZED: Rank = .{ .rank = 0 };
 
-    var env = base.ModuleEnv.init(gpa);
+    pub fn min(self: Rank, other: Rank) Rank {
+        return .{ .rank = @min(self.rank, other.rank) };
+    }
+};
+
+pub const Mark = struct {
+    mark: i32,
+    pub const NONE: Mark = .{ .mark = 0 };
+};
+
+pub const Descriptor = struct {
+    rank: Rank,
+    mark: Mark,
+    type: RType,
+
+    const NONE: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = .{ .flex_var = null } };
+
+    const List = std.ArrayList(Descriptor);
+};
+
+pub fn toDesc(rocType: RType) Descriptor {
+    var desc = Descriptor.NONE;
+    desc.type = rocType;
+    return desc;
+}
+
+test "store" {
+    var env = base.ModuleEnv.init(testing.allocator);
     defer env.deinit();
-
-    var store = Type.Store.init(&env);
+    var store = RType.Store.init(&env);
     defer store.deinit();
 
-    const bool_str = try std.fmt.allocPrint(gpa, "{}", .{store.get(Type.Store.BOOL)});
-    defer gpa.free(bool_str);
+    // Test fresh index creation
+    const idx1 = store.fresh();
+    const idx2 = store.fresh();
+    try testing.expect(@intFromEnum(idx1) < @intFromEnum(idx2));
 
-    try testing.expectEqualStrings(bool_str, "Bool");
+    // Test uninitialized slot returns NONE
+    try testing.expectEqual(store.get(idx1).type, Descriptor.NONE.type);
 
-    const i128_str = try std.fmt.allocPrint(gpa, "{}", .{store.get(Type.Store.I128)});
-    defer gpa.free(i128_str);
+    // Test setting and getting a descriptor
+    var desc: Descriptor = Descriptor.NONE;
+    desc.type = RType.primType(Prim.bool);
+    store.set(idx1, desc);
+    try testing.expectEqual(store.get(idx1).type, RType.primType(Prim.bool));
 
-    try testing.expectEqualStrings(i128_str, "I128");
+    // Test updating an existing descriptor
+    const updated_desc: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = RType.primType(Prim.bool) };
+    store.set(idx1, updated_desc);
+    try testing.expectEqual(store.get(idx1).type, RType.primType(Prim.bool));
+
+    // Test merge
+    const idx3 = store.fresh();
+    const idx4 = store.fresh();
+    const union_desc: Descriptor = .{ .rank = Rank.GENERALIZED, .mark = Mark.NONE, .type = RType.primType(Prim.bool) };
+    store.merge(idx3, idx4, union_desc);
+    try testing.expectEqual(store.get(idx3).type, RType.primType(Prim.bool));
+    try testing.expectEqual(store.get(idx4).type, RType.primType(Prim.bool));
+
+    // TODO test double redirect
 }
+
+// test "formatting" {
+//     var store = Type.Store.init(std.testing.allocator);
+//     defer store.deinit();
+
+//     const bool_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.BOOL)});
+//     defer testing.allocator.free(bool_str);
+
+//     try testing.expectEqualStrings(bool_str, "Bool");
+
+//     const i128_str = try std.fmt.allocPrint(testing.allocator, "{}", .{store.get(Type.Store.I128)});
+//     defer testing.allocator.free(i128_str);
+
+//     try testing.expectEqualStrings(i128_str, "I128");
+// }
