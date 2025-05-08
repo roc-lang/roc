@@ -37,18 +37,24 @@ pub const Slot = union(enum) {
 ///
 /// Var maps to a SlotStore.Idx internally
 pub const Store = struct {
+    const Self = @This();
+
     gpa: std.mem.Allocator,
 
+    // Slots & descriptors
     slots: SlotStore,
     descs: DescStore,
+
+    // Small strings
+    flex_rigid_var_names: collections.SmallStringInterner,
     record_field_names: collections.SmallStringInterner,
+
+    // Everything else
     alias_args: VarSafeList,
     tuple_elems: VarSafeList,
     type_apply_args: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeList,
-
-    const Self = @This();
 
     /// Init the unification table
     pub fn init(gpa: std.mem.Allocator) Self {
@@ -57,6 +63,7 @@ pub const Store = struct {
             .gpa = gpa,
             .descs = DescStore.init(gpa, 64),
             .slots = SlotStore.init(gpa, 64),
+            .flex_rigid_var_names = collections.SmallStringInterner.initCapacity(gpa, 64),
             .record_field_names = collections.SmallStringInterner.initCapacity(gpa, 64),
             .alias_args = VarSafeList.initCapacity(gpa, 64),
             .tuple_elems = VarSafeList.initCapacity(gpa, 64),
@@ -70,6 +77,7 @@ pub const Store = struct {
     pub fn deinit(self: *Self) void {
         self.descs.deinit();
         self.slots.deinit();
+        self.flex_rigid_var_names.deinit(self.gpa);
         self.record_field_names.deinit(self.gpa);
         self.alias_args.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);

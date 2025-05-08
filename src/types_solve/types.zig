@@ -2,6 +2,7 @@ const std = @import("std");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 
+const SmallStringInterner = collections.SmallStringInterner;
 const SafeList = collections.SafeList;
 
 test {
@@ -42,7 +43,8 @@ pub const Rank = enum(u4) {
 /// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
 /// details
 pub const Content = union(enum) {
-    flex_var: ?Ident.Idx,
+    flex_var: ?SmallStringInterner.Idx,
+    rigid_var: SmallStringInterner.Idx,
     alias: Alias,
     effectful,
     pure,
@@ -56,6 +58,7 @@ pub const TypeIdent = struct {
 
     ident_idx: Ident.Idx,
     // TODO: Add module ident
+    // will there be a CanIdent or smthing?
 
     pub fn eql(a: Self, b: Self) bool {
         return a.ident_idx == b.ident_idx;

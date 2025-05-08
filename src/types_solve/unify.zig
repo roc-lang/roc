@@ -41,6 +41,7 @@ const store = @import("./store.zig");
 const types = @import("./types.zig");
 
 const exitOnOutOfMemory = collections.utils.exitOnOom;
+const SmallStringInterner = collections.SmallStringInterner;
 
 const Slot = store.Slot;
 const ResolvedVarDesc = store.ResolvedVarDesc;
@@ -177,6 +178,9 @@ const Unifier = struct {
                     .flex_var => |mb_a_ident| {
                         self.unifyFlex(&vars, mb_a_ident, vars.b.desc.content);
                     },
+                    .rigid_var => |_| {
+                        try self.unifyRigid(&vars, vars.b.desc.content);
+                    },
                     .alias => |a_alias| {
                         switch (a_alias.type) {
                             .structural => {
@@ -205,7 +209,7 @@ const Unifier = struct {
     // Unify flex //
 
     /// Unify when `a` was a flex
-    fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, mb_a_ident: ?Ident.Idx, b_content: Content) void {
+    fn unifyFlex(self: *Self, vars: *const ResolvedVarDescs, mb_a_ident: ?SmallStringInterner.Idx, b_content: Content) void {
         switch (b_content) {
             .flex_var => |mb_b_ident| {
                 if (mb_a_ident) |a_ident| {
@@ -214,10 +218,26 @@ const Unifier = struct {
                     self.merge(vars, Content{ .flex_var = mb_b_ident });
                 }
             },
+            .rigid_var => self.merge(vars, b_content),
             .alias => self.merge(vars, b_content),
             .effectful => self.merge(vars, b_content),
             .pure => self.merge(vars, b_content),
             .concrete => self.merge(vars, b_content),
+            .err => self.merge(vars, .err),
+        }
+    }
+
+    // Unify rigid //
+
+    /// Unify when `a` was a rigid
+    fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
+        switch (b_content) {
+            .flex_var => self.merge(vars, vars.a.desc.content),
+            .rigid_var => return error.TypeMismatch,
+            .alias => return error.TypeMismatch,
+            .effectful => return error.TypeMismatch,
+            .pure => return error.TypeMismatch,
+            .concrete => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -229,6 +249,9 @@ const Unifier = struct {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .alias = a_alias });
+            },
+            .rigid_var => |_| {
+                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 switch (b_alias.type) {
@@ -256,6 +279,9 @@ const Unifier = struct {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .alias = a_alias });
+            },
+            .rigid_var => |_| {
+                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
                 switch (b_alias.type) {
@@ -349,6 +375,7 @@ const Unifier = struct {
             .flex_var => |_| {
                 self.merge(vars, Content{ .concrete = a_flat_type });
             },
+            .rigid_var => return error.TypeMismatch,
             .alias => |alias| {
                 switch (alias.type) {
                     .structural => {
@@ -1174,6 +1201,74 @@ test "unify - a is flex_var and b is not" {
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+}
+
+// unification - rigid
+
+test "rigid_var - unifies with flex_var" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const rigid = Content{ .rigid_var = @enumFromInt(1) };
+    const a = env.types_store.freshFromContent(.{ .flex_var = null });
+    const b = env.types_store.freshFromContent(rigid);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
+}
+
+test "rigid_var - unifies with flex_var (other way)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const rigid = Content{ .rigid_var = @enumFromInt(1) };
+    const a = env.types_store.freshFromContent(rigid);
+    const b = env.types_store.freshFromContent(.{ .flex_var = null });
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
+}
+
+test "rigid_var - cannot unify with alias (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const alias = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const rigid = env.types_store.freshFromContent(.{ .rigid_var = @enumFromInt(1) });
+
+    const result = unify(&env.types_store, &env.scratch, alias, rigid);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "rigid_var - cannot unify with itself if different names (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const rigid1 = env.types_store.freshFromContent(.{ .rigid_var = @enumFromInt(1) });
+    const rigid2 = env.types_store.freshFromContent(.{ .rigid_var = @enumFromInt(2) });
+
+    const result = unify(&env.types_store, &env.scratch, rigid1, rigid2);
+    try std.testing.expectEqual(false, result.isOk());
+}
+
+test "rigid_var - cannot unify with identical rigid_var (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const rigid1 = env.types_store.freshFromContent(.{ .rigid_var = @enumFromInt(1) });
+    const rigid2 = env.types_store.freshFromContent(.{ .rigid_var = @enumFromInt(1) });
+
+    const result = unify(&env.types_store, &env.scratch, rigid1, rigid2);
+    try std.testing.expectEqual(false, result.isOk());
 }
 
 // unification - aliases
