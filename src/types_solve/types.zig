@@ -71,6 +71,7 @@ pub const Alias = struct {
     backing_var: Var,
     // TODO: lambda sets var
 
+    /// the type of an alias
     pub const Type = enum { opaque_, structural };
 };
 
@@ -112,25 +113,44 @@ pub const Num = union(enum) {
     int: Int,
     frac: Frac,
 
+    /// the Frac data type
     pub const Frac = enum { flex_var, f32, f64, dec };
+
+    /// the Int data type
     pub const Int = enum { flex_var, u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
 };
 
+/// constant
 pub const num_flex_var: FlatType = .{ .num = Num.flex_var };
+/// constant
 pub const frac_flex_var: FlatType = .{ .num = Num{ .frac = .flex_var } };
+/// constant
 pub const frac_f32: FlatType = .{ .num = Num{ .frac = .f32 } };
+/// constant
 pub const frac_f64: FlatType = .{ .num = Num{ .frac = .f64 } };
+/// constant
 pub const frac_dec: FlatType = .{ .num = Num{ .frac = .dec } };
+/// constant
 pub const int_flex_var: FlatType = .{ .num = Num{ .int = .flex_var } };
+/// constant
 pub const int_u8: FlatType = .{ .num = Num{ .int = .u8 } };
+/// constant
 pub const int_i8: FlatType = .{ .num = Num{ .int = .i8 } };
+/// constant
 pub const int_u16: FlatType = .{ .num = Num{ .int = .u16 } };
+/// constant
 pub const int_i16: FlatType = .{ .num = Num{ .int = .i16 } };
+/// constant
 pub const int_u32: FlatType = .{ .num = Num{ .int = .u32 } };
+/// constant
 pub const int_i32: FlatType = .{ .num = Num{ .int = .i32 } };
+/// constant
 pub const int_u64: FlatType = .{ .num = Num{ .int = .u64 } };
+/// constant
 pub const int_i64: FlatType = .{ .num = Num{ .int = .i64 } };
+/// constant
 pub const int_u128: FlatType = .{ .num = Num{ .int = .u128 } };
+/// constant
 pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 
 /// Represents a function
@@ -147,14 +167,15 @@ pub const Func = struct {
 
 /// Represents a record
 pub const Record = struct {
+    // TODO: Should we use a multilist here?
     fields: RecordFieldSafeList.Range,
     ext: Var,
 
-    const SelfR = @This();
+    const Self = @This();
 
     /// Returns true if all fields in a record are optional
     /// If there are no fields, also returns true
-    pub fn areAllFieldsOptional(self: *const SelfR, backing_fields: *const RecordFieldSafeList) bool {
+    pub fn areAllFieldsOptional(self: *const Self, backing_fields: *const RecordFieldSafeList) bool {
         for (backing_fields.rangeToSlice(self.fields)) |field| {
             if (field.typ != .optional) {
                 return false;
@@ -164,10 +185,6 @@ pub const Record = struct {
     }
 };
 
-/// A record field name
-/// Once this module is used, this should be an index into a FieldName store or something
-const RecordFieldName = enum(u32) { _ };
-
 /// TODO: Rust compiler has `demanded` here too
 const RecordFieldType = enum { required, optional };
 
@@ -175,7 +192,7 @@ const RecordFieldType = enum { required, optional };
 pub const RecordField = struct {
     const Self = @This();
 
-    name: RecordFieldName,
+    name: collections.SmallStringInterner.Idx,
     typ: RecordFieldType,
     var_: Var,
 

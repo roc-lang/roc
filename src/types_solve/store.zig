@@ -41,7 +41,7 @@ pub const Store = struct {
 
     slots: SlotStore,
     descs: DescStore,
-
+    record_field_names: collections.SmallStringInterner,
     alias_args: VarSafeList,
     tuple_elems: VarSafeList,
     type_apply_args: VarSafeList,
@@ -57,6 +57,7 @@ pub const Store = struct {
             .gpa = gpa,
             .descs = DescStore.init(gpa, 64),
             .slots = SlotStore.init(gpa, 64),
+            .record_field_names = collections.SmallStringInterner.initCapacity(gpa, 64),
             .alias_args = VarSafeList.initCapacity(gpa, 64),
             .tuple_elems = VarSafeList.initCapacity(gpa, 64),
             .type_apply_args = VarSafeList.initCapacity(gpa, 64),
@@ -69,6 +70,7 @@ pub const Store = struct {
     pub fn deinit(self: *Self) void {
         self.descs.deinit();
         self.slots.deinit();
+        self.record_field_names.deinit(self.gpa);
         self.alias_args.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);
         self.type_apply_args.deinit(self.gpa);
