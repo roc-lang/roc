@@ -133,6 +133,11 @@ pub const Store = struct {
         return self.record_fields.appendSlice(self.gpa, slice);
     }
 
+    /// Given a range, get a slice of record fields from the backing array
+    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeList.Range) []const RecordField {
+        return self.record_fields.rangeToSlice(range);
+    }
+
     // resolvers //
 
     /// Given a type var, follow all redirects until finding the root descriptor

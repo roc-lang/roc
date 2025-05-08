@@ -1,10 +1,12 @@
 const std = @import("std");
 
-const exitOnOutOfMemory = @import("../collections.zig").utils.exitOnOom;
+const collections = @import("../collections.zig");
 const Region = @import("../base/Region.zig");
 const Ident = @import("../base/Ident.zig");
 const store = @import("./store.zig");
 const types = @import("./types.zig");
+
+const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 const Slot = store.Slot;
 const ResolvedVarDesc = store.ResolvedVarDesc;
@@ -23,6 +25,10 @@ const Num = types.Num;
 const Func = types.Func;
 const Record = types.Record;
 const RecordField = types.RecordField;
+const RecordFieldSafeList = types.RecordFieldSafeList;
+const TwoRecordFields = types.TwoRecordFields;
+const TwoRecordFieldsSafeList = types.TwoRecordFieldsSafeList;
+
 const RecordFieldArray = types.RecordField.Array;
 const RecordFieldsArray = types.RecordFields.Array;
 
@@ -32,8 +38,16 @@ const RecordFieldsArray = types.RecordFields.Array;
 /// * Resolve type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
-pub fn unify(types_store: *store.Store, vars: *VarArray, a: Var, b: Var) Result {
-    var unify_pool = UnifyPool.init(types_store, vars);
+pub fn unify(
+    types_store: *store.Store,
+    scratch: *UnifyScratch,
+    vars: *VarArray,
+    a: Var,
+    b: Var,
+) Result {
+    scratch.reset();
+
+    var unify_pool = UnifyPool.init(types_store, scratch, vars);
     unify_pool.unifyGuarded(a, b) catch |err| switch (err) {
         error.TypeMismatch => {
             types_store.union_(a, b, .{
@@ -66,16 +80,19 @@ pub const Result = union(enum) {
 const VarArray = std.BoundedArray(Var, 16);
 
 /// Unifciation with a pool of variables
+///
+/// TODO: Pools being a bounded array will likely change in the future
 const UnifyPool = struct {
     const Self = @This();
 
     types_store: *store.Store,
+    scratch: *UnifyScratch,
     pool_vars: *VarArray,
 
     /// Init a unify_pool
     /// Caller owns the memory of the provided values
-    fn init(types_store: *store.Store, vars: *VarArray) Self {
-        return .{ .types_store = types_store, .pool_vars = vars };
+    fn init(types_store: *store.Store, scratch: *UnifyScratch, vars: *VarArray) Self {
+        return .{ .types_store = types_store, .scratch = scratch, .pool_vars = vars };
     }
 
     // merge
@@ -104,7 +121,7 @@ const UnifyPool = struct {
     // unification
 
     /// Error thrown during unification when there's a type mismatch
-    const Error = error{TypeMismatch};
+    const Error = error{ TypeMismatch, InvalidRecordExt };
 
     /// Unify checking for equivalance
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) error{TypeMismatch}!void {
@@ -348,7 +365,7 @@ const UnifyPool = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        if (a_record.areAllFieldsOptional()) {
+                        if (a_record.areAllFieldsOptional(&self.types_store.record_fields)) {
                             try self.unifyGuarded(a_record.ext, vars.b.var_);
                         } else {
                             return error.TypeMismatch;
@@ -366,7 +383,7 @@ const UnifyPool = struct {
                         self.merge(vars, Content{ .concrete = .empty_record });
                     },
                     .record => |b_record| {
-                        if (b_record.areAllFieldsOptional()) {
+                        if (b_record.areAllFieldsOptional(&self.types_store.record_fields)) {
                             try self.unifyGuarded(vars.a.var_, b_record.ext);
                         } else {
                             return error.TypeMismatch;
@@ -524,6 +541,8 @@ const UnifyPool = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
+    const RecordFieldArray64 = std.BoundedArray(RecordField, 64);
+
     /// unify two records
     ///
     /// this:
@@ -535,37 +554,23 @@ const UnifyPool = struct {
         a_record: Record,
         b_record: Record,
     ) error{TypeMismatch}!void {
+
         // First, unwrap all fields for record a, panicaing with various non-recoverable error
         // These pancis will likely be changed/removed in the future
-        var a_fields = RecordFieldArray.fromSlice(a_record.fields.slice()) catch unreachable;
-        var a_ext = b_record.ext;
-        switch (self.gatherRecordFields(a_record, &a_fields)) {
-            .ok => |next_ext| {
-                a_ext = next_ext;
-            },
-            .invalid_ext => @panic("unifyTwoRecords: Record a ext was invalid"),
-            .too_many_fields => @panic("unifyTwoRecords: Record a had more than 16 fields"),
-        }
-
-        var b_fields = RecordFieldArray.fromSlice(b_record.fields.slice()) catch unreachable;
-        var b_ext = b_record.ext;
-        switch (self.gatherRecordFields(b_record, &b_fields)) {
-            .ok => |next_ext| {
-                b_ext = next_ext;
-            },
-            .invalid_ext => @panic("unifyTwoRecords: Record a ext was invalid"),
-            .too_many_fields => @panic("unifyTwoRecords: Record a had more than 16 fields"),
-        }
-
-        // Then partition the fields
-        var partitioned = RecordField.Partitioned.init();
-        RecordField.parition(&a_fields, &b_fields, &partitioned) catch |err| switch (err) {
-            error.Overflow => @panic("unifyTwoRecords: Paritioning of records a and b had more than 16 fields"),
+        const a_gathered_fields = self.gatherRecordFields(a_record) catch |err| switch (err) {
+            error.InvalidRecordExt => @panic("unifyTwoRecords: Record a ext was invalid"),
         };
 
+        const b_gathered_fields = self.gatherRecordFields(b_record) catch |err| switch (err) {
+            error.InvalidRecordExt => @panic("unifyTwoRecords: Record b ext was invalid"),
+        };
+
+        // Then partition the fields
+        const partitioned = paritionFields(self.scratch, a_gathered_fields.range, b_gathered_fields.range);
+
         // Determine how the fields of a & b extend
-        const a_has_uniq_fields = partitioned.only_in_a.len > 0;
-        const b_has_uniq_fields = partitioned.only_in_b.len > 0;
+        const a_has_uniq_fields = partitioned.only_in_a.len() > 0;
+        const b_has_uniq_fields = partitioned.only_in_b.len() > 0;
 
         var fields_ext: FieldsExtension = .exactly_the_same;
         if (a_has_uniq_fields and b_has_uniq_fields) {
@@ -580,124 +585,128 @@ const UnifyPool = struct {
         switch (fields_ext) {
             .exactly_the_same => {
                 // Unify exts (these will both be the empty record)
-                try self.unifyGuarded(a_ext, b_ext);
+                try self.unifyGuarded(a_gathered_fields.ext, b_gathered_fields.ext);
 
                 // Unify shared fields
-                self.unifySharedFields(vars, &partitioned.in_both, null, a_ext) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'exactly_the_same'"),
-                    error.TypeMismatch => return error.TypeMismatch,
-                };
+                // This copies fields from scratch into type_store
+                try self.unifySharedFields(
+                    vars,
+                    self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    a_gathered_fields.ext,
+                );
             },
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
+                // This copies fields from scratch into type_store
+                const only_in_a_fields_range = self.types_store.record_fields.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
+                );
                 const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
-                    .fields = partitioned.only_in_a,
-                    .ext = a_ext,
+                    .fields = only_in_a_fields_range,
+                    .ext = a_gathered_fields.ext,
                 } } });
 
                 // Unify the sub record with b's ext
-                try self.unifyGuarded(only_in_a_var, b_ext);
+                try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
 
                 // Unify shared fields
-                self.unifySharedFields(vars, &partitioned.in_both, null, only_in_a_var) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'a_extends_b'"),
-                    error.TypeMismatch => return error.TypeMismatch,
-                };
+                // This copies fields from scratch into type_store
+                try self.unifySharedFields(
+                    vars,
+                    self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    only_in_a_var,
+                );
             },
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
+                // This copies fields from scratch into type_store
+                const only_in_b_fields_range = self.types_store.record_fields.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                );
                 const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
-                    .fields = partitioned.only_in_b,
-                    .ext = b_ext,
+                    .fields = only_in_b_fields_range,
+                    .ext = b_gathered_fields.ext,
                 } } });
 
                 // Unify the sub record with a's ext
-                try self.unifyGuarded(a_ext, only_in_b_var);
+                try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
 
                 // Unify shared fields
-                self.unifySharedFields(vars, &partitioned.in_both, null, only_in_b_var) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'b_extends_a'"),
-                    error.TypeMismatch => return error.TypeMismatch,
-                };
+                // This copies fields from scratch into type_store
+                try self.unifySharedFields(
+                    vars,
+                    self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    only_in_b_var,
+                );
             },
             .both_extend => {
-                // Create a new variable of a record with only b's uniq fields
+                // Create a new variable of a record with only a's uniq fields
+                // This copies fields from scratch into type_store
+                const only_in_a_fields_range = self.types_store.record_fields.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
+                );
                 const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
-                    .fields = partitioned.only_in_a,
-                    .ext = a_ext,
+                    .fields = only_in_a_fields_range,
+                    .ext = a_gathered_fields.ext,
                 } } });
+
+                // Create a new variable of a record with only b's uniq fields
+                // This copies fields from scratch into type_store
+                const only_in_b_fields_range = self.types_store.record_fields.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                );
                 const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
-                    .fields = partitioned.only_in_b,
-                    .ext = b_ext,
+                    .fields = only_in_b_fields_range,
+                    .ext = b_gathered_fields.ext,
                 } } });
+
+                // Create a new ext var
                 const new_ext_var = self.fresh(vars, .{ .flex_var = null });
 
                 // Unify the sub records with exts
-                try self.unifyGuarded(a_ext, only_in_b_var);
-                try self.unifyGuarded(only_in_a_var, b_ext); // FIXED HERE
-
-                // Create a new array of all non-shared fields
-                var extended_fields = RecordFieldArray.init(0) catch unreachable;
-                extended_fields.appendSlice(partitioned.only_in_a.slice()) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when creating shared fields for 'b_extends_a'"),
-                };
-                extended_fields.appendSlice(partitioned.only_in_b.slice()) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when creating shared fields for 'b_extends_a'"),
-                };
+                try self.unifyGuarded(a_gathered_fields.ext, only_in_b_var);
+                try self.unifyGuarded(only_in_a_var, b_gathered_fields.ext);
 
                 // Unify shared fields
-                self.unifySharedFields(vars, &partitioned.in_both, &extended_fields, new_ext_var) catch |err| switch (err) {
-                    error.Overflow => @panic("unifyTwoRecords: Overflowed when unify share records for 'b_extends_a'"),
-                    error.TypeMismatch => return error.TypeMismatch,
-                };
+                // This copies fields from scratch into type_store
+                try self.unifySharedFields(
+                    vars,
+                    self.scratch.in_both_fields.rangeToSlice(partitioned.in_both),
+                    self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
+                    self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
+                    new_ext_var,
+                );
             },
         }
-    }
-
-    /// Given a list of shared fields & a list of extended fields, unify the shared
-    /// Then merge a new record with both shared+extended fields
-    fn unifySharedFields(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        shared_fields: *RecordFieldsArray,
-        mb_extended_fields: ?*RecordFieldArray,
-        ext: Var,
-    ) error{ Overflow, TypeMismatch }!void {
-        // Create a new array of to hold all fields
-        var combined_fields = try RecordFieldArray.init(0);
-
-        // Unify shared fields and append
-        for (0..shared_fields.len) |i| {
-            const fields = shared_fields.get(i);
-            try self.unifyGuarded(fields.a.var_, fields.b.var_);
-            try combined_fields.append(fields.a);
-        }
-
-        // Append combined fields
-        if (mb_extended_fields) |extended_fields| {
-            try combined_fields.appendSlice(extended_fields.slice());
-        }
-
-        // Merge vars
-        self.merge(vars, Content{ .concrete = FlatType{ .record = .{
-            .fields = combined_fields,
-            .ext = ext,
-        } } });
     }
 
     const FieldsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
 
-    const GatherFieldsResult = union(enum) { ok: Var, invalid_ext, too_many_fields };
+    const GatheredFields = struct { ext: Var, range: RecordFieldSafeList.Range };
 
-    /// Extend a record's `ext` variable, gathering all fields into an array.
-    /// Gathered fields are appended to the `fields` array
-    fn gatherRecordFields(self: *Self, record: Record, fields: *RecordFieldArray) GatherFieldsResult {
+    /// Extend a record's `ext` variable, gathering all fields.
+    /// Gathered fields are appended to the `self.scratch.gathered_fields` array
+    fn gatherRecordFields(self: *Self, record: Record) error{InvalidRecordExt}!GatheredFields {
+        var range = self.scratch.gathered_fields.appendSlice(
+            self.scratch.gpa,
+            self.types_store.record_fields.rangeToSlice(record.fields),
+        );
         var ext_var = record.ext;
         while (true) {
             switch (self.types_store.resolveVar(ext_var).desc.content) {
                 // TODO: rigid var!
                 .flex_var => {
-                    return .{ .ok = ext_var };
+                    return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |alias| {
                     ext_var = alias.backing_var;
@@ -705,20 +714,174 @@ const UnifyPool = struct {
                 .concrete => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
-                            fields.appendSlice(ext_record.fields.slice()) catch |err| switch (err) {
-                                error.Overflow => return .too_many_fields,
-                            };
+                            const next_range = self.scratch.gathered_fields.appendSlice(
+                                self.scratch.gpa,
+                                self.types_store.record_fields.rangeToSlice(record.fields),
+                            );
+                            range.end = next_range.end;
                             ext_var = ext_record.ext;
                         },
                         .empty_record => {
-                            return .{ .ok = ext_var };
+                            return .{ .ext = ext_var, .range = range };
                         },
-                        else => return .invalid_ext,
+                        else => return error.InvalidRecordExt,
                     }
                 },
-                else => return .invalid_ext,
+                else => return error.InvalidRecordExt,
             }
         }
+    }
+
+    const Partitioned = struct {
+        only_in_a: RecordFieldSafeList.Range,
+        only_in_b: RecordFieldSafeList.Range,
+        in_both: TwoRecordFieldsSafeList.Range,
+    };
+
+    /// Given 2 records, divide the fields by name into groups of
+    /// * in only a
+    /// * in only b
+    /// * in both
+    ///
+    /// This function operates on the scratch arrays and returns ranges
+    ///
+    /// This sorts the gathered  fields in-place if not already sorted
+    /// O(n + m)
+    pub fn paritionFields(
+        scratch: *UnifyScratch,
+        a_fields_range: RecordFieldSafeList.Range,
+        b_fields_range: RecordFieldSafeList.Range,
+    ) Partitioned {
+        // First sort the fields
+        const a_fields = scratch.gathered_fields.rangeToSlice(a_fields_range);
+        std.mem.sort(RecordField, a_fields, .{}, comptime RecordField.sortByFieldNameAsc);
+        const b_fields = scratch.gathered_fields.rangeToSlice(b_fields_range);
+        std.mem.sort(RecordField, b_fields, .{}, comptime RecordField.sortByFieldNameAsc);
+
+        // Get the start of index of the new range
+        const a_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
+        const b_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_b_fields.len());
+        const both_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.in_both_fields.len());
+
+        // Iterate over the fields in order, grouping them
+        var a_i: usize = 0;
+        var b_i: usize = 0;
+        while (a_i < a_fields.len and b_i < b_fields.len) {
+            const a_next = a_fields[a_i];
+            const b_next = b_fields[b_i];
+
+            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
+                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{ .a = a_next, .b = b_next });
+                a_i = a_i + 1;
+                b_i = b_i + 1;
+            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
+                _ = scratch.only_in_a_fields.append(scratch.gpa, a_next);
+                a_i = a_i + 1;
+            } else {
+                _ = scratch.only_in_b_fields.append(scratch.gpa, b_next);
+                b_i = b_i + 1;
+            }
+        }
+
+        // If b was shorter, add the extra a elems
+        while (a_i < a_fields.len) {
+            const a_next = a_fields[a_i];
+            _ = scratch.only_in_a_fields.append(scratch.gpa, a_next);
+            a_i = a_i + 1;
+        }
+
+        // If a was shorter, add the extra b elems
+        while (b_i < b_fields.len) {
+            const b_next = b_fields[b_i];
+            _ = scratch.only_in_b_fields.append(scratch.gpa, b_next);
+            b_i = b_i + 1;
+        }
+
+        // Get the end index of the new range
+        const a_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
+        const b_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_b_fields.len());
+        const both_fields_end: RecordFieldSafeList.Idx = @enumFromInt(scratch.in_both_fields.len());
+
+        // Return the ranges
+        return .{
+            .only_in_a = .{ .start = a_fields_start, .end = a_fields_end },
+            .only_in_b = .{ .start = b_fields_start, .end = b_fields_end },
+            .in_both = .{ .start = both_fields_start, .end = both_fields_end },
+        };
+    }
+
+    /// Given a list of shared fields & a list of extended fields, unify the shared
+    /// Then merge a new record with both shared+extended fields
+    fn unifySharedFields(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        shared_fields: []TwoRecordFields,
+        mb_a_extended_fields: ?[]RecordField,
+        mb_b_extended_fields: ?[]RecordField,
+        ext: Var,
+    ) error{TypeMismatch}!void {
+        const range_start: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+
+        for (shared_fields) |fields| {
+            // TODO: pick recursion variable?
+            try self.unifyGuarded(fields.a.var_, fields.b.var_);
+            _ = self.types_store.record_fields.append(self.types_store.gpa, fields.b);
+        }
+
+        // Append combined fields
+        if (mb_a_extended_fields) |extended_fields| {
+            _ = self.types_store.record_fields.appendSlice(self.types_store.gpa, extended_fields);
+        }
+        if (mb_b_extended_fields) |extended_fields| {
+            _ = self.types_store.record_fields.appendSlice(self.types_store.gpa, extended_fields);
+        }
+
+        const range_end: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+
+        // Merge vars
+        self.merge(vars, Content{ .concrete = FlatType{ .record = .{
+            .fields = .{ .start = range_start, .end = range_end },
+            .ext = ext,
+        } } });
+    }
+};
+
+/// A struct that holds a scratch allocator and holds intermediate data used  during unification
+/// The idea here is that this is allocated and reused across many unification runs
+pub const UnifyScratch = struct {
+    const Self = @This();
+
+    gpa: std.mem.Allocator,
+    gathered_fields: RecordFieldSafeList,
+    only_in_a_fields: RecordFieldSafeList,
+    only_in_b_fields: RecordFieldSafeList,
+    in_both_fields: TwoRecordFieldsSafeList,
+
+    /// Init scratch
+    pub fn init(gpa: std.mem.Allocator) Self {
+        return .{
+            .gpa = gpa,
+            .gathered_fields = RecordFieldSafeList.initCapacity(gpa, 64),
+            .only_in_a_fields = RecordFieldSafeList.initCapacity(gpa, 64),
+            .only_in_b_fields = RecordFieldSafeList.initCapacity(gpa, 64),
+            .in_both_fields = TwoRecordFieldsSafeList.initCapacity(gpa, 64),
+        };
+    }
+
+    /// Deinit scratch
+    pub fn deinit(self: *Self) void {
+        self.gathered_fields.deinit(self.gpa);
+        self.only_in_a_fields.deinit(self.gpa);
+        self.only_in_b_fields.deinit(self.gpa);
+        self.in_both_fields.deinit(self.gpa);
+    }
+
+    /// Reset the scratch arrays, retaining the allocated memory
+    pub fn reset(self: *UnifyScratch) void {
+        self.gathered_fields.items.clearRetainingCapacity();
+        self.only_in_a_fields.items.clearRetainingCapacity();
+        self.only_in_b_fields.items.clearRetainingCapacity();
+        self.in_both_fields.items.clearRetainingCapacity();
     }
 };
 
@@ -731,6 +894,7 @@ const TestEnv = struct {
     gpa: std.mem.Allocator,
     ident_store: Ident.Store,
     types_store: store.Store,
+    scratch: UnifyScratch,
     pool_vars: VarArray,
 
     pub fn init(gpa: std.mem.Allocator) Self {
@@ -738,6 +902,7 @@ const TestEnv = struct {
             .gpa = gpa,
             .ident_store = Ident.Store.initCapacity(gpa, 16),
             .types_store = store.Store.init(gpa),
+            .scratch = UnifyScratch.init(gpa),
             .pool_vars = VarArray.init(0) catch unreachable,
         };
     }
@@ -745,6 +910,7 @@ const TestEnv = struct {
     pub fn deinit(self: *Self) void {
         self.ident_store.deinit(self.gpa);
         self.types_store.deinit();
+        self.scratch.deinit();
     }
 
     const Error = error{ VarIsNotRoot, DescIsNotRecord };
@@ -854,20 +1020,22 @@ const TestEnv = struct {
 
     // helpers - concrete - func
 
-    fn mkRecord(fields: []const RecordField, ext_var: Var) Content {
-        std.debug.assert(fields.len <= RecordField.array_capacity);
-        const fields_arr = RecordFieldArray.fromSlice(fields) catch unreachable;
-        return Content{ .concrete = .{ .record = .{ .fields = fields_arr, .ext = ext_var } } };
+    const RecordInfo = struct { record: Record, content: Content };
+
+    fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) RecordInfo {
+        const fields_range = self.types_store.appendRecordFields(fields);
+        const record = Record{ .fields = fields_range, .ext = ext_var };
+        return .{ .content = Content{ .concrete = .{ .record = record } }, .record = record };
     }
 
-    fn mkRecordOpen(self: *Self, fields: []const RecordField) Content {
+    fn mkRecordOpen(self: *Self, fields: []const RecordField) RecordInfo {
         const ext_var = self.types_store.freshFromContent(.{ .flex_var = null });
-        return Self.mkRecord(fields, ext_var);
+        return self.mkRecord(fields, ext_var);
     }
 
-    fn mkRecordClosed(self: *Self, fields: []const RecordField) Content {
+    fn mkRecordClosed(self: *Self, fields: []const RecordField) RecordInfo {
         const ext_var = self.types_store.freshFromContent(.{ .concrete = .empty_record });
-        return Self.mkRecord(fields, ext_var);
+        return self.mkRecord(fields, ext_var);
     }
 };
 
@@ -882,7 +1050,7 @@ test "unify - identical" {
     const a = env.types_store.fresh();
     const desc = try env.getDescForRootVar(a);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, a);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, a);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(desc, try env.getDescForRootVar(a));
@@ -897,7 +1065,7 @@ test "unify - both flex vars" {
     const a = env.types_store.fresh();
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -912,7 +1080,7 @@ test "unify - a is flex_var and b is not" {
     const a = env.types_store.fresh();
     const b = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -934,7 +1102,7 @@ test "unify - structural alias with same args" {
     const a = env.types_store.freshFromContent(alias);
     const b = env.types_store.freshFromContent(alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -955,7 +1123,7 @@ test "unify - structural aliases with different names but same backing" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(a)).content);
@@ -979,7 +1147,7 @@ test "unify - structural alias with different args (fail)" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1002,7 +1170,7 @@ test "unify - structural vs opaque alias with same name and args (fail)" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1026,7 +1194,7 @@ test "unify - opaque alias with different args (fail)" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1050,7 +1218,7 @@ test "unify - opaque alias with sam args" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1072,7 +1240,7 @@ test "unify - opaque alias with flex" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1094,7 +1262,7 @@ test "unify - structural alias with flex" {
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1111,7 +1279,7 @@ test "unify - pure with pure" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.pure);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1126,7 +1294,7 @@ test "unify - effectful with effectful" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.effectful);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1141,7 +1309,7 @@ test "unify - pure with flex_var" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1156,7 +1324,7 @@ test "unify - effectful with flex_var" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1171,7 +1339,7 @@ test "unify - pure with effectful" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.effectful);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1186,7 +1354,7 @@ test "unify - effectful with pure (fail)" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.pure);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1201,7 +1369,7 @@ test "unify - pure with err (fail)" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(.err);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1216,7 +1384,7 @@ test "unify - effectful with err (fail)" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(.err);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1232,7 +1400,7 @@ test "unify - pure with concrete type fails" {
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
 }
@@ -1246,7 +1414,7 @@ test "unify - effectful with concrete type fails" {
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
 }
@@ -1264,7 +1432,7 @@ test "unify - a is type_apply and b is flex_var" {
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.fresh();
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1282,7 +1450,7 @@ test "unify - a is flex_var and b is type_apply" {
     const a = env.types_store.fresh();
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1302,7 +1470,7 @@ test "unify - a & b are same type_apply" {
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1321,7 +1489,7 @@ test "unify - a & b are diff type_apply (fail)" {
     const a = env.types_store.freshFromContent(bool_);
     const b = env.types_store.freshFromContent(str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1342,7 +1510,7 @@ test "unify - a & b are same type_apply with 1 args" {
     const a = env.types_store.freshFromContent(maybe_str);
     const b = env.types_store.freshFromContent(maybe_str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1366,7 +1534,7 @@ test "unify - a & b are same type_apply with 2 args" {
     const a = env.types_store.freshFromContent(result_str_bool);
     const b = env.types_store.freshFromContent(result_str_bool);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1391,7 +1559,7 @@ test "unify - a & b are same type_apply with flipped args (fail)" {
     const a = env.types_store.freshFromContent(result_str_bool);
     const b = env.types_store.freshFromContent(result_bool_str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1417,7 +1585,7 @@ test "unify - a & b are same tuple" {
     const a = env.types_store.freshFromContent(tuple_str_bool);
     const b = env.types_store.freshFromContent(tuple_str_bool);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1442,7 +1610,7 @@ test "unify - a & b are tuples with args flipped (fail)" {
     const a = env.types_store.freshFromContent(tuple_str_bool);
     const b = env.types_store.freshFromContent(tuple_bool_str);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1463,7 +1631,7 @@ test "unify - num flex_var with int concrete" {
     const a = env.types_store.freshFromContent(flex);
     const b = env.types_store.freshFromContent(int_i32);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1482,7 +1650,7 @@ test "unify - num int(flex_var) with int concrete" {
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1501,7 +1669,7 @@ test "unify - num frac(flex_var) with frac concrete" {
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1520,7 +1688,7 @@ test "unify - num int concrete == int concrete" {
     const a = env.types_store.freshFromContent(i64a);
     const b = env.types_store.freshFromContent(i64b);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1539,7 +1707,7 @@ test "unify - num frac concrete != frac concrete (fail)" {
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1558,7 +1726,7 @@ test "unify - num int concrete != int concrete (fail)" {
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1577,7 +1745,7 @@ test "unify - num int vs frac (fail)" {
     const a = env.types_store.freshFromContent(int_desc);
     const b = env.types_store.freshFromContent(frac_desc);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1596,7 +1764,7 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1619,7 +1787,7 @@ test "unify - func are same" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1638,7 +1806,7 @@ test "unify - funcs have diff return args (fail)" {
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{int_i32}, str));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1657,7 +1825,7 @@ test "unify - funcs have diff return types (fail)" {
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, int_i32));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1678,7 +1846,7 @@ test "unify - same funcs pure" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1699,7 +1867,7 @@ test "unify - same funcs effectful" {
     const a = env.types_store.freshFromContent(func);
     const b = env.types_store.freshFromContent(func);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1721,7 +1889,7 @@ test "unify - same funcs first eff, second pure (fail)" {
     const a = env.types_store.freshFromContent(eff_func);
     const b = env.types_store.freshFromContent(pure_func);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1743,11 +1911,95 @@ test "unify - same funcs first pure, second eff" {
     const a = env.types_store.freshFromContent(pure_func);
     const b = env.types_store.freshFromContent(eff_func);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - records - partition fields
+
+test "partitionFields - same record" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+
+    const range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ field_x, field_y });
+
+    const result = UnifyPool.paritionFields(&env.scratch, range, range);
+
+    try std.testing.expectEqual(0, result.only_in_a.len());
+    try std.testing.expectEqual(0, result.only_in_b.len());
+    try std.testing.expectEqual(2, result.in_both.len());
+}
+
+test "partitionFields - disjoint fields" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+
+    const a_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ a1, a2 });
+    const b_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{b1});
+
+    const result = UnifyPool.paritionFields(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(2, result.only_in_a.len());
+    try std.testing.expectEqual(1, result.only_in_b.len());
+    try std.testing.expectEqual(0, result.in_both.len());
+}
+
+test "partitionFields - overlapping fields" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+
+    const a_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ a1, both });
+    const b_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ b1, both });
+
+    const result = UnifyPool.paritionFields(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(1, result.only_in_a.len());
+    try std.testing.expectEqual(1, result.only_in_b.len());
+    try std.testing.expectEqual(1, result.in_both.len());
+}
+
+test "partitionFields - reordering is normalized" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
+    const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .var_ = @enumFromInt(2) };
+
+    const a_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ f3, f1, f2 });
+    const b_range = env.scratch.gathered_fields.appendSlice(gpa, &[_]RecordField{ f1, f2, f3 });
+
+    const result = UnifyPool.paritionFields(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(0, result.only_in_a.len());
+    try std.testing.expectEqual(0, result.only_in_b.len());
+    try std.testing.expectEqual(3, result.in_both.len());
+
+    const both = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].a.name));
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].b.name));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].a.name));
+    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].b.name));
+    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].a.name));
+    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].b.name));
 }
 
 // unification - concrete/concrete - records closed
@@ -1762,16 +2014,22 @@ test "unify - identical closed records" {
     const fields = [_]RecordField{
         .{ .name = @enumFromInt(1), .var_ = str, .typ = .required },
     };
-    const record = env.mkRecordClosed(&fields);
+    const record_data = env.mkRecordClosed(&fields);
 
-    const a = env.types_store.freshFromContent(record);
-    const b = env.types_store.freshFromContent(record);
+    const a = env.types_store.freshFromContent(record_data.content);
+    const b = env.types_store.freshFromContent(record_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(record, (try env.getDescForRootVar(b)).content);
+
+    const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqualSlices(
+        RecordField,
+        env.types_store.record_fields.rangeToSlice(record_data.record.fields),
+        env.types_store.record_fields.rangeToSlice(b_record.fields),
+    );
 }
 
 test "unify - closed record mismatch on diff fields (fail)" {
@@ -1784,10 +2042,13 @@ test "unify - closed record mismatch on diff fields (fail)" {
     const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
 
-    const a = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field1, field2 }));
-    const b = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field1}));
+    const a_record_data = env.mkRecordClosed(&[_]RecordField{ field1, field2 });
+    const a = env.types_store.freshFromContent(a_record_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const b_record_data = env.mkRecordClosed(&[_]RecordField{field1});
+    const b = env.types_store.freshFromContent(b_record_data.content);
+
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1796,7 +2057,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// unification - concrete/concrete - records open
+// // unification - concrete/concrete - records open
 
 test "unify - open record a extends b" {
     const gpa = std.testing.allocator;
@@ -1809,24 +2070,28 @@ test "unify - open record a extends b" {
     const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
 
-    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only }));
-    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_shared}));
+    const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
+    const a = env.types_store.freshFromContent(a_rec_data.content);
+    const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
+    const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    try std.testing.expectEqual(1, b_record.fields.len);
-    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+    try std.testing.expectEqual(1, b_record.fields.len());
+    const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
+    try std.testing.expectEqual(field_shared, b_record_fields[0]);
 
     try std.testing.expectEqual(1, env.pool_vars.len);
     try std.testing.expectEqual(env.pool_vars.get(0), b_record.ext);
 
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
-    try std.testing.expectEqual(1, b_ext_record.fields.len);
-    try std.testing.expectEqual(field_a_only, b_ext_record.fields.get(0));
+    try std.testing.expectEqual(1, b_ext_record.fields.len());
+    const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
+    try std.testing.expectEqual(field_a_only, b_ext_record_fields[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
@@ -1843,24 +2108,28 @@ test "unify - open record b extends a" {
     const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
 
-    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_shared}));
-    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only }));
+    const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
+    const a = env.types_store.freshFromContent(a_rec_data.content);
+    const b_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only });
+    const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    try std.testing.expectEqual(1, b_record.fields.len);
-    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+    try std.testing.expectEqual(1, b_record.fields.len());
+    const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
+    try std.testing.expectEqual(field_shared, b_record_fields[0]);
 
     try std.testing.expectEqual(1, env.pool_vars.len);
     try std.testing.expectEqual(env.pool_vars.get(0), b_record.ext);
 
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
-    try std.testing.expectEqual(1, b_ext_record.fields.len);
-    try std.testing.expectEqual(field_b_only, b_ext_record.fields.get(0));
+    try std.testing.expectEqual(1, b_ext_record.fields.len());
+    const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
+    try std.testing.expectEqual(field_b_only, b_ext_record_fields[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
@@ -1879,17 +2148,20 @@ test "unify - both extend open record" {
     const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
     const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_, .typ = .required };
 
-    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only }));
-    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only }));
+    const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
+    const a = env.types_store.freshFromContent(a_rec_data.content);
+    const b_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_b_only });
+    const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    try std.testing.expectEqual(3, b_record.fields.len);
-    try std.testing.expectEqual(field_shared, b_record.fields.get(0));
+    try std.testing.expectEqual(3, b_record.fields.len());
+    const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
+    try std.testing.expectEqual(field_shared, b_record_fields[0]);
 
     const b_ext = env.types_store.resolveVar(b_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
@@ -1898,13 +2170,15 @@ test "unify - both extend open record" {
 
     const only_a_var = env.pool_vars.get(0);
     const only_a_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_a_var).desc);
-    try std.testing.expectEqual(1, only_a_record.fields.len);
-    try std.testing.expectEqual(field_a_only, only_a_record.fields.get(0));
+    try std.testing.expectEqual(1, only_a_record.fields.len());
+    const only_a_record_fields = env.types_store.getRecordFieldsSlice(only_a_record.fields);
+    try std.testing.expectEqual(field_a_only, only_a_record_fields[0]);
 
     const only_b_var = env.pool_vars.get(1);
     const only_b_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_b_var).desc);
-    try std.testing.expectEqual(1, only_b_record.fields.len);
-    try std.testing.expectEqual(field_b_only, only_b_record.fields.get(0));
+    try std.testing.expectEqual(1, only_b_record.fields.len());
+    const only_b_record_fields = env.types_store.getRecordFieldsSlice(only_b_record.fields);
+    try std.testing.expectEqual(field_b_only, only_b_record_fields[0]);
 
     const ext_var = env.pool_vars.get(2);
     const ext_content = env.types_store.resolveVar(ext_var).desc.content;
@@ -1922,10 +2196,12 @@ test "unify - record mismatch on shared field (fail)" {
     const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
 
-    const a = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_a}));
-    const b = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_b}));
+    const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_a});
+    const a = env.types_store.freshFromContent(a_rec_data.content);
+    const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_b});
+    const b = env.types_store.freshFromContent(b_rec_data.content);
 
-    const result = unify(&env.types_store, &env.pool_vars, a, b);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, a, b);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
@@ -1934,7 +2210,7 @@ test "unify - record mismatch on shared field (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// unification - concrete/concrete - records open+closed
+// // unification - concrete/concrete - records open+closed
 
 test "unify - open record extends closed (fail)" {
     const gpa = std.testing.allocator;
@@ -1946,10 +2222,10 @@ test "unify - open record extends closed (fail)" {
     const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
 
-    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }));
-    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}));
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }).content);
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}).content);
 
-    const result = unify(&env.types_store, &env.pool_vars, open, closed);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, open, closed);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -1966,10 +2242,10 @@ test "unify - closed record extends open" {
     const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
 
-    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}));
-    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }));
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}).content);
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }).content);
 
-    const result = unify(&env.types_store, &env.pool_vars, open, closed);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, open, closed);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -1986,10 +2262,10 @@ test "unify - open vs closed with type mismatch (fail)" {
     const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
 
-    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}));
-    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}));
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
 
-    const result = unify(&env.types_store, &env.pool_vars, open, closed);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, open, closed);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
@@ -2009,10 +2285,10 @@ test "unify - closed vs open with type mismatch (fail)" {
     const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
     const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
 
-    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}));
-    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}));
+    const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
+    const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
 
-    const result = unify(&env.types_store, &env.pool_vars, closed, open);
+    const result = unify(&env.types_store, &env.scratch, &env.pool_vars, closed, open);
 
     try std.testing.expectEqual(false, result.isOk());
     try std.testing.expectEqual(Slot{ .redirect = open }, env.types_store.getSlot(closed));
