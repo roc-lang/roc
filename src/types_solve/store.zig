@@ -158,7 +158,7 @@ pub const Store = struct {
         const redirected = self.resolveVar(initial_var);
         const redirected_root_var = redirected.var_;
 
-        // then follow the chain again, but compressing each step to the concrete type
+        // then follow the chain again, but compressing each to the root
         if (initial_var != redirected_root_var) {
             var compressed_slot_idx = Self.varToSlotIdx(initial_var);
             var compressed_slot: Slot = self.slots.get(compressed_slot_idx);
@@ -374,7 +374,7 @@ test "resolveVarAndCompressPath - no-op on already root" {
     var store = Store.init(gpa);
     defer store.deinit();
 
-    const num = types.Content{ .concrete = types.num_flex_var };
+    const num = types.Content{ .structure = types.num_flex_var };
     const num_var = store.freshFromContent(num);
 
     const result = store.resolveVarAndCompressPath(num_var);
@@ -384,13 +384,13 @@ test "resolveVarAndCompressPath - no-op on already root" {
     // try std.testing.expectEqual(store.getSlot(num_var), Slot{ .root = num_desc_idx });
 }
 
-test "resolveVarAndCompressPath - flattens redirect chain to concrete" {
+test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     const gpa = std.testing.allocator;
 
     var store = Store.init(gpa);
     defer store.deinit();
 
-    const num = types.Content{ .concrete = types.num_flex_var };
+    const num = types.Content{ .structure = types.num_flex_var };
     const c = store.freshFromContent(num);
     const b = store.freshRedirect(c);
     const a = store.freshRedirect(b);

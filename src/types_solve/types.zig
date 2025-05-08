@@ -48,7 +48,7 @@ pub const Content = union(enum) {
     alias: Alias,
     effectful,
     pure,
-    concrete: FlatType,
+    structure: FlatType,
     err,
 };
 

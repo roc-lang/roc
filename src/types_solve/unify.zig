@@ -197,8 +197,8 @@ const Unifier = struct {
                     .pure => {
                         try self.unifyPure(&vars, vars.b.desc.content);
                     },
-                    .concrete => |a_flat_type| {
-                        try self.unifyConcrete(&vars, a_flat_type, vars.b.desc.content);
+                    .structure => |a_flat_type| {
+                        try self.unifyStructure(&vars, a_flat_type, vars.b.desc.content);
                     },
                     .err => return error.TypeMismatch,
                 }
@@ -222,7 +222,7 @@ const Unifier = struct {
             .alias => self.merge(vars, b_content),
             .effectful => self.merge(vars, b_content),
             .pure => self.merge(vars, b_content),
-            .concrete => self.merge(vars, b_content),
+            .structure => self.merge(vars, b_content),
             .err => self.merge(vars, .err),
         }
     }
@@ -237,7 +237,7 @@ const Unifier = struct {
             .alias => return error.TypeMismatch,
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .concrete => return error.TypeMismatch,
+            .structure => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -269,7 +269,7 @@ const Unifier = struct {
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .concrete => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
+            .structure => try self.unifyGuarded(a_alias.backing_var, vars.b.var_),
             .err => self.merge(vars, .err),
         }
     }
@@ -299,7 +299,7 @@ const Unifier = struct {
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .concrete => return error.TypeMismatch,
+            .structure => return error.TypeMismatch,
             .err => self.merge(vars, .err),
         }
     }
@@ -362,10 +362,10 @@ const Unifier = struct {
         }
     }
 
-    // Unify concrete //
+    // Unify structure //
 
-    /// Unify when `a` is a concrete type
-    fn unifyConcrete(
+    /// Unify when `a` is a structure type
+    fn unifyStructure(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_flat_type: FlatType,
@@ -373,7 +373,7 @@ const Unifier = struct {
     ) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
-                self.merge(vars, Content{ .concrete = a_flat_type });
+                self.merge(vars, Content{ .structure = a_flat_type });
             },
             .rigid_var => return error.TypeMismatch,
             .alias => |alias| {
@@ -386,14 +386,14 @@ const Unifier = struct {
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
-            .concrete => |b_flat_type| {
+            .structure => |b_flat_type| {
                 try self.unifyFlatType(vars, a_flat_type, b_flat_type);
             },
             .err => self.merge(vars, .err),
         }
     }
 
-    /// Unify when `a` is a concrete type
+    /// Unify when `a` is a structure type
     fn unifyFlatType(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -453,7 +453,7 @@ const Unifier = struct {
             .empty_record => {
                 switch (b_flat_type) {
                     .empty_record => {
-                        self.merge(vars, Content{ .concrete = .empty_record });
+                        self.merge(vars, Content{ .structure = .empty_record });
                     },
                     .record => |b_record| {
                         if (b_record.fields.len() == 0 or // this line is here for explicitness
@@ -679,7 +679,7 @@ const Unifier = struct {
                     self.types_store.gpa,
                     self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
                 );
-                const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
                     .ext = a_gathered_fields.ext,
                 } } });
@@ -704,7 +704,7 @@ const Unifier = struct {
                     self.types_store.gpa,
                     self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
                 );
-                const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
                     .ext = b_gathered_fields.ext,
                 } } });
@@ -729,7 +729,7 @@ const Unifier = struct {
                     self.types_store.gpa,
                     self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
                 );
-                const only_in_a_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_a_fields_range,
                     .ext = a_gathered_fields.ext,
                 } } });
@@ -740,7 +740,7 @@ const Unifier = struct {
                     self.types_store.gpa,
                     self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
                 );
-                const only_in_b_var = self.fresh(vars, Content{ .concrete = FlatType{ .record = .{
+                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
                     .fields = only_in_b_fields_range,
                     .ext = b_gathered_fields.ext,
                 } } });
@@ -793,7 +793,7 @@ const Unifier = struct {
                 .alias => |alias| {
                     ext_var = alias.backing_var;
                 },
-                .concrete => |flat_type| {
+                .structure => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
                             const next_range = self.scratch.appendSliceGatheredFields(
@@ -926,7 +926,7 @@ const Unifier = struct {
         const range_end: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
         // Merge vars
-        self.merge(vars, Content{ .concrete = FlatType{ .record = .{
+        self.merge(vars, Content{ .structure = FlatType{ .record = .{
             .fields = .{ .start = range_start, .end = range_end },
             .ext = ext,
         } } });
@@ -1043,7 +1043,7 @@ const TestEnv = struct {
     /// Unwrap a record or throw
     pub fn getRecordOrErr(desc: Desc) error{DescIsNotRecord}!Record {
         switch (desc.content) {
-            .concrete => |flat_type| {
+            .structure => |flat_type| {
                 switch (flat_type) {
                     .record => |record| {
                         return record;
@@ -1060,7 +1060,7 @@ const TestEnv = struct {
         return TypeIdent{ .ident_idx = ident_idx };
     }
 
-    // helpers - concrete - tuple
+    // helpers - structure - tuple
 
     fn mkAlias(self: *Self, typ: Alias.Type, name: []const u8, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
@@ -1082,11 +1082,11 @@ const TestEnv = struct {
         };
     }
 
-    // helpers - concrete - type_apply
+    // helpers - structure - type_apply
 
     fn mkTypeApplyNoArg(self: *Self, name: []const u8) Content {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
-        return .{ .concrete = .{ .type_apply = .{
+        return .{ .structure = .{ .type_apply = .{
             .ident = .{ .ident_idx = ident_idx },
             .args = types.VarSafeList.Range.empty,
         } } };
@@ -1095,7 +1095,7 @@ const TestEnv = struct {
     fn mkTypeApplyArgs(self: *Self, name: []const u8, args: []const Var) Content {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
         const args_range = self.types_store.appendTypeApplyArgs(args);
-        return .{ .concrete = .{ .type_apply = .{ .ident = .{ .ident_idx = ident_idx }, .args = args_range } } };
+        return .{ .structure = .{ .type_apply = .{ .ident = .{ .ident_idx = ident_idx }, .args = args_range } } };
     }
 
     fn mkTypeApply1Arg(self: *Self, name: []const u8, arg: Var) Content {
@@ -1106,18 +1106,18 @@ const TestEnv = struct {
         return self.mkTypeApplyArgs(name, &[_]Var{ arg1, arg2 });
     }
 
-    // helpers - concrete - tuple
+    // helpers - structure - tuple
 
     fn mkTuple(self: *Self, slice: []const Var) Content {
         const elems_range = self.types_store.appendTupleElems(slice);
-        return Content{ .concrete = .{ .tuple = .{ .elems = elems_range } } };
+        return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
     }
 
-    // helpers - concrete - func
+    // helpers - structure - func
 
     fn mkFunc(self: *Self, args: []const Var, ret: Var, eff: Var) Content {
         const args_range = self.types_store.appendFuncArgs(args);
-        return Content{ .concrete = .{ .func = .{ .args = args_range, .ret = ret, .eff = eff } } };
+        return Content{ .structure = .{ .func = .{ .args = args_range, .ret = ret, .eff = eff } } };
     }
 
     fn mkFuncFlex(self: *Self, args: []const Var, ret: Var) Content {
@@ -1135,14 +1135,14 @@ const TestEnv = struct {
         return self.mkFunc(args, ret, eff_var);
     }
 
-    // helpers - concrete - func
+    // helpers - structure - func
 
     const RecordInfo = struct { record: Record, content: Content };
 
     fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) RecordInfo {
         const fields_range = self.types_store.appendRecordFields(fields);
         const record = Record{ .fields = fields_range, .ext = ext_var };
-        return .{ .content = Content{ .concrete = .{ .record = record } }, .record = record };
+        return .{ .content = Content{ .structure = .{ .record = record } }, .record = record };
     }
 
     fn mkRecordOpen(self: *Self, fields: []const RecordField) RecordInfo {
@@ -1151,7 +1151,7 @@ const TestEnv = struct {
     }
 
     fn mkRecordClosed(self: *Self, fields: []const RecordField) RecordInfo {
-        const ext_var = self.types_store.freshFromContent(.{ .concrete = .empty_record });
+        const ext_var = self.types_store.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
     }
 };
@@ -1576,7 +1576,7 @@ test "unify - effectful with err (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - pure with concrete type fails" {
+test "unify - pure with structure type fails" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1590,7 +1590,7 @@ test "unify - pure with concrete type fails" {
     try std.testing.expectEqual(false, result.isOk());
 }
 
-test "unify - effectful with concrete type fails" {
+test "unify - effectful with structure type fails" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1604,7 +1604,7 @@ test "unify - effectful with concrete type fails" {
     try std.testing.expectEqual(false, result.isOk());
 }
 
-// unification - concrete/flex_vars
+// unification - structure/flex_vars
 
 test "unify - a is type_apply and b is flex_var" {
     const gpa = std.testing.allocator;
@@ -1642,7 +1642,7 @@ test "unify - a is flex_var and b is type_apply" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - concrete/concrete - type_apply
+// unification - structure/structure - type_apply
 
 test "unify - a & b are same type_apply" {
     const gpa = std.testing.allocator;
@@ -1751,7 +1751,7 @@ test "unify - a & b are same type_apply with flipped args (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - concrete/concrete - tuple
+// unification - structure/structure - tuple
 
 test "unify - a & b are same tuple" {
     const gpa = std.testing.allocator;
@@ -1802,16 +1802,16 @@ test "unify - a & b are tuples with args flipped (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - concrete/concrete - num
+// unification - structure/structure - num
 
-test "unify - num flex_var with int concrete" {
+test "unify - num flex_var with int structure" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const flex = Content{ .concrete = types.num_flex_var };
-    const int_i32 = Content{ .concrete = types.int_i32 };
+    const flex = Content{ .structure = types.num_flex_var };
+    const int_i32 = Content{ .structure = types.int_i32 };
 
     const a = env.types_store.freshFromContent(flex);
     const b = env.types_store.freshFromContent(int_i32);
@@ -1823,14 +1823,14 @@ test "unify - num flex_var with int concrete" {
     try std.testing.expectEqual(int_i32, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - num int(flex_var) with int concrete" {
+test "unify - num int(flex_var) with int structure" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = types.int_flex_var };
-    const b_content = Content{ .concrete = types.int_i64 };
+    const a_content = Content{ .structure = types.int_flex_var };
+    const b_content = Content{ .structure = types.int_i64 };
 
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
@@ -1842,14 +1842,14 @@ test "unify - num int(flex_var) with int concrete" {
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - num frac(flex_var) with frac concrete" {
+test "unify - num frac(flex_var) with frac structure" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = types.frac_flex_var };
-    const b_content = Content{ .concrete = types.frac_f64 };
+    const a_content = Content{ .structure = types.frac_flex_var };
+    const b_content = Content{ .structure = types.frac_f64 };
 
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
@@ -1861,14 +1861,14 @@ test "unify - num frac(flex_var) with frac concrete" {
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - num int concrete == int concrete" {
+test "unify - num int structure == int structure" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const i64a = Content{ .concrete = types.int_i64 };
-    const i64b = Content{ .concrete = types.int_i64 };
+    const i64a = Content{ .structure = types.int_i64 };
+    const i64b = Content{ .structure = types.int_i64 };
 
     const a = env.types_store.freshFromContent(i64a);
     const b = env.types_store.freshFromContent(i64b);
@@ -1880,14 +1880,14 @@ test "unify - num int concrete == int concrete" {
     try std.testing.expectEqual(i64b, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - num frac concrete != frac concrete (fail)" {
+test "unify - num frac structure != frac structure (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = types.frac_f32 };
-    const b_content = Content{ .concrete = types.frac_f64 };
+    const a_content = Content{ .structure = types.frac_f32 };
+    const b_content = Content{ .structure = types.frac_f64 };
 
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
@@ -1899,14 +1899,14 @@ test "unify - num frac concrete != frac concrete (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - num int concrete != int concrete (fail)" {
+test "unify - num int structure != int structure (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = types.int_i32 };
-    const b_content = Content{ .concrete = types.int_i64 };
+    const a_content = Content{ .structure = types.int_i32 };
+    const b_content = Content{ .structure = types.int_i64 };
 
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
@@ -1924,8 +1924,8 @@ test "unify - num int vs frac (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_desc = Content{ .concrete = types.int_i32 };
-    const frac_desc = Content{ .concrete = types.frac_f32 };
+    const int_desc = Content{ .structure = types.int_i32 };
+    const frac_desc = Content{ .structure = types.frac_f32 };
 
     const a = env.types_store.freshFromContent(int_desc);
     const b = env.types_store.freshFromContent(frac_desc);
@@ -1943,8 +1943,8 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a_content = Content{ .concrete = types.frac_flex_var };
-    const b_content = Content{ .concrete = types.frac_flex_var };
+    const a_content = Content{ .structure = types.frac_flex_var };
+    const b_content = Content{ .structure = types.frac_flex_var };
 
     const a = env.types_store.freshFromContent(a_content);
     const b = env.types_store.freshFromContent(b_content);
@@ -1956,7 +1956,7 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - concrete/concrete - func
+// unification - structure/structure - func
 
 test "unify - func are same" {
     const gpa = std.testing.allocator;
@@ -1964,8 +1964,8 @@ test "unify - func are same" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
-    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const func = env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
@@ -1985,7 +1985,7 @@ test "unify - funcs have diff return args (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{int_i32}, str));
@@ -2004,7 +2004,7 @@ test "unify - funcs have diff return types (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, int_i32));
@@ -2023,8 +2023,8 @@ test "unify - same funcs pure" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
-    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
 
@@ -2044,8 +2044,8 @@ test "unify - same funcs effectful" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
-    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
 
@@ -2065,8 +2065,8 @@ test "unify - same funcs first eff, second pure (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
-    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
@@ -2087,8 +2087,8 @@ test "unify - same funcs first pure, second eff" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const int_i32 = env.types_store.freshFromContent(Content{ .concrete = types.int_i32 });
-    const num = env.types_store.freshFromContent(Content{ .concrete = types.num_flex_var });
+    const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
+    const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
@@ -2187,7 +2187,7 @@ test "partitionFields - reordering is normalized" {
     try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].b.name));
 }
 
-// unification - concrete/concrete - records closed
+// unification - structure/structure - records closed
 
 test "unify - identical closed records" {
     const gpa = std.testing.allocator;
@@ -2242,7 +2242,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// // unification - concrete/concrete - records open
+// // unification - structure/structure - records open
 
 test "unify - open record a extends b" {
     const gpa = std.testing.allocator;
@@ -2395,7 +2395,7 @@ test "unify - record mismatch on shared field (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// // unification - concrete/concrete - records open+closed
+// // unification - structure/structure - records open+closed
 
 test "unify - open record extends closed (fail)" {
     const gpa = std.testing.allocator;
