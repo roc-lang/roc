@@ -36,6 +36,8 @@ pub const Rank = enum(u4) {
     }
 };
 
+// content //
+
 /// Represents what the a type *is*
 ///
 /// Numbers are special cased here. This means that when constraints, types
@@ -52,18 +54,7 @@ pub const Content = union(enum) {
     err,
 };
 
-/// Represents an ident of a type
-pub const TypeIdent = struct {
-    const Self = @This();
-
-    ident_idx: Ident.Idx,
-    // TODO: Add module ident
-    // will there be a CanIdent or smthing?
-
-    pub fn eql(a: Self, b: Self) bool {
-        return a.ident_idx == b.ident_idx;
-    }
-};
+// alias //
 
 // a nominal or structural alias
 // can hold up to 16 arguments
@@ -78,7 +69,20 @@ pub const Alias = struct {
     pub const Type = enum { opaque_, structural };
 };
 
-// flat types
+/// Represents an ident of a type
+/// TODO: Should this be something like CanIdent???
+pub const TypeIdent = struct {
+    const Self = @This();
+
+    ident_idx: Ident.Idx,
+    // TODO: Add module ident
+
+    pub fn eql(a: Self, b: Self) bool {
+        return a.ident_idx == b.ident_idx;
+    }
+};
+
+// flat types //
 
 // A "flat" data type
 // todo: rename?
@@ -89,7 +93,11 @@ pub const FlatType = union(enum) {
     func: Func,
     record: Record,
     empty_record,
+    tag_union: TagUnion,
+    empty_tag_union,
 };
+
+// type application //
 
 /// Represents a type application, like `List String` or `Result Error Value`.
 /// Applications may have up to 16 type arguments.
@@ -98,10 +106,14 @@ pub const TypeApply = struct {
     args: VarSafeList.Range,
 };
 
+// tuples //
+
 /// Represents a tuple
 pub const Tuple = struct {
     elems: VarSafeList.Range,
 };
+
+// numbers //
 
 /// Represents number
 ///
@@ -156,6 +168,8 @@ pub const int_u128: FlatType = .{ .num = Num{ .int = .u128 } };
 /// constant
 pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 
+// functions //
+
 /// Represents a function
 /// Functions may have up to 16 arguments.
 /// TODO: Should function support more args?
@@ -167,6 +181,8 @@ pub const Func = struct {
     // TODO: These are needed once we have lambda sets
     // lambda_set: Var,
 };
+
+// records //
 
 /// Represents a record
 pub const Record = struct {
@@ -212,7 +228,37 @@ pub const RecordFieldSafeList = SafeList(RecordField);
 pub const TwoRecordFieldsSafeList = SafeList(TwoRecordFields);
 
 /// Two record fields
-pub const TwoRecordFields = struct {
-    a: RecordField,
-    b: RecordField,
+pub const TwoRecordFields = struct { a: RecordField, b: RecordField };
+
+// tag unions //
+
+/// Represents a tag union
+pub const TagUnion = struct {
+    tags: TagSafeList.Range,
+    ext: Var,
 };
+
+/// A tag entry in a tag union row
+pub const Tag = struct {
+    /// The name of the tag (e.g. "Ok", "Err")
+    name: collections.SmallStringInterner.Idx,
+
+    /// A list of argument types for the tag (0 = no payload)
+    args: VarSafeList.Range,
+
+    const Self = @This();
+
+    /// A function to be pased into std.mem.sort to sort tags by idx
+    pub fn sortByTagIdxAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
+        return @intFromEnum(a.name) < @intFromEnum(b.name);
+    }
+};
+
+/// A safelist of tag union fields
+pub const TagSafeList = SafeList(Tag);
+
+/// A safelist of tag union fields
+pub const TwoTagsSafeList = SafeList(TwoTags);
+
+/// Two tag union fields
+pub const TwoTags = struct { a: Tag, b: Tag };

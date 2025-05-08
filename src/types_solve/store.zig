@@ -11,10 +11,13 @@ const exitOnOutOfMemory = collections.utils.exitOnOom;
 const Desc = types.Descriptor;
 const Var = types.Var;
 const VarSafeList = types.VarSafeList;
-const RecordFieldSafeList = types.RecordFieldSafeList;
 const Content = types.Content;
 const Rank = types.Rank;
 const RecordField = types.RecordField;
+const Tag = types.Tag;
+
+const RecordFieldSafeList = types.RecordFieldSafeList;
+const TagSafeList = types.TagSafeList;
 
 /// A variable & it's descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -48,6 +51,7 @@ pub const Store = struct {
     // Small strings
     flex_rigid_var_names: collections.SmallStringInterner,
     record_field_names: collections.SmallStringInterner,
+    tag_names: collections.SmallStringInterner,
 
     // Everything else
     alias_args: VarSafeList,
@@ -55,35 +59,54 @@ pub const Store = struct {
     type_apply_args: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeList,
+    tags: TagSafeList,
+    tag_args: VarSafeList,
 
     /// Init the unification table
     pub fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determin sensible defaults
         return .{
             .gpa = gpa,
+
+            // slots & descriptors
             .descs = DescStore.init(gpa, 64),
             .slots = SlotStore.init(gpa, 64),
+
+            // strs
             .flex_rigid_var_names = collections.SmallStringInterner.initCapacity(gpa, 64),
             .record_field_names = collections.SmallStringInterner.initCapacity(gpa, 64),
+            .tag_names = collections.SmallStringInterner.initCapacity(gpa, 64),
+
+            // everything else
             .alias_args = VarSafeList.initCapacity(gpa, 64),
             .tuple_elems = VarSafeList.initCapacity(gpa, 64),
             .type_apply_args = VarSafeList.initCapacity(gpa, 64),
             .func_args = VarSafeList.initCapacity(gpa, 64),
             .record_fields = RecordFieldSafeList.initCapacity(gpa, 64),
+            .tags = TagSafeList.initCapacity(gpa, 64),
+            .tag_args = VarSafeList.initCapacity(gpa, 64),
         };
     }
 
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
+        // slots & descriptors
         self.descs.deinit();
         self.slots.deinit();
+
+        // strs
         self.flex_rigid_var_names.deinit(self.gpa);
         self.record_field_names.deinit(self.gpa);
+        self.tag_names.deinit(self.gpa);
+
+        // everything else
         self.alias_args.deinit(self.gpa);
         self.tuple_elems.deinit(self.gpa);
         self.type_apply_args.deinit(self.gpa);
         self.func_args.deinit(self.gpa);
         self.record_fields.deinit(self.gpa);
+        self.tags.deinit(self.gpa);
+        self.tag_args.deinit(self.gpa);
     }
 
     // fresh variables //
@@ -116,7 +139,7 @@ pub const Store = struct {
         return Self.slotIdxToVar(slot_idx);
     }
 
-    // sub list helpers //
+    // sub list setters //
 
     /// Append a slice of alias args to the backing list, returning the range
     pub fn appendAliasArgs(self: *Self, slice: []const Var) VarSafeList.Range {
@@ -142,6 +165,18 @@ pub const Store = struct {
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeList.Range {
         return self.record_fields.appendSlice(self.gpa, slice);
     }
+
+    /// Append a slice of tags to the backing list, returning the range
+    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeList.Range {
+        return self.tags.appendSlice(self.gpa, slice);
+    }
+
+    /// Append a slice of tag args to the backing list, returning the range
+    pub fn appendTagArgs(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.tag_args.appendSlice(self.gpa, slice);
+    }
+
+    // sub list getters //
 
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeList.Range) []const RecordField {

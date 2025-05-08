@@ -61,10 +61,15 @@ const Func = types.Func;
 const Record = types.Record;
 const RecordField = types.RecordField;
 const TwoRecordFields = types.TwoRecordFields;
+const TagUnion = types.TagUnion;
+const Tag = types.Tag;
+const TwoTags = types.TwoTags;
 
 const VarSafeList = types.VarSafeList;
 const RecordFieldSafeList = types.RecordFieldSafeList;
 const TwoRecordFieldsSafeList = types.TwoRecordFieldsSafeList;
+const TagSafeList = types.TagSafeList;
+const TwoTagsSafeList = types.TwoTagsSafeList;
 
 /// Unify two type variables
 ///
@@ -467,6 +472,36 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
+            .tag_union => |a_tag_union| {
+                switch (b_flat_type) {
+                    .empty_tag_union => {
+                        if (a_tag_union.tags.len() == 0) {
+                            try self.unifyGuarded(a_tag_union.ext, vars.b.var_);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    .tag_union => |b_tag_union| {
+                        try self.unifyTwoTagUnions(vars, a_tag_union, b_tag_union);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .empty_tag_union => {
+                switch (b_flat_type) {
+                    .empty_tag_union => {
+                        self.merge(vars, Content{ .structure = .empty_tag_union });
+                    },
+                    .tag_union => |b_tag_union| {
+                        if (b_tag_union.tags.len() == 0) {
+                            try self.unifyGuarded(vars.a.var_, b_tag_union.ext);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
         }
     }
 
@@ -615,8 +650,6 @@ const Unifier = struct {
 
         self.merge(vars, vars.b.desc.content);
     }
-
-    const RecordFieldArray64 = std.BoundedArray(RecordField, 64);
 
     /// unify two records
     ///
@@ -786,8 +819,10 @@ const Unifier = struct {
         var ext_var = record.ext;
         while (true) {
             switch (self.types_store.resolveVar(ext_var).desc.content) {
-                // TODO: rigid var!
                 .flex_var => {
+                    return .{ .ext = ext_var, .range = range };
+                },
+                .rigid_var => {
                     return .{ .ext = ext_var, .range = range };
                 },
                 .alias => |alias| {
@@ -813,7 +848,7 @@ const Unifier = struct {
         }
     }
 
-    const Partitioned = struct {
+    const PartitionedRecordFields = struct {
         only_in_a: RecordFieldSafeList.Range,
         only_in_b: RecordFieldSafeList.Range,
         in_both: TwoRecordFieldsSafeList.Range,
@@ -838,7 +873,7 @@ const Unifier = struct {
         scratch: *Scratch,
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
-    ) Partitioned {
+    ) PartitionedRecordFields {
         // First sort the fields
         const a_fields = scratch.gathered_fields.rangeToSlice(a_fields_range);
         std.mem.sort(RecordField, a_fields, .{}, comptime RecordField.sortByFieldNameAsc);
@@ -931,6 +966,332 @@ const Unifier = struct {
             .ext = ext,
         } } });
     }
+
+    /// unify two tag_unions
+    ///
+    /// this:
+    /// * unwraps extensible variable to get all tag_unions tags
+    /// * checks that parallel args unify
+    fn unifyTwoTagUnions(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_tag_union: TagUnion,
+        b_tag_union: TagUnion,
+    ) error{TypeMismatch}!void {
+
+        // First, unwrap all tags for tag_union a, panicaing with various non-recoverable error
+        // These pancis will likely be changed/removed in the future
+        const a_gathered_tags = self.gatherTagUnionTags(a_tag_union) catch |err| switch (err) {
+            error.InvalidTagUnionExt => @panic("unifyTwoTagUnions: TagUnion a ext was invalid"),
+        };
+
+        const b_gathered_tags = self.gatherTagUnionTags(b_tag_union) catch |err| switch (err) {
+            error.InvalidTagUnionExt => @panic("unifyTwoTagUnions: TagUnion b ext was invalid"),
+        };
+
+        // Then partition the tags
+        const partitioned = partitionTags(self.scratch, a_gathered_tags.range, b_gathered_tags.range);
+
+        // Determine how the tags of a & b extend
+        const a_has_uniq_tags = partitioned.only_in_a.len() > 0;
+        const b_has_uniq_tags = partitioned.only_in_b.len() > 0;
+
+        var tags_ext: TagsExtension = .exactly_the_same;
+        if (a_has_uniq_tags and b_has_uniq_tags) {
+            tags_ext = .both_extend;
+        } else if (a_has_uniq_tags) {
+            tags_ext = .a_extends_b;
+        } else if (b_has_uniq_tags) {
+            tags_ext = .b_extends_a;
+        }
+
+        // Unify tags
+        switch (tags_ext) {
+            .exactly_the_same => {
+                // Unify exts (these will both be the empty tag_union)
+                try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
+
+                // Unify shared tags
+                // This copies tags from scratch into type_store
+                try self.unifySharedTags(
+                    vars,
+                    self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    a_gathered_tags.ext,
+                );
+            },
+            .a_extends_b => {
+                // Create a new variable of a tag_union with only a's uniq tags
+                // This copies tags from scratch into type_store
+                const only_in_a_tags_range = self.types_store.tags.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
+                );
+                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                    .tags = only_in_a_tags_range,
+                    .ext = a_gathered_tags.ext,
+                } } });
+
+                // Unify the sub tag_union with b's ext
+                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+
+                // Unify shared tags
+                // This copies tags from scratch into type_store
+                try self.unifySharedTags(
+                    vars,
+                    self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    only_in_a_var,
+                );
+            },
+            .b_extends_a => {
+                // Create a new variable of a tag_union with only b's uniq tags
+                // This copies tags from scratch into type_store
+                const only_in_b_tags_range = self.types_store.tags.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                );
+                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                    .tags = only_in_b_tags_range,
+                    .ext = b_gathered_tags.ext,
+                } } });
+
+                // Unify the sub tag_union with a's ext
+                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+
+                // Unify shared tags
+                // This copies tags from scratch into type_store
+                try self.unifySharedTags(
+                    vars,
+                    self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                    null,
+                    null,
+                    only_in_b_var,
+                );
+            },
+            .both_extend => {
+                // Create a new variable of a tag_union with only a's uniq tags
+                // This copies tags from scratch into type_store
+                const only_in_a_tags_range = self.types_store.tags.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
+                );
+                const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                    .tags = only_in_a_tags_range,
+                    .ext = a_gathered_tags.ext,
+                } } });
+
+                // Create a new variable of a tag_union with only b's uniq tags
+                // This copies tags from scratch into type_store
+                const only_in_b_tags_range = self.types_store.tags.appendSlice(
+                    self.types_store.gpa,
+                    self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                );
+                const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
+                    .tags = only_in_b_tags_range,
+                    .ext = b_gathered_tags.ext,
+                } } });
+
+                // Create a new ext var
+                const new_ext_var = self.fresh(vars, .{ .flex_var = null });
+
+                // Unify the sub tag_unions with exts
+                try self.unifyGuarded(a_gathered_tags.ext, only_in_b_var);
+                try self.unifyGuarded(only_in_a_var, b_gathered_tags.ext);
+
+                // Unify shared tags
+                // This copies tags from scratch into type_store
+                try self.unifySharedTags(
+                    vars,
+                    self.scratch.in_both_tags.rangeToSlice(partitioned.in_both),
+                    self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
+                    self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
+                    new_ext_var,
+                );
+            },
+        }
+    }
+
+    const TagsExtension = enum { exactly_the_same, a_extends_b, b_extends_a, both_extend };
+
+    const GatheredTags = struct { ext: Var, range: TagSafeList.Range };
+
+    /// Recursively unwraps the tags of an extensible tag_union, flattening all visible tags
+    /// into `scratch.gathered_tags` and following through:
+    /// * structural aliases (by chasing `.backing_var`)
+    /// * tag_union extension chains (via nested `.tag_union.ext`)
+    ///
+    /// Returns:
+    /// * a `Range` indicating the location of the gathered tags in `gathered_tags`
+    /// * the final tail extension variable, which is either a flex var or an empty tag_union
+    ///
+    /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
+    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) error{InvalidTagUnionExt}!GatheredTags {
+        var range = self.scratch.appendSliceGatheredTags(
+            self.types_store.tags.rangeToSlice(tag_union.tags),
+        );
+        var ext_var = tag_union.ext;
+        while (true) {
+            switch (self.types_store.resolveVar(ext_var).desc.content) {
+                .flex_var => {
+                    return .{ .ext = ext_var, .range = range };
+                },
+                .rigid_var => {
+                    return .{ .ext = ext_var, .range = range };
+                },
+                .alias => |alias| {
+                    ext_var = alias.backing_var;
+                },
+                .structure => |flat_type| {
+                    switch (flat_type) {
+                        .tag_union => |ext_tag_union| {
+                            const next_range = self.scratch.appendSliceGatheredTags(
+                                self.types_store.tags.rangeToSlice(tag_union.tags),
+                            );
+                            range.end = next_range.end;
+                            ext_var = ext_tag_union.ext;
+                        },
+                        .empty_tag_union => {
+                            return .{ .ext = ext_var, .range = range };
+                        },
+                        else => return error.InvalidTagUnionExt,
+                    }
+                },
+                else => return error.InvalidTagUnionExt,
+            }
+        }
+    }
+
+    const PartitionedTags = struct {
+        only_in_a: TagSafeList.Range,
+        only_in_b: TagSafeList.Range,
+        in_both: TwoTagsSafeList.Range,
+    };
+
+    /// Given two ranges of tag_union tags stored in `scratch.gathered_tags`, this function:
+    /// * sorts both slices in-place by field name
+    /// * partitions them into three disjoint groups:
+    ///     - tags only in `a`
+    ///     - tags only in `b`
+    ///     - tags present in both (by name)
+    ///
+    /// These groups are stored into dedicated scratch buffers:
+    /// * `only_in_a_tags`
+    /// * `only_in_b_tags`
+    /// * `in_both_tags`
+    ///
+    /// The result is a set of ranges that can be used to slice those buffers.
+    ///
+    /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
+    pub fn partitionTags(
+        scratch: *Scratch,
+        a_tags_range: TagSafeList.Range,
+        b_tags_range: TagSafeList.Range,
+    ) PartitionedTags {
+        // First sort the tags
+        const a_tags = scratch.gathered_tags.rangeToSlice(a_tags_range);
+        std.mem.sort(Tag, a_tags, .{}, comptime Tag.sortByTagIdxAsc);
+        const b_tags = scratch.gathered_tags.rangeToSlice(b_tags_range);
+        std.mem.sort(Tag, b_tags, .{}, comptime Tag.sortByTagIdxAsc);
+
+        // Get the start of index of the new range
+        const a_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
+        const b_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_b_tags.len());
+        const both_tags_start: TagSafeList.Idx = @enumFromInt(scratch.in_both_tags.len());
+
+        // Iterate over the tags in order, grouping them
+        var a_i: usize = 0;
+        var b_i: usize = 0;
+        while (a_i < a_tags.len and b_i < b_tags.len) {
+            const a_next = a_tags[a_i];
+            const b_next = b_tags[b_i];
+
+            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
+                _ = scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
+                a_i = a_i + 1;
+                b_i = b_i + 1;
+            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
+                _ = scratch.only_in_a_tags.append(scratch.gpa, a_next);
+                a_i = a_i + 1;
+            } else {
+                _ = scratch.only_in_b_tags.append(scratch.gpa, b_next);
+                b_i = b_i + 1;
+            }
+        }
+
+        // If b was shorter, add the extra a elems
+        while (a_i < a_tags.len) {
+            const a_next = a_tags[a_i];
+            _ = scratch.only_in_a_tags.append(scratch.gpa, a_next);
+            a_i = a_i + 1;
+        }
+
+        // If a was shorter, add the extra b elems
+        while (b_i < b_tags.len) {
+            const b_next = b_tags[b_i];
+            _ = scratch.only_in_b_tags.append(scratch.gpa, b_next);
+            b_i = b_i + 1;
+        }
+
+        // Get the end index of the new range
+        const a_tags_end: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
+        const b_tags_end: TagSafeList.Idx = @enumFromInt(scratch.only_in_b_tags.len());
+        const both_tags_end: TagSafeList.Idx = @enumFromInt(scratch.in_both_tags.len());
+
+        // Return the ranges
+        return .{
+            .only_in_a = .{ .start = a_tags_start, .end = a_tags_end },
+            .only_in_b = .{ .start = b_tags_start, .end = b_tags_end },
+            .in_both = .{ .start = both_tags_start, .end = both_tags_end },
+        };
+    }
+
+    /// Given a list of shared tags & a list of extended tags, unify the shared
+    /// Then merge a new tag_union with both shared+extended tags
+    fn unifySharedTags(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        shared_tags: []TwoTags,
+        mb_a_extended_tags: ?[]Tag,
+        mb_b_extended_tags: ?[]Tag,
+        ext: Var,
+    ) error{TypeMismatch}!void {
+        const range_start: TagSafeList.Idx = @enumFromInt(self.types_store.tags.len());
+
+        for (shared_tags) |tags| {
+            const tag_a_args = self.types_store.tag_args.rangeToSlice(tags.a.args);
+            const tag_b_args = self.types_store.tag_args.rangeToSlice(tags.b.args);
+
+            if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
+
+            for (tag_a_args, tag_b_args) |a_arg, b_arg| {
+                try self.unifyGuarded(a_arg, b_arg);
+            }
+
+            _ = self.types_store.tags.append(self.types_store.gpa, Tag{
+                .name = tags.b.name,
+                .args = tags.b.args,
+            });
+        }
+
+        // Append combined tags
+        if (mb_a_extended_tags) |extended_tags| {
+            _ = self.types_store.tags.appendSlice(self.types_store.gpa, extended_tags);
+        }
+        if (mb_b_extended_tags) |extended_tags| {
+            _ = self.types_store.tags.appendSlice(self.types_store.gpa, extended_tags);
+        }
+
+        const range_end: TagSafeList.Idx = @enumFromInt(self.types_store.tags.len());
+
+        // Merge vars
+        self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
+            .tags = .{ .start = range_start, .end = range_end },
+            .ext = ext,
+        } } });
+    }
 };
 
 /// A reusable memory arena used across unification calls to avoid per-call allocations.
@@ -953,11 +1314,17 @@ pub const Scratch = struct {
     // used by caller of unify
     fresh_vars: VarSafeList,
 
-    // used internal by unification
+    // records - used internal by unification
     gathered_fields: RecordFieldSafeList,
     only_in_a_fields: RecordFieldSafeList,
     only_in_b_fields: RecordFieldSafeList,
     in_both_fields: TwoRecordFieldsSafeList,
+
+    // records - used internal by unification
+    gathered_tags: TagSafeList,
+    only_in_a_tags: TagSafeList,
+    only_in_b_tags: TagSafeList,
+    in_both_tags: TwoTagsSafeList,
 
     /// Init scratch
     pub fn init(gpa: std.mem.Allocator) Self {
@@ -969,6 +1336,10 @@ pub const Scratch = struct {
             .only_in_a_fields = RecordFieldSafeList.initCapacity(gpa, 32),
             .only_in_b_fields = RecordFieldSafeList.initCapacity(gpa, 32),
             .in_both_fields = TwoRecordFieldsSafeList.initCapacity(gpa, 32),
+            .gathered_tags = TagSafeList.initCapacity(gpa, 32),
+            .only_in_a_tags = TagSafeList.initCapacity(gpa, 32),
+            .only_in_b_tags = TagSafeList.initCapacity(gpa, 32),
+            .in_both_tags = TwoTagsSafeList.initCapacity(gpa, 32),
         };
     }
 
@@ -979,6 +1350,10 @@ pub const Scratch = struct {
         self.only_in_a_fields.deinit(self.gpa);
         self.only_in_b_fields.deinit(self.gpa);
         self.in_both_fields.deinit(self.gpa);
+        self.gathered_tags.deinit(self.gpa);
+        self.only_in_a_tags.deinit(self.gpa);
+        self.only_in_b_tags.deinit(self.gpa);
+        self.in_both_tags.deinit(self.gpa);
     }
 
     /// Reset the scratch arrays, retaining the allocated memory
@@ -987,12 +1362,20 @@ pub const Scratch = struct {
         self.only_in_a_fields.items.clearRetainingCapacity();
         self.only_in_b_fields.items.clearRetainingCapacity();
         self.in_both_fields.items.clearRetainingCapacity();
+        self.gathered_tags.items.clearRetainingCapacity();
+        self.only_in_a_tags.items.clearRetainingCapacity();
+        self.only_in_b_tags.items.clearRetainingCapacity();
+        self.in_both_tags.items.clearRetainingCapacity();
     }
 
     // helpers //
 
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) RecordFieldSafeList.Range {
         return self.gathered_fields.appendSlice(self.gpa, fields);
+    }
+
+    fn appendSliceGatheredTags(self: *Self, fields: []const Tag) TagSafeList.Range {
+        return self.gathered_tags.appendSlice(self.gpa, fields);
     }
 };
 
@@ -1047,6 +1430,21 @@ const TestEnv = struct {
                 switch (flat_type) {
                     .record => |record| {
                         return record;
+                    },
+                    else => return error.DescIsNotRecord,
+                }
+            },
+            else => return error.DescIsNotRecord,
+        }
+    }
+
+    /// Unwrap a record or throw
+    pub fn getTagUnionOrErr(desc: Desc) error{DescIsNotRecord}!TagUnion {
+        switch (desc.content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        return tag_union;
                     },
                     else => return error.DescIsNotRecord,
                 }
@@ -1135,7 +1533,7 @@ const TestEnv = struct {
         return self.mkFunc(args, ret, eff_var);
     }
 
-    // helpers - structure - func
+    // helpers - structure - records
 
     const RecordInfo = struct { record: Record, content: Content };
 
@@ -1153,6 +1551,30 @@ const TestEnv = struct {
     fn mkRecordClosed(self: *Self, fields: []const RecordField) RecordInfo {
         const ext_var = self.types_store.freshFromContent(.{ .structure = .empty_record });
         return self.mkRecord(fields, ext_var);
+    }
+
+    // helpers - structure - tag union
+
+    const TagUnionInfo = struct { tag_union: TagUnion, content: Content };
+
+    fn mkTagArgs(self: *Self, args: []const Var) VarSafeList.Range {
+        return self.types_store.appendTagArgs(args);
+    }
+
+    fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) TagUnionInfo {
+        const tags_range = self.types_store.appendTags(tags);
+        const tag_union = TagUnion{ .tags = tags_range, .ext = ext_var };
+        return .{ .content = Content{ .structure = .{ .tag_union = tag_union } }, .tag_union = tag_union };
+    }
+
+    fn mkTagUnionOpen(self: *Self, tags: []const Tag) TagUnionInfo {
+        const ext_var = self.types_store.freshFromContent(.{ .flex_var = null });
+        return self.mkTagUnion(tags, ext_var);
+    }
+
+    fn mkTagUnionClosed(self: *Self, tags: []const Tag) TagUnionInfo {
+        const ext_var = self.types_store.freshFromContent(.{ .structure = .empty_tag_union });
+        return self.mkTagUnion(tags, ext_var);
     }
 };
 
@@ -2242,7 +2664,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// // unification - structure/structure - records open
+// unification - structure/structure - records open
 
 test "unify - open record a extends b" {
     const gpa = std.testing.allocator;
@@ -2395,7 +2817,7 @@ test "unify - record mismatch on shared field (fail)" {
     try std.testing.expectEqual(Content.err, desc_b.content);
 }
 
-// // unification - structure/structure - records open+closed
+// unification - structure/structure - records open+closed
 
 test "unify - open record extends closed (fail)" {
     const gpa = std.testing.allocator;
@@ -2479,5 +2901,69 @@ test "unify - closed vs open with type mismatch (fail)" {
     try std.testing.expectEqual(Slot{ .redirect = open }, env.types_store.getSlot(closed));
 
     const desc = try env.getDescForRootVar(open);
+    try std.testing.expectEqual(Content.err, desc.content);
+}
+
+// unification - structure/structure - tag unions closed
+
+test "unify - identical closed tag_unions" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const tag_arg_range = env.mkTagArgs(&[_]Var{str});
+    const tags = [_]Tag{
+        .{ .name = @enumFromInt(1), .args = tag_arg_range },
+    };
+    const tag_union_data = env.mkTagUnionClosed(&tags);
+
+    const a = env.types_store.freshFromContent(tag_union_data.content);
+    const b = env.types_store.freshFromContent(tag_union_data.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    try std.testing.expectEqual(1, b_tags.len);
+
+    const b_tag = b_tags[0];
+    const b_tag_args = env.types_store.tag_args.rangeToSlice(b_tag.args);
+    try std.testing.expectEqual(1, b_tag_args.len);
+    try std.testing.expectEqual(str, b_tag_args[0]);
+}
+
+test "unify - closed tag_unions with diff args (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const a_tag_arg_range = env.mkTagArgs(&[_]Var{str});
+    const a_tags = [_]Tag{
+        .{ .name = @enumFromInt(1), .args = a_tag_arg_range },
+    };
+    const a_tag_union_data = env.mkTagUnionClosed(&a_tags);
+    const a = env.types_store.freshFromContent(a_tag_union_data.content);
+
+    const b_tag_arg_range = env.mkTagArgs(&[_]Var{int});
+    const b_tags = [_]Tag{
+        .{ .name = @enumFromInt(1), .args = b_tag_arg_range },
+    };
+    const b_tag_union_data = env.mkTagUnionClosed(&b_tags);
+    const b = env.types_store.freshFromContent(b_tag_union_data.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc = try env.getDescForRootVar(b);
     try std.testing.expectEqual(Content.err, desc.content);
 }
