@@ -10,14 +10,15 @@ const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 const Desc = types.Descriptor;
 const Var = types.Var;
-const VarSafeList = types.VarSafeList;
 const Content = types.Content;
 const Rank = types.Rank;
+const Mark = types.Mark;
 const RecordField = types.RecordField;
 const Tag = types.Tag;
 
-const RecordFieldSafeList = types.RecordFieldSafeList;
-const TagSafeList = types.TagSafeList;
+const VarSafeList = Var.SafeList;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
+const TagSafeMultiList = Tag.SafeMultiList;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -25,7 +26,7 @@ pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: D
 /// Two variables & descs
 pub const ResolvedVarDescs = struct { a: ResolvedVarDesc, b: ResolvedVarDesc };
 
-// Reperents either type data *or* a symlink to another type variable
+/// Reperents either type data *or* a symlink to another type variable
 pub const Slot = union(enum) {
     root: DescStore.Idx,
     redirect: Var,
@@ -48,23 +49,18 @@ pub const Store = struct {
     slots: SlotStore,
     descs: DescStore,
 
-    // Small strings
-    flex_rigid_var_names: collections.SmallStringInterner,
-    record_field_names: collections.SmallStringInterner,
-    tag_names: collections.SmallStringInterner,
-
     // Everything else
     alias_args: VarSafeList,
     tuple_elems: VarSafeList,
     type_apply_args: VarSafeList,
     func_args: VarSafeList,
-    record_fields: RecordFieldSafeList,
-    tags: TagSafeList,
+    record_fields: RecordFieldSafeMultiList,
+    tags: TagSafeMultiList,
     tag_args: VarSafeList,
 
     /// Init the unification table
     pub fn init(gpa: std.mem.Allocator) Self {
-        // TODO: eventually use herusitics here to determin sensible defaults
+        // TODO: eventually use herusitics here to determine sensible defaults
         return .{
             .gpa = gpa,
 
@@ -72,18 +68,13 @@ pub const Store = struct {
             .descs = DescStore.init(gpa, 64),
             .slots = SlotStore.init(gpa, 64),
 
-            // strs
-            .flex_rigid_var_names = collections.SmallStringInterner.initCapacity(gpa, 64),
-            .record_field_names = collections.SmallStringInterner.initCapacity(gpa, 64),
-            .tag_names = collections.SmallStringInterner.initCapacity(gpa, 64),
-
             // everything else
             .alias_args = VarSafeList.initCapacity(gpa, 64),
             .tuple_elems = VarSafeList.initCapacity(gpa, 64),
             .type_apply_args = VarSafeList.initCapacity(gpa, 64),
             .func_args = VarSafeList.initCapacity(gpa, 64),
-            .record_fields = RecordFieldSafeList.initCapacity(gpa, 64),
-            .tags = TagSafeList.initCapacity(gpa, 64),
+            .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, 64),
+            .tags = TagSafeMultiList.initCapacity(gpa, 64),
             .tag_args = VarSafeList.initCapacity(gpa, 64),
         };
     }
@@ -93,11 +84,6 @@ pub const Store = struct {
         // slots & descriptors
         self.descs.deinit();
         self.slots.deinit();
-
-        // strs
-        self.flex_rigid_var_names.deinit(self.gpa);
-        self.record_field_names.deinit(self.gpa);
-        self.tag_names.deinit(self.gpa);
 
         // everything else
         self.alias_args.deinit(self.gpa);
@@ -127,7 +113,7 @@ pub const Store = struct {
     /// Create a new variable with the provided desc at the top level
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
-        const desc_idx = self.descs.insert(.{ .content = content, .rank = Rank.top_level });
+        const desc_idx = self.descs.insert(.{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
         const slot_idx = self.slots.insert(.{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
@@ -162,12 +148,12 @@ pub const Store = struct {
     }
 
     /// Append a slice of record fields to the backing list, returning the range
-    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeList.Range {
+    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
         return self.record_fields.appendSlice(self.gpa, slice);
     }
 
     /// Append a slice of tags to the backing list, returning the range
-    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeList.Range {
+    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
         return self.tags.appendSlice(self.gpa, slice);
     }
 
@@ -179,8 +165,13 @@ pub const Store = struct {
     // sub list getters //
 
     /// Given a range, get a slice of record fields from the backing array
-    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeList.Range) []const RecordField {
+    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.rangeToSlice(range);
+    }
+
+    /// Given a range, get a slice of tags from the backing array
+    pub fn getTagsSlice(self: *Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
+        return self.tags.rangeToSlice(range);
     }
 
     // resolvers //
@@ -250,15 +241,15 @@ pub const Store = struct {
         }
     }
 
-    // equivalance //
+    // equivalence //
 
     /// The result of checking for equivalance
     pub const VarEquivResult = union(enum) { equiv, not_equiv: ResolvedVarDescs };
 
-    /// Check if two variables are equivalant
+    /// Check if two variables are equivalent
     /// This will follow all redirects and compress the path
     ///
-    /// If the vars are *not equivalant, then return the resolved vars & descs
+    /// If the vars are *not equivalent, then return the resolved vars & descs
     pub fn checkVarsEquiv(self: *Self, a_var: Var, b_var: Var) VarEquivResult {
         const a = self.resolveVarAndCompressPath(a_var);
         const b = self.resolveVarAndCompressPath(b_var);
@@ -277,8 +268,7 @@ pub const Store = struct {
     ///
     // NOTE: The elm & the roc compiler this step differently
     // * The elm compiler sets b to redirect to a
-    // * The roc compiler sets a to redirect to b (based on the `ena` compiler
-    // See the `union` function in subs.rs for details
+    // * The roc compiler sets a to redirect to b
     pub fn union_(self: *Self, a_var: Var, b_var: Var, new_desc: Desc) void {
         const b_data = self.resolveVarAndCompressPath(b_var);
 
