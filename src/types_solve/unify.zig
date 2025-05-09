@@ -1,5 +1,5 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
-//! * structural and opaque type aliases
+//! * type aliases
 //! * effect and purity tracking
 //! * extensible row-based record types
 //!
@@ -51,6 +51,7 @@ const TypeIdent = types.TypeIdent;
 const Var = types.Var;
 const Desc = types.Descriptor;
 const Rank = types.Rank;
+const Mark = types.Mark;
 const Content = types.Content;
 const Alias = types.Alias;
 const FlatType = types.FlatType;
@@ -93,6 +94,7 @@ pub fn unify(
             types_store.union_(a, b, .{
                 .content = .err,
                 .rank = Rank.generalized,
+                .mark = Mark.none,
             });
             return Result{ .err = .{ .a = a, .b = b } };
         },
@@ -129,7 +131,7 @@ pub const Result = union(enum) {
 ///
 /// `Unifier` supports:
 /// * flexible and rigid type variables
-/// * structural and opaque type aliases
+/// * type aliases
 /// * extensible records with row polymorphism
 /// * basic support for function, tuple, and number types
 ///
@@ -154,6 +156,7 @@ const Unifier = struct {
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .mark = Mark.none,
         });
     }
 
@@ -162,6 +165,7 @@ const Unifier = struct {
         const var_ = self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .mark = Mark.none,
         });
         _ = self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -187,14 +191,7 @@ const Unifier = struct {
                         try self.unifyRigid(&vars, vars.b.desc.content);
                     },
                     .alias => |a_alias| {
-                        switch (a_alias.type) {
-                            .structural => {
-                                try self.unifyStructuralAlias(&vars, a_alias, vars.b.desc.content);
-                            },
-                            .opaque_ => {
-                                try self.unifyOpaqueAlias(&vars, a_alias, vars.b.desc.content);
-                            },
-                        }
+                        try self.unifyAlias(&vars, a_alias, vars.b.desc.content);
                     },
                     .effectful => {
                         try self.unifyEffectful(&vars, vars.b.desc.content);
@@ -247,10 +244,10 @@ const Unifier = struct {
         }
     }
 
-    // Unify structural alias //
+    // Unify alias //
 
-    /// Unify when `a` was a structural alias
-    fn unifyStructuralAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+    /// Unify when `a` was a alias
+    fn unifyAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .alias = a_alias });
@@ -259,17 +256,10 @@ const Unifier = struct {
                 try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
-                switch (b_alias.type) {
-                    .structural => {
-                        if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
-                            try self.unifyTwoAliases(vars, a_alias, b_alias);
-                        } else {
-                            try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
-                        }
-                    },
-                    .opaque_ => {
-                        try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
-                    },
+                if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
+                    try self.unifyTwoAliases(vars, a_alias, b_alias);
+                } else {
+                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
                 }
             },
             .effectful => return error.TypeMismatch,
@@ -279,37 +269,7 @@ const Unifier = struct {
         }
     }
 
-    /// Unify when `a` was a nominal type
-    fn unifyOpaqueAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
-        switch (b_content) {
-            .flex_var => |_| {
-                self.merge(vars, Content{ .alias = a_alias });
-            },
-            .rigid_var => |_| {
-                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
-            },
-            .alias => |b_alias| {
-                switch (b_alias.type) {
-                    .structural => {
-                        try self.unifyGuarded(vars.a.var_, b_alias.backing_var);
-                    },
-                    .opaque_ => {
-                        if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
-                            try self.unifyTwoAliases(vars, a_alias, b_alias);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                }
-            },
-            .effectful => return error.TypeMismatch,
-            .pure => return error.TypeMismatch,
-            .structure => return error.TypeMismatch,
-            .err => self.merge(vars, .err),
-        }
-    }
-
-    /// Unify two aliases, either structural or opaque
+    /// Unify two aliases
     ///
     /// This function assumes the caller has already checked that the alias names match
     ///
@@ -332,7 +292,8 @@ const Unifier = struct {
 
         // TODO: Here, we'll need some special handling for recursion variables
         // For each argument variable, we need to prefer recursive vars. Then
-        // we'll build a new structurla alias and pass that to self.merge
+        // we'll build a new alias and pass that to self.merge
+        //
         // See unify_two_aliases and choose_merged_var in the rust compiler for details
 
         // Rust compiler comment:
@@ -382,12 +343,7 @@ const Unifier = struct {
             },
             .rigid_var => return error.TypeMismatch,
             .alias => |alias| {
-                switch (alias.type) {
-                    .structural => {
-                        try self.unifyGuarded(vars.a.var_, alias.backing_var);
-                    },
-                    .opaque_ => |_| return error.TypeMismatch,
-                }
+                try self.unifyGuarded(vars.a.var_, alias.backing_var);
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -441,9 +397,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        if (a_record.fields.len() == 0 or // this line is here for explicitness
-                            a_record.areAllFieldsOptional(&self.types_store.record_fields))
-                        {
+                        if (a_record.fields.len() == 0) {
                             try self.unifyGuarded(a_record.ext, vars.b.var_);
                         } else {
                             return error.TypeMismatch;
@@ -461,9 +415,7 @@ const Unifier = struct {
                         self.merge(vars, Content{ .structure = .empty_record });
                     },
                     .record => |b_record| {
-                        if (b_record.fields.len() == 0 or // this line is here for explicitness
-                            b_record.areAllFieldsOptional(&self.types_store.record_fields))
-                        {
+                        if (b_record.fields.len() == 0) {
                             try self.unifyGuarded(vars.a.var_, b_record.ext);
                         } else {
                             return error.TypeMismatch;
@@ -804,7 +756,7 @@ const Unifier = struct {
 
     /// Recursively unwraps the fields of an extensible record, flattening all visible fields
     /// into `scratch.gathered_fields` and following through:
-    /// * structural aliases (by chasing `.backing_var`)
+    /// * aliases (by chasing `.backing_var`)
     /// * record extension chains (via nested `.record.ext`)
     ///
     /// Returns:
@@ -1120,7 +1072,7 @@ const Unifier = struct {
 
     /// Recursively unwraps the tags of an extensible tag_union, flattening all visible tags
     /// into `scratch.gathered_tags` and following through:
-    /// * structural aliases (by chasing `.backing_var`)
+    /// * aliases (by chasing `.backing_var`)
     /// * tag_union extension chains (via nested `.tag_union.ext`)
     ///
     /// Returns:
@@ -1394,9 +1346,13 @@ const TestEnv = struct {
     const Self = @This();
 
     gpa: std.mem.Allocator,
-    ident_store: Ident.Store,
+
+    // testing unification things
     types_store: store.Store,
     scratch: Scratch,
+
+    // testing interners
+    ident_store: Ident.Store,
 
     pub fn init(gpa: std.mem.Allocator) Self {
         return .{
@@ -1460,20 +1416,18 @@ const TestEnv = struct {
 
     // helpers - structure - tuple
 
-    fn mkAlias(self: *Self, typ: Alias.Type, name: []const u8, args: []const Var, backing_var: Var) Alias {
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
         return .{
-            .type = typ,
             .ident = self.mkTypeIdent(name),
             .args = args_range,
             .backing_var = backing_var,
         };
     }
 
-    fn mkAliasFromIdent(self: *Self, typ: Alias.Type, type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
+    fn mkAliasFromIdent(self: *Self, type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
         return .{
-            .type = typ,
             .ident = type_ident_idx,
             .args = args_range,
             .backing_var = backing_var,
@@ -1695,7 +1649,7 @@ test "rigid_var - cannot unify with identical rigid_var (fail)" {
 
 // unification - aliases
 
-test "unify - structural alias with same args" {
+test "unify - alias with same args" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1704,7 +1658,7 @@ test "unify - structural alias with same args" {
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-    const alias = Content{ .alias = env.mkAlias(.structural, "AliasName", &[_]Var{ str, bool_ }, backing) };
+    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
 
     const a = env.types_store.freshFromContent(alias);
     const b = env.types_store.freshFromContent(alias);
@@ -1716,7 +1670,7 @@ test "unify - structural alias with same args" {
     try std.testing.expectEqual(alias, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural aliases with different names but same backing" {
+test "unify - aliases with different names but same backing" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1724,8 +1678,8 @@ test "unify - structural aliases with different names but same backing" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{str}));
-    const a_alias = Content{ .alias = env.mkAlias(.structural, "AliasA", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias(.structural, "AliasB", &[_]Var{str}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
+    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
@@ -1737,7 +1691,7 @@ test "unify - structural aliases with different names but same backing" {
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural alias with different args (fail)" {
+test "unify - alias with different args (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1748,8 +1702,8 @@ test "unify - structural alias with different args (fail)" {
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+    const b_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
@@ -1761,78 +1715,7 @@ test "unify - structural alias with different args (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural vs opaque alias with same name and args (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{str}));
-
-    const alias_ident = env.mkTypeIdent("Thing");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{str}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with different args (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with sam args" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with flex" {
+test "unify - alias with flex" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1842,29 +1725,7 @@ test "unify - opaque alias with flex" {
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.fresh();
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - structural alias with flex" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
@@ -2532,8 +2393,8 @@ test "partitionFields - same record" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
 
     const range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
@@ -2549,9 +2410,9 @@ test "partitionFields - disjoint fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const a2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
@@ -2568,9 +2429,9 @@ test "partitionFields - overlapping fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const both = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
@@ -2587,9 +2448,9 @@ test "partitionFields - reordering is normalized" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
-    const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .var_ = @enumFromInt(2) };
+    const f1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const f2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const f3 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
@@ -2619,7 +2480,7 @@ test "unify - identical closed records" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const fields = [_]RecordField{
-        .{ .name = @enumFromInt(1), .var_ = str, .typ = .required },
+        .{ .name = @enumFromInt(1), .var_ = str },
     };
     const record_data = env.mkRecordClosed(&fields);
 
@@ -2646,8 +2507,8 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const a_record_data = env.mkRecordClosed(&[_]RecordField{ field1, field2 });
     const a = env.types_store.freshFromContent(a_record_data.content);
@@ -2674,8 +2535,8 @@ test "unify - open record a extends b" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2712,8 +2573,8 @@ test "unify - open record b extends a" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2751,9 +2612,9 @@ test "unify - both extend open record" {
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
-    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
+    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_ };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2800,8 +2661,8 @@ test "unify - record mismatch on shared field (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_a});
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2826,8 +2687,8 @@ test "unify - open record extends closed (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}).content);
@@ -2846,8 +2707,8 @@ test "unify - closed record extends open" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }).content);
@@ -2866,8 +2727,8 @@ test "unify - open vs closed with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
@@ -2889,8 +2750,8 @@ test "unify - closed vs open with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);

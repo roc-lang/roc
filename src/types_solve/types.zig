@@ -1,3 +1,16 @@
+//! This module defines the core data structures for representing types in the compiler's
+//! Hindley-Milner type inference system. It includes:
+//!
+//! - `Var`: unique type variable identifiers
+//! - `Descriptor`: the rank, mark, and structure of a type
+//! - `Content`: the semantic meaning of a type (flex var, alias, function, record, etc.)
+//! - `FlatType`: the 'flat' shape of a type (tuples, numbers, tag unions, etc.)
+//! - `Alias`: nominal or structural type aliases
+//! - `Func`, `Record`, `TagUnion`: structured type forms
+//!
+//! Special care is taken to keep memory layouts small and efficient. When modifying
+//! these types, please consider their size impact and unification performance.
+
 const std = @import("std");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
@@ -8,9 +21,9 @@ const SafeList = collections.SafeList;
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
     // If it went up, please make sure your changes are absolutely required!
-    try std.testing.expectEqual(28, @sizeOf(Descriptor));
+    try std.testing.expectEqual(32, @sizeOf(Descriptor));
     try std.testing.expectEqual(24, @sizeOf(Content));
-    try std.testing.expectEqual(20, @sizeOf(Alias));
+    try std.testing.expectEqual(16, @sizeOf(Alias));
     try std.testing.expectEqual(20, @sizeOf(FlatType));
     try std.testing.expectEqual(12, @sizeOf(Record));
 }
@@ -21,8 +34,8 @@ pub const Var = enum(u32) { _ };
 /// A safelist of type variables
 pub const VarSafeList = SafeList(Var);
 
-// A type descriptor
-pub const Descriptor = struct { content: Content, rank: Rank };
+/// A type descriptor
+pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
 
 /// A type variable rank
 pub const Rank = enum(u4) {
@@ -33,6 +46,21 @@ pub const Rank = enum(u4) {
     /// Get the lowest rank
     pub fn min(a: Rank, b: Rank) Rank {
         return @enumFromInt(@min(@intFromEnum(a), @intFromEnum(b)));
+    }
+};
+
+/// A type variable mark
+pub const Mark = enum(u32) {
+    const Self = @This();
+
+    getVarNames = 0,
+    occurs = 1,
+    none = 2,
+    _,
+
+    /// Get the lowest rank
+    pub fn next(self: Self) Self {
+        return self + 1;
     }
 };
 
@@ -56,17 +84,11 @@ pub const Content = union(enum) {
 
 // alias //
 
-// a nominal or structural alias
-// can hold up to 16 arguments
+/// a nominal or structural alias
 pub const Alias = struct {
-    type: Type,
     ident: TypeIdent,
     args: VarSafeList.Range,
     backing_var: Var,
-    // TODO: lambda sets var
-
-    /// the type of an alias
-    pub const Type = enum { opaque_, structural };
 };
 
 /// Represents an ident of a type
@@ -84,8 +106,7 @@ pub const TypeIdent = struct {
 
 // flat types //
 
-// A "flat" data type
-// todo: rename?
+/// A "flat" data type
 pub const FlatType = union(enum) {
     type_apply: TypeApply,
     tuple: Tuple,
@@ -119,7 +140,7 @@ pub const Tuple = struct {
 ///
 /// Numbers could be representsed by `type_apply` and phantom types, but
 /// that ends up being inefficient because every number type requires
-/// multiple different type entrie.s By special casing them here we can
+/// multiple different type entries. By special casing them here we can
 /// ensure that they have more compact representations
 pub const Num = union(enum) {
     const Self = @This();
@@ -171,15 +192,10 @@ pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 // functions //
 
 /// Represents a function
-/// Functions may have up to 16 arguments.
-/// TODO: Should function support more args?
 pub const Func = struct {
     args: VarSafeList.Range,
     ret: Var,
     eff: Var,
-
-    // TODO: These are needed once we have lambda sets
-    // lambda_set: Var,
 };
 
 // records //
@@ -191,31 +207,16 @@ pub const Record = struct {
     ext: Var,
 
     const Self = @This();
-
-    /// Returns true if all fields in a record are optional
-    /// If there are no fields, also returns true
-    pub fn areAllFieldsOptional(self: *const Self, backing_fields: *const RecordFieldSafeList) bool {
-        for (backing_fields.rangeToSlice(self.fields)) |field| {
-            if (field.typ != .optional) {
-                return false;
-            }
-        }
-        return true;
-    }
 };
-
-/// TODO: Rust compiler has `demanded` here too
-const RecordFieldType = enum { required, optional };
 
 /// A field on a record
 pub const RecordField = struct {
     const Self = @This();
 
     name: collections.SmallStringInterner.Idx,
-    typ: RecordFieldType,
     var_: Var,
 
-    /// A function to be pased into std.mem.sort to sort fields by name
+    /// A function to be passed into std.mem.sort to sort fields by name
     pub fn sortByFieldNameAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
         return @intFromEnum(a.name) < @intFromEnum(b.name);
     }
@@ -248,7 +249,7 @@ pub const Tag = struct {
 
     const Self = @This();
 
-    /// A function to be pased into std.mem.sort to sort tags by idx
+    /// A function to be passed into std.mem.sort to sort tags by idx
     pub fn sortByTagIdxAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
         return @intFromEnum(a.name) < @intFromEnum(b.name);
     }
