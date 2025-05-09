@@ -19,7 +19,7 @@ const Tag = types.Tag;
 const RecordFieldSafeList = types.RecordFieldSafeList;
 const TagSafeList = types.TagSafeList;
 
-/// A variable & it's descriptor info
+/// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
 
 /// Two variables & descs
@@ -223,7 +223,15 @@ pub const Store = struct {
                     redirected_slot_idx = Self.varToSlotIdx(next_redirect_var);
                     redirected_slot = self.slots.get(redirected_slot_idx);
                 },
-                .root => |_| break,
+                .root => |desc_idx| {
+                    const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
+                    const desc = self.descs.get(desc_idx);
+                    return .{
+                        .var_ = redirected_root_var,
+                        .desc_idx = desc_idx,
+                        .desc = desc,
+                    };
+                },
             }
         }
         const redirected_root_var = Self.slotIdxToVar(redirected_slot_idx);
