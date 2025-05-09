@@ -33,7 +33,7 @@ test {
 pub const Var = enum(u32) {
     _,
 
-    /// A safelist of type variables
+    /// A safe list of type variables
     pub const SafeList = MkSafeList(Var);
 };
 
@@ -227,7 +227,7 @@ pub const RecordField = struct {
     /// A safe multi list of record fields
     pub const SafeMultiList = MkSafeMultiList(Self);
 
-    /// A safelist of record fields
+    /// A safe list of record fields
     pub const SafeList = MkSafeList(Self);
 };
 
@@ -241,10 +241,10 @@ pub const TwoRecordFields = struct {
     b_name: collections.SmallStringInterner.Idx,
     b_var: Var,
 
-    /// A safelist of record fields
+    /// A safe list of record fields
     pub const SafeMultiList = MkSafeMultiList(Self);
 
-    /// A safelist of record fields
+    /// A safe list of record fields
     pub const SafeList = MkSafeList(Self);
 };
 
@@ -252,7 +252,7 @@ pub const TwoRecordFields = struct {
 
 /// Represents a tag union
 pub const TagUnion = struct {
-    tags: TagSafeList.Range,
+    tags: Tag.SafeMultiList.Range,
     ext: Var,
 };
 
@@ -270,13 +270,22 @@ pub const Tag = struct {
     pub fn sortByTagIdxAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
         return @intFromEnum(a.name) < @intFromEnum(b.name);
     }
+
+    /// A safe list of tags
+    pub const SafeList = MkSafeList(@This());
+
+    /// A safe multi list of tags
+    pub const SafeMultiList = MkSafeMultiList(@This());
 };
 
-/// A safelist of tag union fields
-pub const TagSafeList = MkSafeList(Tag);
-
-/// A safelist of tag union fields
-pub const TwoTagsSafeList = MkSafeList(TwoTags);
-
 /// Two tag union fields
-pub const TwoTags = struct { a: Tag, b: Tag };
+pub const TwoTags = struct {
+    a: Tag,
+    b: Tag,
+
+    /// A safe list of tag union fields
+    pub const SafeList = MkSafeList(TwoTags);
+
+    /// A safe multi list of tag union fields
+    pub const SafeMultiList = MkSafeMultiList(TwoTags);
+};

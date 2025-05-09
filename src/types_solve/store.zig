@@ -18,7 +18,7 @@ const Tag = types.Tag;
 
 const VarSafeList = Var.SafeList;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const TagSafeList = types.TagSafeList;
+const TagSafeMultiList = Tag.SafeMultiList;
 
 /// A variable & its descriptor info
 pub const ResolvedVarDesc = struct { var_: Var, desc_idx: DescStore.Idx, desc: Desc };
@@ -55,7 +55,7 @@ pub const Store = struct {
     type_apply_args: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
-    tags: TagSafeList,
+    tags: TagSafeMultiList,
     tag_args: VarSafeList,
 
     /// Init the unification table
@@ -74,7 +74,7 @@ pub const Store = struct {
             .type_apply_args = VarSafeList.initCapacity(gpa, 64),
             .func_args = VarSafeList.initCapacity(gpa, 64),
             .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, 64),
-            .tags = TagSafeList.initCapacity(gpa, 64),
+            .tags = TagSafeMultiList.initCapacity(gpa, 64),
             .tag_args = VarSafeList.initCapacity(gpa, 64),
         };
     }
@@ -153,7 +153,7 @@ pub const Store = struct {
     }
 
     /// Append a slice of tags to the backing list, returning the range
-    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeList.Range {
+    pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
         return self.tags.appendSlice(self.gpa, slice);
     }
 
