@@ -21,7 +21,7 @@ pub const Var = enum(u32) { _ };
 /// A safelist of type variables
 pub const VarSafeList = SafeList(Var);
 
-// A type descritpro
+// A type descriptor
 pub const Descriptor = struct { content: Content, rank: Rank };
 
 /// A type variable rank

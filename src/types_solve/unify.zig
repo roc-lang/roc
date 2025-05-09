@@ -74,7 +74,7 @@ const TwoTagsSafeList = types.TwoTagsSafeList;
 /// Unify two type variables
 ///
 /// This function
-/// * Resolve type variables & compresses paths
+/// * Resolves type variables & compresses paths
 /// * Compares variable contents for equality
 /// * Merges unified variables so 1 is "root" and the other is "redirect"
 pub fn unify(
@@ -279,7 +279,7 @@ const Unifier = struct {
         }
     }
 
-    /// Unify when `a` was a structural alias
+    /// Unify when `a` was a nominal type
     fn unifyOpaqueAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
@@ -317,7 +317,7 @@ const Unifier = struct {
     /// * that the arities are the same
     /// * that parallel arguments unify
     ///
-    /// NOTE: the rust version of this function `unify_two_aliases` is *signifgantly* more
+    /// NOTE: the rust version of this function `unify_two_aliases` is *significantly* more
     /// complicated than the version here
     fn unifyTwoAliases(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_alias: Alias) error{TypeMismatch}!void {
         if (a_alias.args.len() != b_alias.args.len()) {
@@ -1248,7 +1248,7 @@ const Unifier = struct {
         };
     }
 
-    /// Given a list of shared tags & a list of extended tags, unify the shared
+    /// Given a list of shared tags & a list of extended tags, unify the shared tags.
     /// Then merge a new tag_union with both shared+extended tags
     fn unifySharedTags(
         self: *Self,
