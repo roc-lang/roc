@@ -1,5 +1,5 @@
 //! This module implements Hindley-Milner style type unification with extensions for:
-//! * structural and opaque type aliases
+//! * type aliases
 //! * effect and purity tracking
 //! * extensible row-based record types
 //!
@@ -51,6 +51,7 @@ const TypeIdent = types.TypeIdent;
 const Var = types.Var;
 const Desc = types.Descriptor;
 const Rank = types.Rank;
+const Mark = types.Mark;
 const Content = types.Content;
 const Alias = types.Alias;
 const FlatType = types.FlatType;
@@ -65,11 +66,14 @@ const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 const TwoTags = types.TwoTags;
 
-const VarSafeList = types.VarSafeList;
-const RecordFieldSafeList = types.RecordFieldSafeList;
-const TwoRecordFieldsSafeList = types.TwoRecordFieldsSafeList;
-const TagSafeList = types.TagSafeList;
-const TwoTagsSafeList = types.TwoTagsSafeList;
+const VarSafeList = Var.SafeList;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
+const RecordFieldSafeList = RecordField.SafeList;
+const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
+const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
+const TagSafeList = Tag.SafeList;
+const TagSafeMultiList = Tag.SafeMultiList;
+const TwoTagsSafeList = TwoTags.SafeList;
 
 /// Unify two type variables
 ///
@@ -93,6 +97,7 @@ pub fn unify(
             types_store.union_(a, b, .{
                 .content = .err,
                 .rank = Rank.generalized,
+                .mark = Mark.none,
             });
             return Result{ .err = .{ .a = a, .b = b } };
         },
@@ -129,7 +134,7 @@ pub const Result = union(enum) {
 ///
 /// `Unifier` supports:
 /// * flexible and rigid type variables
-/// * structural and opaque type aliases
+/// * type aliases
 /// * extensible records with row polymorphism
 /// * basic support for function, tuple, and number types
 ///
@@ -154,6 +159,7 @@ const Unifier = struct {
         self.types_store.union_(vars.a.var_, vars.b.var_, .{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .mark = Mark.none,
         });
     }
 
@@ -162,6 +168,7 @@ const Unifier = struct {
         const var_ = self.types_store.register(.{
             .content = new_content,
             .rank = Rank.min(vars.a.desc.rank, vars.b.desc.rank),
+            .mark = Mark.none,
         });
         _ = self.scratch.fresh_vars.append(self.scratch.gpa, var_);
         return var_;
@@ -170,7 +177,7 @@ const Unifier = struct {
     // unification
 
     /// Error thrown during unification when there's a type mismatch
-    const Error = error{ TypeMismatch, InvalidRecordExt };
+    const Error = error{TypeMismatch};
 
     /// Unify checking for equivalance
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) error{TypeMismatch}!void {
@@ -187,14 +194,7 @@ const Unifier = struct {
                         try self.unifyRigid(&vars, vars.b.desc.content);
                     },
                     .alias => |a_alias| {
-                        switch (a_alias.type) {
-                            .structural => {
-                                try self.unifyStructuralAlias(&vars, a_alias, vars.b.desc.content);
-                            },
-                            .opaque_ => {
-                                try self.unifyOpaqueAlias(&vars, a_alias, vars.b.desc.content);
-                            },
-                        }
+                        try self.unifyAlias(&vars, a_alias, vars.b.desc.content);
                     },
                     .effectful => {
                         try self.unifyEffectful(&vars, vars.b.desc.content);
@@ -247,10 +247,10 @@ const Unifier = struct {
         }
     }
 
-    // Unify structural alias //
+    // Unify alias //
 
-    /// Unify when `a` was a structural alias
-    fn unifyStructuralAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
+    /// Unify when `a` was a alias
+    fn unifyAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => |_| {
                 self.merge(vars, Content{ .alias = a_alias });
@@ -259,17 +259,10 @@ const Unifier = struct {
                 try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
-                switch (b_alias.type) {
-                    .structural => {
-                        if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
-                            try self.unifyTwoAliases(vars, a_alias, b_alias);
-                        } else {
-                            try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
-                        }
-                    },
-                    .opaque_ => {
-                        try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
-                    },
+                if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
+                    try self.unifyTwoAliases(vars, a_alias, b_alias);
+                } else {
+                    try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
                 }
             },
             .effectful => return error.TypeMismatch,
@@ -279,37 +272,7 @@ const Unifier = struct {
         }
     }
 
-    /// Unify when `a` was a nominal type
-    fn unifyOpaqueAlias(self: *Self, vars: *const ResolvedVarDescs, a_alias: Alias, b_content: Content) error{TypeMismatch}!void {
-        switch (b_content) {
-            .flex_var => |_| {
-                self.merge(vars, Content{ .alias = a_alias });
-            },
-            .rigid_var => |_| {
-                try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
-            },
-            .alias => |b_alias| {
-                switch (b_alias.type) {
-                    .structural => {
-                        try self.unifyGuarded(vars.a.var_, b_alias.backing_var);
-                    },
-                    .opaque_ => {
-                        if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
-                            try self.unifyTwoAliases(vars, a_alias, b_alias);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                }
-            },
-            .effectful => return error.TypeMismatch,
-            .pure => return error.TypeMismatch,
-            .structure => return error.TypeMismatch,
-            .err => self.merge(vars, .err),
-        }
-    }
-
-    /// Unify two aliases, either structural or opaque
+    /// Unify two aliases
     ///
     /// This function assumes the caller has already checked that the alias names match
     ///
@@ -332,7 +295,8 @@ const Unifier = struct {
 
         // TODO: Here, we'll need some special handling for recursion variables
         // For each argument variable, we need to prefer recursive vars. Then
-        // we'll build a new structurla alias and pass that to self.merge
+        // we'll build a new alias and pass that to self.merge
+        //
         // See unify_two_aliases and choose_merged_var in the rust compiler for details
 
         // Rust compiler comment:
@@ -382,12 +346,7 @@ const Unifier = struct {
             },
             .rigid_var => return error.TypeMismatch,
             .alias => |alias| {
-                switch (alias.type) {
-                    .structural => {
-                        try self.unifyGuarded(vars.a.var_, alias.backing_var);
-                    },
-                    .opaque_ => |_| return error.TypeMismatch,
-                }
+                try self.unifyGuarded(vars.a.var_, alias.backing_var);
             },
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -441,9 +400,7 @@ const Unifier = struct {
             .record => |a_record| {
                 switch (b_flat_type) {
                     .empty_record => {
-                        if (a_record.fields.len() == 0 or // this line is here for explicitness
-                            a_record.areAllFieldsOptional(&self.types_store.record_fields))
-                        {
+                        if (a_record.fields.len() == 0) {
                             try self.unifyGuarded(a_record.ext, vars.b.var_);
                         } else {
                             return error.TypeMismatch;
@@ -461,9 +418,7 @@ const Unifier = struct {
                         self.merge(vars, Content{ .structure = .empty_record });
                     },
                     .record => |b_record| {
-                        if (b_record.fields.len() == 0 or // this line is here for explicitness
-                            b_record.areAllFieldsOptional(&self.types_store.record_fields))
-                        {
+                        if (b_record.fields.len() == 0) {
                             try self.unifyGuarded(vars.a.var_, b_record.ext);
                         } else {
                             return error.TypeMismatch;
@@ -651,11 +606,83 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
-    /// unify two records
+    /// Unify two extensible records.
     ///
-    /// this:
-    /// * unwraps extensible variable to get all records fields
-    /// * checks that parallel args unify
+    /// This function implements Elm-style record unification.
+    ///
+    /// Each record consists of:
+    /// - a fixed set of known fields (`fields`)
+    /// - an extensible tail variable (`ext`) that may point to additional unknown fields
+    ///
+    /// Given two records `a` and `b`, we:
+    ///   1. Collect all known fields by unwrapping their `ext` chains.
+    ///   2. Partition the field sets into:
+    ///      - `in_both`: shared fields present in both `a` and `b`
+    ///      - `only_in_a`: fields only present in `a`
+    ///      - `only_in_b`: fields only present in `b`
+    ///   3. Determine the relationship between the two records based on these partitions.
+    ///
+    /// Four cases follow:
+    ///
+    /// ---
+    ///
+    /// **Case 1: Exactly the Same Fields**
+    ///
+    /// a = { x, y }ext_a
+    /// b = { x, y }ext_b
+    ///
+    /// - All fields are shared
+    /// - We unify `ext_a ~ ext_b`
+    /// - Then unify each shared field pair
+    ///
+    /// ---
+    ///
+    /// **Case 2: `a` Extends `b`**
+    ///
+    /// a = { x, y, z }ext_a
+    /// b = { x, y }ext_b
+    ///
+    /// - `a` has additional fields not in `b`
+    /// - We generate a new var `only_in_a_var = { z }ext_a`
+    /// - Unify `only_in_a_var ~ ext_b`
+    /// - Then unify shared fields
+    ///
+    /// ---
+    ///
+    /// **Case 3: `b` Extends `a`**
+    ///
+    /// a = { x, y }ext_a
+    /// b = { x, y, z }ext_b
+    ///
+    /// - Same as Case 2, but reversed
+    /// - `b` has additional fields not in `a`
+    /// - We generate a new var `only_in_b_var = { z }ext_b`
+    /// - Unify `ext_a ~ only_in_b_var`
+    /// - Then unify shared fields
+    ///
+    /// ---
+    ///
+    /// **Case 4: Both Extend Each Other**
+    ///
+    /// a = { x, y, z }ext_a
+    /// b = { x, y, w }ext_b
+    ///
+    /// - Each has unique fields the other lacks
+    /// - Generate:
+    ///     - shared_ext = fresh flex_var
+    ///     - only_in_a_var = { z }shared_ext
+    ///     - only_in_b_var = { w }shared_ext
+    /// - Unify:
+    ///     - `ext_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ ext_b`
+    /// - Then unify shared fields into `{ x, y }shared_ext`
+    ///
+    /// ---
+    ///
+    /// All field unification is done using `unifySharedFields`, and new variables are created using `fresh`.
+    ///
+    /// This function does not attempt to deduplicate fields or reorder them — callers are responsible
+    /// for providing consistent field names.
     fn unifyTwoRecords(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -665,13 +692,8 @@ const Unifier = struct {
 
         // First, unwrap all fields for record a, panicaing with various non-recoverable error
         // These pancis will likely be changed/removed in the future
-        const a_gathered_fields = self.gatherRecordFields(a_record) catch |err| switch (err) {
-            error.InvalidRecordExt => @panic("unifyTwoRecords: Record a ext was invalid"),
-        };
-
-        const b_gathered_fields = self.gatherRecordFields(b_record) catch |err| switch (err) {
-            error.InvalidRecordExt => @panic("unifyTwoRecords: Record b ext was invalid"),
-        };
+        const a_gathered_fields = try self.gatherRecordFields(a_record);
+        const b_gathered_fields = try self.gatherRecordFields(b_record);
 
         // Then partition the fields
         const partitioned = partitionFields(self.scratch, a_gathered_fields.range, b_gathered_fields.range);
@@ -804,7 +826,7 @@ const Unifier = struct {
 
     /// Recursively unwraps the fields of an extensible record, flattening all visible fields
     /// into `scratch.gathered_fields` and following through:
-    /// * structural aliases (by chasing `.backing_var`)
+    /// * aliases (by chasing `.backing_var`)
     /// * record extension chains (via nested `.record.ext`)
     ///
     /// Returns:
@@ -812,10 +834,15 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty record
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-    fn gatherRecordFields(self: *Self, record: Record) error{InvalidRecordExt}!GatheredFields {
-        var range = self.scratch.appendSliceGatheredFields(
-            self.types_store.record_fields.rangeToSlice(record.fields),
+    fn gatherRecordFields(self: *Self, record: Record) error{TypeMismatch}!GatheredFields {
+        // first, copy from the store's MultiList record fields array into scratch's
+        // regular list, capturing the insertion range
+        var range = self.scratch.copyGatherFieldsFromMultiList(
+            &self.types_store.record_fields,
+            record.fields,
         );
+
+        // then recursiv
         var ext_var = record.ext;
         while (true) {
             switch (self.types_store.resolveVar(ext_var).desc.content) {
@@ -831,8 +858,9 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
-                            const next_range = self.scratch.appendSliceGatheredFields(
-                                self.types_store.record_fields.rangeToSlice(record.fields),
+                            const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                &self.types_store.record_fields,
+                                ext_record.fields,
                             );
                             range.end = next_range.end;
                             ext_var = ext_record.ext;
@@ -840,10 +868,10 @@ const Unifier = struct {
                         .empty_record => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => return error.InvalidRecordExt,
+                        else => return error.TypeMismatch,
                     }
                 },
-                else => return error.InvalidRecordExt,
+                else => return error.TypeMismatch,
             }
         }
     }
@@ -893,7 +921,10 @@ const Unifier = struct {
             const b_next = b_fields[b_i];
 
             if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{ .a = a_next, .b = b_next });
+                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
+                    .a = a_next,
+                    .b = b_next,
+                });
                 a_i = a_i + 1;
                 b_i = b_i + 1;
             } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
@@ -937,17 +968,21 @@ const Unifier = struct {
     fn unifySharedFields(
         self: *Self,
         vars: *const ResolvedVarDescs,
-        shared_fields: []TwoRecordFields,
-        mb_a_extended_fields: ?[]RecordField,
-        mb_b_extended_fields: ?[]RecordField,
+        shared_fields: TwoRecordFieldsSafeList.Slice,
+        mb_a_extended_fields: ?RecordFieldSafeList.Slice,
+        mb_b_extended_fields: ?RecordFieldSafeList.Slice,
         ext: Var,
     ) error{TypeMismatch}!void {
-        const range_start: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+        const range_start: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
-        for (shared_fields) |fields| {
-            // TODO: pick recursion variable?
-            try self.unifyGuarded(fields.a.var_, fields.b.var_);
-            _ = self.types_store.record_fields.append(self.types_store.gpa, fields.b);
+        // Here, iterate over shared fields, sub unifying the field variables.
+        // At this point, the fields are know to be identical, so we arbitrary choose b
+        for (shared_fields) |shared| {
+            try self.unifyGuarded(shared.a.var_, shared.b.var_);
+            _ = self.types_store.record_fields.append(self.types_store.gpa, RecordField{
+                .name = shared.b.name,
+                .var_ = shared.b.var_,
+            });
         }
 
         // Append combined fields
@@ -958,7 +993,7 @@ const Unifier = struct {
             _ = self.types_store.record_fields.appendSlice(self.types_store.gpa, extended_fields);
         }
 
-        const range_end: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+        const range_end: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
         // Merge vars
         self.merge(vars, Content{ .structure = FlatType{ .record = .{
@@ -967,11 +1002,83 @@ const Unifier = struct {
         } } });
     }
 
-    /// unify two tag_unions
+    /// Unify two extensible tag union.
     ///
-    /// this:
-    /// * unwraps extensible variable to get all tag_unions tags
-    /// * checks that parallel args unify
+    /// This function implements Elm-style record unification, but for tag unions.
+    ///
+    /// Each tag union consists of:
+    /// - a fixed set of known tags (`tags`)
+    /// - an extensible tail variable (`ext`) that may point to additional unknown tags
+    ///
+    /// Given two tag unions `a` and `b`, we:
+    ///   1. Collect all known tags by unwrapping their `ext` chains.
+    ///   2. Partition the tags sets into:
+    ///      - `in_both`: shared fields present in both `a` and `b`
+    ///      - `only_in_a`: fields only present in `a`
+    ///      - `only_in_b`: fields only present in `b`
+    ///   3. Determine the relationship between the two tag unions based on these partitions.
+    ///
+    /// Four cases follow:
+    ///
+    /// ---
+    ///
+    /// **Case 1: Exactly the Same Tags**
+    ///
+    /// a = [ X ]ext_a
+    /// b = [ X ]ext_b
+    ///
+    /// - All tags are shared
+    /// - We unify `ext_a ~ ext_b`
+    /// - Then unify each shared tag pair
+    ///
+    /// ---
+    ///
+    /// **Case 2: `a` Extends `b`**
+    ///
+    /// a = [ X, Y, Z ]ext_a
+    /// b = [ X, Y ]ext_b
+    ///
+    /// - `a` has additional tags not in `b`
+    /// - We generate a new var `only_in_a_var = [ Z ]ext_a`
+    /// - Unify `only_in_a_var ~ ext_b`
+    /// - Then unify shared tags into `[ X, Y ]only_in_a_var`
+    ///
+    /// ---
+    ///
+    /// **Case 3: `b` Extends `a`**
+    ///
+    /// a = [ X, Y ]ext_a
+    /// b = [ X, Y, Z ]ext_b
+    ///
+    /// - Same as Case 2, but reversed
+    /// - `b` has additional tags not in `a`
+    /// - We generate a new var `only_in_b_var = [ Z ]ext_b`
+    /// - Unify `ext_a ~ only_in_b_var`
+    /// - Then unify shared tags into `[ X, Y ]only_in_b_var`
+    ///
+    /// ---
+    ///
+    /// **Case 4: Both Extend Each Other**
+    ///
+    /// a = [ X, Y, Z ]ext_a
+    /// b = [ X, Y, W ]ext_b
+    ///
+    /// - Each has unique tags the other lacks
+    /// - Generate:
+    ///     - shared_ext = fresh flex_var
+    ///     - only_in_a_var = [ Z ]shared_ext
+    ///     - only_in_b_var = [ W ]shared_ext
+    /// - Unify:
+    ///     - `ext_a ~ only_in_b_var`
+    ///     - `only_in_a_var ~ ext_b`
+    /// - Then unify shared tags into `[ X, Y ]shared_ext`
+    ///
+    /// ---
+    ///
+    /// All tag unification is done using `unifySharedTags`, and new variables are created using `fresh`.
+    ///
+    /// This function does not attempt to deduplicate tags or reorder them — callers are responsible
+    /// for providing consistent tag names.
     fn unifyTwoTagUnions(
         self: *Self,
         vars: *const ResolvedVarDescs,
@@ -981,13 +1088,8 @@ const Unifier = struct {
 
         // First, unwrap all tags for tag_union a, panicaing with various non-recoverable error
         // These pancis will likely be changed/removed in the future
-        const a_gathered_tags = self.gatherTagUnionTags(a_tag_union) catch |err| switch (err) {
-            error.InvalidTagUnionExt => @panic("unifyTwoTagUnions: TagUnion a ext was invalid"),
-        };
-
-        const b_gathered_tags = self.gatherTagUnionTags(b_tag_union) catch |err| switch (err) {
-            error.InvalidTagUnionExt => @panic("unifyTwoTagUnions: TagUnion b ext was invalid"),
-        };
+        const a_gathered_tags = try self.gatherTagUnionTags(a_tag_union);
+        const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
         // Then partition the tags
         const partitioned = partitionTags(self.scratch, a_gathered_tags.range, b_gathered_tags.range);
@@ -1120,7 +1222,7 @@ const Unifier = struct {
 
     /// Recursively unwraps the tags of an extensible tag_union, flattening all visible tags
     /// into `scratch.gathered_tags` and following through:
-    /// * structural aliases (by chasing `.backing_var`)
+    /// * aliases (by chasing `.backing_var`)
     /// * tag_union extension chains (via nested `.tag_union.ext`)
     ///
     /// Returns:
@@ -1128,10 +1230,15 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty tag_union
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-tag_union type).
-    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) error{InvalidTagUnionExt}!GatheredTags {
-        var range = self.scratch.appendSliceGatheredTags(
-            self.types_store.tags.rangeToSlice(tag_union.tags),
+    fn gatherTagUnionTags(self: *Self, tag_union: TagUnion) error{TypeMismatch}!GatheredTags {
+        // first, copy from the store's MultiList record fields array into scratch's
+        // regular list, capturing the insertion range
+        var range = self.scratch.copyGatherTagsFromMultiList(
+            &self.types_store.tags,
+            tag_union.tags,
         );
+
+        // then loop gathering extensible tags
         var ext_var = tag_union.ext;
         while (true) {
             switch (self.types_store.resolveVar(ext_var).desc.content) {
@@ -1147,8 +1254,9 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .tag_union => |ext_tag_union| {
-                            const next_range = self.scratch.appendSliceGatheredTags(
-                                self.types_store.tags.rangeToSlice(tag_union.tags),
+                            const next_range = self.scratch.copyGatherTagsFromMultiList(
+                                &self.types_store.tags,
+                                ext_tag_union.tags,
                             );
                             range.end = next_range.end;
                             ext_var = ext_tag_union.ext;
@@ -1156,10 +1264,10 @@ const Unifier = struct {
                         .empty_tag_union => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => return error.InvalidTagUnionExt,
+                        else => return error.TypeMismatch,
                     }
                 },
-                else => return error.InvalidTagUnionExt,
+                else => return error.TypeMismatch,
             }
         }
     }
@@ -1258,7 +1366,7 @@ const Unifier = struct {
         mb_b_extended_tags: ?[]Tag,
         ext: Var,
     ) error{TypeMismatch}!void {
-        const range_start: TagSafeList.Idx = @enumFromInt(self.types_store.tags.len());
+        const range_start: TagSafeMultiList.Idx = @enumFromInt(self.types_store.tags.len());
 
         for (shared_tags) |tags| {
             const tag_a_args = self.types_store.tag_args.rangeToSlice(tags.a.args);
@@ -1284,7 +1392,7 @@ const Unifier = struct {
             _ = self.types_store.tags.appendSlice(self.types_store.gpa, extended_tags);
         }
 
-        const range_end: TagSafeList.Idx = @enumFromInt(self.types_store.tags.len());
+        const range_end: TagSafeMultiList.Idx = @enumFromInt(self.types_store.tags.len());
 
         // Merge vars
         self.merge(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -1298,13 +1406,30 @@ const Unifier = struct {
 ///
 /// `Scratch` owns several typed scratch arrays, each designed to hold a specific type of
 /// temporary data needed during unification. These include:
-/// * `gathered_fields`: accumulated record fields from recursive extensions
-/// * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionFields`
-/// * `in_both_fields`: shared fields with matching names
+///
 /// * `fresh_vars`: type variables created during a unification pass
+/// * For records
+///   * `gathered_fields`: accumulated record fields from recursive extensions
+///   * `only_in_a_fields`, `only_in_b_fields`: disjoint fields after `partitionFields`
+///   * `in_both_fields`: shared fields with matching names
+/// * For tag unions
+///   * `gathered_tags`: accumulated tags from recursive extensions
+///   * `only_in_a_tags`, `only_in_b_tags`: disjoint tags after `partitionTags`
+///   * `in_both_tags`: shared tags with matching names
 ///
 /// `Scratch` should be initialized once and reused for many unification runs.
-/// Each call to `unify` will automatically reset the scratch buffer at the start.
+/// Each call to `unify` will reset the scratch buffer at the start.
+///
+/// Note that while the types store uses MultiLists for record fields & tags, this
+/// struct uses regular safe list. There are several reasons for this:
+/// 1. We have to sort tags/fields during unification, and MultiList doesn't
+///    have a great way to do this
+/// 2. These allocations are freed after this stage of compilation completes, so
+///    while SafeLists waste some space compared to MultiList, the cost isn't too
+///    high
+///
+/// TODO: If canonicalization can ensure that record fields/tags are always sorted
+/// then we could switch these to use multi lists.
 pub const Scratch = struct {
     const Self = @This();
 
@@ -1370,6 +1495,43 @@ pub const Scratch = struct {
 
     // helpers //
 
+    /// Given a multi list of record fields and a range, copy from the multi list
+    /// into scratch's gathered fields array
+    fn copyGatherFieldsFromMultiList(
+        self: *Self,
+        multi_list: *const RecordFieldSafeMultiList,
+        range: RecordFieldSafeMultiList.Range,
+    ) RecordFieldSafeList.Range {
+        const start: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
+        const record_fields_slice = multi_list.rangeToSlice(range);
+        for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
+            _ = self.gathered_fields.append(
+                self.gpa,
+                RecordField{ .name = name, .var_ = var_ },
+            );
+        }
+        const end: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
+        return .{ .start = start, .end = end };
+    }
+    /// Given a multi list of tag and a range, copy from the multi list
+    /// into scratch's gathered fields array
+    fn copyGatherTagsFromMultiList(
+        self: *Self,
+        multi_list: *const TagSafeMultiList,
+        range: TagSafeMultiList.Range,
+    ) TagSafeList.Range {
+        const start: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
+        const tag_slice = multi_list.rangeToSlice(range);
+        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+            _ = self.gathered_tags.append(
+                self.gpa,
+                Tag{ .name = name, .args = args },
+            );
+        }
+        const end: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
+        return .{ .start = start, .end = end };
+    }
+
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) RecordFieldSafeList.Range {
         return self.gathered_fields.appendSlice(self.gpa, fields);
     }
@@ -1394,9 +1556,13 @@ const TestEnv = struct {
     const Self = @This();
 
     gpa: std.mem.Allocator,
-    ident_store: Ident.Store,
+
+    // testing unification things
     types_store: store.Store,
     scratch: Scratch,
+
+    // testing interners
+    ident_store: Ident.Store,
 
     pub fn init(gpa: std.mem.Allocator) Self {
         return .{
@@ -1413,7 +1579,7 @@ const TestEnv = struct {
         self.scratch.deinit();
     }
 
-    const Error = error{ VarIsNotRoot, DescIsNotRecord };
+    const Error = error{ VarIsNotRoot, DescIsNotRecord, DescIsNotTagUnion };
 
     /// Get a desc from a root var
     pub fn getDescForRootVar(self: *Self, var_: Var) error{VarIsNotRoot}!Desc {
@@ -1439,17 +1605,17 @@ const TestEnv = struct {
     }
 
     /// Unwrap a record or throw
-    pub fn getTagUnionOrErr(desc: Desc) error{DescIsNotRecord}!TagUnion {
+    pub fn getTagUnionOrErr(desc: Desc) error{DescIsNotTagUnion}!TagUnion {
         switch (desc.content) {
             .structure => |flat_type| {
                 switch (flat_type) {
                     .tag_union => |tag_union| {
                         return tag_union;
                     },
-                    else => return error.DescIsNotRecord,
+                    else => return error.DescIsNotTagUnion,
                 }
             },
-            else => return error.DescIsNotRecord,
+            else => return error.DescIsNotTagUnion,
         }
     }
 
@@ -1460,20 +1626,18 @@ const TestEnv = struct {
 
     // helpers - structure - tuple
 
-    fn mkAlias(self: *Self, typ: Alias.Type, name: []const u8, args: []const Var, backing_var: Var) Alias {
+    fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
         return .{
-            .type = typ,
             .ident = self.mkTypeIdent(name),
             .args = args_range,
             .backing_var = backing_var,
         };
     }
 
-    fn mkAliasFromIdent(self: *Self, typ: Alias.Type, type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
+    fn mkAliasFromIdent(self: *Self, type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
         return .{
-            .type = typ,
             .ident = type_ident_idx,
             .args = args_range,
             .backing_var = backing_var,
@@ -1486,7 +1650,7 @@ const TestEnv = struct {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
         return .{ .structure = .{ .type_apply = .{
             .ident = .{ .ident_idx = ident_idx },
-            .args = types.VarSafeList.Range.empty,
+            .args = VarSafeList.Range.empty,
         } } };
     }
 
@@ -1559,6 +1723,10 @@ const TestEnv = struct {
 
     fn mkTagArgs(self: *Self, args: []const Var) VarSafeList.Range {
         return self.types_store.appendTagArgs(args);
+    }
+
+    fn mkTag(self: *Self, name: collections.SmallStringInterner.Idx, args: []const Var) Tag {
+        return Tag{ .name = name, .args = self.types_store.appendTagArgs(args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) TagUnionInfo {
@@ -1695,7 +1863,7 @@ test "rigid_var - cannot unify with identical rigid_var (fail)" {
 
 // unification - aliases
 
-test "unify - structural alias with same args" {
+test "unify - alias with same args" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1704,7 +1872,7 @@ test "unify - structural alias with same args" {
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-    const alias = Content{ .alias = env.mkAlias(.structural, "AliasName", &[_]Var{ str, bool_ }, backing) };
+    const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
 
     const a = env.types_store.freshFromContent(alias);
     const b = env.types_store.freshFromContent(alias);
@@ -1716,7 +1884,7 @@ test "unify - structural alias with same args" {
     try std.testing.expectEqual(alias, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural aliases with different names but same backing" {
+test "unify - aliases with different names but same backing" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1724,8 +1892,8 @@ test "unify - structural aliases with different names but same backing" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{str}));
-    const a_alias = Content{ .alias = env.mkAlias(.structural, "AliasA", &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAlias(.structural, "AliasB", &[_]Var{str}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
+    const b_alias = Content{ .alias = env.mkAlias("AliasB", &[_]Var{str}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
@@ -1737,7 +1905,7 @@ test "unify - structural aliases with different names but same backing" {
     try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural alias with different args (fail)" {
+test "unify - alias with different args (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1748,8 +1916,8 @@ test "unify - structural alias with different args (fail)" {
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
+    const b_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
@@ -1761,78 +1929,7 @@ test "unify - structural alias with different args (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - structural vs opaque alias with same name and args (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{str}));
-
-    const alias_ident = env.mkTypeIdent("Thing");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{str}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with different args (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(false, result.isOk());
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with sam args" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.freshFromContent(b_alias);
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(b_alias, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - opaque alias with flex" {
+test "unify - alias with flex" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -1842,29 +1939,7 @@ test "unify - opaque alias with flex" {
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.opaque_, alias_ident, &[_]Var{bool_}, backing) };
-
-    const a = env.types_store.freshFromContent(a_alias);
-    const b = env.types_store.fresh();
-
-    const result = unify(&env.types_store, &env.scratch, a, b);
-
-    try std.testing.expectEqual(.ok, result);
-    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(a_alias, (try env.getDescForRootVar(b)).content);
-}
-
-test "unify - structural alias with flex" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
-    const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
-
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(.structural, alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
@@ -2532,8 +2607,8 @@ test "partitionFields - same record" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const field_y = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
 
     const range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
@@ -2542,6 +2617,12 @@ test "partitionFields - same record" {
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
     try std.testing.expectEqual(2, result.in_both.len());
+
+    const both_slice = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(field_x, both_slice[0].a);
+    try std.testing.expectEqual(field_x, both_slice[0].b);
+    try std.testing.expectEqual(field_y, both_slice[1].a);
+    try std.testing.expectEqual(field_y, both_slice[1].b);
 }
 
 test "partitionFields - disjoint fields" {
@@ -2549,9 +2630,9 @@ test "partitionFields - disjoint fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const a2 = RecordField{ .name = @enumFromInt(2), .typ = .required, .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const a2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
@@ -2561,6 +2642,13 @@ test "partitionFields - disjoint fields" {
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(0, result.in_both.len());
+
+    const only_in_a_slice = env.scratch.only_in_a_fields.rangeToSlice(result.only_in_a);
+    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+    try std.testing.expectEqual(a2, only_in_a_slice[1]);
+
+    const only_in_b_slice = env.scratch.only_in_b_fields.rangeToSlice(result.only_in_b);
+    try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
 test "partitionFields - overlapping fields" {
@@ -2568,9 +2656,9 @@ test "partitionFields - overlapping fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const both = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .typ = .required, .var_ = @enumFromInt(2) };
+    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const both = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
@@ -2580,6 +2668,16 @@ test "partitionFields - overlapping fields" {
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
     try std.testing.expectEqual(1, result.in_both.len());
+
+    const both_slice = env.scratch.in_both_fields.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(both, both_slice[0].a);
+    try std.testing.expectEqual(both, both_slice[0].b);
+
+    const only_in_a_slice = env.scratch.only_in_a_fields.rangeToSlice(result.only_in_a);
+    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+
+    const only_in_b_slice = env.scratch.only_in_b_fields.rangeToSlice(result.only_in_b);
+    try std.testing.expectEqual(b1, only_in_b_slice[0]);
 }
 
 test "partitionFields - reordering is normalized" {
@@ -2587,9 +2685,9 @@ test "partitionFields - reordering is normalized" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = RecordField{ .name = @enumFromInt(1), .typ = .required, .var_ = @enumFromInt(0) };
-    const f2 = RecordField{ .name = @enumFromInt(2), .typ = .optional, .var_ = @enumFromInt(1) };
-    const f3 = RecordField{ .name = @enumFromInt(3), .typ = .optional, .var_ = @enumFromInt(2) };
+    const f1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
+    const f2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const f3 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
@@ -2601,12 +2699,12 @@ test "partitionFields - reordering is normalized" {
     try std.testing.expectEqual(3, result.in_both.len());
 
     const both = env.scratch.in_both_fields.rangeToSlice(result.in_both);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].a.name));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].b.name));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].a.name));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].b.name));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].a.name));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].b.name));
+    try std.testing.expectEqual(f1, both[0].a);
+    try std.testing.expectEqual(f1, both[0].b);
+    try std.testing.expectEqual(f2, both[1].a);
+    try std.testing.expectEqual(f2, both[1].b);
+    try std.testing.expectEqual(f3, both[2].a);
+    try std.testing.expectEqual(f3, both[2].b);
 }
 
 // unification - structure/structure - records closed
@@ -2619,9 +2717,10 @@ test "unify - identical closed records" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const fields = [_]RecordField{
-        .{ .name = @enumFromInt(1), .var_ = str, .typ = .required },
+        .{ .name = @enumFromInt(1), .var_ = str },
     };
     const record_data = env.mkRecordClosed(&fields);
+    const record_data_fields = env.types_store.record_fields.rangeToSlice(record_data.record.fields);
 
     const a = env.types_store.freshFromContent(record_data.content);
     const b = env.types_store.freshFromContent(record_data.content);
@@ -2632,11 +2731,9 @@ test "unify - identical closed records" {
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    try std.testing.expectEqualSlices(
-        RecordField,
-        env.types_store.record_fields.rangeToSlice(record_data.record.fields),
-        env.types_store.record_fields.rangeToSlice(b_record.fields),
-    );
+    const b_record_fields = env.types_store.record_fields.rangeToSlice(b_record.fields);
+    try std.testing.expectEqualSlices(collections.SmallStringInterner.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
+    try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
 }
 
 test "unify - closed record mismatch on diff fields (fail)" {
@@ -2646,8 +2743,8 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const a_record_data = env.mkRecordClosed(&[_]RecordField{ field1, field2 });
     const a = env.types_store.freshFromContent(a_record_data.content);
@@ -2674,8 +2771,8 @@ test "unify - open record a extends b" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2687,10 +2784,13 @@ test "unify - open record a extends b" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
+    // check that the update var at b is correct
+
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
     try std.testing.expectEqual(env.scratch.fresh_vars.get(@enumFromInt(0)).*, b_record.ext);
@@ -2698,10 +2798,16 @@ test "unify - open record a extends b" {
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_a_only, b_ext_record_fields[0]);
+    try std.testing.expectEqual(field_a_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_a_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
+    try std.testing.expectEqual(b_record.ext, env.scratch.fresh_vars.items.items[0]);
 }
 
 test "unify - open record b extends a" {
@@ -2712,8 +2818,8 @@ test "unify - open record b extends a" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2725,21 +2831,27 @@ test "unify - open record b extends a" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
+    // check that the update var at b is correct
+
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
-
-    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
-    try std.testing.expectEqual(env.scratch.fresh_vars.get(@enumFromInt(0)).*, b_record.ext);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_b_only, b_ext_record_fields[0]);
+    try std.testing.expectEqual(field_b_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_b_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
+    try std.testing.expectEqual(b_record.ext, env.scratch.fresh_vars.items.items[0]);
 }
 
 test "unify - both extend open record" {
@@ -2751,9 +2863,9 @@ test "unify - both extend open record" {
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int, .typ = .required };
-    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_, .typ = .required };
+    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
+    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_ };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2765,13 +2877,19 @@ test "unify - both extend open record" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
+    // check that the update var at b is correct
+
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(3, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
+    try std.testing.expectEqual(field_shared, b_record_fields.get(0));
+    try std.testing.expectEqual(field_a_only, b_record_fields.get(1));
+    try std.testing.expectEqual(field_b_only, b_record_fields.get(2));
 
     const b_ext = env.types_store.resolveVar(b_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+
+    // check that fresh vars are correct
 
     try std.testing.expectEqual(3, env.scratch.fresh_vars.len());
 
@@ -2779,13 +2897,13 @@ test "unify - both extend open record" {
     const only_a_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_a_var).desc);
     try std.testing.expectEqual(1, only_a_record.fields.len());
     const only_a_record_fields = env.types_store.getRecordFieldsSlice(only_a_record.fields);
-    try std.testing.expectEqual(field_a_only, only_a_record_fields[0]);
+    try std.testing.expectEqual(field_a_only, only_a_record_fields.get(0));
 
     const only_b_var = env.scratch.fresh_vars.get(@enumFromInt(1)).*;
     const only_b_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_b_var).desc);
     try std.testing.expectEqual(1, only_b_record.fields.len());
     const only_b_record_fields = env.types_store.getRecordFieldsSlice(only_b_record.fields);
-    try std.testing.expectEqual(field_b_only, only_b_record_fields[0]);
+    try std.testing.expectEqual(field_b_only, only_b_record_fields.get(0));
 
     const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
     const ext_content = env.types_store.resolveVar(ext_var).desc.content;
@@ -2800,8 +2918,8 @@ test "unify - record mismatch on shared field (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_a});
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2826,8 +2944,8 @@ test "unify - open record extends closed (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}).content);
@@ -2846,8 +2964,8 @@ test "unify - closed record extends open" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str, .typ = .required };
+    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }).content);
@@ -2858,7 +2976,7 @@ test "unify - closed record extends open" {
     try std.testing.expectEqual(Slot{ .redirect = closed }, env.types_store.getSlot(open));
 }
 
-test "unify - open vs closed with type mismatch (fail)" {
+test "unify - open vs closed records with type mismatch (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -2866,8 +2984,8 @@ test "unify - open vs closed with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
@@ -2881,7 +2999,7 @@ test "unify - open vs closed with type mismatch (fail)" {
     try std.testing.expectEqual(Content.err, desc.content);
 }
 
-test "unify - closed vs open with type mismatch (fail)" {
+test "unify - closed vs open records with type mismatch (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -2889,8 +3007,8 @@ test "unify - closed vs open with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str, .typ = .required };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int, .typ = .required };
+    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
+    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
 
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
@@ -2904,6 +3022,113 @@ test "unify - closed vs open with type mismatch (fail)" {
     try std.testing.expectEqual(Content.err, desc.content);
 }
 
+// unification - tag unions - partition tags
+
+test "partitionTags - same tags" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const tag_x = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
+    const tag_y = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
+
+    const range = env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
+
+    const result = Unifier.partitionTags(&env.scratch, range, range);
+
+    try std.testing.expectEqual(0, result.only_in_a.len());
+    try std.testing.expectEqual(0, result.only_in_b.len());
+    try std.testing.expectEqual(2, result.in_both.len());
+
+    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(tag_x, both_slice[0].a);
+    try std.testing.expectEqual(tag_x, both_slice[0].b);
+    try std.testing.expectEqual(tag_y, both_slice[1].a);
+    try std.testing.expectEqual(tag_y, both_slice[1].b);
+}
+
+test "partitionTags - disjoint fields" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
+    const a2 = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
+    const b1 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+
+    const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
+    const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
+
+    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(2, result.only_in_a.len());
+    try std.testing.expectEqual(1, result.only_in_b.len());
+    try std.testing.expectEqual(0, result.in_both.len());
+
+    const only_in_a_slice = env.scratch.only_in_a_tags.rangeToSlice(result.only_in_a);
+    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+    try std.testing.expectEqual(a2, only_in_a_slice[1]);
+
+    const only_in_b_slice = env.scratch.only_in_b_tags.rangeToSlice(result.only_in_b);
+    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+}
+
+test "partitionTags - overlapping tags" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const a1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
+    const both = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
+    const b1 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+
+    const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
+    const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
+
+    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(1, result.only_in_a.len());
+    try std.testing.expectEqual(1, result.only_in_b.len());
+    try std.testing.expectEqual(1, result.in_both.len());
+
+    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(both, both_slice[0].a);
+    try std.testing.expectEqual(both, both_slice[0].b);
+
+    const only_in_a_slice = env.scratch.only_in_a_tags.rangeToSlice(result.only_in_a);
+    try std.testing.expectEqual(a1, only_in_a_slice[0]);
+
+    const only_in_b_slice = env.scratch.only_in_b_tags.rangeToSlice(result.only_in_b);
+    try std.testing.expectEqual(b1, only_in_b_slice[0]);
+}
+
+test "partitionTags - reordering is normalized" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const f1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
+    const f2 = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
+    const f3 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+
+    const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
+    const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
+
+    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+
+    try std.testing.expectEqual(0, result.only_in_a.len());
+    try std.testing.expectEqual(0, result.only_in_b.len());
+    try std.testing.expectEqual(3, result.in_both.len());
+
+    const both_slice = env.scratch.in_both_tags.rangeToSlice(result.in_both);
+    try std.testing.expectEqual(f1, both_slice[0].a);
+    try std.testing.expectEqual(f1, both_slice[0].b);
+    try std.testing.expectEqual(f2, both_slice[1].a);
+    try std.testing.expectEqual(f2, both_slice[1].b);
+    try std.testing.expectEqual(f3, both_slice[2].a);
+    try std.testing.expectEqual(f3, both_slice[2].b);
+}
+
 // unification - structure/structure - tag unions closed
 
 test "unify - identical closed tag_unions" {
@@ -2914,9 +3139,8 @@ test "unify - identical closed tag_unions" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
     const tag_arg_range = env.mkTagArgs(&[_]Var{str});
-    const tags = [_]Tag{
-        .{ .name = @enumFromInt(1), .args = tag_arg_range },
-    };
+    const tag = Tag{ .name = @enumFromInt(1), .args = tag_arg_range };
+    const tags = [_]Tag{tag};
     const tag_union_data = env.mkTagUnionClosed(&tags);
 
     const a = env.types_store.freshFromContent(tag_union_data.content);
@@ -2929,10 +3153,15 @@ test "unify - identical closed tag_unions" {
 
     const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
     const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags_names = b_tags.items(.name);
+    const b_tags_args = b_tags.items(.args);
+    try std.testing.expectEqual(1, b_tags.len);
+    try std.testing.expectEqual(tag.name, b_tags_names[0]);
+    try std.testing.expectEqual(tag.args, b_tags_args[0]);
+
     try std.testing.expectEqual(1, b_tags.len);
 
-    const b_tag = b_tags[0];
-    const b_tag_args = env.types_store.tag_args.rangeToSlice(b_tag.args);
+    const b_tag_args = env.types_store.tag_args.rangeToSlice(b_tags_args[0]);
     try std.testing.expectEqual(1, b_tag_args.len);
     try std.testing.expectEqual(str, b_tag_args[0]);
 }
@@ -2958,6 +3187,334 @@ test "unify - closed tag_unions with diff args (fail)" {
     };
     const b_tag_union_data = env.mkTagUnionClosed(&b_tags);
     const b = env.types_store.freshFromContent(b_tag_union_data.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc = try env.getDescForRootVar(b);
+    try std.testing.expectEqual(Content.err, desc.content);
+}
+
+// unification - structure/structure - tag unions open
+
+test "unify - open tag union a extends b" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{str});
+    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_arg_range };
+
+    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{ int, int });
+    const tag_shared = Tag{ .name = @enumFromInt(2), .args = tag_shared_arg_range };
+
+    const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
+    const a = env.types_store.freshFromContent(tag_union_a.content);
+
+    const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
+    const b = env.types_store.freshFromContent(tag_union_b.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_tag_union.tags.len());
+
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags_names = b_tags.items(.name);
+    const b_tags_args = b_tags.items(.args);
+    try std.testing.expectEqual(1, b_tags.len);
+    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
+
+    const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.types_store.resolveVar(b_tag_union.ext).desc);
+    try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
+
+    const b_ext_tags = env.types_store.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags_names = b_ext_tags.items(.name);
+    const b_ext_tags_args = b_ext_tags.items(.args);
+    try std.testing.expectEqual(1, b_ext_tags.len);
+    try std.testing.expectEqual(tag_a_only.name, b_ext_tags_names[0]);
+    try std.testing.expectEqual(tag_a_only.args, b_ext_tags_args[0]);
+
+    const b_ext_ext = env.types_store.resolveVar(b_ext_tag_union.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+}
+
+test "unify - open tag union b extends a" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+
+    const tag_b_only_arg_range = env.mkTagArgs(&[_]Var{ str, int });
+    const tag_b_only = Tag{ .name = @enumFromInt(1), .args = tag_b_only_arg_range };
+
+    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{int});
+    const tag_shared = Tag{ .name = @enumFromInt(2), .args = tag_shared_arg_range };
+
+    const tag_union_a = env.mkTagUnionOpen(&[_]Tag{tag_shared});
+    const a = env.types_store.freshFromContent(tag_union_a.content);
+
+    const tag_union_b = env.mkTagUnionOpen(&[_]Tag{ tag_b_only, tag_shared });
+    const b = env.types_store.freshFromContent(tag_union_b.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_tag_union.tags.len());
+
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags_names = b_tags.items(.name);
+    const b_tags_args = b_tags.items(.args);
+    try std.testing.expectEqual(1, b_tags.len);
+    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
+
+    const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.types_store.resolveVar(b_tag_union.ext).desc);
+    try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
+
+    const b_ext_tags = env.types_store.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags_names = b_ext_tags.items(.name);
+    const b_ext_tags_args = b_ext_tags.items(.args);
+    try std.testing.expectEqual(1, b_ext_tags.len);
+    try std.testing.expectEqual(tag_b_only.name, b_ext_tags_names[0]);
+    try std.testing.expectEqual(tag_b_only.args, b_ext_tags_args[0]);
+
+    const b_ext_ext = env.types_store.resolveVar(b_ext_tag_union.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+}
+
+test "unify - both extend open tag union" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{bool_});
+    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_arg_range };
+
+    const tag_b_only_arg_range = env.mkTagArgs(&[_]Var{ str, int });
+    const tag_b_only = Tag{ .name = @enumFromInt(2), .args = tag_b_only_arg_range };
+
+    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{int});
+    const tag_shared = Tag{ .name = @enumFromInt(3), .args = tag_shared_arg_range };
+
+    const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
+    const a = env.types_store.freshFromContent(tag_union_a.content);
+
+    const tag_union_b = env.mkTagUnionOpen(&[_]Tag{ tag_b_only, tag_shared });
+    const b = env.types_store.freshFromContent(tag_union_b.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(3, b_tag_union.tags.len());
+
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    try std.testing.expectEqual(3, b_tags.len);
+    try std.testing.expectEqual(tag_shared, b_tags.get(0));
+    try std.testing.expectEqual(tag_a_only, b_tags.get(1));
+    try std.testing.expectEqual(tag_b_only, b_tags.get(2));
+
+    const b_ext = env.types_store.resolveVar(b_tag_union.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(3, env.scratch.fresh_vars.len());
+
+    const only_a_var = env.scratch.fresh_vars.get(@enumFromInt(0)).*;
+    const only_a_tag_union = try TestEnv.getTagUnionOrErr(env.types_store.resolveVar(only_a_var).desc);
+    try std.testing.expectEqual(1, only_a_tag_union.tags.len());
+    const only_a_tags = env.types_store.getTagsSlice(only_a_tag_union.tags);
+    try std.testing.expectEqual(tag_a_only, only_a_tags.get(0));
+
+    const only_b_var = env.scratch.fresh_vars.get(@enumFromInt(1)).*;
+    const only_b_tag_union = try TestEnv.getTagUnionOrErr(env.types_store.resolveVar(only_b_var).desc);
+    try std.testing.expectEqual(1, only_b_tag_union.tags.len());
+    const only_b_tags = env.types_store.getTagsSlice(only_b_tag_union.tags);
+    try std.testing.expectEqual(tag_b_only, only_b_tags.get(0));
+
+    const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
+    const ext_content = env.types_store.resolveVar(ext_var).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, ext_content);
+}
+
+test "unify - open tag unions a & b have same tag name with diff args (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const tag_name: collections.SmallStringInterner.Idx = @enumFromInt(1);
+
+    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{str});
+    const tag_a_only = Tag{ .name = tag_name, .args = tag_a_only_arg_range };
+
+    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{ int, int });
+    const tag_shared = Tag{ .name = tag_name, .args = tag_shared_arg_range };
+
+    const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
+    const a = env.types_store.freshFromContent(tag_union_a.content);
+
+    const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
+    const b = env.types_store.freshFromContent(tag_union_b.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc = try env.getDescForRootVar(b);
+    try std.testing.expectEqual(Content.err, desc.content);
+}
+
+// unification - structure/structure - records open+closed
+
+test "unify - open tag extends closed (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const tag_shared_args = env.mkTagArgs(&[_]Var{str});
+    const tag_shared = Tag{ .name = @enumFromInt(0), .args = tag_shared_args };
+
+    const tag_a_only_args = env.mkTagArgs(&[_]Var{str});
+    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_args };
+
+    const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{ tag_shared, tag_a_only }).content);
+    const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_shared}).content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(Content.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - closed tag union extends open" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+
+    const tag_shared = env.mkTag(@enumFromInt(0), &[_]Var{str});
+    const tag_b_only = env.mkTag(@enumFromInt(1), &[_]Var{str});
+
+    const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_shared}).content);
+    const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{ tag_shared, tag_b_only }).content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_tag_union.tags.len());
+
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags_names = b_tags.items(.name);
+    const b_tags_args = b_tags.items(.args);
+    try std.testing.expectEqual(1, b_tags.len);
+    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
+
+    const b_ext_tag_union = try TestEnv.getTagUnionOrErr(env.types_store.resolveVar(b_tag_union.ext).desc);
+    try std.testing.expectEqual(1, b_ext_tag_union.tags.len());
+
+    const b_ext_tags = env.types_store.tags.rangeToSlice(b_ext_tag_union.tags);
+    const b_ext_tags_names = b_ext_tags.items(.name);
+    const b_ext_tags_args = b_ext_tags.items(.args);
+    try std.testing.expectEqual(1, b_ext_tags.len);
+    try std.testing.expectEqual(tag_b_only.name, b_ext_tags_names[0]);
+    try std.testing.expectEqual(tag_b_only.args, b_ext_tags_args[0]);
+
+    const b_ext_ext = env.types_store.resolveVar(b_ext_tag_union.ext).desc.content;
+    try std.testing.expectEqual(Content{ .structure = .empty_tag_union }, b_ext_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
+    try std.testing.expectEqual(b_tag_union.ext, env.scratch.fresh_vars.items.items[0]);
+}
+
+test "unify - open vs closed tag union with type mismatch (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const tag_a = env.mkTag(@enumFromInt(0), &[_]Var{str});
+    const tag_b = env.mkTag(@enumFromInt(0), &[_]Var{bool_});
+
+    const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_a}).content);
+    const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_b}).content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    const desc = try env.getDescForRootVar(b);
+    try std.testing.expectEqual(Content.err, desc.content);
+}
+
+test "unify - closed vs open tag union with type mismatch (fail)" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+
+    const tag_a = env.mkTag(@enumFromInt(0), &[_]Var{str});
+    const tag_b = env.mkTag(@enumFromInt(1), &[_]Var{bool_});
+
+    const a = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_a}).content);
+    const b = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_b}).content);
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
