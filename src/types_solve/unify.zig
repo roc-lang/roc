@@ -66,9 +66,11 @@ const TagUnion = types.TagUnion;
 const Tag = types.Tag;
 const TwoTags = types.TwoTags;
 
-const VarSafeList = types.VarSafeList;
-const RecordFieldSafeList = types.RecordFieldSafeList;
-const TwoRecordFieldsSafeList = types.TwoRecordFieldsSafeList;
+const VarSafeList = Var.SafeList;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
+const RecordFieldSafeList = RecordField.SafeList;
+const TwoRecordFieldsSafeMultiList = TwoRecordFields.SafeMultiList;
+const TwoRecordFieldsSafeList = TwoRecordFields.SafeList;
 const TagSafeList = types.TagSafeList;
 const TwoTagsSafeList = types.TwoTagsSafeList;
 
@@ -617,13 +619,8 @@ const Unifier = struct {
 
         // First, unwrap all fields for record a, panicaing with various non-recoverable error
         // These pancis will likely be changed/removed in the future
-        const a_gathered_fields = self.gatherRecordFields(a_record) catch |err| switch (err) {
-            error.InvalidRecordExt => @panic("unifyTwoRecords: Record a ext was invalid"),
-        };
-
-        const b_gathered_fields = self.gatherRecordFields(b_record) catch |err| switch (err) {
-            error.InvalidRecordExt => @panic("unifyTwoRecords: Record b ext was invalid"),
-        };
+        const a_gathered_fields = try self.gatherRecordFields(a_record);
+        const b_gathered_fields = try self.gatherRecordFields(b_record);
 
         // Then partition the fields
         const partitioned = partitionFields(self.scratch, a_gathered_fields.range, b_gathered_fields.range);
@@ -764,10 +761,15 @@ const Unifier = struct {
     /// * the final tail extension variable, which is either a flex var or an empty record
     ///
     /// Errors if it encounters a malformed or invalid extension (e.g. a non-record type).
-    fn gatherRecordFields(self: *Self, record: Record) error{InvalidRecordExt}!GatheredFields {
-        var range = self.scratch.appendSliceGatheredFields(
-            self.types_store.record_fields.rangeToSlice(record.fields),
+    fn gatherRecordFields(self: *Self, record: Record) error{TypeMismatch}!GatheredFields {
+        // first, copy from the store's MultiList record fields array into scratch's
+        // regular list, capturing the insertion range
+        var range = self.scratch.copyGatherFieldsFromMultiList(
+            &self.types_store.record_fields,
+            record.fields,
         );
+
+        // then recursiv
         var ext_var = record.ext;
         while (true) {
             switch (self.types_store.resolveVar(ext_var).desc.content) {
@@ -783,8 +785,9 @@ const Unifier = struct {
                 .structure => |flat_type| {
                     switch (flat_type) {
                         .record => |ext_record| {
-                            const next_range = self.scratch.appendSliceGatheredFields(
-                                self.types_store.record_fields.rangeToSlice(record.fields),
+                            const next_range = self.scratch.copyGatherFieldsFromMultiList(
+                                &self.types_store.record_fields,
+                                ext_record.fields,
                             );
                             range.end = next_range.end;
                             ext_var = ext_record.ext;
@@ -792,10 +795,10 @@ const Unifier = struct {
                         .empty_record => {
                             return .{ .ext = ext_var, .range = range };
                         },
-                        else => return error.InvalidRecordExt,
+                        else => return error.TypeMismatch,
                     }
                 },
-                else => return error.InvalidRecordExt,
+                else => return error.TypeMismatch,
             }
         }
     }
@@ -845,7 +848,12 @@ const Unifier = struct {
             const b_next = b_fields[b_i];
 
             if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{ .a = a_next, .b = b_next });
+                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
+                    .a_name = a_next.name,
+                    .a_var = a_next.var_,
+                    .b_name = b_next.name,
+                    .b_var = b_next.var_,
+                });
                 a_i = a_i + 1;
                 b_i = b_i + 1;
             } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
@@ -889,17 +897,21 @@ const Unifier = struct {
     fn unifySharedFields(
         self: *Self,
         vars: *const ResolvedVarDescs,
-        shared_fields: []TwoRecordFields,
-        mb_a_extended_fields: ?[]RecordField,
-        mb_b_extended_fields: ?[]RecordField,
+        shared_fields: TwoRecordFieldsSafeList.Slice,
+        mb_a_extended_fields: ?RecordFieldSafeList.Slice,
+        mb_b_extended_fields: ?RecordFieldSafeList.Slice,
         ext: Var,
     ) error{TypeMismatch}!void {
-        const range_start: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+        const range_start: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
-        for (shared_fields) |fields| {
-            // TODO: pick recursion variable?
-            try self.unifyGuarded(fields.a.var_, fields.b.var_);
-            _ = self.types_store.record_fields.append(self.types_store.gpa, fields.b);
+        // Here, iterate over shared fields, sub unifying the field variables.
+        // At this point, the fields are know to be identical, so we arbitrary choose b's name
+        for (shared_fields) |shared| {
+            try self.unifyGuarded(shared.a_var, shared.b_var);
+            _ = self.types_store.record_fields.append(self.types_store.gpa, RecordField{
+                .name = shared.b_name,
+                .var_ = shared.b_var,
+            });
         }
 
         // Append combined fields
@@ -910,7 +922,7 @@ const Unifier = struct {
             _ = self.types_store.record_fields.appendSlice(self.types_store.gpa, extended_fields);
         }
 
-        const range_end: RecordFieldSafeList.Idx = @enumFromInt(self.types_store.record_fields.len());
+        const range_end: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
 
         // Merge vars
         self.merge(vars, Content{ .structure = FlatType{ .record = .{
@@ -1322,6 +1334,25 @@ pub const Scratch = struct {
 
     // helpers //
 
+    /// Given a multi list of record fields and a range, copy from the multi list
+    /// into scratch's gathered fields array
+    fn copyGatherFieldsFromMultiList(
+        self: *Self,
+        multi_list: *const RecordFieldSafeMultiList,
+        range: RecordFieldSafeMultiList.Range,
+    ) RecordFieldSafeList.Range {
+        const start: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
+        const record_fields_slice = multi_list.rangeToSlice(range);
+        for (record_fields_slice.items(.name), record_fields_slice.items(.var_)) |name, var_| {
+            _ = self.gathered_fields.append(
+                self.gpa,
+                RecordField{ .name = name, .var_ = var_ },
+            );
+        }
+        const end: RecordFieldSafeList.Idx = @enumFromInt(self.gathered_fields.len());
+        return .{ .start = start, .end = end };
+    }
+
     fn appendSliceGatheredFields(self: *Self, fields: []const RecordField) RecordFieldSafeList.Range {
         return self.gathered_fields.appendSlice(self.gpa, fields);
     }
@@ -1440,7 +1471,7 @@ const TestEnv = struct {
         const ident_idx = self.ident_store.insert(self.gpa, Ident.for_text(name), Region.zero());
         return .{ .structure = .{ .type_apply = .{
             .ident = .{ .ident_idx = ident_idx },
-            .args = types.VarSafeList.Range.empty,
+            .args = VarSafeList.Range.empty,
         } } };
     }
 
@@ -2462,12 +2493,12 @@ test "partitionFields - reordering is normalized" {
     try std.testing.expectEqual(3, result.in_both.len());
 
     const both = env.scratch.in_both_fields.rangeToSlice(result.in_both);
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].a.name));
-    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(both[0].b.name));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].a.name));
-    try std.testing.expectEqual(@as(u32, 2), @intFromEnum(both[1].b.name));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].a.name));
-    try std.testing.expectEqual(@as(u32, 3), @intFromEnum(both[2].b.name));
+    try std.testing.expectEqual(f1.name, both[0].a_name);
+    try std.testing.expectEqual(f1.name, both[0].b_name);
+    try std.testing.expectEqual(f2.name, both[1].a_name);
+    try std.testing.expectEqual(f2.name, both[1].b_name);
+    try std.testing.expectEqual(f3.name, both[2].a_name);
+    try std.testing.expectEqual(f3.name, both[2].b_name);
 }
 
 // unification - structure/structure - records closed
@@ -2483,6 +2514,7 @@ test "unify - identical closed records" {
         .{ .name = @enumFromInt(1), .var_ = str },
     };
     const record_data = env.mkRecordClosed(&fields);
+    const record_data_fields = env.types_store.record_fields.rangeToSlice(record_data.record.fields);
 
     const a = env.types_store.freshFromContent(record_data.content);
     const b = env.types_store.freshFromContent(record_data.content);
@@ -2493,11 +2525,9 @@ test "unify - identical closed records" {
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
-    try std.testing.expectEqualSlices(
-        RecordField,
-        env.types_store.record_fields.rangeToSlice(record_data.record.fields),
-        env.types_store.record_fields.rangeToSlice(b_record.fields),
-    );
+    const b_record_fields = env.types_store.record_fields.rangeToSlice(b_record.fields);
+    try std.testing.expectEqualSlices(collections.SmallStringInterner.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
+    try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
 }
 
 test "unify - closed record mismatch on diff fields (fail)" {
@@ -2551,7 +2581,8 @@ test "unify - open record a extends b" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
     try std.testing.expectEqual(env.scratch.fresh_vars.get(@enumFromInt(0)).*, b_record.ext);
@@ -2559,7 +2590,8 @@ test "unify - open record a extends b" {
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_a_only, b_ext_record_fields[0]);
+    try std.testing.expectEqual(field_a_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_a_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
@@ -2589,7 +2621,8 @@ test "unify - open record b extends a" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(1, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     try std.testing.expectEqual(1, env.scratch.fresh_vars.len());
     try std.testing.expectEqual(env.scratch.fresh_vars.get(@enumFromInt(0)).*, b_record.ext);
@@ -2597,7 +2630,8 @@ test "unify - open record b extends a" {
     const b_ext_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(b_record.ext).desc);
     try std.testing.expectEqual(1, b_ext_record.fields.len());
     const b_ext_record_fields = env.types_store.getRecordFieldsSlice(b_ext_record.fields);
-    try std.testing.expectEqual(field_b_only, b_ext_record_fields[0]);
+    try std.testing.expectEqual(field_b_only.name, b_ext_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_b_only.var_, b_ext_record_fields.items(.var_)[0]);
 
     const b_ext_ext = env.types_store.resolveVar(b_ext_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext_ext);
@@ -2629,7 +2663,8 @@ test "unify - both extend open record" {
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     try std.testing.expectEqual(3, b_record.fields.len());
     const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
-    try std.testing.expectEqual(field_shared, b_record_fields[0]);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
 
     const b_ext = env.types_store.resolveVar(b_record.ext).desc.content;
     try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
@@ -2640,13 +2675,15 @@ test "unify - both extend open record" {
     const only_a_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_a_var).desc);
     try std.testing.expectEqual(1, only_a_record.fields.len());
     const only_a_record_fields = env.types_store.getRecordFieldsSlice(only_a_record.fields);
-    try std.testing.expectEqual(field_a_only, only_a_record_fields[0]);
+    try std.testing.expectEqual(field_a_only.name, only_a_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_a_only.var_, only_a_record_fields.items(.var_)[0]);
 
     const only_b_var = env.scratch.fresh_vars.get(@enumFromInt(1)).*;
     const only_b_record = try TestEnv.getRecordOrErr(env.types_store.resolveVar(only_b_var).desc);
     try std.testing.expectEqual(1, only_b_record.fields.len());
     const only_b_record_fields = env.types_store.getRecordFieldsSlice(only_b_record.fields);
-    try std.testing.expectEqual(field_b_only, only_b_record_fields[0]);
+    try std.testing.expectEqual(field_b_only.name, only_b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_b_only.var_, only_b_record_fields.items(.var_)[0]);
 
     const ext_var = env.scratch.fresh_vars.get(@enumFromInt(2)).*;
     const ext_content = env.types_store.resolveVar(ext_var).desc.content;

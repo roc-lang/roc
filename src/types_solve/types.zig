@@ -16,7 +16,8 @@ const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 
 const SmallStringInterner = collections.SmallStringInterner;
-const SafeList = collections.SafeList;
+const MkSafeList = collections.SafeList;
+const MkSafeMultiList = collections.SafeMultiList;
 
 test {
     // If your changes caused this number to go down, great! Please update it to the lower number.
@@ -29,10 +30,12 @@ test {
 }
 
 /// A type variable
-pub const Var = enum(u32) { _ };
+pub const Var = enum(u32) {
+    _,
 
-/// A safelist of type variables
-pub const VarSafeList = SafeList(Var);
+    /// A safelist of type variables
+    pub const SafeList = MkSafeList(Var);
+};
 
 /// A type descriptor
 pub const Descriptor = struct { content: Content, rank: Rank, mark: Mark };
@@ -87,7 +90,7 @@ pub const Content = union(enum) {
 /// a nominal or structural alias
 pub const Alias = struct {
     ident: TypeIdent,
-    args: VarSafeList.Range,
+    args: Var.SafeList.Range,
     backing_var: Var,
 };
 
@@ -124,14 +127,14 @@ pub const FlatType = union(enum) {
 /// Applications may have up to 16 type arguments.
 pub const TypeApply = struct {
     ident: TypeIdent,
-    args: VarSafeList.Range,
+    args: Var.SafeList.Range,
 };
 
 // tuples //
 
 /// Represents a tuple
 pub const Tuple = struct {
-    elems: VarSafeList.Range,
+    elems: Var.SafeList.Range,
 };
 
 // numbers //
@@ -193,7 +196,7 @@ pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
 
 /// Represents a function
 pub const Func = struct {
-    args: VarSafeList.Range,
+    args: Var.SafeList.Range,
     ret: Var,
     eff: Var,
 };
@@ -202,8 +205,7 @@ pub const Func = struct {
 
 /// Represents a record
 pub const Record = struct {
-    // TODO: Should we use a multilist here?
-    fields: RecordFieldSafeList.Range,
+    fields: RecordField.SafeMultiList.Range,
     ext: Var,
 
     const Self = @This();
@@ -213,6 +215,7 @@ pub const Record = struct {
 pub const RecordField = struct {
     const Self = @This();
 
+    // if you add a field here, make sure to add it to RecordFields too!
     name: collections.SmallStringInterner.Idx,
     var_: Var,
 
@@ -220,16 +223,30 @@ pub const RecordField = struct {
     pub fn sortByFieldNameAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
         return @intFromEnum(a.name) < @intFromEnum(b.name);
     }
+
+    /// A safe multi list of record fields
+    pub const SafeMultiList = MkSafeMultiList(Self);
+
+    /// A safelist of record fields
+    pub const SafeList = MkSafeList(Self);
 };
 
-/// A safelist of record fields
-pub const RecordFieldSafeList = SafeList(RecordField);
+/// Cartesion set of record fields, used during unification
+pub const TwoRecordFields = struct {
+    const Self = @This();
 
-/// A safelist of record fields
-pub const TwoRecordFieldsSafeList = SafeList(TwoRecordFields);
+    // if you add a field here, make sure to add it to RecordField too!
+    a_name: collections.SmallStringInterner.Idx,
+    a_var: Var,
+    b_name: collections.SmallStringInterner.Idx,
+    b_var: Var,
 
-/// Two record fields
-pub const TwoRecordFields = struct { a: RecordField, b: RecordField };
+    /// A safelist of record fields
+    pub const SafeMultiList = MkSafeMultiList(Self);
+
+    /// A safelist of record fields
+    pub const SafeList = MkSafeList(Self);
+};
 
 // tag unions //
 
@@ -245,7 +262,7 @@ pub const Tag = struct {
     name: collections.SmallStringInterner.Idx,
 
     /// A list of argument types for the tag (0 = no payload)
-    args: VarSafeList.Range,
+    args: Var.SafeList.Range,
 
     const Self = @This();
 
@@ -256,10 +273,10 @@ pub const Tag = struct {
 };
 
 /// A safelist of tag union fields
-pub const TagSafeList = SafeList(Tag);
+pub const TagSafeList = MkSafeList(Tag);
 
 /// A safelist of tag union fields
-pub const TwoTagsSafeList = SafeList(TwoTags);
+pub const TwoTagsSafeList = MkSafeList(TwoTags);
 
 /// Two tag union fields
 pub const TwoTags = struct { a: Tag, b: Tag };

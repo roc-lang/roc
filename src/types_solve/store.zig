@@ -10,14 +10,14 @@ const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 const Desc = types.Descriptor;
 const Var = types.Var;
-const VarSafeList = types.VarSafeList;
 const Content = types.Content;
 const Rank = types.Rank;
 const Mark = types.Mark;
 const RecordField = types.RecordField;
 const Tag = types.Tag;
 
-const RecordFieldSafeList = types.RecordFieldSafeList;
+const VarSafeList = Var.SafeList;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const TagSafeList = types.TagSafeList;
 
 /// A variable & its descriptor info
@@ -54,7 +54,7 @@ pub const Store = struct {
     tuple_elems: VarSafeList,
     type_apply_args: VarSafeList,
     func_args: VarSafeList,
-    record_fields: RecordFieldSafeList,
+    record_fields: RecordFieldSafeMultiList,
     tags: TagSafeList,
     tag_args: VarSafeList,
 
@@ -73,7 +73,7 @@ pub const Store = struct {
             .tuple_elems = VarSafeList.initCapacity(gpa, 64),
             .type_apply_args = VarSafeList.initCapacity(gpa, 64),
             .func_args = VarSafeList.initCapacity(gpa, 64),
-            .record_fields = RecordFieldSafeList.initCapacity(gpa, 64),
+            .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, 64),
             .tags = TagSafeList.initCapacity(gpa, 64),
             .tag_args = VarSafeList.initCapacity(gpa, 64),
         };
@@ -148,7 +148,7 @@ pub const Store = struct {
     }
 
     /// Append a slice of record fields to the backing list, returning the range
-    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeList.Range {
+    pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
         return self.record_fields.appendSlice(self.gpa, slice);
     }
 
@@ -165,7 +165,7 @@ pub const Store = struct {
     // sub list getters //
 
     /// Given a range, get a slice of record fields from the backing array
-    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeList.Range) []const RecordField {
+    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.rangeToSlice(range);
     }
 
