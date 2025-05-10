@@ -3,14 +3,94 @@
     <label id="close-tutorial-toc" for="tutorial-toc-toggle">close</label>
     <!-- TODO fix search: input [id "toc-search", type "text", placeholder "Search"] [] -->
     <ol>
-    <li><a href="#repl">REPL</a></li>
-    <li><a href="#building-an-application">Building an Application</a></li>
-    <li><a href="#pattern-matching">Pattern Matching</a></li>
-    <li><a href="#types">Types</a></li>
-    <li><a href="#crashing">Crashing</a></li>
-    <li><a href="#testing">Testing</a></li>
-    <li><a href="#modules">Modules</a></li>
-    <li><a href="#advanced-concepts">Advanced Concepts</a></li>
+        <li class="tut-1"><a href="#ai-docs">AI Docs</a></li>
+        <li class="tut-1"><a href="#repl">REPL</a></li>
+        <li class="tut-2"><a href="#hello-world">Hello, World!</a></li>
+        <li class="tut-2"><a href="#naming-things">Naming Things</a></li>
+        <li class="tut-2"><a href="#arithmetic">Arithmetic</a></li>
+        <li class="tut-2"><a href="#calling-functions">Calling Functions</a></li>
+        <li class="tut-2"><a href="#string-interpolation">String Interpolation</a></li>
+        <li class="tut-1"><a href="#building-an-application">Building an Application</a></li>
+        <li class="tut-2"><a href="#defs">Defs</a></li>
+        <li class="tut-2"><a href="#defining-functions">Defining Functions</a></li>
+        <li class="tut-2"><a href="#if-then-else">`if`-`then`-`else` expressions</a></li>
+        <li class="tut-2"><a href="#else-if">`else if` expressions</a></li>
+        <li class="tut-2"><a href="#comments">Comments</a></li>
+        <li class="tut-2"><a href="#doc-comments">Doc Comments</a></li>
+        <li class="tut-2"><a href="#records">Records</a></li>
+        <li class="tut-2"><a href="#accepting-extra-fields">Accepting extra fields</a></li>
+        <li class="tut-2"><a href="#record-shorthands">Record shorthands</a></li>
+        <li class="tut-2"><a href="#record-destructuring">Record destructuring</a></li>
+        <li class="tut-2"><a href="#making-records-from-other-records">Making records from other records</a></li>
+        <li class="tut-2"><a href="#dbg">Debugging with `dbg`</a></li>
+        <li class="tut-2"><a href="#tuples">Tuples</a></li>
+        <li class="tut-2"><a href="#tuple-access">Accessing values in tuples</a></li>
+        <li class="tut-1"><a href="#pattern-matching">Pattern Matching</a></li>
+        <li class="tut-2"><a href="#tags">Tags</a></li>
+        <li class="tut-2"><a href="#tags-with-payloads">Tags with payloads</a></li>
+        <li class="tut-2"><a href="#booleans">Booleans</a></li>
+        <li class="tut-2"><a href="#lists">Lists</a></li>
+        <li class="tut-2"><a href="#list-map">List.map</a></li>
+        <li class="tut-2"><a href="#list-element-type-compatibility">List element type compatibility</a></li>
+        <li class="tut-2"><a href="#lists-that-hold-elements-of-different-types">Lists that hold elements of different types</a></li>
+        <li class="tut-2"><a href="#using-tags-as-functions">Using tags as functions</a></li>
+        <li class="tut-2"><a href="#list-any-and-list-all">List.any and List.all</a></li>
+        <li class="tut-2"><a href="#removing-elements-from-a-list">Removing elements from a list</a></li>
+        <li class="tut-2"><a href="#getting-an-individual-element-from-a-list">Getting an individual element from a list</a></li>
+        <li class="tut-2"><a href="#error-handling">Error Handling</a></li>
+        <li class="tut-2"><a href="#the-question-postfix-operator">The `?` postfix operator</a></li>
+        <li class="tut-2"><a href="#recovering-from-errors">Recovering from errors with the `??` infix operator</a></li>
+        <li class="tut-2"><a href="#walking-the-elements-in-a-list">Walking the elements in a list</a></li>
+        <li class="tut-2"><a href="#pattern-matching-on-lists">Pattern Matching on Lists</a></li>
+        <li class="tut-2"><a href="#the-pipe-operator">The pipe operator</a></li>
+        <li class="tut-1"><a href="#types">Types</a></li>
+        <li class="tut-2"><a href="#type-annotations">Type Annotations</a></li>
+        <li class="tut-2"><a href="#type-aliases">Type Aliases</a></li>
+        <li class="tut-2"><a href="#type-parameters">Type Parameters</a></li>
+        <li class="tut-2"><a href="#wildcard-type">Wildcard Types</a></li>
+        <li class="tut-2"><a href="#type-variables">Type Variables</a></li>
+        <li class="tut-2"><a href="#tag-union-types">Tag Union Types</a></li>
+        <li class="tut-2"><a href="#accumulating-tag-types">Accumulating Tag Types</a></li>
+        <li class="tut-2"><a href="#opaque-types">Opaque Types</a></li>
+        <li class="tut-2"><a href="#integers">Integers</a></li>
+        <li class="tut-2"><a href="#fractions">Fractions</a></li>
+        <li class="tut-2"><a href="#num-int-and-frac">Num, Int, and Frac</a></li>
+        <li class="tut-2"><a href="#number-literals">Number Literals</a></li>
+        <li class="tut-2"><a href="#default-value-record-fields">Default-Value Record Fields</a></li>
+        <li class="tut-1"><a href="#crashing">Crashing</a></li>
+        <li class="tut-2"><a href="#crashing-in-unreachable-branches">Crashing in unreachable branches</a></li>
+        <li class="tut-2"><a href="#crashing-for-todos">Crashing for TODOs</a></li>
+        <li class="tut-2"><a href="#crashing-for-error-handling">Crashing for error handling</a></li>
+        <li class="tut-1"><a href="#testing">Testing</a></li>
+        <li class="tut-2"><a href="#inline-expects">Inline Expectations</a></li>
+        <li class="tut-1"><a href="#modules">Modules</a></li>
+        <li class="tut-2"><a href="#builtin-modules">Builtin Modules</a></li>
+        <li class="tut-2"><a href="#app-module-header">App Module Header</a></li>
+        <li class="tut-2"><a href="#package-modules">Package Modules</a></li>
+        <li class="tut-2"><a href="#regular-modules">Regular Modules</a></li>
+        <li class="tut-2"><a href="#platform-modules">Platform Modules</a></li>
+        <li class="tut-2"><a href="#importing-files">Importing Files</a></li>
+        <li class="tut-1"><a href="#efffectful-functions">Effectful functions</a></li>
+        <li class="tut-2"><a href="#reading-values">Reading values</a></li>
+        <li class="tut-2"><a href="#failure">Effectful failure</a></li>
+        <li class="tut-2"><a href="#handling-failure">Handling failure</a></li>
+        <li class="tut-2"><a href="#underscore">The \_ type</a></li>
+        <li class="tut-2"><a href="#ignoring-informationless-return-values">Ignoring informationless return values</a></li>
+        <li class="tut-2"><a href="#tagging-errors">Tagging errors</a></li>
+        <li class="tut-2"><a href="#inspect">Displaying Roc values with `Inspect.to_str`</a></li>
+        <li class="tut-2"><a href="#the-early-return-keyword">The early `return` keyword</a></li>
+        <li class="tut-1"><a href="#examples">Examples</a></li>
+        <li class="tut-1"><a href="#advanced-concepts">Advanced Concepts</a></li>
+        <li class="tut-2"><a href="#open-records-and-closed-records">Open Records and Closed Records</a></li>
+        <li class="tut-2"><a href="#constrained-records">Constrained Records</a></li>
+        <li class="tut-2"><a href="#type-variables-in-record-annotations">Type Variables in Record Annotations</a></li>
+        <li class="tut-2"><a href="#open-and-closed-tag-unions">Open and Closed Tag Unions</a></li>
+        <li class="tut-2"><a href="#combining-open-unions">Combining Open Unions</a></li>
+        <li class="tut-2"><a href="#type-variables-in-tag-unions">Type Variables in Tag Unions</a></li>
+        <li class="tut-2"><a href="#record-builder">Record Builder</a></li>
+        <li class="tut-2"><a href="#reserved-keywords">Reserved Keywords</a></li>
+        <li class="tut-1"><a href="#operator-desugaring-table">Operator Desugaring Table</a></li>
+        <li class="tut-2"><a href="#additional-resources">Additional Resources</a></li>
     </ol>
 </nav>
 <section id="tutorial-body">
