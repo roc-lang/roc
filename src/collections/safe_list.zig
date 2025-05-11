@@ -2,10 +2,16 @@
 
 const std = @import("std");
 const utils = @import("utils.zig");
+const padded_ptr = @import("padded_ptr.zig");
+const math = std.math;
 
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const exitOnOom = utils.exitOnOom;
+const PaddedPtr = padded_ptr.PaddedPtr;
+
+// Parts of this implementation are adapted from the Zig standard library under the MIT License.
+// Thanks, Zig authors!
 
 /// Represents a type safe range in a list; [start, end)
 ///
@@ -37,12 +43,14 @@ pub fn SafeRange(comptime Idx: type) type {
 /// (barring manual usage of macros). An Idx can only be used for lists
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
-pub fn SafeList(comptime T: type) type {
+pub fn SafeList(comptime T: type, comptime Len: type) type {
     return struct {
-        items: std.ArrayListUnmanaged(T) = .{},
+        ptr: PaddedPtr(T),
+        length: Len,
+        capacity: Len,
 
         /// An index for an item in the list.
-        pub const Idx = enum(u32) { _ };
+        pub const Idx = enum(Len) { _ };
 
         /// A non-type-safe slice of the list.
         pub const Slice = std.ArrayListUnmanaged(T).Slice;
@@ -55,8 +63,8 @@ pub fn SafeList(comptime T: type) type {
             range: Range,
         };
 
-        /// Initialize the `SafeList` with the specified capacity.
-        pub fn initCapacity(gpa: Allocator, capacity: usize) SafeList(T) {
+        /// Intialize the `SafeList` with the specified capacity.
+        pub fn initCapacity(gpa: Allocator, capacity: Len) SafeList(T) {
             return .{
                 .items = std.ArrayListUnmanaged(T).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
             };
@@ -68,7 +76,7 @@ pub fn SafeList(comptime T: type) type {
         }
 
         /// Get the length of this list.
-        pub fn len(self: *const SafeList(T)) usize {
+        pub fn len(self: *const SafeList(T)) Len {
             return self.items.items.len;
         }
 
@@ -77,7 +85,7 @@ pub fn SafeList(comptime T: type) type {
             const length = self.len();
             self.items.append(gpa, item) catch |err| exitOnOom(err);
 
-            return @enumFromInt(@as(u32, @intCast(length)));
+            return @enumFromInt(@as(Len, @intCast(length)));
         }
 
         /// Add all the items in a slice to the end of this list.
@@ -132,7 +140,7 @@ pub fn SafeList(comptime T: type) type {
                 const curr = iter.current;
                 iter.current += 1;
 
-                const idx: u32 = @truncate(curr);
+                const idx: Len = @truncate(curr);
                 return @enumFromInt(idx);
             }
         };
@@ -143,6 +151,60 @@ pub fn SafeList(comptime T: type) type {
                 .len = self.len(),
                 .current = 0,
             };
+        }
+
+        /// If the current capacity is less than `new_capacity`, this function will
+        /// modify the list so that it can hold at least `new_capacity` items.
+        /// Invalidates element pointers if additional memory is needed.
+        pub fn ensureTotalCapacity(self: *SafeList(T), alloc: Allocator, new_capacity: Len) !void {
+            if (@sizeOf(T) == 0) {
+                self.capacity = math.maxInt(Len);
+                return;
+            }
+
+            if (self.capacity >= new_capacity) return;
+
+            const better_capacity = ArrayListAlignedUnmanaged(T, alignment).growCapacity(self.capacity, new_capacity);
+            return self.ensureTotalCapacityPrecise(better_capacity);
+        }
+
+        /// Called internally when capacity gets exceeded.
+        fn expand(self: *SafeList(T), alloc: Allocator) !void {
+            // Expand by 1.5x, or if previous capacity was 0, expand to 8 by default.
+            try self.ensureTotalCapacity(alloc, @max(8, (self.capacity * 3) / 2));
+        }
+
+        /// Serialize into pointers (most likely both being into the same memory-mapped file).
+        /// If heap_dest doesn't have the necessary alignment, writes zeros.
+        pub fn serialize(self: *const SafeList(T), stack_dest: *[]u8, heap_dest: *[]u8) void {
+            // TODO debug assert that stack_dest has the correct alignment
+            const zeroed = .{
+                .ptr = null,
+                .length = self.length,
+                .capacity = self.length, // We serialize these as exact-fit.
+            };
+
+            const padding = null; // TODO make a slice for the alignment padding
+
+            @memcpy(stack_dest, &zeroed);
+            @memset(padding, 0); // TODO can presumably make branchless + use simd
+            @memcpy(heap_dest, self.asSlice());
+
+            // TODO advance stack_dest base on self's size
+            // TODO advance heap_dest based on (padding + elem bytes written)
+        }
+
+        pub fn rehydrateFrom(self: *SafeList(T), heap_src: *[]u8) void {
+            // TODO advance heap_src until it's aligned to T
+
+            self.ptr = PaddedPtr.init(heap_src);
+
+            // TODO advance heap_src based on how many bytes we just took.
+        }
+
+        pub fn cachedHeapBytes(self: *const SafeList(T)) usize {
+            // When we serialize, we only write len bytes, not capacity bytes.
+            return self.length * @sizeOf(T); // TODO round off to 16B alignment always.
         }
     };
 }
@@ -164,12 +226,12 @@ pub fn SafeList(comptime T: type) type {
 /// (barring manual usage of macros). An Idx can only be used for lists
 /// that hold T's, giving type safety. Also, out-of-bounds errors are
 /// less likely since indices are only created for valid list entries.
-pub fn SafeMultiList(comptime T: type) type {
+pub fn SafeMultiList(comptime T: type, comptime Len: type) type {
     return struct {
         items: std.MultiArrayList(T) = .{},
 
         /// Index of an item in the list.
-        pub const Idx = enum(u32) { zero = 0, _ };
+        pub const Idx = enum(Len) { zero = 0, _ };
 
         /// A non-type-safe slice of the list.
         pub const Slice = std.MultiArrayList(T).Slice;
@@ -214,7 +276,7 @@ pub fn SafeMultiList(comptime T: type) type {
             const length = self.len();
             self.items.append(gpa, item) catch |err| exitOnOom(err);
 
-            return @enumFromInt(@as(u32, @intCast(length)));
+            return @enumFromInt(@as(Len, @intCast(length)));
         }
 
         pub fn appendSlice(self: *SafeMultiList(T), gpa: Allocator, elems: []const T) Range {
@@ -288,7 +350,7 @@ pub fn SafeMultiList(comptime T: type) type {
                 const curr = iter.current;
                 iter.current += 1;
 
-                const idx: u32 = @truncate(curr);
+                const idx: Len = @truncate(curr);
                 return @enumFromInt(idx);
             }
         };

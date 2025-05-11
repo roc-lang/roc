@@ -58,9 +58,37 @@ pub const Store = struct {
     /// By default, this is set to index 0, the primary module being compiled.
     /// This needs to be set when the ident is first seen during canonicalization
     /// before doing anything else.
-    exposing_modules: std.ArrayListUnmanaged(ModuleImport.Idx) = .{},
-    attributes: std.ArrayListUnmanaged(Attributes) = .{},
+    exposing_modules: PaddedPtr(ModuleImport.Idx) = .{},
+    attributes: PaddedPtr(Attributes) = .{},
+
+    //////////// TODO ///////////////
+    // Next step: write a *deserialization* function for this.
+    // Need to be able to rehydrate based on knowing we have this whole Struct in memory,
+    // and can then just make the PaddedPtrs start wherever we want them to.
+    // Then just need to make *serialization* do the reverse of this!
+
+    len: u32,
+    capacity: u32,
     next_unique_name: u32 = 0,
+
+    /// The cache has already deserialized our bytes from disk into memory, so we need to set our
+    /// pointers accordingly.
+    pub fn rehydrateFromCache(self: *Store) void {
+        // TODO this logic should live somewhere reusable.
+        var exposing_modules = @as([*]const u8, @ptrCast(self)) + @sizeOf(Store);
+        const alignment = @alignOf(ModuleImport.Idx);
+        const offset = (@intFromPtr(exposing_modules) + (alignment - 1)) & ~@as(usize, alignment - 1);
+        exposing_modules = @as([*]const u8, @ptrFromInt(offset));
+        self.exposing_modules = PaddedPtr(ModuleImport.Idx).init(@ptrCast(exposing_modules));
+
+        // TODO rehydrate `attributes` based on it being right after exposing_modules * len,
+        // again with alignment padding considerations.
+        // TODO when writing these to disk, we need to include in the iovecs (or mmap writes)
+        // zeros wherever alignment padding comes up, as well as pointers. This is both for
+        // consistency (we should always write a byte-for-byte identical cache file given
+        // the same inputs) and also for security (we shouldn't write random memory contents
+        // to the cache in case there's randomly sensitive information in there).
+    }
 
     /// Initialize the memory for an `Ident.Store` with a specific capaicty.
     pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Store {

@@ -9,22 +9,44 @@
 const std = @import("std");
 const utils = @import("./utils.zig");
 const Region = @import("../base/Region.zig");
+const safe_list = @import("./safe_list.zig");
 
 const exitOnOom = utils.exitOnOom;
+const SafeList = safe_list.SafeList;
+const assert = std.debug.assert;
 
 const Self = @This();
+
+/// serialize into slices (most likely both being into the same memory-mapped file).
+/// mutates the lengths of the given slices to advance them based on how much was
+/// written to them.
+pub fn serialize(self: *const Self, stack_dest: *[]u8, heap_dest: *[]u8) void {
+    // These must be serialized in the same order they're rehydrated - see rehydrateFrom()
+    self.bytes.serialize(stack_dest, heap_dest);
+    self.strings.serialize(stack_dest, heap_dest);
+    self.outer_indices.serialize(stack_dest, heap_dest);
+    self.regions.serialize(stack_dest, heap_dest);
+}
+
+pub fn rehydrateFrom(self: *Self, heap_src: *u8) void {
+    // These must be rehydrated in the same order they're serialized - see serialize()
+    self.bytes.rehydrateFrom(heap_src);
+    self.strings.rehydrateFrom(heap_src);
+    self.outer_indices.rehydrateFrom(heap_src);
+    self.regions.rehydrateFrom(heap_src);
+}
 
 /// The raw underlying bytes for all strings.
 /// Since strings are small, they are simply null terminated.
 /// This uses only 1 byte to encode the size and is cheap to scan.
-bytes: std.ArrayListUnmanaged(u8) = .{},
-/// A deduplicated set of strings indices referencing into bytes.
+bytes: SafeList(u8) = .{},
+/// A deduplicated set of strings indicies referencing into bytes.
 /// The key is the offset into bytes.
 strings: StringIdx.Table = .{},
 /// A unique ID for every string. This is fundamentally an index into bytes.
 /// It also maps 1:1 with a region at the same index.
-outer_indices: std.ArrayListUnmanaged(StringIdx) = .{},
-regions: std.ArrayListUnmanaged(Region) = .{},
+outer_indices: SafeList(StringIdx) = .{},
+regions: SafeList(Region) = .{},
 
 /// A unique index for a deduped string in this interner.
 pub const Idx = enum(u32) { _ };
@@ -51,6 +73,13 @@ pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
     self.strings.deinit(gpa);
     self.outer_indices.deinit(gpa);
     self.regions.deinit(gpa);
+}
+
+pub fn cachedHeapBytes(self: *const Self, heap_align: usize) usize {
+    return self.bytes.cachedHeapBytes() +
+        self.strings.cachedHeapBytes() +
+        self.outer_indices.cachedHeapBytes() +
+        self.regions.cachedHeapBytes();
 }
 
 /// Add a string to this interner, returning a unique, serial index.
@@ -139,3 +168,21 @@ const StringIdx = enum(u32) {
         }
     };
 };
+
+test "serialize/rehydrate" {
+    const strings = ["a", "b", "c"];
+    // Give it excess capacity so we can verify that it was compacted away by serialization.
+    const capacity = strings.length + 19;
+    const gpa = null;
+    const self = Self.initCapacity(gpa, capacity);
+    const heap_src = null;
+    const stack_dest = null;
+    const heap_dest = null;
+
+    self.serialize(stack_dest, heap_dest);
+    self.rehydrateFrom(heap_src);
+
+    std.debug.assert(self.length == length);
+    std.debug.assert(self.capacity == length); // Capacity should have been compacted down to len.
+    std.debug.assert(false); // TODO assert that all the contents are the same.
+}

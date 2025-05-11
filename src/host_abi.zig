@@ -50,13 +50,37 @@ pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
         /// Called when the Roc program has run an `expect` which failed.
         roc_expect_failed: fn (*RocExpectFailed, *CallEnv) void,
         /// Called when the Roc program crashes, e.g. due to integer overflow.
-        /// This function must not return, because the Roc program assumes it will
+        /// This function must not return, because the Roc function assumes it will
         /// not continue to be executed after this function is called.
-        roc_crashed: fn (*RocCrashed, *CallEnv) void,
+        roc_crashed: fn (*RocCrashed, *CallEnv) unreachable,
         /// At the end of this struct, the host must include all the functions
         /// it wants to provide to the Roc program for the Roc program to call
         /// (e.g. I/O operations and such).
         host_fns: HostFns,
+
+        pub fn alloc(self: *RocOps(CallEnv, HostFns), info: *RocAlloc) void {
+            (self.roc_alloc)(info, self.env);
+        }
+
+        pub fn dealloc(self: *RocOps(CallEnv, HostFns), info: *RocDealloc) void {
+            (self.roc_dealloc)(info, self.env);
+        }
+
+        pub fn realloc(self: *RocOps(CallEnv, HostFns), info: *RocRealloc) void {
+            (self.roc_realloc)(info, self.env);
+        }
+
+        pub fn dbg(self: *RocOps(CallEnv, HostFns), info: *RocDbg) void {
+            (self.roc_dbg)(info, self.env);
+        }
+
+        pub fn expect_failed(self: *RocOps(CallEnv, HostFns), info: *RocExpectFailed) void {
+            (self.roc_expect_failed)(info, self.env);
+        }
+
+        pub fn crashed(self: *RocOps(CallEnv, HostFns), info: *RocCrashed) unreachable {
+            (self.roc_crashed)(info, self.env);
+        }
     };
 }
 
