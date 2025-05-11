@@ -676,6 +676,20 @@ const Formatter = struct {
                 try fmt.push('.');
                 _ = try fmt.formatExprInner(fa.right, .no_indent_on_access);
             },
+            .local_dispatch => |ld| {
+                _ = try fmt.formatExpr(ld.left);
+                if (multiline and try fmt.flushCommentsBefore(ld.operator)) {
+                    if (format_behavior == .normal) {
+                        fmt.curr_indent += 1;
+                    }
+                    try fmt.pushIndent();
+                }
+                try fmt.pushAll("->");
+                if (multiline and try fmt.flushCommentsAfter(ld.operator)) {
+                    try fmt.pushIndent();
+                }
+                _ = try fmt.formatExprInner(ld.right, .no_indent_on_access);
+            },
             .int => |i| {
                 try fmt.pushTokenText(i.token);
             },
@@ -2393,7 +2407,7 @@ test "Syntax grab bag" {
         \\        3.14 | 6.28 => 314
         \\        (1, 2, 3) => 123
         \\        (1, 2 | 5, 3) => 123
-        \\        { foo: 1, bar: 2, ..rest } => 12
+        \\        { foo: 1, bar: 2, ..rest } => 12->add(34)
         \\        { # After pattern record open
         \\            foo # After pattern record field name
         \\                : # Before pattern record field value
@@ -2641,6 +2655,23 @@ test "record access multiline formatting" {
         \\    .static_dispatch_method()? # Comment 2
         \\    .next_static_dispatch_method()? # Comment 3
         \\    .record_field?
+    ;
+    try exprFmtsSame(exprWithComments, .no_debug);
+}
+
+test "local dispatch multiline formatting" {
+    const expr =
+        \\some_fn(arg1)?
+        \\    ->static_dispatch_method()?
+        \\    ->next_static_dispatch_method()?
+        \\    ->record_field?
+    ;
+    try exprFmtsSame(expr, .no_debug);
+    const exprWithComments =
+        \\some_fn(arg1)? # Comment 1
+        \\    ->static_dispatch_method()? # Comment 2
+        \\    ->next_static_dispatch_method()? # Comment 3
+        \\    ->record_field?
     ;
     try exprFmtsSame(exprWithComments, .no_debug);
 }
