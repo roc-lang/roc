@@ -3,46 +3,33 @@ description=Various type declarations
 ~~~SOURCE
 module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
 
-Map a b : List(a), (a -> b) -> List(b)
+Map(a, b) : List(a), (a -> b) -> List(b)
 
 Foo : (Bar, Baz)
 
-Some a : { foo : Ok(a), bar : Something }
+Some(a) : { foo : Ok(a), bar : Something }
 
-Maybe a : [Some(a), None]
+Maybe(a) : [Some(a), None]
 
-SomeFunc a : Maybe(a), a -> Maybe(a)
+SomeFunc(a) : Maybe(a), a -> Maybe(a)
 
 MyType : U64
 
 MyType2 : Module.Thingy
 ~~~PROBLEMS
-PARSER: expected_colon_after_type_annotation
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
-PARSER: expr_unexpected_token
-PARSER: expected_colon_after_type_annotation
+NIL
 ~~~TOKENS
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),UpperIdent(1:9-1:12),Comma(1:12-1:13),UpperIdent(1:14-1:17),Comma(1:17-1:18),UpperIdent(1:19-1:23),Comma(1:23-1:24),UpperIdent(1:25-1:30),Comma(1:30-1:31),UpperIdent(1:32-1:40),Comma(1:40-1:41),LowerIdent(1:42-1:49),Comma(1:49-1:50),LowerIdent(1:51-1:56),CloseSquare(1:56-1:57),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(3:1-3:4),LowerIdent(3:5-3:6),LowerIdent(3:7-3:8),OpColon(3:9-3:10),UpperIdent(3:11-3:15),NoSpaceOpenRound(3:15-3:16),LowerIdent(3:16-3:17),CloseRound(3:17-3:18),Comma(3:18-3:19),OpenRound(3:20-3:21),LowerIdent(3:21-3:22),OpArrow(3:23-3:25),LowerIdent(3:26-3:27),CloseRound(3:27-3:28),OpArrow(3:29-3:31),UpperIdent(3:32-3:36),NoSpaceOpenRound(3:36-3:37),LowerIdent(3:37-3:38),CloseRound(3:38-3:39),Newline(1:1-1:1),
+UpperIdent(3:1-3:4),NoSpaceOpenRound(3:4-3:5),LowerIdent(3:5-3:6),Comma(3:6-3:7),LowerIdent(3:8-3:9),CloseRound(3:9-3:10),OpColon(3:11-3:12),UpperIdent(3:13-3:17),NoSpaceOpenRound(3:17-3:18),LowerIdent(3:18-3:19),CloseRound(3:19-3:20),Comma(3:20-3:21),OpenRound(3:22-3:23),LowerIdent(3:23-3:24),OpArrow(3:25-3:27),LowerIdent(3:28-3:29),CloseRound(3:29-3:30),OpArrow(3:31-3:33),UpperIdent(3:34-3:38),NoSpaceOpenRound(3:38-3:39),LowerIdent(3:39-3:40),CloseRound(3:40-3:41),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(5:1-5:4),OpColon(5:5-5:6),OpenRound(5:7-5:8),UpperIdent(5:8-5:11),Comma(5:11-5:12),UpperIdent(5:13-5:16),CloseRound(5:16-5:17),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(7:1-7:5),LowerIdent(7:6-7:7),OpColon(7:8-7:9),OpenCurly(7:10-7:11),LowerIdent(7:12-7:15),OpColon(7:16-7:17),UpperIdent(7:18-7:20),NoSpaceOpenRound(7:20-7:21),LowerIdent(7:21-7:22),CloseRound(7:22-7:23),Comma(7:23-7:24),LowerIdent(7:25-7:28),OpColon(7:29-7:30),UpperIdent(7:31-7:40),CloseCurly(7:41-7:42),Newline(1:1-1:1),
+UpperIdent(7:1-7:5),NoSpaceOpenRound(7:5-7:6),LowerIdent(7:6-7:7),CloseRound(7:7-7:8),OpColon(7:9-7:10),OpenCurly(7:11-7:12),LowerIdent(7:13-7:16),OpColon(7:17-7:18),UpperIdent(7:19-7:21),NoSpaceOpenRound(7:21-7:22),LowerIdent(7:22-7:23),CloseRound(7:23-7:24),Comma(7:24-7:25),LowerIdent(7:26-7:29),OpColon(7:30-7:31),UpperIdent(7:32-7:41),CloseCurly(7:42-7:43),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(9:1-9:6),LowerIdent(9:7-9:8),OpColon(9:9-9:10),OpenSquare(9:11-9:12),UpperIdent(9:12-9:16),NoSpaceOpenRound(9:16-9:17),LowerIdent(9:17-9:18),CloseRound(9:18-9:19),Comma(9:19-9:20),UpperIdent(9:21-9:25),CloseSquare(9:25-9:26),Newline(1:1-1:1),
+UpperIdent(9:1-9:6),NoSpaceOpenRound(9:6-9:7),LowerIdent(9:7-9:8),CloseRound(9:8-9:9),OpColon(9:10-9:11),OpenSquare(9:12-9:13),UpperIdent(9:13-9:17),NoSpaceOpenRound(9:17-9:18),LowerIdent(9:18-9:19),CloseRound(9:19-9:20),Comma(9:20-9:21),UpperIdent(9:22-9:26),CloseSquare(9:26-9:27),Newline(1:1-1:1),
 Newline(1:1-1:1),
-UpperIdent(11:1-11:9),LowerIdent(11:10-11:11),OpColon(11:12-11:13),UpperIdent(11:14-11:19),NoSpaceOpenRound(11:19-11:20),LowerIdent(11:20-11:21),CloseRound(11:21-11:22),Comma(11:22-11:23),LowerIdent(11:24-11:25),OpArrow(11:26-11:28),UpperIdent(11:29-11:34),NoSpaceOpenRound(11:34-11:35),LowerIdent(11:35-11:36),CloseRound(11:36-11:37),Newline(1:1-1:1),
+UpperIdent(11:1-11:9),NoSpaceOpenRound(11:9-11:10),LowerIdent(11:10-11:11),CloseRound(11:11-11:12),OpColon(11:13-11:14),UpperIdent(11:15-11:20),NoSpaceOpenRound(11:20-11:21),LowerIdent(11:21-11:22),CloseRound(11:22-11:23),Comma(11:23-11:24),LowerIdent(11:25-11:26),OpArrow(11:27-11:29),UpperIdent(11:30-11:35),NoSpaceOpenRound(11:35-11:36),LowerIdent(11:36-11:37),CloseRound(11:37-11:38),Newline(1:1-1:1),
 Newline(1:1-1:1),
 UpperIdent(13:1-13:7),OpColon(13:8-13:9),UpperIdent(13:10-13:13),Newline(1:1-1:1),
 Newline(1:1-1:1),
@@ -57,60 +44,48 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
         (exposed_item (upper_ident "SomeFunc"))
         (exposed_item (lower_ident "add_one"))
         (exposed_item (lower_ident "main!")))
-    (malformed_stmt (3:1-3:6) "expected_colon_after_type_annotation")
-    (type_anno (3:7-5:4)
-        "b"
-        (fn (3:11-3:39)
-            (apply (3:32-3:39)
+    (type_decl (3:1-5:4)
+        (header
+            "Map"
+            (ty_var (3:5-3:6) "a")
+            (ty_var (3:8-3:9) "b"))
+        (fn (3:13-3:41)
+            (apply (3:34-3:41)
                 (ty "List")
-                (ty_var (3:37-3:38) "b"))
-            (apply (3:11-3:18)
+                (ty_var (3:39-3:40) "b"))
+            (apply (3:13-3:20)
                 (ty "List")
-                (ty_var (3:16-3:17) "a"))
-            (fn (3:21-3:27)
-                (ty_var (3:26-3:27) "b")
-                (ty_var (3:21-3:22) "a"))))
+                (ty_var (3:18-3:19) "a"))
+            (fn (3:23-3:29)
+                (ty_var (3:28-3:29) "b")
+                (ty_var (3:23-3:24) "a"))))
     (type_decl (5:1-7:5)
         (header "Foo")
         (tuple (5:7-5:17)
             (ty "Bar")
             (ty "Baz")))
-    (malformed_stmt (7:1-7:7) "expected_colon_after_type_annotation")
-    (malformed_expr (7:8-7:9) "expr_unexpected_token")
-    (record (7:10-7:42)
-        (field
-            "foo"
-            (apply (7:18-7:23)
-                (tag (7:18-7:20) "Ok")
-                (ident (7:21-7:22) "" "a")))
-        (field "bar" (tag (7:31-7:40) "Something")))
-    (malformed_stmt (9:1-9:8) "expected_colon_after_type_annotation")
-    (malformed_expr (9:9-9:10) "expr_unexpected_token")
-    (list (9:11-9:26)
-        (apply (9:12-9:19)
-            (tag (9:12-9:16) "Some")
-            (ident (9:17-9:18) "" "a"))
-        (tag (9:21-9:25) "None"))
-    (malformed_stmt (11:1-11:11) "expected_colon_after_type_annotation")
-    (malformed_expr (11:12-11:13) "expr_unexpected_token")
-    (malformed_stmt (11:14-11:23) "expected_colon_after_type_annotation")
-    (ident (11:24-11:25) "" "a")
-    (malformed_expr (11:26-11:28) "expr_unexpected_token")
-    (malformed_stmt (11:29-13:7) "expected_colon_after_type_annotation")
-    (malformed_expr (13:8-13:9) "expr_unexpected_token")
-    (malformed_stmt (13:10-15:8) "expected_colon_after_type_annotation")
-    (malformed_expr (15:9-15:10) "expr_unexpected_token")
-    (malformed_stmt (15:11-15:24) "expected_colon_after_type_annotation"))
+    (type_decl (7:1-9:6)
+        (header "Some" (ty_var (7:6-7:7) "a"))
+        (record (7:11-7:43) "<field>" "<field>"))
+    (type_decl (9:1-11:9)
+        (header "Maybe" (ty_var (9:7-9:8) "a"))
+        (tag_union (9:12-9:27) "TODO tags" "TODO open_anno"))
+    (type_decl (11:1-13:7)
+        (header "SomeFunc" (ty_var (11:10-11:11) "a"))
+        (fn (11:15-11:38)
+            (apply (11:30-11:38)
+                (ty "Maybe")
+                (ty_var (11:36-11:37) "a"))
+            (apply (11:15-11:23)
+                (ty "Maybe")
+                (ty_var (11:21-11:22) "a"))
+            (ty_var (11:25-11:26) "a")))
+    (type_decl (13:1-15:8)
+        (header "MyType")
+        (ty "U64"))
+    (type_decl (15:1-15:24)
+        (header "MyType2")
+        (mod_ty "Module" ".Thingy")))
 ~~~FORMATTED
-module [Map, Foo, Some, Maybe, SomeFunc, add_one, main!]
-
-b : List(a), (a -> b) -> List(b)
-
-Foo : (Bar, Baz)
-
-{ foo: Ok(a), bar: Something }
-
-[Some(a), None]
-
-a
+NO CHANGE
 ~~~END

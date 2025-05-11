@@ -3110,6 +3110,16 @@ pub const NodeStore = struct {
                     node.appendNodeChild(env.gpa, &child);
                     return node;
                 },
+                .local_dispatch => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "local_dispatch");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
+
+                    var left = ir.store.getExpr(a.left).toSExpr(env, ir, line_starts);
+                    var right = ir.store.getExpr(a.right).toSExpr(env, ir, line_starts);
+                    node.appendNodeChild(env.gpa, &left);
+                    node.appendNodeChild(env.gpa, &right);
+                    return node;
+                },
                 // (binop <op> <lhs> <rhs>)
                 .bin_op => |a| {
                     return a.toSExpr(env, ir, line_starts);
