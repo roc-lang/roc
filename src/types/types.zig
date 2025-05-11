@@ -76,13 +76,47 @@ pub const Mark = enum(u32) {
 /// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
 /// details
 pub const Content = union(enum) {
-    flex_var: ?SmallStringInterner.Idx,
-    rigid_var: SmallStringInterner.Idx,
+    const Self = @This();
+
+    flex_var: ?Ident.Idx,
+    rigid_var: Ident.Idx,
     alias: Alias,
     effectful,
     pure,
     structure: FlatType,
     err,
+
+    // helpers //
+
+    /// Unwrap a record or return null
+    pub fn unwrapRecord(content: Self) ?Record {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .record => |record| {
+                        return record;
+                    },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
+
+    /// Unwrap a tag union or return null
+    pub fn unwrapTagUnion(content: Self) ?TagUnion {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .tag_union => |tag_union| {
+                        return tag_union;
+                    },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
 };
 
 // alias //

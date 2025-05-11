@@ -10,7 +10,7 @@ const collections = @import("../../collections.zig");
 const Region = base.Region;
 
 /// todo
-const Type = types.Type;
+const TypeVar = types.Var;
 
 const CanIR = @import("../canonicalize/IR.zig");
 
@@ -22,9 +22,9 @@ exprs: Expr.List,
 destructs: DestructureDef.List,
 function_bodies: FunctionDef.List,
 function_args: FunctionDef.Arg.List,
-type_indices: collections.SafeList(Type.Idx),
+type_indices: collections.SafeList(TypeVar),
 declarations: DeclarationTag.List,
-host_exposed_annotations: std.AutoHashMap(usize, Type.Idx),
+host_exposed_annotations: std.AutoHashMap(usize, TypeVar),
 
 /// initialise an empty IR
 pub fn init(env: *base.ModuleEnv) Self {
@@ -37,7 +37,7 @@ pub fn init(env: *base.ModuleEnv) Self {
         .function_args = .{},
         .type_indices = .{},
         .declarations = .{},
-        .host_exposed_annotations = std.AutoHashMap(usize, Type.Idx).init(env.gpa),
+        .host_exposed_annotations = std.AutoHashMap(usize, TypeVar).init(env.gpa),
     };
 }
 
@@ -85,19 +85,19 @@ pub const DeclarationTag = union(enum) {
 };
 
 /// Marks whether a recursive let-cycle was determined to be illegal during solving.
-pub const IllegalCycleMark = ?Type.Idx;
+pub const IllegalCycleMark = ?TypeVar;
 
 /// todo
 pub const FunctionDef = struct {
-    closure_type: Type.Idx,
-    return_type: Type.Idx,
-    fx_type: Type.Idx,
+    closure_type: TypeVar,
+    return_type: TypeVar,
+    fx_type: TypeVar,
     // early_returns: std.ArrayList(CanIR.EarlyReturn),
     arguments: Arg.Range,
 
     /// todo
     pub const Arg = struct {
-        type: Type.Idx,
+        type: TypeVar,
         pattern: Pattern.Idx,
         region: Region,
 

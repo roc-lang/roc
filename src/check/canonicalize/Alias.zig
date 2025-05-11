@@ -8,7 +8,7 @@ const collections = @import("../../collections.zig");
 
 const Region = base.Region;
 const Problem = problem_mod.Problem;
-const TypeIdx = types.Type.Idx;
+const TypeVar = types.Var;
 const Ident = base.Ident;
 
 name: Ident.Idx,
@@ -44,7 +44,7 @@ pub const Kind = union(enum) {
 /// The data for a nominal alias, e.g. `Foo := [Foo(Str)]`
 pub const Nominal = struct {
     type_variables: Var.Range,
-    recursion_variables: std.AutoHashMap(TypeIdx, Ident.Idx),
+    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
 };
 /// The data for a structural alias, e.g. `Foo : { bar : Str }`
 pub const Structural = struct {
@@ -60,7 +60,7 @@ pub const Malformed = struct {
 pub const Var = struct {
     name: Ident.Idx,
     region: Region,
-    type_var: TypeIdx,
+    type_var: TypeVar,
 
     /// A list of alias type variables.
     pub const List = collections.SafeMultiList(@This());

@@ -3,6 +3,7 @@
 
 const std = @import("std");
 
+const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const types = @import("./types.zig");
 
@@ -43,7 +44,7 @@ pub const Slot = union(enum) {
 pub const Store = struct {
     const Self = @This();
 
-    gpa: std.mem.Allocator,
+    env: *base.ModuleEnv,
 
     // Slots & descriptors
     slots: SlotStore,
@@ -59,23 +60,23 @@ pub const Store = struct {
     tag_args: VarSafeList,
 
     /// Init the unification table
-    pub fn init(gpa: std.mem.Allocator) Self {
+    pub fn init(env: *base.ModuleEnv) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
         return .{
-            .gpa = gpa,
+            .env = env,
 
             // slots & descriptors
-            .descs = DescStore.init(gpa, 64),
-            .slots = SlotStore.init(gpa, 64),
+            .descs = DescStore.init(env.gpa, 1024),
+            .slots = SlotStore.init(env.gpa, 1024),
 
             // everything else
-            .alias_args = VarSafeList.initCapacity(gpa, 64),
-            .tuple_elems = VarSafeList.initCapacity(gpa, 64),
-            .type_apply_args = VarSafeList.initCapacity(gpa, 64),
-            .func_args = VarSafeList.initCapacity(gpa, 64),
-            .record_fields = RecordFieldSafeMultiList.initCapacity(gpa, 64),
-            .tags = TagSafeMultiList.initCapacity(gpa, 64),
-            .tag_args = VarSafeList.initCapacity(gpa, 64),
+            .alias_args = VarSafeList.initCapacity(env.gpa, 512),
+            .tuple_elems = VarSafeList.initCapacity(env.gpa, 512),
+            .type_apply_args = VarSafeList.initCapacity(env.gpa, 512),
+            .func_args = VarSafeList.initCapacity(env.gpa, 512),
+            .record_fields = RecordFieldSafeMultiList.initCapacity(env.gpa, 512),
+            .tags = TagSafeMultiList.initCapacity(env.gpa, 512),
+            .tag_args = VarSafeList.initCapacity(env.gpa, 512),
         };
     }
 
@@ -86,13 +87,13 @@ pub const Store = struct {
         self.slots.deinit();
 
         // everything else
-        self.alias_args.deinit(self.gpa);
-        self.tuple_elems.deinit(self.gpa);
-        self.type_apply_args.deinit(self.gpa);
-        self.func_args.deinit(self.gpa);
-        self.record_fields.deinit(self.gpa);
-        self.tags.deinit(self.gpa);
-        self.tag_args.deinit(self.gpa);
+        self.alias_args.deinit(self.env.gpa);
+        self.tuple_elems.deinit(self.env.gpa);
+        self.type_apply_args.deinit(self.env.gpa);
+        self.func_args.deinit(self.env.gpa);
+        self.record_fields.deinit(self.env.gpa);
+        self.tags.deinit(self.env.gpa);
+        self.tag_args.deinit(self.env.gpa);
     }
 
     // fresh variables //
@@ -129,37 +130,37 @@ pub const Store = struct {
 
     /// Append a slice of alias args to the backing list, returning the range
     pub fn appendAliasArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.alias_args.appendSlice(self.gpa, slice);
+        return self.alias_args.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of tuple elems to the backing list, returning the range
     pub fn appendTupleElems(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tuple_elems.appendSlice(self.gpa, slice);
+        return self.tuple_elems.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of type apply args to the backing list, returning the range
     pub fn appendTypeApplyArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.type_apply_args.appendSlice(self.gpa, slice);
+        return self.type_apply_args.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of func args to the backing list, returning the range
     pub fn appendFuncArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.func_args.appendSlice(self.gpa, slice);
+        return self.func_args.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of record fields to the backing list, returning the range
     pub fn appendRecordFields(self: *Self, slice: []const RecordField) RecordFieldSafeMultiList.Range {
-        return self.record_fields.appendSlice(self.gpa, slice);
+        return self.record_fields.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of tags to the backing list, returning the range
     pub fn appendTags(self: *Self, slice: []const Tag) TagSafeMultiList.Range {
-        return self.tags.appendSlice(self.gpa, slice);
+        return self.tags.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of tag args to the backing list, returning the range
     pub fn appendTagArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.tag_args.appendSlice(self.gpa, slice);
+        return self.tag_args.appendSlice(self.env.gpa, slice);
     }
 
     // sub list getters //
@@ -387,7 +388,10 @@ const DescStore = struct {
 test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var store = Store.init(&module_env);
     defer store.deinit();
 
     const c = store.fresh();
@@ -404,7 +408,10 @@ test "resolveVarAndCompressPath - flattens redirect chain to flex_var" {
 test "resolveVarAndCompressPath - no-op on already root" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var store = Store.init(&module_env);
     defer store.deinit();
 
     const num = types.Content{ .structure = types.num_flex_var };
@@ -420,7 +427,10 @@ test "resolveVarAndCompressPath - no-op on already root" {
 test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     const gpa = std.testing.allocator;
 
-    var store = Store.init(gpa);
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var store = Store.init(&module_env);
     defer store.deinit();
 
     const num = types.Content{ .structure = types.num_flex_var };
