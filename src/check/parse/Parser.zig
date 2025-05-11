@@ -1491,10 +1491,43 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
     }
     if (expr) |e| {
         var expression = self.parseExprSuffix(start, e);
-        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent) {
+        while (self.peek() == .NoSpaceDotInt or self.peek() == .NoSpaceDotLowerIdent or self.peek() == .DotLowerIdent or self.peek() == .OpArrow) {
             const tok = self.peek();
             if (tok == .NoSpaceDotInt) {
                 return self.pushMalformed(IR.NodeStore.ExprIdx, .expr_no_space_dot_int, self.pos);
+            } else if (self.peek() == .OpArrow) {
+                const s = self.pos;
+                self.advance();
+                if (self.peek() == .LowerIdent) {
+                    const ident = self.store.addExpr(.{ .ident = .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .token = self.pos,
+                        .qualifier = null,
+                    } });
+                    self.advance();
+                    const ident_suffixed = self.parseExprSuffix(s, ident);
+                    expression = self.store.addExpr(.{ .local_dispatch = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = s,
+                        .left = expression,
+                        .right = ident_suffixed,
+                    } });
+                } else if (self.peek() == .UpperIdent) { // UpperIdent - should be a tag
+                    const tag = self.store.addExpr(.{ .tag = .{
+                        .region = .{ .start = self.pos, .end = self.pos },
+                        .token = self.pos,
+                    } });
+                    self.advance();
+                    const ident_suffixed = self.parseExprSuffix(s, tag);
+                    expression = self.store.addExpr(.{ .local_dispatch = .{
+                        .region = .{ .start = start, .end = self.pos },
+                        .operator = s,
+                        .left = expression,
+                        .right = ident_suffixed,
+                    } });
+                } else {
+                    return self.pushMalformed(IR.NodeStore.ExprIdx, .expr_arrow_expects_ident, self.pos);
+                }
             } else { // NoSpaceDotLowerIdent
                 const s = self.pos;
                 const ident = self.store.addExpr(.{ .ident = .{

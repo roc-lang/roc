@@ -163,6 +163,7 @@ pub const Diagnostic = struct {
         where_expected_var_or_module,
         import_must_be_top_level,
         invalid_type_arg,
+        expr_arrow_expects_ident,
     };
 };
 
@@ -513,6 +514,11 @@ pub const Node = struct {
         /// Example: EXAMPLE
         /// * lhs - LHS DESCRIPTION
         /// * rhs - RHS DESCRIPTION
+        local_dispatch,
+        /// DESCRIPTION
+        /// Example: EXAMPLE
+        /// * lhs - node index of left expression
+        /// * rhs - node index of right expression
         bin_op,
         /// DESCRIPTION
         /// Example: EXAMPLE
@@ -1125,6 +1131,13 @@ pub const NodeStore = struct {
                 node.region = fa.region;
                 node.data.lhs = fa.left.id;
                 node.data.rhs = fa.right.id;
+            },
+            .local_dispatch => |ld| {
+                node.tag = .local_dispatch;
+                node.region = ld.region;
+                node.main_token = ld.operator;
+                node.data.lhs = ld.left.id;
+                node.data.rhs = ld.right.id;
             },
             .bin_op => |op| {
                 node.tag = .bin_op;
@@ -1815,6 +1828,14 @@ pub const NodeStore = struct {
             },
             .field_access => {
                 return .{ .field_access = .{
+                    .left = .{ .id = node.data.lhs },
+                    .right = .{ .id = node.data.rhs },
+                    .operator = node.main_token,
+                    .region = node.region,
+                } };
+            },
+            .local_dispatch => {
+                return .{ .local_dispatch = .{
                     .left = .{ .id = node.data.lhs },
                     .right = .{ .id = node.data.rhs },
                     .operator = node.main_token,
@@ -2895,6 +2916,7 @@ pub const NodeStore = struct {
             region: Region,
         },
         field_access: BinOp,
+        local_dispatch: BinOp,
         bin_op: BinOp,
         suffix_single_question: Unary,
         unary_op: Unary,
@@ -3086,6 +3108,16 @@ pub const NodeStore = struct {
 
                     var child = a.toSExpr(env, ir, line_starts);
                     node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                .local_dispatch => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "local_dispatch");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
+
+                    var left = ir.store.getExpr(a.left).toSExpr(env, ir, line_starts);
+                    var right = ir.store.getExpr(a.right).toSExpr(env, ir, line_starts);
+                    node.appendNodeChild(env.gpa, &left);
+                    node.appendNodeChild(env.gpa, &right);
                     return node;
                 },
                 // (binop <op> <lhs> <rhs>)
