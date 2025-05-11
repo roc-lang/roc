@@ -10,7 +10,7 @@ const Ident = base.Ident;
 const Region = base.Region;
 const ModuleImport = base.ModuleImport;
 const StringLiteral = base.StringLiteral;
-const TypeIdx = types.Type.Idx;
+const TypeVar = types.Var;
 const Problem = problem.Problem;
 const Self = @This();
 
@@ -26,7 +26,7 @@ when_branches: WhenBranch.List,
 patterns: Pattern.List,
 patterns_at_regions: PatternAtRegion.List,
 typed_patterns_at_regions: TypedPatternAtRegion.List,
-type_indices: collections.SafeList(TypeIdx),
+type_indices: collections.SafeList(TypeVar),
 // type_var_names: Ident.Store,
 ingested_files: IngestedFile.List,
 
@@ -82,7 +82,7 @@ pub fn deinit(self: *Self) void {
 }
 
 // Helper to add type index info
-fn appendTypeVarChild(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeIdx) void {
+fn appendTypeVarChild(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u8, type_idx: TypeVar) void {
     var type_node = sexpr.Expr.init(gpa, name);
     type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
     node.appendNodeChild(gpa, &type_node);
@@ -98,7 +98,7 @@ fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, env: *const base.
 
 /// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
-    named: std.AutoHashMap(TypeIdx, Ident.Idx),
+    named: std.AutoHashMap(TypeVar, Ident.Idx),
     // with_methods: std.AutoHashMap(TypeVar, WithMethods),
 
     // pub const WithMethods = struct {
@@ -115,7 +115,7 @@ pub const Expr = union(enum) {
     // Num stores the `a` variable in `Num a`. Not the same as the variable
     // stored in Int and Float below, which is strictly for better error messages
     num: struct {
-        num_var: TypeIdx,
+        num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Num,
@@ -123,15 +123,15 @@ pub const Expr = union(enum) {
 
     // Int and Float store a variable to generate better error messages
     int: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
     float: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
@@ -139,25 +139,25 @@ pub const Expr = union(enum) {
     str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
     single_quote: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         value: u32,
         bound: types.num.Bound.SingleQuote,
     },
     list: struct {
-        elem_var: TypeIdx,
+        elem_var: TypeVar,
         elems: ExprAtRegion.Range,
     },
 
     @"var": struct {
         ident: Ident.Idx,
-        type_var: TypeIdx,
+        type_var: TypeVar,
     },
 
     when: When.Idx,
     @"if": struct {
-        cond_var: TypeIdx,
-        branch_var: TypeIdx,
+        cond_var: TypeVar,
+        branch_var: TypeVar,
         branches: IfBranch.Range,
         final_else: ExprAtRegion.Idx,
     },
@@ -181,7 +181,7 @@ pub const Expr = union(enum) {
 
     // Product Types
     record: struct {
-        record_var: TypeIdx,
+        record_var: TypeVar,
         // TODO:
         // fields: SendMap<Lowercase, Field>,
     },
@@ -192,30 +192,30 @@ pub const Expr = union(enum) {
     /// The "crash" keyword
     crash: struct {
         msg: ExprAtRegion.Idx,
-        ret_var: TypeIdx,
+        ret_var: TypeVar,
     },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     record_access: struct {
-        record_var: TypeIdx,
-        ext_var: TypeIdx,
-        field_var: TypeIdx,
+        record_var: TypeVar,
+        ext_var: TypeVar,
+        field_var: TypeVar,
         loc_expr: ExprAtRegion.Idx,
         field: Ident.Idx,
     },
 
     // Sum Types
     tag: struct {
-        tag_union_var: TypeIdx,
-        ext_var: TypeIdx,
+        tag_union_var: TypeVar,
+        ext_var: TypeVar,
         name: Ident.Idx,
         args: TypedExprAtRegion.Range,
     },
 
     zero_argument_tag: struct {
         closure_name: Ident.Idx,
-        variant_var: TypeIdx,
-        ext_var: TypeIdx,
+        variant_var: TypeVar,
+        ext_var: TypeVar,
         name: Ident.Idx,
     },
 
@@ -463,7 +463,7 @@ pub const Def = struct {
     pattern_region: Region,
     expr: Expr.Idx,
     expr_region: Region,
-    expr_var: TypeIdx,
+    expr_var: TypeVar,
     // TODO:
     // pattern_vars: SendMap<Symbol, Variable>,
     annotation: ?Annotation,
@@ -473,9 +473,9 @@ pub const Def = struct {
         /// A def that introduces identifiers
         Let,
         /// A standalone statement with an fx variable
-        Stmt: TypeIdx,
+        Stmt: TypeVar,
         /// Ignored result, must be effectful
-        Ignored: TypeIdx,
+        Ignored: TypeVar,
 
         pub fn toSExpr(self: *const @This(), gpa: std.mem.Allocator) sexpr.Expr {
             switch (self.*) {
@@ -535,7 +535,7 @@ pub const Def = struct {
 
 /// todo
 pub const Annotation = struct {
-    signature: TypeIdx,
+    signature: TypeVar,
     // introduced_variables: IntroducedVariables,
     // aliases: VecMap<Symbol, Alias>,
     region: Region,
@@ -586,7 +586,7 @@ pub const ExprAtRegion = struct {
 /// todo
 pub const TypedExprAtRegion = struct {
     expr: Expr.Idx,
-    type_var: TypeIdx,
+    type_var: TypeVar,
     region: Region,
 
     /// todo
@@ -608,9 +608,9 @@ pub const TypedExprAtRegion = struct {
 
 /// todo
 pub const Function = struct {
-    return_var: TypeIdx,
-    fx_var: TypeIdx,
-    function_var: TypeIdx,
+    return_var: TypeVar,
+    fx_var: TypeVar,
+    function_var: TypeVar,
     expr: Expr.Idx,
     region: Region,
 
@@ -634,14 +634,14 @@ pub const IfBranch = struct {
 pub const When = struct {
     /// The actual condition of the when expression.
     loc_cond: ExprAtRegion.Idx,
-    cond_var: TypeIdx,
+    cond_var: TypeVar,
     /// Type of each branch (and therefore the type of the entire `when` expression)
-    expr_var: TypeIdx,
+    expr_var: TypeVar,
     region: Region,
     /// The branches of the when, and the type of the condition that they expect to be matched
     /// against.
     branches: WhenBranch.Range,
-    branches_cond_var: TypeIdx,
+    branches_cond_var: TypeVar,
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
 
@@ -760,45 +760,45 @@ pub const Pattern = union(enum) {
         ident: Ident.Idx,
     },
     applied_tag: struct {
-        whole_var: TypeIdx,
-        ext_var: TypeIdx,
+        whole_var: TypeVar,
+        ext_var: TypeVar,
         tag_name: Ident.Idx,
         arguments: TypedPatternAtRegion.Range,
     },
     record_destructure: struct {
-        whole_var: TypeIdx,
-        ext_var: TypeIdx,
+        whole_var: TypeVar,
+        ext_var: TypeVar,
         destructs: RecordDestruct.Range,
     },
     list: struct {
-        list_var: TypeIdx,
-        elem_var: TypeIdx,
+        list_var: TypeVar,
+        elem_var: TypeVar,
         patterns: Pattern.Range,
     },
     num_literal: struct {
-        num_var: TypeIdx,
+        num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Num,
     },
     int_literal: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
         bound: types.num.Bound.Int,
     },
     float_literal: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
         bound: types.num.Bound.Float,
     },
     str_literal: StringLiteral.Idx,
     char_literal: struct {
-        num_var: TypeIdx,
-        precision_var: TypeIdx,
+        num_var: TypeVar,
+        precision_var: TypeVar,
         value: u32,
         bound: types.num.Bound.SingleQuote,
     },
@@ -952,7 +952,7 @@ pub const PatternAtRegion = struct {
 pub const TypedPatternAtRegion = struct {
     pattern: Pattern.Idx,
     region: Region,
-    type_var: TypeIdx,
+    type_var: TypeVar,
 
     pub const List = collections.SafeMultiList(@This());
     pub const Idx = List.Idx;
@@ -972,7 +972,7 @@ pub const TypedPatternAtRegion = struct {
 
 /// todo
 pub const RecordDestruct = struct {
-    type_var: TypeIdx,
+    type_var: TypeVar,
     region: Region,
     label: Ident.Idx,
     ident: Ident.Idx,
@@ -1018,10 +1018,10 @@ pub const RecordDestruct = struct {
 };
 
 /// Marks whether a when branch is redundant using a variable.
-pub const RedundantMark = TypeIdx;
+pub const RedundantMark = TypeVar;
 
 /// Marks whether a when expression is exhaustive using a variable.
-pub const ExhaustiveMark = TypeIdx;
+pub const ExhaustiveMark = TypeVar;
 
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
@@ -1070,14 +1070,14 @@ pub const Content = union(enum) {
     RigidVar: Ident.Idx,
     /// name given to a recursion variable
     RecursionVar: struct {
-        structure: TypeIdx,
+        structure: TypeVar,
         opt_name: ?Ident.Idx,
     },
     Structure: FlatType,
     Alias: struct {
         ident: Ident.Idx,
         // vars: AliasVariables,
-        type_var: TypeIdx,
+        type_var: TypeVar,
         kind: Alias.Kind,
     },
     RangedNumber: types.num.NumericRange,
@@ -1091,17 +1091,17 @@ pub const Content = union(enum) {
 pub const FlatType = union(enum) {
     Apply: struct {
         ident: Ident.Idx,
-        vars: collections.SafeList(TypeIdx).Range,
+        vars: collections.SafeList(TypeVar).Range,
     },
     Func: struct {
-        arg_vars: collections.SafeList(TypeIdx).Range,
-        ret_var: TypeIdx,
-        fx: TypeIdx,
+        arg_vars: collections.SafeList(TypeVar).Range,
+        ret_var: TypeVar,
+        fx: TypeVar,
     },
     /// A function that we know nothing about yet except that it's effectful
     EffectfulFunc,
     Record: struct {
-        whole_var: TypeIdx,
+        whole_var: TypeVar,
         fields: RecordField.Range,
     },
     // TagUnion: struct {
@@ -1130,7 +1130,7 @@ pub const FlatType = union(enum) {
     /// todo
     pub const RecordField = struct {
         name: Ident.Idx,
-        type_var: TypeIdx,
+        type_var: TypeVar,
         // type: Reco,
 
         /// todo
@@ -1158,7 +1158,7 @@ pub const TagExt = union(enum) {
     /// ```
     ///
     /// as an error rather than resolving as [A][B].
-    Openness: TypeIdx,
+    Openness: TypeVar,
     /// This tag extension can grow unboundedly.
-    Any: TypeIdx,
+    Any: TypeVar,
 };

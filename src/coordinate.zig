@@ -25,7 +25,6 @@ const Package = base.Package;
 const PackageUrl = base.PackageUrl;
 const ModuleWork = base.ModuleWork;
 const ModuleWorkIdx = base.ModuleWorkIdx;
-const Type = types.Type;
 const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -43,7 +42,7 @@ pub const TypecheckResult = union(enum) {
         main_module_idx: ModuleWorkIdx,
         can_irs: ModuleWork(can.IR).Store,
         resolve_irs: ModuleWork(resolve.IR).Store,
-        type_stores: ModuleWork(Type.Store).Store,
+        type_stores: ModuleWork(types.Store).Store,
     };
 
     /// Failure to typecheck a module.
@@ -136,7 +135,7 @@ pub fn typecheckModule(
         resolve.resolveImports(resolve_irs.getWork(idx), can_irs.getWork(idx), &resolve_irs);
     }
 
-    const type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
+    const type_stores = ModuleWork(types.Store).Store.initFromCanIrs(gpa, &can_irs);
     index_iter = type_stores.iterIndices();
     while (index_iter.next()) |idx| {
         check_types.checkTypes(type_stores.getWork(idx), resolve_irs.getWork(idx), &resolve_irs, &type_stores);

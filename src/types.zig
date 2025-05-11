@@ -1,46 +1,56 @@
-pub const num = @import("types/num.zig");
+const store = @import("./types/store.zig");
+const types = @import("./types/types.zig");
 
-pub const Type = @import("types/type.zig").Type;
+/// Numbers
+pub const num = @import("./types/num.zig");
 
-// todo -- we probably don't need this anymmore.. remove in follow-up PR
-/// Lowest level of the type system, representing the most fundamental or atomic types
-pub const Primitive = union(enum) {
-    Int: Int,
-    Float: Float,
-    Bool,
-    Str,
-    Crash,
-};
+/// Type Store
+pub const Store = store.Store;
 
-/// All Roc Int types
-pub const Int = enum {
-    U8,
-    I8,
-    U16,
-    I16,
-    U32,
-    I32,
-    U64,
-    I64,
-    U128,
-    I128,
-};
+/// Type Slot
+pub const Slot = store.Slot;
 
-/// All Roc Float types
-pub const Float = enum {
-    F32,
-    F64,
-    Dec,
-};
+/// Type Var
+pub const Var = types.Var;
 
-/// Roc Num types; Int and Float
-pub const Num = union(enum) {
-    Int: Int,
-    Float: Float,
-};
+/// Type Desc
+pub const Desc = types.Descriptor;
 
-/// Marks whether a when branch is redundant using a variable.
-pub const RedundantMark = struct { redundant_mark: Type.Idx };
+/// Type Rank
+pub const Rank = types.Rank;
 
-/// Marks whether a when expression is exhaustive using a variable.
-pub const ExhaustiveMark = struct { exhaustive_mark: Type.Idx };
+/// Type Mark
+pub const Mark = types.Mark;
+
+/// Type Content
+pub const Content = types.Content;
+
+/// Type Alias
+pub const Alias = types.Alias;
+
+/// Type FlatType
+pub const FlatType = types.FlatType;
+
+/// Type TypeApply
+pub const TypeApply = types.TypeApply;
+
+/// Type Tuple
+pub const Tuple = types.Tuple;
+
+/// Type Num
+pub const Num = types.Num;
+
+/// Type Func
+pub const Func = types.Func;
+
+/// Type Record
+pub const Record = types.Record;
+
+/// Type RecordField
+pub const RecordField = types.RecordField;
+
+/// Type TagUnion
+pub const TagUnion = types.TagUnion;
+
+/// Type Tag
+pub const Tag = types.Tag;
