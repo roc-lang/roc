@@ -619,7 +619,7 @@ pub fn test(matches: &ArgMatches, target: Target) -> io::Result<i32> {
                 return handle_loading_problem(problem);
             }
             Err(LoadMonomorphizedError::ErrorModule(module)) => {
-                return handle_error_module(module, start_time.elapsed(), path.as_os_str(), false);
+                return handle_error_module(module, start_time.elapsed());
             }
         };
         let problems = report_problems_monomorphized(&mut loaded);
@@ -1133,7 +1133,7 @@ pub fn build(
             }
         }
         Err(BuildFileError::ErrorModule { module, total_time }) => {
-            handle_error_module(module, total_time, path.as_os_str(), true)
+            handle_error_module(module, total_time)
         }
         Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
     }

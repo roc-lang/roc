@@ -1,9 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_dev_out.normalize_stdout_and_stderr()
-snapshot_kind: text
 ---
-
 ── TOO MANY ARGS in tests/test-projects/module_params/arity_mismatch.roc ───────
 
 The get_user function expects 1 argument, but it got 2 instead:
@@ -36,6 +34,4 @@ make partial application explicit.
 
 ────────────────────────────────────────────────────────────────────────────────
 
-3 errors and 0 warnings found in <ignored for test> ms.
-
-You can run <ignored for tests>
+3 errors and 0 warnings found in <ignored for test> ms

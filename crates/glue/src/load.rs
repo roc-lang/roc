@@ -189,7 +189,7 @@ pub fn generate(
                     Ok(0)
                 }
                 Err(BuildFileError::ErrorModule { module, total_time }) => {
-                    handle_error_module(module, total_time, spec_path.as_os_str(), true)
+                    handle_error_module(module, total_time)
                 }
                 Err(BuildFileError::LoadingProblem(problem)) => handle_loading_problem(problem),
             };
