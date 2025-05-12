@@ -992,7 +992,7 @@ pub fn build(
         .map(|x| x * 1024);
 
     let build_ordering = match config {
-        BuildAndRunIfNoErrors => BuildOrdering::BuildIfChecks,
+        BuildAndRunIfNoErrors | BuildOnly => BuildOrdering::BuildIfChecks,
         _ => BuildOrdering::AlwaysBuild,
     };
 
