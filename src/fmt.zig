@@ -462,6 +462,40 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(e.body);
                 return .extra_newline_needed;
             },
+            .@"for" => |f| {
+                try fmt.pushAll("for");
+                const patt_region = fmt.nodeRegion(f.patt.id);
+                if (multiline and try fmt.flushCommentsBefore(patt_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatPattern(f.patt);
+                if (multiline and try fmt.flushCommentsAfter(patt_region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.pushAll("in");
+                const expr_region = fmt.nodeRegion(f.expr.id);
+                if (multiline and try fmt.flushCommentsBefore(expr_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(f.expr);
+                if (multiline and try fmt.flushCommentsAfter(expr_region.end)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(f.body);
+                return .extra_newline_needed;
+            },
             .crash => |c| {
                 try fmt.pushAll("crash");
                 const body_region = fmt.nodeRegion(c.expr.id);
@@ -2486,6 +2520,10 @@ test "Syntax grab bag" {
         \\        456, # Comment two
         \\        789, # Comment three
         \\    ]
+        \\    for n in list {
+        \\        Stdout.line!("Adding ${n} to ${number}")
+        \\        number = number + n
+        \\    }
         \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
         \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
         \\    multiline_tuple = (

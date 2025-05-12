@@ -167,6 +167,7 @@ pub const Diagnostic = struct {
         var_only_allowed_in_a_body,
         var_must_have_ident,
         var_expected_equals,
+        for_expected_in,
     };
 };
 
@@ -266,6 +267,11 @@ pub const Node = struct {
         /// * lhs - node index for block or expr
         /// * rhs - ignored
         expect,
+        /// A for statement
+        /// * main_token - node index for pattern for loop variable
+        /// * lhs - node index for loop initializing expression
+        /// * rhs - node index for loop body expression
+        @"for",
         /// An early return statement
         /// * lhs - node index for expr
         /// * rhs - ignored
@@ -924,6 +930,13 @@ pub const NodeStore = struct {
                 node.tag = .expect;
                 node.data.lhs = e.body.id;
                 node.region = e.region;
+            },
+            .@"for" => |f| {
+                node.tag = .@"for";
+                node.main_token = f.patt.id;
+                node.data.lhs = f.expr.id;
+                node.data.rhs = f.body.id;
+                node.region = f.region;
             },
             .@"return" => |r| {
                 node.tag = .@"return";
@@ -1638,6 +1651,14 @@ pub const NodeStore = struct {
             .expect => {
                 return .{ .expect = .{
                     .body = .{ .id = node.data.lhs },
+                    .region = node.region,
+                } };
+            },
+            .@"for" => {
+                return .{ .@"for" = .{
+                    .patt = .{ .id = node.main_token },
+                    .expr = .{ .id = node.data.lhs },
+                    .body = .{ .id = node.data.rhs },
                     .region = node.region,
                 } };
             },
@@ -2367,6 +2388,12 @@ pub const NodeStore = struct {
             body: ExprIdx,
             region: Region,
         },
+        @"for": struct {
+            patt: PatternIdx,
+            expr: ExprIdx,
+            body: ExprIdx,
+            region: Region,
+        },
         @"return": struct {
             expr: ExprIdx,
             region: Region,
@@ -2513,6 +2540,27 @@ pub const NodeStore = struct {
 
                     var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
                     node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                .@"for" => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "for");
+
+                    // patt
+                    {
+                        var child = ir.store.getPattern(a.patt).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // expr
+                    {
+                        var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // body
+                    {
+                        var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+
                     return node;
                 },
                 // (return <expr>)

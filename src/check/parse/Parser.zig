@@ -919,6 +919,28 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?IR.NodeStore.St
             }
             return statement_idx;
         },
+        .KwFor => {
+            const start = self.pos;
+            self.advance();
+            const patt = self.parsePattern(.alternatives_forbidden);
+            self.expect(.KwIn) catch {
+                return self.pushMalformed(IR.NodeStore.StatementIdx, .for_expected_in, self.pos);
+            };
+            const expr = self.parseExpr();
+            const body = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .@"for" = .{
+                .region = .{ .start = start, .end = self.pos },
+                .patt = patt,
+                .expr = expr,
+                .body = body,
+            } });
+
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+
+            return statement_idx;
+        },
         .KwCrash => {
             const start = self.pos;
             self.advance();

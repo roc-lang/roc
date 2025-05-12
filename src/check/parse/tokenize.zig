@@ -124,6 +124,7 @@ pub const Token = struct {
         KwExpect,
         KwExposes,
         KwExposing,
+        KwFor,
         KwGenerates,
         KwHas,
         KwHosted,
@@ -131,6 +132,7 @@ pub const Token = struct {
         KwImplements,
         KwImport,
         KwImports,
+        KwIn,
         KwInterface,
         KwMatch,
         KwModule,
@@ -157,6 +159,7 @@ pub const Token = struct {
                 .KwExpect,
                 .KwExposes,
                 .KwExposing,
+                .KwFor,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -164,6 +167,7 @@ pub const Token = struct {
                 .KwImplements,
                 .KwImport,
                 .KwImports,
+                .KwIn,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -259,6 +263,7 @@ pub const Token = struct {
                 .KwExpect,
                 .KwExposes,
                 .KwExposing,
+                .KwFor,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -266,6 +271,7 @@ pub const Token = struct {
                 .KwImplements,
                 .KwImport,
                 .KwImports,
+                .KwIn,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -318,6 +324,7 @@ pub const Token = struct {
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
         .{ "exposing", .KwExposing },
+        .{ "for", .KwFor },
         .{ "generates", .KwGenerates },
         .{ "has", .KwHas },
         .{ "hosted", .KwHosted },
@@ -325,6 +332,7 @@ pub const Token = struct {
         .{ "implements", .KwImplements },
         .{ "import", .KwImport },
         .{ "imports", .KwImports },
+        .{ "in", .KwIn },
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
@@ -2046,6 +2054,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwExposing => {
                 try buf2.appendSlice(alloc, "exposing");
             },
+            .KwFor => {
+                try buf2.appendSlice(alloc, "for");
+            },
             .KwGenerates => {
                 try buf2.appendSlice(alloc, "generates");
             },
@@ -2066,6 +2077,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwImports => {
                 try buf2.appendSlice(alloc, "imports");
+            },
+            .KwIn => {
+                try buf2.appendSlice(alloc, "in");
             },
             .KwInterface => {
                 try buf2.appendSlice(alloc, "interface");
