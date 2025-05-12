@@ -164,6 +164,9 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        var_only_allowed_in_a_body,
+        var_must_have_ident,
+        var_expected_equals,
     };
 };
 
@@ -245,6 +248,11 @@ pub const Node = struct {
         /// * lhs - pattern node index
         /// * rhs - value node index
         decl,
+        /// A declaration of a reassignable binding
+        /// Example: `var a_ = some_expr`
+        /// * main_token - pattern node index
+        /// * lhs - value node index
+        @"var",
         /// Any plain expression - see Exprs below
         /// * lhs - node index to actual expr node
         /// * rhs - ignored
@@ -895,6 +903,12 @@ pub const NodeStore = struct {
                 node.data.lhs = d.pattern.id;
                 node.data.rhs = d.body.id;
                 node.region = d.region;
+            },
+            .@"var" => |v| {
+                node.tag = .@"var";
+                node.main_token = v.name;
+                node.data.lhs = v.body.id;
+                node.region = v.region;
             },
             .expr => |expr| {
                 node.tag = .expr;
@@ -1580,6 +1594,13 @@ pub const NodeStore = struct {
                 return .{ .decl = .{
                     .pattern = .{ .id = node.data.lhs },
                     .body = .{ .id = node.data.rhs },
+                    .region = node.region,
+                } };
+            },
+            .@"var" => {
+                return .{ .@"var" = .{
+                    .name = node.main_token,
+                    .body = .{ .id = node.data.lhs },
                     .region = node.region,
                 } };
             },
@@ -2329,6 +2350,11 @@ pub const NodeStore = struct {
             body: ExprIdx,
             region: Region,
         },
+        @"var": struct {
+            name: TokenIdx,
+            body: ExprIdx,
+            region: Region,
+        },
         expr: struct {
             expr: ExprIdx,
             region: Region,
@@ -2385,6 +2411,24 @@ pub const NodeStore = struct {
                     // body
                     {
                         const body = ir.store.getExpr(decl.body);
+                        var body_node = body.toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &body_node);
+                    }
+                    return node;
+                },
+                .@"var" => |v| {
+                    var node = sexpr.Expr.init(env.gpa, "var");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(v.region, line_starts));
+                    // name
+                    {
+                        const name_str = ir.resolve(v.name);
+                        var child = sexpr.Expr.init(env.gpa, "name");
+                        child.appendStringChild(env.gpa, name_str);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // body
+                    {
+                        const body = ir.store.getExpr(v.body);
                         var body_node = body.toSExpr(env, ir, line_starts);
                         node.appendNodeChild(env.gpa, &body_node);
                     }

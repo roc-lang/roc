@@ -284,6 +284,32 @@ const Formatter = struct {
                 _ = try fmt.formatExpr(d.body);
                 return .extra_newline_needed;
             },
+            .@"var" => |v| {
+                try fmt.pushAll("var");
+                if (multiline and try fmt.flushCommentsBefore(v.name)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.pushTokenText(v.name);
+                if (multiline and try fmt.flushCommentsAfter(v.name)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                try fmt.push('=');
+                const body_region = fmt.nodeRegion(v.body.id);
+                if (multiline and try fmt.flushCommentsBefore(body_region.start)) {
+                    fmt.curr_indent += 1;
+                    try fmt.pushIndent();
+                } else {
+                    try fmt.push(' ');
+                }
+                _ = try fmt.formatExpr(v.body);
+                return .extra_newline_needed;
+            },
             .expr => |e| {
                 _ = try fmt.formatExpr(e.expr);
                 return .extra_newline_needed;
@@ -2432,7 +2458,7 @@ test "Syntax grab bag" {
         \\main! : List(String) -> Result({}, _)
         \\main! = |_| { # Yeah I can leave a comment here
         \\    world = "World"
-        \\    number = 123
+        \\    var number = 123
         \\    expect blah == 1
         \\    tag = Blue
         \\    return # Comment after return keyword

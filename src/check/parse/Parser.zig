@@ -945,6 +945,31 @@ fn parseStmtByType(self: *Parser, statementType: StatementType) ?IR.NodeStore.St
             }
             return statement_idx;
         },
+        .KwVar => {
+            const start = self.pos;
+            if (statementType != .in_body) {
+                return self.pushMalformed(IR.NodeStore.StatementIdx, .var_only_allowed_in_a_body, self.pos);
+            }
+            self.advance();
+            if (self.peek() != .LowerIdent) {
+                return self.pushMalformed(IR.NodeStore.StatementIdx, .var_must_have_ident, self.pos);
+            }
+            const name = self.pos;
+            self.advance();
+            self.expect(.OpAssign) catch {
+                return self.pushMalformed(IR.NodeStore.StatementIdx, .var_expected_equals, self.pos);
+            };
+            const body = self.parseExpr();
+            const statement_idx = self.store.addStatement(.{ .@"var" = .{
+                .name = name,
+                .body = body,
+                .region = .{ .start = start, .end = self.pos },
+            } });
+            if (self.peek() == .Newline) {
+                self.advance();
+            }
+            return statement_idx;
+        },
         .LowerIdent => {
             const start = self.pos;
             if (self.peekNext() == .OpAssign) {

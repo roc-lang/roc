@@ -53,6 +53,9 @@ pub fn canonicalize(
             .decl => |decl| {
                 _ = decl;
             },
+            .@"var" => |v| {
+                _ = v;
+            },
             .expr => |expr| {
                 _ = expr;
             },
