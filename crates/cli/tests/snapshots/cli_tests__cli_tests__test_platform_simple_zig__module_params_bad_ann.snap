@@ -1,9 +1,7 @@
 ---
 source: crates/cli/tests/cli_tests.rs
 expression: cli_dev_out.normalize_stdout_and_stderr()
-snapshot_kind: text
 ---
-
 ── TYPE MISMATCH in tests/test-projects/module_params/BadAnn.roc ───────────────
 
 Something is off with the body of the
@@ -42,6 +40,4 @@ Tip: It looks like it takes too many arguments. I'm seeing 1 extra.
 
 ────────────────────────────────────────────────────────────────────────────────
 
-2 errors and 1 warning found in <ignored for test> ms.
-
-You can run <ignored for tests>
+2 errors and 1 warning found in <ignored for test> ms
