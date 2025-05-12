@@ -181,7 +181,7 @@ const Unifier = struct {
     /// Error thrown during unification when there's a type mismatch
     const Error = error{TypeMismatch};
 
-    /// Unify checking for equivalance
+    /// Unify checking for equivalence
     fn unifyGuarded(self: *Self, a_var: Var, b_var: Var) error{TypeMismatch}!void {
         switch (self.types_store.checkVarsEquiv(a_var, b_var)) {
             .equiv => {
@@ -289,8 +289,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.alias_args.rangeToSlice(a_alias.args);
-        const b_args = self.types_store.alias_args.rangeToSlice(b_alias.args);
+        const a_args = self.types_store.getAliasArgsSlice(a_alias.args);
+        const b_args = self.types_store.getAliasArgsSlice(b_alias.args);
         for (a_args, b_args) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
@@ -481,8 +481,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.type_apply_args.rangeToSlice(a_type_apply.args);
-        const b_args = self.types_store.type_apply_args.rangeToSlice(b_type_apply.args);
+        const a_args = self.types_store.getTypeApplyArgsSlice(a_type_apply.args);
+        const b_args = self.types_store.getTypeApplyArgsSlice(b_type_apply.args);
         for (a_args, b_args) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
@@ -511,8 +511,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_elems = self.types_store.tuple_elems.rangeToSlice(a_tuple.elems);
-        const b_elems = self.types_store.tuple_elems.rangeToSlice(b_tuple.elems);
+        const a_elems = self.types_store.getTupleElemsSlice(a_tuple.elems);
+        const b_elems = self.types_store.getTupleElemsSlice(b_tuple.elems);
         for (a_elems, b_elems) |a_elem, b_elem| {
             try self.unifyGuarded(a_elem, b_elem);
         }
@@ -596,8 +596,8 @@ const Unifier = struct {
             return error.TypeMismatch;
         }
 
-        const a_args = self.types_store.func_args.rangeToSlice(a_func.args);
-        const b_args = self.types_store.func_args.rangeToSlice(b_func.args);
+        const a_args = self.types_store.getFuncArgsSlice(a_func.args);
+        const b_args = self.types_store.getFuncArgsSlice(b_func.args);
         for (a_args, b_args) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
@@ -732,8 +732,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.record_fields.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_a_fields_range = self.types_store.appendRecordFields(
                     self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
                 );
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -757,8 +756,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.record_fields.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_b_fields_range = self.types_store.appendRecordFields(
                     self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
                 );
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -782,8 +780,7 @@ const Unifier = struct {
             .both_extend => {
                 // Create a new variable of a record with only a's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_a_fields_range = self.types_store.record_fields.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_a_fields_range = self.types_store.appendRecordFields(
                     self.scratch.only_in_a_fields.rangeToSlice(partitioned.only_in_a),
                 );
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -793,8 +790,7 @@ const Unifier = struct {
 
                 // Create a new variable of a record with only b's uniq fields
                 // This copies fields from scratch into type_store
-                const only_in_b_fields_range = self.types_store.record_fields.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_b_fields_range = self.types_store.appendRecordFields(
                     self.scratch.only_in_b_fields.rangeToSlice(partitioned.only_in_b),
                 );
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .record = .{
@@ -981,18 +977,18 @@ const Unifier = struct {
         // At this point, the fields are know to be identical, so we arbitrary choose b
         for (shared_fields) |shared| {
             try self.unifyGuarded(shared.a.var_, shared.b.var_);
-            _ = self.types_store.record_fields.append(self.types_store.env.gpa, RecordField{
+            _ = self.types_store.appendRecordFields(&[_]RecordField{.{
                 .name = shared.b.name,
                 .var_ = shared.b.var_,
-            });
+            }});
         }
 
         // Append combined fields
         if (mb_a_extended_fields) |extended_fields| {
-            _ = self.types_store.record_fields.appendSlice(self.types_store.env.gpa, extended_fields);
+            _ = self.types_store.appendRecordFields(extended_fields);
         }
         if (mb_b_extended_fields) |extended_fields| {
-            _ = self.types_store.record_fields.appendSlice(self.types_store.env.gpa, extended_fields);
+            _ = self.types_store.appendRecordFields(extended_fields);
         }
 
         const range_end: RecordFieldSafeMultiList.Idx = @enumFromInt(self.types_store.record_fields.len());
@@ -1128,8 +1124,7 @@ const Unifier = struct {
             .a_extends_b => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = self.types_store.tags.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
                 );
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -1153,8 +1148,7 @@ const Unifier = struct {
             .b_extends_a => {
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = self.types_store.tags.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
                 );
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -1178,8 +1172,7 @@ const Unifier = struct {
             .both_extend => {
                 // Create a new variable of a tag_union with only a's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_a_tags_range = self.types_store.tags.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_a_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_a_tags.rangeToSlice(partitioned.only_in_a),
                 );
                 const only_in_a_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -1189,8 +1182,7 @@ const Unifier = struct {
 
                 // Create a new variable of a tag_union with only b's uniq tags
                 // This copies tags from scratch into type_store
-                const only_in_b_tags_range = self.types_store.tags.appendSlice(
-                    self.types_store.env.gpa,
+                const only_in_b_tags_range = self.types_store.appendTags(
                     self.scratch.only_in_b_tags.rangeToSlice(partitioned.only_in_b),
                 );
                 const only_in_b_var = self.fresh(vars, Content{ .structure = FlatType{ .tag_union = .{
@@ -1380,18 +1372,18 @@ const Unifier = struct {
                 try self.unifyGuarded(a_arg, b_arg);
             }
 
-            _ = self.types_store.tags.append(self.types_store.env.gpa, Tag{
+            _ = self.types_store.appendTags(&[_]Tag{.{
                 .name = tags.b.name,
                 .args = tags.b.args,
-            });
+            }});
         }
 
         // Append combined tags
         if (mb_a_extended_tags) |extended_tags| {
-            _ = self.types_store.tags.appendSlice(self.types_store.env.gpa, extended_tags);
+            _ = self.types_store.appendTags(extended_tags);
         }
         if (mb_b_extended_tags) |extended_tags| {
-            _ = self.types_store.tags.appendSlice(self.types_store.env.gpa, extended_tags);
+            _ = self.types_store.appendTags(extended_tags);
         }
 
         const range_end: TagSafeMultiList.Idx = @enumFromInt(self.types_store.tags.len());

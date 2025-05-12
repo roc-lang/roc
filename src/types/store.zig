@@ -32,7 +32,7 @@ pub const Slot = union(enum) {
     root: DescStore.Idx,
     redirect: Var,
 
-    const ArrayList = std.ArrayList(Slot);
+    const ArrayList = std.ArrayListUnmanaged(Slot);
 };
 
 /// The store of all type variables and their descriptors
@@ -83,8 +83,8 @@ pub const Store = struct {
     /// Deinit the unification table
     pub fn deinit(self: *Self) void {
         // slots & descriptors
-        self.descs.deinit();
-        self.slots.deinit();
+        self.descs.deinit(self.env.gpa);
+        self.slots.deinit(self.env.gpa);
 
         // everything else
         self.alias_args.deinit(self.env.gpa);
@@ -106,23 +106,23 @@ pub const Store = struct {
 
     /// Create a new variable with the given descriptor
     pub fn register(self: *Self, desc: Desc) Var {
-        const desc_idx = self.descs.insert(desc);
-        const slot_idx = self.slots.insert(.{ .root = desc_idx });
+        const desc_idx = self.descs.insert(self.env.gpa, desc);
+        const slot_idx = self.slots.insert(self.env.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a new variable with the provided desc at the top level
     /// Used in tests
     pub fn freshFromContent(self: *Self, content: Content) Var {
-        const desc_idx = self.descs.insert(.{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
-        const slot_idx = self.slots.insert(.{ .root = desc_idx });
+        const desc_idx = self.descs.insert(self.env.gpa, .{ .content = content, .rank = Rank.top_level, .mark = Mark.none });
+        const slot_idx = self.slots.insert(self.env.gpa, .{ .root = desc_idx });
         return Self.slotIdxToVar(slot_idx);
     }
 
     /// Create a variable redirecting to the provided var
     /// Used in tests
     pub fn freshRedirect(self: *Self, var_: Var) Var {
-        const slot_idx = self.slots.insert(.{ .redirect = var_ });
+        const slot_idx = self.slots.insert(self.env.gpa, .{ .redirect = var_ });
         return Self.slotIdxToVar(slot_idx);
     }
 
@@ -164,6 +164,26 @@ pub const Store = struct {
     }
 
     // sub list getters //
+
+    /// Given a range, get a slice of alias args from the backing array
+    pub fn getAliasArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.alias_args.rangeToSlice(range);
+    }
+
+    /// Given a range, get a slice of tuple from the backing list
+    pub fn getTupleElemsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.tuple_elems.rangeToSlice(range);
+    }
+
+    /// Given a range, get a slice of type from to the backing
+    pub fn getTypeApplyArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.type_apply_args.rangeToSlice(range);
+    }
+
+    /// Given a range, get a slice of func from the backing list
+    pub fn getFuncArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.func_args.rangeToSlice(range);
+    }
 
     /// Given a range, get a slice of record fields from the backing array
     pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
@@ -244,7 +264,7 @@ pub const Store = struct {
 
     // equivalence //
 
-    /// The result of checking for equivalance
+    /// The result of checking for equivalence
     pub const VarEquivResult = union(enum) { equiv, not_equiv: ResolvedVarDescs };
 
     /// Check if two variables are equivalent
@@ -318,14 +338,14 @@ const SlotStore = struct {
         return .{ .backing = arr_list };
     }
 
-    fn deinit(self: *Self) void {
-        self.backing.deinit();
+    fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+        self.backing.deinit(gpa);
     }
 
     /// Insert a new slot into the store
-    fn insert(self: *Self, typ: Slot) Idx {
+    fn insert(self: *Self, gpa: std.mem.Allocator, typ: Slot) Idx {
         const idx: Idx = @enumFromInt(self.backing.items.len);
-        self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
+        self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 
@@ -349,23 +369,23 @@ const SlotStore = struct {
 const DescStore = struct {
     const Self = @This();
 
-    backing: std.ArrayList(Desc),
+    backing: std.ArrayListUnmanaged(Desc),
 
     /// Init & allocated memory
     fn init(gpa: std.mem.Allocator, capacity: usize) Self {
-        const arr_list = std.ArrayList(Desc).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
+        const arr_list = std.ArrayListUnmanaged(Desc).initCapacity(gpa, capacity) catch |err| exitOnOutOfMemory(err);
         return .{ .backing = arr_list };
     }
 
     /// Deinit & free allocated memory
-    fn deinit(self: *Self) void {
-        self.backing.deinit();
+    fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+        self.backing.deinit(gpa);
     }
 
     /// Insert a value into the store
-    fn insert(self: *Self, typ: Desc) Idx {
+    fn insert(self: *Self, gpa: std.mem.Allocator, typ: Desc) Idx {
         const idx: Idx = @enumFromInt(self.backing.items.len);
-        self.backing.append(typ) catch |err| exitOnOutOfMemory(err);
+        self.backing.append(gpa, typ) catch |err| exitOnOutOfMemory(err);
         return idx;
     }
 
