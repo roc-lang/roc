@@ -275,7 +275,12 @@ Closure implementation:
 
 ## Type Inference
 
-TODO
+The process of automatically determining the types of expressions without explicit [type annotations](#type-signature) from the programmer.
+The compiler analyzes how values are used in code to deduce their types.
+
+Type inference implementation:
+- new compiler: Not yet implemented
+- old compiler: Type inference is spread over multiple crates: [solve](crates/compiler/solve), [late-solve](crates/compiler/solve),[unify](crates/compiler/unify), [constrain](crates/compiler/constrain), ...
 
 ## Type Solving
 
