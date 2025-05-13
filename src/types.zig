@@ -32,7 +32,7 @@ pub const Alias = types.Alias;
 pub const FlatType = types.FlatType;
 
 /// Type TypeApply
-pub const TypeApply = types.TypeApply;
+pub const TypeApply = types.Builtin;
 
 /// Type Tuple
 pub const Tuple = types.Tuple;

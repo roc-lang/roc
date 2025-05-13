@@ -151,7 +151,9 @@ pub const TypeIdent = struct {
 
 /// A "flat" data type
 pub const FlatType = union(enum) {
-    type_apply: TypeApply,
+    str,
+    box: Var,
+    list: Var,
     tuple: Tuple,
     num: Num,
     func: Func,
@@ -159,15 +161,6 @@ pub const FlatType = union(enum) {
     empty_record,
     tag_union: TagUnion,
     empty_tag_union,
-};
-
-// type application //
-
-/// Represents a type application, like `List String` or `Result Error Value`.
-/// Applications may have up to 16 type arguments.
-pub const TypeApply = struct {
-    ident: TypeIdent,
-    args: Var.SafeList.Range,
 };
 
 // tuples //
