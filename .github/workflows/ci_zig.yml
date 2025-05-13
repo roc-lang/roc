@@ -43,7 +43,7 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022] # macos-13 uses x64, macos-14 uses arm64
+                os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-14 uses arm64
         steps:
             - name: Checkout
               uses: actions/checkout@v4
