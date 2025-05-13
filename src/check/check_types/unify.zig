@@ -57,7 +57,7 @@ const Mark = types.Mark;
 const Content = types.Content;
 const Alias = types.Alias;
 const FlatType = types.FlatType;
-const TypeApply = types.TypeApply;
+const Builtin = types.Builtin;
 const Tuple = types.Tuple;
 const Num = types.Num;
 const Func = types.Func;
@@ -361,10 +361,28 @@ const Unifier = struct {
         b_flat_type: FlatType,
     ) error{TypeMismatch}!void {
         switch (a_flat_type) {
-            .type_apply => |a_type_apply| {
+            .str => {
                 switch (b_flat_type) {
-                    .type_apply => |b_type_apply| {
-                        try self.unifyTypeApply(vars, a_type_apply, b_type_apply);
+                    .str => {
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .box => |a_var| {
+                switch (b_flat_type) {
+                    .box => |b_var| {
+                        try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .list => |a_var| {
+                switch (b_flat_type) {
+                    .list => |b_var| {
+                        try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -454,34 +472,6 @@ const Unifier = struct {
                 }
             },
         }
-    }
-
-    /// unify type application (both with args like 'List Str' and without like 'Bool')
-    ///
-    /// this checks:
-    /// * that the type names match
-    /// * that the arities are the same
-    /// * that parallel arguments unify
-    fn unifyTypeApply(
-        self: *Self,
-        vars: *const ResolvedVarDescs,
-        a_type_apply: TypeApply,
-        b_type_apply: TypeApply,
-    ) error{TypeMismatch}!void {
-        if (!TypeIdent.eql(&self.types_store.env.idents, a_type_apply.ident, b_type_apply.ident)) {
-            return error.TypeMismatch;
-        }
-        if (a_type_apply.args.len() != b_type_apply.args.len()) {
-            return error.TypeMismatch;
-        }
-
-        const a_args = self.types_store.getTypeApplyArgsSlice(a_type_apply.args);
-        const b_args = self.types_store.getTypeApplyArgsSlice(b_type_apply.args);
-        for (a_args, b_args) |a_arg, b_arg| {
-            try self.unifyGuarded(a_arg, b_arg);
-        }
-
-        self.merge(vars, vars.b.desc.content);
     }
 
     /// unify tuples
@@ -1632,30 +1622,6 @@ const TestEnv = struct {
         };
     }
 
-    // helpers - structure - type_apply
-
-    fn mkTypeApplyNoArg(self: *Self, name: []const u8) Content {
-        const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
-        return .{ .structure = .{ .type_apply = .{
-            .ident = .{ .ident_idx = ident_idx },
-            .args = VarSafeList.Range.empty,
-        } } };
-    }
-
-    fn mkTypeApplyArgs(self: *Self, name: []const u8, args: []const Var) Content {
-        const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
-        const args_range = self.types_store.appendTypeApplyArgs(args);
-        return .{ .structure = .{ .type_apply = .{ .ident = .{ .ident_idx = ident_idx }, .args = args_range } } };
-    }
-
-    fn mkTypeApply1Arg(self: *Self, name: []const u8, arg: Var) Content {
-        return self.mkTypeApplyArgs(name, &[_]Var{arg});
-    }
-
-    fn mkTypeApply2Args(self: *Self, name: []const u8, arg1: Var, arg2: Var) Content {
-        return self.mkTypeApplyArgs(name, &[_]Var{ arg1, arg2 });
-    }
-
     // helpers - structure - tuple
 
     fn mkTuple(self: *Self, slice: []const Var) Content {
@@ -1783,7 +1749,7 @@ test "unify - a is flex_var and b is not" {
     defer env.deinit();
 
     const a = env.types_store.fresh();
-    const b = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const b = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
@@ -1828,7 +1794,7 @@ test "rigid_var - cannot unify with alias (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const alias = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const alias = env.types_store.freshFromContent(Content{ .structure = .str });
     const rigid = env.types_store.freshFromContent(env.mkRigidVar("a"));
 
     const result = unify(&env.types_store, &env.scratch, alias, rigid);
@@ -1866,8 +1832,8 @@ test "unify - alias with same args" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
     const alias = Content{ .alias = env.mkAlias("AliasName", &[_]Var{ str, bool_ }, backing) };
@@ -1887,7 +1853,7 @@ test "unify - aliases with different names but same backing" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{str}));
     const a_alias = Content{ .alias = env.mkAlias("AliasA", &[_]Var{str}, backing) };
@@ -1908,8 +1874,8 @@ test "unify - alias with different args (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
@@ -1931,8 +1897,8 @@ test "unify - alias with flex" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
     const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
@@ -2074,7 +2040,7 @@ test "unify - pure with structure type fails" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const a = env.types_store.freshFromContent(.pure);
     const b = env.types_store.freshFromContent(str);
 
@@ -2088,7 +2054,7 @@ test "unify - effectful with structure type fails" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const a = env.types_store.freshFromContent(.effectful);
     const b = env.types_store.freshFromContent(str);
 
@@ -2099,13 +2065,13 @@ test "unify - effectful with structure type fails" {
 
 // unification - structure/flex_vars
 
-test "unify - a is type_apply and b is flex_var" {
+test "unify - a is builtin and b is flex_var" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
 
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.fresh();
@@ -2117,13 +2083,13 @@ test "unify - a is type_apply and b is flex_var" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a is flex_var and b is type_apply" {
+test "unify - a is flex_var and b is builtin" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
 
     const a = env.types_store.fresh();
     const b = env.types_store.freshFromContent(str);
@@ -2135,15 +2101,15 @@ test "unify - a is flex_var and b is type_apply" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
-// unification - structure/structure - type_apply
+// unification - structure/structure - builtin
 
-test "unify - a & b are same type_apply" {
+test "unify - a & b are both str" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
 
     const a = env.types_store.freshFromContent(str);
     const b = env.types_store.freshFromContent(str);
@@ -2155,16 +2121,16 @@ test "unify - a & b are same type_apply" {
     try std.testing.expectEqual(str, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are diff type_apply (fail)" {
+test "unify - a & b are diff (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
-    const bool_ = env.mkTypeApplyNoArg("Bool");
+    const str = Content{ .structure = .str };
+    const int = Content{ .structure = types.int_i8 };
 
-    const a = env.types_store.freshFromContent(bool_);
+    const a = env.types_store.freshFromContent(int);
     const b = env.types_store.freshFromContent(str);
 
     const result = unify(&env.types_store, &env.scratch, a, b);
@@ -2174,68 +2140,90 @@ test "unify - a & b are diff type_apply (fail)" {
     try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are same type_apply with 1 args" {
+test "unify - a & b box with same arg unify" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const str_var = env.types_store.freshFromContent(str);
 
-    const maybe_str = env.mkTypeApply1Arg("Maybe", str_var);
+    const box_str = Content{ .structure = .{ .box = str_var } };
 
-    const a = env.types_store.freshFromContent(maybe_str);
-    const b = env.types_store.freshFromContent(maybe_str);
+    const a = env.types_store.freshFromContent(box_str);
+    const b = env.types_store.freshFromContent(box_str);
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(maybe_str, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(box_str, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are same type_apply with 2 args" {
+test "unify - a & b box with diff args (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const str_var = env.types_store.freshFromContent(str);
 
-    const bool_ = env.mkTypeApplyNoArg("Bool");
-    const bool_var = env.types_store.freshFromContent(bool_);
+    const i64_ = Content{ .structure = types.int_i64 };
+    const i64_var = env.types_store.freshFromContent(i64_);
 
-    const result_str_bool = env.mkTypeApply2Args("Result", str_var, bool_var);
+    const box_str = Content{ .structure = .{ .box = str_var } };
+    const box_i64 = Content{ .structure = .{ .box = i64_var } };
 
-    const a = env.types_store.freshFromContent(result_str_bool);
-    const b = env.types_store.freshFromContent(result_str_bool);
+    const a = env.types_store.freshFromContent(box_str);
+    const b = env.types_store.freshFromContent(box_i64);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - a & b list with same arg unify" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = Content{ .structure = .str };
+    const str_var = env.types_store.freshFromContent(str);
+
+    const list_str = Content{ .structure = .{ .list = str_var } };
+
+    const a = env.types_store.freshFromContent(list_str);
+    const b = env.types_store.freshFromContent(list_str);
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
-    try std.testing.expectEqual(result_str_bool, (try env.getDescForRootVar(b)).content);
+    try std.testing.expectEqual(list_str, (try env.getDescForRootVar(b)).content);
 }
 
-test "unify - a & b are same type_apply with flipped args (fail)" {
+test "unify - a & b list with diff args (fail)" {
     const gpa = std.testing.allocator;
 
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const str_var = env.types_store.freshFromContent(str);
 
-    const bool_ = env.mkTypeApplyNoArg("Bool");
-    const bool_var = env.types_store.freshFromContent(bool_);
+    const u8_ = Content{ .structure = types.int_u8 };
+    const u8_var = env.types_store.freshFromContent(u8_);
 
-    const result_str_bool = env.mkTypeApply2Args("Result", str_var, bool_var);
-    const result_bool_str = env.mkTypeApply2Args("Result", bool_var, str_var);
+    const list_str = Content{ .structure = .{ .list = str_var } };
+    const list_u8 = Content{ .structure = .{ .list = u8_var } };
 
-    const a = env.types_store.freshFromContent(result_str_bool);
-    const b = env.types_store.freshFromContent(result_bool_str);
+    const a = env.types_store.freshFromContent(list_str);
+    const b = env.types_store.freshFromContent(list_u8);
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
@@ -2252,10 +2240,10 @@ test "unify - a & b are same tuple" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const str_var = env.types_store.freshFromContent(str);
 
-    const bool_ = env.mkTypeApplyNoArg("Bool");
+    const bool_ = Content{ .structure = types.int_i8 };
     const bool_var = env.types_store.freshFromContent(bool_);
 
     const tuple_str_bool = env.mkTuple(&[_]Var{ str_var, bool_var });
@@ -2276,10 +2264,10 @@ test "unify - a & b are tuples with args flipped (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.mkTypeApplyNoArg("Str");
+    const str = Content{ .structure = .str };
     const str_var = env.types_store.freshFromContent(str);
 
-    const bool_ = env.mkTypeApplyNoArg("Bool");
+    const bool_ = Content{ .structure = types.int_i8 };
     const bool_var = env.types_store.freshFromContent(bool_);
 
     const tuple_str_bool = env.mkTuple(&[_]Var{ str_var, bool_var });
@@ -2459,7 +2447,7 @@ test "unify - func are same" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
     const a = env.types_store.freshFromContent(func);
@@ -2479,7 +2467,7 @@ test "unify - funcs have diff return args (fail)" {
     defer env.deinit();
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{int_i32}, str));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
@@ -2498,7 +2486,7 @@ test "unify - funcs have diff return types (fail)" {
     defer env.deinit();
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const a = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, int_i32));
     const b = env.types_store.freshFromContent(env.mkFuncFlex(&[_]Var{str}, str));
@@ -2518,7 +2506,7 @@ test "unify - same funcs pure" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
 
     const a = env.types_store.freshFromContent(func);
@@ -2539,7 +2527,7 @@ test "unify - same funcs effectful" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
 
     const a = env.types_store.freshFromContent(func);
@@ -2560,7 +2548,7 @@ test "unify - same funcs first eff, second pure (fail)" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
 
@@ -2582,7 +2570,7 @@ test "unify - same funcs first pure, second eff" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num = env.types_store.freshFromContent(Content{ .structure = types.num_flex_var });
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
 
@@ -2710,7 +2698,7 @@ test "unify - identical closed records" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const fields = [_]RecordField{env.mkRecordField("a", str)};
     const record_data = env.mkRecordClosed(&fields);
@@ -2735,7 +2723,7 @@ test "unify - closed record mismatch on diff fields (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const field1 = env.mkRecordField("field1", str);
     const field2 = env.mkRecordField("field2", str);
@@ -2762,8 +2750,8 @@ test "unify - open record a extends b" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const field_shared = env.mkRecordField("x", str);
     const field_a_only = env.mkRecordField("y", int);
@@ -2809,8 +2797,8 @@ test "unify - open record b extends a" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const field_shared = env.mkRecordField("field_shared", str);
     const field_b_only = env.mkRecordField("field_b_only", int);
@@ -2853,9 +2841,9 @@ test "unify - both extend open record" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const field_shared = env.mkRecordField("x", str);
     const field_a_only = env.mkRecordField("y", int);
@@ -2909,8 +2897,8 @@ test "unify - record mismatch on shared field (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const field_a = env.mkRecordField("x", str);
     const field_b = env.mkRecordField("x", int);
@@ -2937,7 +2925,7 @@ test "unify - open record extends closed (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const field_x = env.mkRecordField("field_x", str);
     const field_y = env.mkRecordField("field_y", str);
@@ -2957,7 +2945,7 @@ test "unify - closed record extends open" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const field_x = env.mkRecordField("field_x", str);
     const field_y = env.mkRecordField("field_y", str);
@@ -2976,8 +2964,8 @@ test "unify - open vs closed records with type mismatch (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const field_x_str = env.mkRecordField("field_x_str", str);
     const field_x_int = env.mkRecordField("field_x_int", int);
@@ -2999,8 +2987,8 @@ test "unify - closed vs open records with type mismatch (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const field_x_str = env.mkRecordField("field_x_str", str);
     const field_x_int = env.mkRecordField("field_x_int", int);
@@ -3131,7 +3119,7 @@ test "unify - identical closed tag_unions" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const tag = env.mkTag("A", &[_]Var{str});
     const tags = [_]Tag{tag};
@@ -3165,8 +3153,8 @@ test "unify - closed tag_unions with diff args (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const a_tag = env.mkTag("A", &[_]Var{str});
     const a_tags = [_]Tag{a_tag};
@@ -3194,8 +3182,8 @@ test "unify - open tag union a extends b" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const tag_a_only = env.mkTag("A", &[_]Var{str});
     const tag_shared = env.mkTag("Shared", &[_]Var{ int, int });
@@ -3247,8 +3235,8 @@ test "unify - open tag union b extends a" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const tag_b_only = env.mkTag("A", &[_]Var{ str, int });
     const tag_shared = env.mkTag("Shared", &[_]Var{int});
@@ -3300,9 +3288,9 @@ test "unify - both extend open tag union" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const tag_a_only = env.mkTag("A", &[_]Var{bool_});
     const tag_b_only = env.mkTag("B", &[_]Var{ str, int });
@@ -3359,8 +3347,8 @@ test "unify - open tag unions a & b have same tag name with diff args (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const int = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
 
     const tag_a_only = env.mkTag("A", &[_]Var{str});
     const tag_shared = env.mkTag("A", &[_]Var{ int, int });
@@ -3387,7 +3375,7 @@ test "unify - open tag extends closed (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const tag_shared = env.mkTag("Shared", &[_]Var{str});
     const tag_a_only = env.mkTag("A", &[_]Var{str});
@@ -3407,7 +3395,7 @@ test "unify - closed tag union extends open" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
 
     const tag_shared = env.mkTag("Shared", &[_]Var{str});
     const tag_b_only = env.mkTag("B", &[_]Var{str});
@@ -3456,8 +3444,8 @@ test "unify - open vs closed tag union with type mismatch (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const tag_a = env.mkTag("A", &[_]Var{str});
     const tag_b = env.mkTag("A", &[_]Var{bool_});
@@ -3479,8 +3467,8 @@ test "unify - closed vs open tag union with type mismatch (fail)" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
-    const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+    const bool_ = env.types_store.freshFromContent(Content{ .structure = types.int_i8 });
 
     const tag_a = env.mkTag("A", &[_]Var{str});
     const tag_b = env.mkTag("B", &[_]Var{bool_});

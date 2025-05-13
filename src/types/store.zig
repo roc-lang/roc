@@ -53,7 +53,7 @@ pub const Store = struct {
     // Everything else
     alias_args: VarSafeList,
     tuple_elems: VarSafeList,
-    type_apply_args: VarSafeList,
+    builtin_args: VarSafeList,
     func_args: VarSafeList,
     record_fields: RecordFieldSafeMultiList,
     tags: TagSafeMultiList,
@@ -72,7 +72,7 @@ pub const Store = struct {
             // everything else
             .alias_args = VarSafeList.initCapacity(env.gpa, 512),
             .tuple_elems = VarSafeList.initCapacity(env.gpa, 512),
-            .type_apply_args = VarSafeList.initCapacity(env.gpa, 512),
+            .builtin_args = VarSafeList.initCapacity(env.gpa, 512),
             .func_args = VarSafeList.initCapacity(env.gpa, 512),
             .record_fields = RecordFieldSafeMultiList.initCapacity(env.gpa, 512),
             .tags = TagSafeMultiList.initCapacity(env.gpa, 512),
@@ -89,7 +89,7 @@ pub const Store = struct {
         // everything else
         self.alias_args.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
-        self.type_apply_args.deinit(self.env.gpa);
+        self.builtin_args.deinit(self.env.gpa);
         self.func_args.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
         self.tags.deinit(self.env.gpa);
@@ -139,8 +139,8 @@ pub const Store = struct {
     }
 
     /// Append a slice of type apply args to the backing list, returning the range
-    pub fn appendTypeApplyArgs(self: *Self, slice: []const Var) VarSafeList.Range {
-        return self.type_apply_args.appendSlice(self.env.gpa, slice);
+    pub fn appendBuiltinArgs(self: *Self, slice: []const Var) VarSafeList.Range {
+        return self.builtin_args.appendSlice(self.env.gpa, slice);
     }
 
     /// Append a slice of func args to the backing list, returning the range
@@ -176,8 +176,8 @@ pub const Store = struct {
     }
 
     /// Given a range, get a slice of type from to the backing
-    pub fn getTypeApplyArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
-        return self.type_apply_args.rangeToSlice(range);
+    pub fn getBuiltinArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+        return self.builtin_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of func from the backing list
