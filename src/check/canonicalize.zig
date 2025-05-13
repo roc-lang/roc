@@ -53,6 +53,9 @@ pub fn canonicalize(
             .decl => |decl| {
                 _ = decl;
             },
+            .@"var" => |v| {
+                _ = v;
+            },
             .expr => |expr| {
                 _ = expr;
             },
@@ -61,6 +64,9 @@ pub fn canonicalize(
             },
             .expect => |expect| {
                 _ = expect;
+            },
+            .@"for" => |f| {
+                _ = f;
             },
             .@"return" => |return_stmt| {
                 _ = return_stmt;

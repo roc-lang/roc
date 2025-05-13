@@ -164,6 +164,10 @@ pub const Diagnostic = struct {
         import_must_be_top_level,
         invalid_type_arg,
         expr_arrow_expects_ident,
+        var_only_allowed_in_a_body,
+        var_must_have_ident,
+        var_expected_equals,
+        for_expected_in,
     };
 };
 
@@ -245,6 +249,11 @@ pub const Node = struct {
         /// * lhs - pattern node index
         /// * rhs - value node index
         decl,
+        /// A declaration of a reassignable binding
+        /// Example: `var a_ = some_expr`
+        /// * main_token - pattern node index
+        /// * lhs - value node index
+        @"var",
         /// Any plain expression - see Exprs below
         /// * lhs - node index to actual expr node
         /// * rhs - ignored
@@ -258,6 +267,11 @@ pub const Node = struct {
         /// * lhs - node index for block or expr
         /// * rhs - ignored
         expect,
+        /// A for statement
+        /// * main_token - node index for pattern for loop variable
+        /// * lhs - node index for loop initializing expression
+        /// * rhs - node index for loop body expression
+        @"for",
         /// An early return statement
         /// * lhs - node index for expr
         /// * rhs - ignored
@@ -896,6 +910,12 @@ pub const NodeStore = struct {
                 node.data.rhs = d.body.id;
                 node.region = d.region;
             },
+            .@"var" => |v| {
+                node.tag = .@"var";
+                node.main_token = v.name;
+                node.data.lhs = v.body.id;
+                node.region = v.region;
+            },
             .expr => |expr| {
                 node.tag = .expr;
                 node.data.lhs = expr.expr.id;
@@ -910,6 +930,13 @@ pub const NodeStore = struct {
                 node.tag = .expect;
                 node.data.lhs = e.body.id;
                 node.region = e.region;
+            },
+            .@"for" => |f| {
+                node.tag = .@"for";
+                node.main_token = f.patt.id;
+                node.data.lhs = f.expr.id;
+                node.data.rhs = f.body.id;
+                node.region = f.region;
             },
             .@"return" => |r| {
                 node.tag = .@"return";
@@ -1583,6 +1610,13 @@ pub const NodeStore = struct {
                     .region = node.region,
                 } };
             },
+            .@"var" => {
+                return .{ .@"var" = .{
+                    .name = node.main_token,
+                    .body = .{ .id = node.data.lhs },
+                    .region = node.region,
+                } };
+            },
             .expr => {
                 return .{ .expr = .{
                     .expr = .{ .id = node.data.lhs },
@@ -1617,6 +1651,14 @@ pub const NodeStore = struct {
             .expect => {
                 return .{ .expect = .{
                     .body = .{ .id = node.data.lhs },
+                    .region = node.region,
+                } };
+            },
+            .@"for" => {
+                return .{ .@"for" = .{
+                    .patt = .{ .id = node.main_token },
+                    .expr = .{ .id = node.data.lhs },
+                    .body = .{ .id = node.data.rhs },
                     .region = node.region,
                 } };
             },
@@ -2329,6 +2371,11 @@ pub const NodeStore = struct {
             body: ExprIdx,
             region: Region,
         },
+        @"var": struct {
+            name: TokenIdx,
+            body: ExprIdx,
+            region: Region,
+        },
         expr: struct {
             expr: ExprIdx,
             region: Region,
@@ -2338,6 +2385,12 @@ pub const NodeStore = struct {
             region: Region,
         },
         expect: struct {
+            body: ExprIdx,
+            region: Region,
+        },
+        @"for": struct {
+            patt: PatternIdx,
+            expr: ExprIdx,
             body: ExprIdx,
             region: Region,
         },
@@ -2385,6 +2438,24 @@ pub const NodeStore = struct {
                     // body
                     {
                         const body = ir.store.getExpr(decl.body);
+                        var body_node = body.toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &body_node);
+                    }
+                    return node;
+                },
+                .@"var" => |v| {
+                    var node = sexpr.Expr.init(env.gpa, "var");
+                    node.appendRegionChild(env.gpa, ir.regionInfo(v.region, line_starts));
+                    // name
+                    {
+                        const name_str = ir.resolve(v.name);
+                        var child = sexpr.Expr.init(env.gpa, "name");
+                        child.appendStringChild(env.gpa, name_str);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // body
+                    {
+                        const body = ir.store.getExpr(v.body);
                         var body_node = body.toSExpr(env, ir, line_starts);
                         node.appendNodeChild(env.gpa, &body_node);
                     }
@@ -2469,6 +2540,27 @@ pub const NodeStore = struct {
 
                     var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
                     node.appendNodeChild(env.gpa, &child);
+                    return node;
+                },
+                .@"for" => |a| {
+                    var node = sexpr.Expr.init(env.gpa, "for");
+
+                    // patt
+                    {
+                        var child = ir.store.getPattern(a.patt).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // expr
+                    {
+                        var child = ir.store.getExpr(a.expr).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+                    // body
+                    {
+                        var child = ir.store.getExpr(a.body).toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &child);
+                    }
+
                     return node;
                 },
                 // (return <expr>)

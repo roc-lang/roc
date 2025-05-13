@@ -124,6 +124,7 @@ pub const Token = struct {
         KwExpect,
         KwExposes,
         KwExposing,
+        KwFor,
         KwGenerates,
         KwHas,
         KwHosted,
@@ -131,6 +132,7 @@ pub const Token = struct {
         KwImplements,
         KwImport,
         KwImports,
+        KwIn,
         KwInterface,
         KwMatch,
         KwModule,
@@ -140,6 +142,7 @@ pub const Token = struct {
         KwProvides,
         KwRequires,
         KwReturn,
+        KwVar,
         KwWhere,
         KwWith,
 
@@ -156,6 +159,7 @@ pub const Token = struct {
                 .KwExpect,
                 .KwExposes,
                 .KwExposing,
+                .KwFor,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -163,6 +167,7 @@ pub const Token = struct {
                 .KwImplements,
                 .KwImport,
                 .KwImports,
+                .KwIn,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -172,6 +177,7 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwVar,
                 .KwWhere,
                 .KwWith,
                 => true,
@@ -257,6 +263,7 @@ pub const Token = struct {
                 .KwExpect,
                 .KwExposes,
                 .KwExposing,
+                .KwFor,
                 .KwGenerates,
                 .KwHas,
                 .KwHosted,
@@ -264,6 +271,7 @@ pub const Token = struct {
                 .KwImplements,
                 .KwImport,
                 .KwImports,
+                .KwIn,
                 .KwInterface,
                 .KwMatch,
                 .KwModule,
@@ -273,6 +281,7 @@ pub const Token = struct {
                 .KwProvides,
                 .KwRequires,
                 .KwReturn,
+                .KwVar,
                 .KwWhere,
                 .KwWith,
                 => false,
@@ -315,6 +324,7 @@ pub const Token = struct {
         .{ "expect", .KwExpect },
         .{ "exposes", .KwExposes },
         .{ "exposing", .KwExposing },
+        .{ "for", .KwFor },
         .{ "generates", .KwGenerates },
         .{ "has", .KwHas },
         .{ "hosted", .KwHosted },
@@ -322,6 +332,7 @@ pub const Token = struct {
         .{ "implements", .KwImplements },
         .{ "import", .KwImport },
         .{ "imports", .KwImports },
+        .{ "in", .KwIn },
         .{ "interface", .KwInterface },
         .{ "match", .KwMatch },
         .{ "module", .KwModule },
@@ -332,6 +343,7 @@ pub const Token = struct {
         .{ "provides", .KwProvides },
         .{ "requires", .KwRequires },
         .{ "return", .KwReturn },
+        .{ "var", .KwVar },
         .{ "where", .KwWhere },
         .{ "with", .KwWith },
     });
@@ -2042,6 +2054,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             .KwExposing => {
                 try buf2.appendSlice(alloc, "exposing");
             },
+            .KwFor => {
+                try buf2.appendSlice(alloc, "for");
+            },
             .KwGenerates => {
                 try buf2.appendSlice(alloc, "generates");
             },
@@ -2062,6 +2077,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwImports => {
                 try buf2.appendSlice(alloc, "imports");
+            },
+            .KwIn => {
+                try buf2.appendSlice(alloc, "in");
             },
             .KwInterface => {
                 try buf2.appendSlice(alloc, "interface");
@@ -2086,6 +2104,9 @@ fn rebuildBufferForTesting(buf: []const u8, tokens: *TokenizedBuffer, alloc: std
             },
             .KwReturn => {
                 try buf2.appendSlice(alloc, "return");
+            },
+            .KwVar => {
+                try buf2.appendSlice(alloc, "var");
             },
             .KwMatch => {
                 try buf2.appendSlice(alloc, "match");
@@ -2137,6 +2158,7 @@ test "tokenizer" {
     try testTokenization(gpa, "1. .2", &[_]Token.Tag{ .Int, .Dot, .DotInt });
     try testTokenization(gpa, "1.2.3", &[_]Token.Tag{ .Float, .NoSpaceDotInt });
     try testTokenization(gpa, "match", &[_]Token.Tag{.KwMatch});
+    try testTokenization(gpa, "var", &[_]Token.Tag{.KwVar});
     try testTokenization(gpa, "{a, b}", &[_]Token.Tag{ .OpenCurly, .LowerIdent, .Comma, .LowerIdent, .CloseCurly });
     try testTokenization(gpa, "\"abc\"", &[_]Token.Tag{ .StringStart, .StringPart, .StringEnd });
     try testTokenization(gpa, "\"a${b}c\"", &[_]Token.Tag{
