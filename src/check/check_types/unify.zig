@@ -261,7 +261,7 @@ const Unifier = struct {
                 try self.unifyGuarded(a_alias.backing_var, vars.b.var_);
             },
             .alias => |b_alias| {
-                if (TypeIdent.eql(a_alias.ident, b_alias.ident)) {
+                if (TypeIdent.eql(&self.types_store.env.idents, a_alias.ident, b_alias.ident)) {
                     try self.unifyTwoAliases(vars, a_alias, b_alias);
                 } else {
                     try self.unifyGuarded(a_alias.backing_var, b_alias.backing_var);
@@ -294,12 +294,6 @@ const Unifier = struct {
         for (a_args, b_args) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
-
-        // TODO: Here, we'll need some special handling for recursion variables
-        // For each argument variable, we need to prefer recursive vars. Then
-        // we'll build a new alias and pass that to self.merge
-        //
-        // See unify_two_aliases and choose_merged_var in the rust compiler for details
 
         // Rust compiler comment:
         // Don't report real_var mismatches, because they must always be surfaced higher, from the argument types.
@@ -474,7 +468,7 @@ const Unifier = struct {
         a_type_apply: TypeApply,
         b_type_apply: TypeApply,
     ) error{TypeMismatch}!void {
-        if (!TypeIdent.eql(a_type_apply.ident, b_type_apply.ident)) {
+        if (!TypeIdent.eql(&self.types_store.env.idents, a_type_apply.ident, b_type_apply.ident)) {
             return error.TypeMismatch;
         }
         if (a_type_apply.args.len() != b_type_apply.args.len()) {
@@ -486,12 +480,6 @@ const Unifier = struct {
         for (a_args, b_args) |a_arg, b_arg| {
             try self.unifyGuarded(a_arg, b_arg);
         }
-
-        // TODO: Here, we'll need some special handling for recursion variables
-        // For each argument variable, we need to prefer recursive vars. Then
-        // we'll build a new flat_type.type_apply with those aruguments and pass
-        // that to self.merge
-        // See unify_flat_type and choose_merged_var in the rust compiler for details
 
         self.merge(vars, vars.b.desc.content);
     }
@@ -698,7 +686,12 @@ const Unifier = struct {
         const b_gathered_fields = try self.gatherRecordFields(b_record);
 
         // Then partition the fields
-        const partitioned = partitionFields(self.scratch, a_gathered_fields.range, b_gathered_fields.range);
+        const partitioned = partitionFields(
+            &self.types_store.env.idents,
+            self.scratch,
+            a_gathered_fields.range,
+            b_gathered_fields.range,
+        );
 
         // Determine how the fields of a & b extend
         const a_has_uniq_fields = partitioned.only_in_a.len() > 0;
@@ -896,15 +889,17 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherRecordFields` and `partitionFields`.
     pub fn partitionFields(
+        ident_store: *const Ident.Store,
         scratch: *Scratch,
         a_fields_range: RecordFieldSafeList.Range,
         b_fields_range: RecordFieldSafeList.Range,
     ) PartitionedRecordFields {
         // First sort the fields
+        const sort_ctx = RecordField.SortCtx{ .store = ident_store };
         const a_fields = scratch.gathered_fields.rangeToSlice(a_fields_range);
-        std.mem.sort(RecordField, a_fields, .{}, comptime RecordField.sortByFieldNameAsc);
+        std.mem.sort(RecordField, a_fields, sort_ctx, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.rangeToSlice(b_fields_range);
-        std.mem.sort(RecordField, b_fields, .{}, comptime RecordField.sortByFieldNameAsc);
+        std.mem.sort(RecordField, b_fields, sort_ctx, comptime RecordField.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
@@ -917,20 +912,24 @@ const Unifier = struct {
         while (a_i < a_fields.len and b_i < b_fields.len) {
             const a_next = a_fields[a_i];
             const b_next = b_fields[b_i];
-
-            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
-                    .a = a_next,
-                    .b = b_next,
-                });
-                a_i = a_i + 1;
-                b_i = b_i + 1;
-            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
-                _ = scratch.only_in_a_fields.append(scratch.gpa, a_next);
-                a_i = a_i + 1;
-            } else {
-                _ = scratch.only_in_b_fields.append(scratch.gpa, b_next);
-                b_i = b_i + 1;
+            const ord = RecordField.orderByName(ident_store, a_next, b_next);
+            switch (ord) {
+                .eq => {
+                    _ = scratch.in_both_fields.append(scratch.gpa, TwoRecordFields{
+                        .a = a_next,
+                        .b = b_next,
+                    });
+                    a_i = a_i + 1;
+                    b_i = b_i + 1;
+                },
+                .lt => {
+                    _ = scratch.only_in_a_fields.append(scratch.gpa, a_next);
+                    a_i = a_i + 1;
+                },
+                .gt => {
+                    _ = scratch.only_in_b_fields.append(scratch.gpa, b_next);
+                    b_i = b_i + 1;
+                },
             }
         }
 
@@ -1090,7 +1089,12 @@ const Unifier = struct {
         const b_gathered_tags = try self.gatherTagUnionTags(b_tag_union);
 
         // Then partition the tags
-        const partitioned = partitionTags(self.scratch, a_gathered_tags.range, b_gathered_tags.range);
+        const partitioned = partitionTags(
+            &self.types_store.env.idents,
+            self.scratch,
+            a_gathered_tags.range,
+            b_gathered_tags.range,
+        );
 
         // Determine how the tags of a & b extend
         const a_has_uniq_tags = partitioned.only_in_a.len() > 0;
@@ -1288,15 +1292,17 @@ const Unifier = struct {
     ///
     /// The caller must not mutate the field ranges between `gatherTagUnionTags` and `partitionTags`.
     pub fn partitionTags(
+        ident_store: *const Ident.Store,
         scratch: *Scratch,
         a_tags_range: TagSafeList.Range,
         b_tags_range: TagSafeList.Range,
     ) PartitionedTags {
         // First sort the tags
+        const sort_ctx = Tag.SortCtx{ .store = ident_store };
         const a_tags = scratch.gathered_tags.rangeToSlice(a_tags_range);
-        std.mem.sort(Tag, a_tags, .{}, comptime Tag.sortByTagIdxAsc);
+        std.mem.sort(Tag, a_tags, sort_ctx, comptime Tag.sortByNameAsc);
         const b_tags = scratch.gathered_tags.rangeToSlice(b_tags_range);
-        std.mem.sort(Tag, b_tags, .{}, comptime Tag.sortByTagIdxAsc);
+        std.mem.sort(Tag, b_tags, sort_ctx, comptime Tag.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
@@ -1309,17 +1315,21 @@ const Unifier = struct {
         while (a_i < a_tags.len and b_i < b_tags.len) {
             const a_next = a_tags[a_i];
             const b_next = b_tags[b_i];
-
-            if (@intFromEnum(a_next.name) == @intFromEnum(b_next.name)) {
-                _ = scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
-                a_i = a_i + 1;
-                b_i = b_i + 1;
-            } else if (@intFromEnum(a_next.name) < @intFromEnum(b_next.name)) {
-                _ = scratch.only_in_a_tags.append(scratch.gpa, a_next);
-                a_i = a_i + 1;
-            } else {
-                _ = scratch.only_in_b_tags.append(scratch.gpa, b_next);
-                b_i = b_i + 1;
+            const ord = Tag.orderByName(ident_store, a_next, b_next);
+            switch (ord) {
+                .eq => {
+                    _ = scratch.in_both_tags.append(scratch.gpa, TwoTags{ .a = a_next, .b = b_next });
+                    a_i = a_i + 1;
+                    b_i = b_i + 1;
+                },
+                .lt => {
+                    _ = scratch.only_in_a_tags.append(scratch.gpa, a_next);
+                    a_i = a_i + 1;
+                },
+                .gt => {
+                    _ = scratch.only_in_b_tags.append(scratch.gpa, b_next);
+                    b_i = b_i + 1;
+                },
             }
         }
 
@@ -1516,10 +1526,10 @@ pub const Scratch = struct {
     ) TagSafeList.Range {
         const start: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
         const tag_slice = multi_list.rangeToSlice(range);
-        for (tag_slice.items(.name), tag_slice.items(.args)) |name, args| {
+        for (tag_slice.items(.name), tag_slice.items(.args)) |ident, args| {
             _ = self.gathered_tags.append(
                 self.gpa,
-                Tag{ .name = name, .args = args },
+                Tag{ .name = ident, .args = args },
             );
         }
         const end: TagSafeList.Idx = @enumFromInt(self.gathered_tags.len());
@@ -1622,15 +1632,6 @@ const TestEnv = struct {
         };
     }
 
-    fn mkAliasFromIdent(self: *Self, type_ident_idx: TypeIdent, args: []const Var, backing_var: Var) Alias {
-        const args_range = self.types_store.appendAliasArgs(args);
-        return .{
-            .ident = type_ident_idx,
-            .args = args_range,
-            .backing_var = backing_var,
-        };
-    }
-
     // helpers - structure - type_apply
 
     fn mkTypeApplyNoArg(self: *Self, name: []const u8) Content {
@@ -1686,6 +1687,15 @@ const TestEnv = struct {
 
     // helpers - structure - records
 
+    fn mkRecordField(self: *Self, name: []const u8, var_: Var) RecordField {
+        const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
+        return Self.mkRecordFieldFromIdent(ident_idx, var_);
+    }
+
+    fn mkRecordFieldFromIdent(ident_idx: Ident.Idx, var_: Var) RecordField {
+        return RecordField{ .name = ident_idx, .var_ = var_ };
+    }
+
     const RecordInfo = struct { record: Record, content: Content };
 
     fn mkRecord(self: *Self, fields: []const RecordField, ext_var: Var) RecordInfo {
@@ -1712,8 +1722,9 @@ const TestEnv = struct {
         return self.types_store.appendTagArgs(args);
     }
 
-    fn mkTag(self: *Self, name: collections.SmallStringInterner.Idx, args: []const Var) Tag {
-        return Tag{ .name = name, .args = self.types_store.appendTagArgs(args) };
+    fn mkTag(self: *Self, name: []const u8, args: []const Var) Tag {
+        const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
+        return Tag{ .name = ident_idx, .args = self.types_store.appendTagArgs(args) };
     }
 
     fn mkTagUnion(self: *Self, tags: []const Tag, ext_var: Var) TagUnionInfo {
@@ -1902,9 +1913,8 @@ test "unify - alias with different args (fail)" {
 
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{str}, backing) };
-    const b_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{str}, backing) };
+    const b_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.freshFromContent(b_alias);
@@ -1925,8 +1935,7 @@ test "unify - alias with flex" {
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
     const backing = env.types_store.freshFromContent(env.mkTuple(&[_]Var{ str, bool_ }));
 
-    const alias_ident = env.mkTypeIdent("Alias");
-    const a_alias = Content{ .alias = env.mkAliasFromIdent(alias_ident, &[_]Var{bool_}, backing) };
+    const a_alias = Content{ .alias = env.mkAlias("Alias", &[_]Var{bool_}, backing) };
 
     const a = env.types_store.freshFromContent(a_alias);
     const b = env.types_store.fresh();
@@ -2594,12 +2603,12 @@ test "partitionFields - same record" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
+    const field_x = env.mkRecordField("field_x", @enumFromInt(0));
+    const field_y = env.mkRecordField("field_y", @enumFromInt(1));
 
     const range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ field_x, field_y });
 
-    const result = Unifier.partitionFields(&env.scratch, range, range);
+    const result = Unifier.partitionFields(&env.types_store.env.idents, &env.scratch, range, range);
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -2617,14 +2626,14 @@ test "partitionFields - disjoint fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
-    const a2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
+    const a1 = env.mkRecordField("a1", @enumFromInt(0));
+    const a2 = env.mkRecordField("a2", @enumFromInt(1));
+    const b1 = env.mkRecordField("b1", @enumFromInt(2));
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, a2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{b1});
 
-    const result = Unifier.partitionFields(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionFields(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -2643,14 +2652,14 @@ test "partitionFields - overlapping fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
-    const both = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
-    const b1 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
+    const a1 = env.mkRecordField("a1", @enumFromInt(0));
+    const both = env.mkRecordField("both", @enumFromInt(1));
+    const b1 = env.mkRecordField("b1", @enumFromInt(2));
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ a1, both });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ b1, both });
 
-    const result = Unifier.partitionFields(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionFields(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -2672,14 +2681,14 @@ test "partitionFields - reordering is normalized" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = RecordField{ .name = @enumFromInt(1), .var_ = @enumFromInt(0) };
-    const f2 = RecordField{ .name = @enumFromInt(2), .var_ = @enumFromInt(1) };
-    const f3 = RecordField{ .name = @enumFromInt(3), .var_ = @enumFromInt(2) };
+    const f1 = env.mkRecordField("f1", @enumFromInt(0));
+    const f2 = env.mkRecordField("f2", @enumFromInt(1));
+    const f3 = env.mkRecordField("f3", @enumFromInt(2));
 
     const a_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f3, f1, f2 });
     const b_range = env.scratch.appendSliceGatheredFields(&[_]RecordField{ f1, f2, f3 });
 
-    const result = Unifier.partitionFields(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionFields(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -2703,9 +2712,7 @@ test "unify - identical closed records" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const fields = [_]RecordField{
-        .{ .name = @enumFromInt(1), .var_ = str },
-    };
+    const fields = [_]RecordField{env.mkRecordField("a", str)};
     const record_data = env.mkRecordClosed(&fields);
     const record_data_fields = env.types_store.record_fields.rangeToSlice(record_data.record.fields);
 
@@ -2719,7 +2726,7 @@ test "unify - identical closed records" {
 
     const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
     const b_record_fields = env.types_store.record_fields.rangeToSlice(b_record.fields);
-    try std.testing.expectEqualSlices(collections.SmallStringInterner.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
+    try std.testing.expectEqualSlices(Ident.Idx, record_data_fields.items(.name), b_record_fields.items(.name));
     try std.testing.expectEqualSlices(Var, record_data_fields.items(.var_), b_record_fields.items(.var_));
 }
 
@@ -2730,8 +2737,8 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field1 = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field2 = RecordField{ .name = @enumFromInt(2), .var_ = str };
+    const field1 = env.mkRecordField("field1", str);
+    const field2 = env.mkRecordField("field2", str);
 
     const a_record_data = env.mkRecordClosed(&[_]RecordField{ field1, field2 });
     const a = env.types_store.freshFromContent(a_record_data.content);
@@ -2758,8 +2765,8 @@ test "unify - open record a extends b" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
+    const field_shared = env.mkRecordField("x", str);
+    const field_a_only = env.mkRecordField("y", int);
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2805,8 +2812,8 @@ test "unify - open record b extends a" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_b_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
+    const field_shared = env.mkRecordField("field_shared", str);
+    const field_b_only = env.mkRecordField("field_b_only", int);
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2850,9 +2857,9 @@ test "unify - both extend open record" {
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const field_shared = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_a_only = RecordField{ .name = @enumFromInt(2), .var_ = int };
-    const field_b_only = RecordField{ .name = @enumFromInt(3), .var_ = bool_ };
+    const field_shared = env.mkRecordField("x", str);
+    const field_a_only = env.mkRecordField("y", int);
+    const field_b_only = env.mkRecordField("z", bool_);
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{ field_shared, field_a_only });
     const a = env.types_store.freshFromContent(a_rec_data.content);
@@ -2905,11 +2912,12 @@ test "unify - record mismatch on shared field (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_a = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_b = RecordField{ .name = @enumFromInt(1), .var_ = int };
+    const field_a = env.mkRecordField("x", str);
+    const field_b = env.mkRecordField("x", int);
 
     const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_a});
     const a = env.types_store.freshFromContent(a_rec_data.content);
+
     const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_b});
     const b = env.types_store.freshFromContent(b_rec_data.content);
 
@@ -2931,8 +2939,8 @@ test "unify - open record extends closed (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
+    const field_x = env.mkRecordField("field_x", str);
+    const field_y = env.mkRecordField("field_y", str);
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{ field_x, field_y }).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x}).content);
@@ -2951,8 +2959,8 @@ test "unify - closed record extends open" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const field_x = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_y = RecordField{ .name = @enumFromInt(2), .var_ = str };
+    const field_x = env.mkRecordField("field_x", str);
+    const field_y = env.mkRecordField("field_y", str);
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{ field_x, field_y }).content);
@@ -2971,8 +2979,8 @@ test "unify - open vs closed records with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
+    const field_x_str = env.mkRecordField("field_x_str", str);
+    const field_x_int = env.mkRecordField("field_x_int", int);
 
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
@@ -2994,8 +3002,8 @@ test "unify - closed vs open records with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const field_x_str = RecordField{ .name = @enumFromInt(1), .var_ = str };
-    const field_x_int = RecordField{ .name = @enumFromInt(1), .var_ = int };
+    const field_x_str = env.mkRecordField("field_x_str", str);
+    const field_x_int = env.mkRecordField("field_x_int", int);
 
     const closed = env.types_store.freshFromContent(env.mkRecordClosed(&[_]RecordField{field_x_int}).content);
     const open = env.types_store.freshFromContent(env.mkRecordOpen(&[_]RecordField{field_x_str}).content);
@@ -3016,12 +3024,12 @@ test "partitionTags - same tags" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const tag_x = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
-    const tag_y = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
+    const tag_x = env.mkTag("X", &[_]Var{@enumFromInt(0)});
+    const tag_y = env.mkTag("Y", &[_]Var{@enumFromInt(1)});
 
     const range = env.scratch.appendSliceGatheredTags(&[_]Tag{ tag_x, tag_y });
 
-    const result = Unifier.partitionTags(&env.scratch, range, range);
+    const result = Unifier.partitionTags(&env.types_store.env.idents, &env.scratch, range, range);
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -3039,14 +3047,14 @@ test "partitionTags - disjoint fields" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
-    const a2 = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
-    const b1 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+    const a1 = env.mkTag("A1", &[_]Var{@enumFromInt(0)});
+    const a2 = env.mkTag("A2", &[_]Var{@enumFromInt(1)});
+    const b1 = env.mkTag("B1", &[_]Var{@enumFromInt(2)});
 
     const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, a2 });
     const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{b1});
 
-    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionTags(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(2, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -3065,14 +3073,14 @@ test "partitionTags - overlapping tags" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const a1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
-    const both = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
-    const b1 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+    const a1 = env.mkTag("A", &[_]Var{@enumFromInt(0)});
+    const both = env.mkTag("Both", &[_]Var{@enumFromInt(1)});
+    const b1 = env.mkTag("B", &[_]Var{@enumFromInt(2)});
 
     const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ a1, both });
     const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ b1, both });
 
-    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionTags(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(1, result.only_in_a.len());
     try std.testing.expectEqual(1, result.only_in_b.len());
@@ -3094,14 +3102,14 @@ test "partitionTags - reordering is normalized" {
     var env = TestEnv.init(gpa);
     defer env.deinit();
 
-    const f1 = env.mkTag(@enumFromInt(1), &[_]Var{@enumFromInt(0)});
-    const f2 = env.mkTag(@enumFromInt(2), &[_]Var{@enumFromInt(1)});
-    const f3 = env.mkTag(@enumFromInt(3), &[_]Var{@enumFromInt(2)});
+    const f1 = env.mkTag("F1", &[_]Var{@enumFromInt(0)});
+    const f2 = env.mkTag("F2", &[_]Var{@enumFromInt(1)});
+    const f3 = env.mkTag("F3", &[_]Var{@enumFromInt(2)});
 
     const a_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ f3, f1, f2 });
     const b_range = env.scratch.appendSliceGatheredTags(&[_]Tag{ f1, f2, f3 });
 
-    const result = Unifier.partitionTags(&env.scratch, a_range, b_range);
+    const result = Unifier.partitionTags(&env.types_store.env.idents, &env.scratch, a_range, b_range);
 
     try std.testing.expectEqual(0, result.only_in_a.len());
     try std.testing.expectEqual(0, result.only_in_b.len());
@@ -3125,8 +3133,7 @@ test "unify - identical closed tag_unions" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const tag_arg_range = env.mkTagArgs(&[_]Var{str});
-    const tag = Tag{ .name = @enumFromInt(1), .args = tag_arg_range };
+    const tag = env.mkTag("A", &[_]Var{str});
     const tags = [_]Tag{tag};
     const tag_union_data = env.mkTagUnionClosed(&tags);
 
@@ -3161,17 +3168,13 @@ test "unify - closed tag_unions with diff args (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const a_tag_arg_range = env.mkTagArgs(&[_]Var{str});
-    const a_tags = [_]Tag{
-        .{ .name = @enumFromInt(1), .args = a_tag_arg_range },
-    };
+    const a_tag = env.mkTag("A", &[_]Var{str});
+    const a_tags = [_]Tag{a_tag};
     const a_tag_union_data = env.mkTagUnionClosed(&a_tags);
     const a = env.types_store.freshFromContent(a_tag_union_data.content);
 
-    const b_tag_arg_range = env.mkTagArgs(&[_]Var{int});
-    const b_tags = [_]Tag{
-        .{ .name = @enumFromInt(1), .args = b_tag_arg_range },
-    };
+    const b_tag = env.mkTag("A", &[_]Var{int});
+    const b_tags = [_]Tag{b_tag};
     const b_tag_union_data = env.mkTagUnionClosed(&b_tags);
     const b = env.types_store.freshFromContent(b_tag_union_data.content);
 
@@ -3194,11 +3197,8 @@ test "unify - open tag union a extends b" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{str});
-    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_arg_range };
-
-    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{ int, int });
-    const tag_shared = Tag{ .name = @enumFromInt(2), .args = tag_shared_arg_range };
+    const tag_a_only = env.mkTag("A", &[_]Var{str});
+    const tag_shared = env.mkTag("Shared", &[_]Var{ int, int });
 
     const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
     const a = env.types_store.freshFromContent(tag_union_a.content);
@@ -3250,11 +3250,8 @@ test "unify - open tag union b extends a" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
 
-    const tag_b_only_arg_range = env.mkTagArgs(&[_]Var{ str, int });
-    const tag_b_only = Tag{ .name = @enumFromInt(1), .args = tag_b_only_arg_range };
-
-    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{int});
-    const tag_shared = Tag{ .name = @enumFromInt(2), .args = tag_shared_arg_range };
+    const tag_b_only = env.mkTag("A", &[_]Var{ str, int });
+    const tag_shared = env.mkTag("Shared", &[_]Var{int});
 
     const tag_union_a = env.mkTagUnionOpen(&[_]Tag{tag_shared});
     const a = env.types_store.freshFromContent(tag_union_a.content);
@@ -3307,14 +3304,9 @@ test "unify - both extend open tag union" {
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{bool_});
-    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_arg_range };
-
-    const tag_b_only_arg_range = env.mkTagArgs(&[_]Var{ str, int });
-    const tag_b_only = Tag{ .name = @enumFromInt(2), .args = tag_b_only_arg_range };
-
-    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{int});
-    const tag_shared = Tag{ .name = @enumFromInt(3), .args = tag_shared_arg_range };
+    const tag_a_only = env.mkTag("A", &[_]Var{bool_});
+    const tag_b_only = env.mkTag("B", &[_]Var{ str, int });
+    const tag_shared = env.mkTag("Shared", &[_]Var{int});
 
     const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
     const a = env.types_store.freshFromContent(tag_union_a.content);
@@ -3369,13 +3361,9 @@ test "unify - open tag unions a & b have same tag name with diff args (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const int = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Int"));
-    const tag_name: collections.SmallStringInterner.Idx = @enumFromInt(1);
 
-    const tag_a_only_arg_range = env.mkTagArgs(&[_]Var{str});
-    const tag_a_only = Tag{ .name = tag_name, .args = tag_a_only_arg_range };
-
-    const tag_shared_arg_range = env.mkTagArgs(&[_]Var{ int, int });
-    const tag_shared = Tag{ .name = tag_name, .args = tag_shared_arg_range };
+    const tag_a_only = env.mkTag("A", &[_]Var{str});
+    const tag_shared = env.mkTag("A", &[_]Var{ int, int });
 
     const tag_union_a = env.mkTagUnionOpen(&[_]Tag{ tag_a_only, tag_shared });
     const a = env.types_store.freshFromContent(tag_union_a.content);
@@ -3401,11 +3389,8 @@ test "unify - open tag extends closed (fail)" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const tag_shared_args = env.mkTagArgs(&[_]Var{str});
-    const tag_shared = Tag{ .name = @enumFromInt(0), .args = tag_shared_args };
-
-    const tag_a_only_args = env.mkTagArgs(&[_]Var{str});
-    const tag_a_only = Tag{ .name = @enumFromInt(1), .args = tag_a_only_args };
+    const tag_shared = env.mkTag("Shared", &[_]Var{str});
+    const tag_a_only = env.mkTag("A", &[_]Var{str});
 
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{ tag_shared, tag_a_only }).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_shared}).content);
@@ -3424,8 +3409,8 @@ test "unify - closed tag union extends open" {
 
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
 
-    const tag_shared = env.mkTag(@enumFromInt(0), &[_]Var{str});
-    const tag_b_only = env.mkTag(@enumFromInt(1), &[_]Var{str});
+    const tag_shared = env.mkTag("Shared", &[_]Var{str});
+    const tag_b_only = env.mkTag("B", &[_]Var{str});
 
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_shared}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{ tag_shared, tag_b_only }).content);
@@ -3474,8 +3459,8 @@ test "unify - open vs closed tag union with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const tag_a = env.mkTag(@enumFromInt(0), &[_]Var{str});
-    const tag_b = env.mkTag(@enumFromInt(0), &[_]Var{bool_});
+    const tag_a = env.mkTag("A", &[_]Var{str});
+    const tag_b = env.mkTag("A", &[_]Var{bool_});
 
     const a = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_a}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_b}).content);
@@ -3497,8 +3482,8 @@ test "unify - closed vs open tag union with type mismatch (fail)" {
     const str = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Str"));
     const bool_ = env.types_store.freshFromContent(env.mkTypeApplyNoArg("Bool"));
 
-    const tag_a = env.mkTag(@enumFromInt(0), &[_]Var{str});
-    const tag_b = env.mkTag(@enumFromInt(1), &[_]Var{bool_});
+    const tag_a = env.mkTag("A", &[_]Var{str});
+    const tag_b = env.mkTag("B", &[_]Var{bool_});
 
     const a = env.types_store.freshFromContent(env.mkTagUnionClosed(&[_]Tag{tag_a}).content);
     const b = env.types_store.freshFromContent(env.mkTagUnionOpen(&[_]Tag{tag_b}).content);

@@ -15,7 +15,6 @@ const std = @import("std");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 
-const SmallStringInterner = collections.SmallStringInterner;
 const MkSafeList = collections.SafeList;
 const MkSafeMultiList = collections.SafeMultiList;
 
@@ -134,10 +133,17 @@ pub const TypeIdent = struct {
     const Self = @This();
 
     ident_idx: Ident.Idx,
-    // TODO: Add module ident
+    // TODO: Add module ident?
 
-    pub fn eql(a: Self, b: Self) bool {
-        return a.ident_idx == b.ident_idx;
+    pub fn eql(store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.order(store, a, b) == .eq;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn order(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.ident_idx);
+        const b_text = store.getText(b.ident_idx);
+        return std.mem.order(u8, a_text, b_text);
     }
 };
 
@@ -249,13 +255,23 @@ pub const Record = struct {
 pub const RecordField = struct {
     const Self = @This();
 
-    // if you add a field here, make sure to add it to RecordFields too!
-    name: collections.SmallStringInterner.Idx,
+    /// The name of the field
+    name: Ident.Idx,
     var_: Var,
 
+    /// The context need by sortByFieldNameAsc
+    pub const SortCtx = struct { store: *const Ident.Store };
+
     /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByFieldNameAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
-        return @intFromEnum(a.name) < @intFromEnum(b.name);
+    pub fn sortByNameAsc(ctx: SortCtx, a: Self, b: Self) bool {
+        return Self.orderByName(ctx.store, a, b) == .lt;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.name);
+        const b_text = store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
     }
 
     /// A safe multi list of record fields
@@ -288,16 +304,26 @@ pub const TagUnion = struct {
 /// A tag entry in a tag union row
 pub const Tag = struct {
     /// The name of the tag (e.g. "Ok", "Err")
-    name: collections.SmallStringInterner.Idx,
+    name: Ident.Idx,
 
     /// A list of argument types for the tag (0 = no payload)
     args: Var.SafeList.Range,
 
     const Self = @This();
 
-    /// A function to be passed into std.mem.sort to sort tags by idx
-    pub fn sortByTagIdxAsc(_: @TypeOf(.{}), a: Self, b: Self) bool {
-        return @intFromEnum(a.name) < @intFromEnum(b.name);
+    /// The context need by sortByFieldNameAsc
+    pub const SortCtx = struct { store: *const Ident.Store };
+
+    /// A function to be passed into std.mem.sort to sort fields by name
+    pub fn sortByNameAsc(ctx: SortCtx, a: Self, b: Self) bool {
+        return Self.orderByName(ctx.store, a, b) == .lt;
+    }
+
+    /// Get the ordering of how a compares to b
+    pub fn orderByName(store: *const Ident.Store, a: Self, b: Self) std.math.Order {
+        const a_text = store.getText(a.name);
+        const b_text = store.getText(b.name);
+        return std.mem.order(u8, a_text, b_text);
     }
 
     /// A safe list of tags
