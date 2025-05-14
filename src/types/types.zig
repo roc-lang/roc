@@ -120,7 +120,7 @@ pub const Content = union(enum) {
 
 // alias //
 
-/// a nominal or structural alias
+/// A named alias to a different type
 pub const Alias = struct {
     ident: TypeIdent,
     args: Var.SafeList.Range,
@@ -156,6 +156,7 @@ pub const FlatType = union(enum) {
     list: Var,
     tuple: Tuple,
     num: Num,
+    custom_type: CustomType,
     func: Func,
     record: Record,
     empty_record,
@@ -224,6 +225,15 @@ pub const int_i64: FlatType = .{ .num = Num{ .int = .i64 } };
 pub const int_u128: FlatType = .{ .num = Num{ .int = .u128 } };
 /// constant
 pub const int_i128: FlatType = .{ .num = Num{ .int = .i128 } };
+
+// custom types //
+
+/// A nominal user-defined type
+pub const CustomType = struct {
+    ident: TypeIdent,
+    args: Var.SafeList.Range,
+    backing_var: Var,
+};
 
 // functions //
 

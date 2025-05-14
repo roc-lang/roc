@@ -56,6 +56,7 @@ const Rank = types.Rank;
 const Mark = types.Mark;
 const Content = types.Content;
 const Alias = types.Alias;
+const CustomType = types.CustomType;
 const FlatType = types.FlatType;
 const Builtin = types.Builtin;
 const Tuple = types.Tuple;
@@ -403,6 +404,14 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
+            .custom_type => |a_type| {
+                switch (b_flat_type) {
+                    .custom_type => |b_type| {
+                        try self.unifyCustomType(vars, a_type, b_type);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
             .func => |a_func| {
                 switch (b_flat_type) {
                     .func => |b_func| {
@@ -556,6 +565,25 @@ const Unifier = struct {
                 },
             },
         }
+    }
+
+    // Unify custom type //
+
+    /// Unify when `a` was a custom type
+    fn unifyCustomType(self: *Self, vars: *const ResolvedVarDescs, a_type: CustomType, b_type: CustomType) error{TypeMismatch}!void {
+        if (!TypeIdent.eql(&self.types_store.env.idents, a_type.ident, b_type.ident)) {
+            return error.TypeMismatch;
+        }
+
+        const a_args = self.types_store.getCustomTypeArgsSlice(a_type.args);
+        const b_args = self.types_store.getCustomTypeArgsSlice(b_type.args);
+        for (a_args, b_args) |a_arg, b_arg| {
+            try self.unifyGuarded(a_arg, b_arg);
+        }
+
+        // Note that here we *do not* unify the backing vars
+
+        self.merge(vars, vars.b.desc.content);
     }
 
     /// unify func
@@ -1604,14 +1632,14 @@ const TestEnv = struct {
         return TypeIdent{ .ident_idx = ident_idx };
     }
 
-    // helpers - structure - tuple
+    // helpers - rigid var
 
     fn mkRigidVar(self: *Self, name: []const u8) Content {
         const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
         return .{ .rigid_var = ident_idx };
     }
 
-    // helpers - structure - tuple
+    // helpers - alias
 
     fn mkAlias(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Alias {
         const args_range = self.types_store.appendAliasArgs(args);
@@ -1627,6 +1655,17 @@ const TestEnv = struct {
     fn mkTuple(self: *Self, slice: []const Var) Content {
         const elems_range = self.types_store.appendTupleElems(slice);
         return Content{ .structure = .{ .tuple = .{ .elems = elems_range } } };
+    }
+
+    // helpers - custom type
+
+    fn mkCustomType(self: *Self, name: []const u8, args: []const Var, backing_var: Var) Content {
+        const args_range = self.types_store.appendCustomTypeArgs(args);
+        return Content{ .structure = .{ .custom_type = .{
+            .ident = self.mkTypeIdent(name),
+            .args = args_range,
+            .backing_var = backing_var,
+        } } };
     }
 
     // helpers - structure - func
@@ -2582,6 +2621,71 @@ test "unify - same funcs first pure, second eff" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(eff_func, (try env.getDescForRootVar(b)).content);
+}
+
+// unification - structure/structure - custom type
+
+test "unify - a & b are both the same custom type" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = env.types_store.freshFromContent(Content{ .structure = .str });
+    const arg_var = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
+    const custom_type = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
+
+    const a = env.types_store.freshFromContent(custom_type);
+    const b = env.types_store.freshFromContent(custom_type);
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(custom_type, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - a & b are diff custom types (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = env.types_store.freshFromContent(Content{ .structure = .str });
+    const arg_var = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
+
+    const custom_type_a = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
+    const a = env.types_store.freshFromContent(custom_type_a);
+
+    const custom_type_b = env.mkCustomType("AnotherType", &[_]Var{arg_var}, backing_var);
+    const b = env.types_store.freshFromContent(custom_type_b);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - a & b are both the same custom type with diff args (fail)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const backing_var = env.types_store.freshFromContent(Content{ .structure = .str });
+    const arg_var = env.types_store.freshFromContent(Content{ .structure = types.int_u8 });
+
+    const custom_type_a = env.mkCustomType("MyType", &[_]Var{arg_var}, backing_var);
+    const a = env.types_store.freshFromContent(custom_type_a);
+
+    const custom_type_b = env.mkCustomType("MyType", &[_]Var{backing_var}, backing_var);
+    const b = env.types_store.freshFromContent(custom_type_b);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - records - partition fields
