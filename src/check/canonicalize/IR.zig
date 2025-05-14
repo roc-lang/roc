@@ -118,31 +118,31 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.num.Bound.Num,
+        bound: types.Num,
     },
 
     // Int and Float store a variable to generate better error messages
     int: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.num.Bound.Int,
+        bound: types.Num.Int,
     },
     float: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.num.Bound.Float,
+        bound: types.Num.Frac,
     },
     str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
     single_quote: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         value: u32,
-        bound: types.num.Bound.SingleQuote,
+        bound: types.Num.Int,
     },
     list: struct {
         elem_var: TypeVar,
@@ -779,28 +779,28 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.num.Bound.Num,
+        bound: types.Num,
     },
     int_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.num.Bound.Int,
+        bound: types.Num.Int,
     },
     float_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.num.Bound.Float,
+        bound: types.Num.Frac,
     },
     str_literal: StringLiteral.Idx,
     char_literal: struct {
         num_var: TypeVar,
-        precision_var: TypeVar,
+        precision_var: TypeVar, // <- can probably be removed
         value: u32,
-        bound: types.num.Bound.SingleQuote,
+        bound: types.Num.Int,
     },
     Underscore,
 

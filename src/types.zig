@@ -1,9 +1,6 @@
 const store = @import("./types/store.zig");
 const types = @import("./types/types.zig");
 
-/// Numbers
-pub const num = @import("./types/num.zig");
-
 /// Type Store
 pub const Store = store.Store;
 

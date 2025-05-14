@@ -536,7 +536,7 @@ const Unifier = struct {
                     } else if (b_int == .flex_var) {
                         // if b is flex, update to a's desc
                         self.merge(vars, vars.a.desc.content);
-                    } else if (a_int == b_int) {
+                    } else if (a_int.exact == b_int.exact) {
                         self.merge(vars, vars.b.desc.content);
                     } else {
                         return error.TypeMismatch;
@@ -557,7 +557,7 @@ const Unifier = struct {
                     } else if (b_frac == .flex_var) {
                         // if b is flex, update to a's desc
                         self.merge(vars, vars.a.desc.content);
-                    } else if (a_frac == b_frac) {
+                    } else if (a_frac.exact == b_frac.exact) {
                         self.merge(vars, vars.b.desc.content);
                     } else {
                         return error.TypeMismatch;
