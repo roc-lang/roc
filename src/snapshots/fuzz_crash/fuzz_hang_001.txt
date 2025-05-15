@@ -1,6 +1,6 @@
 ~~~META
 description=fuzz crash
-verbose-tokens
+type=file
 ~~~SOURCE
 0 (
 ~~~PROBLEMS
@@ -10,8 +10,6 @@ PARSER: expected_expr_close_round_or_comma
 Int(1:1-1:2),OpenRound(1:3-1:4),EndOfFile(1:4-1:4),
 ~~~PARSE
 (file
-    (malformed_header (1:1-1:2) "missing_header")
-    (malformed_expr (1:4-1:4) "expected_expr_close_round_or_comma"))
-~~~FORMATTED
-
+	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_expr (1:4-1:4) "expected_expr_close_round_or_comma"))
 ~~~END

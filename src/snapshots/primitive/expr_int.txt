@@ -1,6 +1,6 @@
 ~~~META
 description=A primitive
-verbose-tokens
+type=file
 ~~~SOURCE
 module [foo]
 foo = 42
@@ -11,10 +11,10 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13
 LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Int(2:7-2:9),EndOfFile(2:9-2:9),
 ~~~PARSE
 (file
-    (module (1:1-1:13) (exposed_item (lower_ident "foo")))
-    (decl (2:1-2:9)
-        (ident (2:1-2:4) "foo")
-        (int (2:7-2:9) "42")))
+	(module (1:1-1:13) (exposed_item (lower_ident "foo")))
+	(decl (2:1-2:9)
+		(ident (2:1-2:4) "foo")
+		(int (2:7-2:9) "42")))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

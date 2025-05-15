@@ -1,5 +1,6 @@
 ~~~META
 description=Various type annotations
+type=file
 ~~~SOURCE
 module []
 
@@ -20,37 +21,37 @@ LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14)
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),EndOfFile(7:38-7:38),
 ~~~PARSE
 (file
-    (module (1:1-1:10))
-    (type_anno (3:1-4:4) "foo" (ty "U64"))
-    (type_anno (4:1-5:4)
-        "bar"
-        (apply (4:7-4:21)
-            (ty "Thing")
-            (ty_var (4:13-4:14) "a")
-            (ty_var (4:16-4:17) "b")
-            (_)))
-    (type_anno (5:1-6:8)
-        "baz"
-        (tuple (5:7-5:16)
-            (ty_var (5:8-5:9) "a")
-            (ty_var (5:11-5:12) "b")
-            (ty_var (5:14-5:15) "c")))
-    (type_anno (6:1-7:6)
-        "add_one"
-        (fn (6:12-6:26)
-            (ty "U32")
-            (ty "U8")
-            (ty "U16")))
-    (type_anno (7:1-7:38)
-        "main!"
-        (fn (7:9-7:38)
-            (apply (7:25-7:38)
-                (ty "Result")
-                (record (7:32-7:34))
-                (_))
-            (apply (7:9-7:21)
-                (ty "List")
-                (ty "String")))))
+	(module (1:1-1:10))
+	(type_anno (3:1-4:4) "foo" (ty "U64"))
+	(type_anno (4:1-5:4)
+		"bar"
+		(apply (4:7-4:21)
+			(ty "Thing")
+			(ty_var (4:13-4:14) "a")
+			(ty_var (4:16-4:17) "b")
+			(_)))
+	(type_anno (5:1-6:8)
+		"baz"
+		(tuple (5:7-5:16)
+			(ty_var (5:8-5:9) "a")
+			(ty_var (5:11-5:12) "b")
+			(ty_var (5:14-5:15) "c")))
+	(type_anno (6:1-7:6)
+		"add_one"
+		(fn (6:12-6:26)
+			(ty "U32")
+			(ty "U8")
+			(ty "U16")))
+	(type_anno (7:1-7:38)
+		"main!"
+		(fn (7:9-7:38)
+			(apply (7:25-7:38)
+				(ty "Result")
+				(record (7:32-7:34))
+				(_))
+			(apply (7:9-7:21)
+				(ty "List")
+				(ty "String")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

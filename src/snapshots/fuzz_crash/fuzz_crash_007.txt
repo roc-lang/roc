@@ -1,6 +1,6 @@
 ~~~META
 description=fuzz crash
-verbose-tokens
+type=file
 ~~~SOURCE
 ff8.8.d
 ~~~PROBLEMS
@@ -11,9 +11,7 @@ PARSER: expr_unexpected_token
 LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFile(1:8-1:8),
 ~~~PARSE
 (file
-    (malformed_header (1:1-1:4) "missing_header")
-    (malformed_expr (1:4-1:6) "expr_unexpected_token")
-    (malformed_expr (1:6-1:8) "expr_unexpected_token"))
-~~~FORMATTED
-
+	(malformed_header (1:1-1:4) "missing_header")
+	(malformed_expr (1:4-1:6) "expr_unexpected_token")
+	(malformed_expr (1:6-1:8) "expr_unexpected_token"))
 ~~~END
