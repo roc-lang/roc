@@ -227,11 +227,10 @@ test "s-expression" {
         defer buf.deinit();
         foo.toStringPretty(buf.writer().any());
         const expected =
-            \\(foo
-            \\    "bar"
-            \\    -123
-            \\    (baz 456 7.89e2))
-        ;
+            "(foo\n" ++
+            "\t\"bar\"\n" ++
+            "\t-123\n" ++
+            "\t(baz 456 7.89e2))";
         try testing.expectEqualStrings(expected, buf.items);
     }
 
