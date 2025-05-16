@@ -75,7 +75,7 @@ fn parseHeaderAndReturnIdx(parser: *Parser) u32 {
     return id.id;
 }
 
-/// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
+/// Parses a Roc Header - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
 pub fn parseHeader(env: *base.ModuleEnv, source: []const u8) IR {
     return runParse(env, source, parseHeaderAndReturnIdx);
@@ -89,7 +89,7 @@ fn parseStatementAndReturnIdx(parser: *Parser) u32 {
     @panic("Statement to parse was not found in AST");
 }
 
-/// Parses a Roc expression - only for use in snapshots. The returned AST should be deallocated by calling deinit
+/// Parses a Roc statement - only for use in snapshots. The returned AST should be deallocated by calling deinit
 /// after its data is used to create the next IR, or at the end of any test.
 pub fn parseStatement(env: *base.ModuleEnv, source: []const u8) IR {
     return runParse(env, source, parseStatementAndReturnIdx);

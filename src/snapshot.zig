@@ -251,8 +251,8 @@ const Meta = struct {
     description: []const u8,
     node_type: NodeType,
 
-    const DESC_START = "description=";
-    const TYPE_START = "type=";
+    const DESC_START: []const u8 = "description=";
+    const TYPE_START: []const u8 = "type=";
 
     fn fromString(text: []const u8) Error!Meta {
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -261,9 +261,9 @@ const Meta = struct {
         while (true) {
             var line = lines.next() orelse break;
             if (std.mem.startsWith(u8, line, DESC_START)) {
-                desc = line[12..];
+                desc = line[(DESC_START.len)..];
             } else if (std.mem.startsWith(u8, line, TYPE_START)) {
-                const ty = line[5..];
+                const ty = line[(TYPE_START.len)..];
                 node_type = try NodeType.fromString(ty);
             }
         }
