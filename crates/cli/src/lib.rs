@@ -59,6 +59,7 @@ pub const CMD_FORMAT_ANNOTATE: &str = "annotate";
 pub const CMD_TEST: &str = "test";
 pub const CMD_GLUE: &str = "glue";
 pub const CMD_PREPROCESS_HOST: &str = "preprocess-host";
+pub const CMD_LICENSES: &str = "licenses";
 
 pub const FLAG_EMIT_LLVM_IR: &str = "emit-llvm-ir";
 pub const FLAG_PROFILING: &str = "profiling";
@@ -397,6 +398,8 @@ pub fn build_app() -> Command {
         )
         .subcommand(Command::new(CMD_VERSION)
             .about(concatcp!("Print the Roc compiler’s version, which is currently ", VERSION)))
+        .subcommand(Command::new(CMD_LICENSES)
+            .about("Prints license info for Roc as well as attributions to other projects used by Roc."))
         .subcommand(Command::new(CMD_CHECK)
             .about("Check the code for problems, but don’t build or run it")
             .arg(flag_main.clone())

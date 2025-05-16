@@ -9,7 +9,7 @@ use roc_cli::{
     CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT, FLAG_LIB, FLAG_MAIN,
     FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
     FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_VERBOSE,
-    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
+    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION, CMD_LICENSES,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::{internal_error, user_error};
@@ -32,6 +32,8 @@ static ALLOC: mimalloc::MiMalloc = mimalloc::MiMalloc;
 use std::ffi::{OsStr, OsString};
 
 use roc_cli::build;
+
+const LEGAL_DETAILS_TEXT: &str = include_str!("../../../legal_details");
 
 fn main() -> io::Result<()> {
     let _tracing_guards = roc_tracing::setup_tracing!();
@@ -491,6 +493,10 @@ fn main() -> io::Result<()> {
         }
         Some((CMD_VERSION, _)) => {
             println!("roc {}", VERSION);
+            Ok(0)
+        }
+        Some((CMD_LICENSES,_)) => {
+            println!("{LEGAL_DETAILS_TEXT}");
             Ok(0)
         }
         _ => unreachable!(),

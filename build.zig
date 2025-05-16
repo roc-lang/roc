@@ -173,6 +173,7 @@ fn add_fuzz_target(
         .link_libc = true,
     });
     repro_exe.root_module.addImport("fuzz_test", fuzz_obj.root_module);
+
     install_and_run(b, no_bin, repro_exe, repro_step, repro_step);
 
     if (fuzz and build_afl and !no_bin) {
@@ -210,6 +211,7 @@ fn addMainExe(
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
+    exe.root_module.addAnonymousImport("legal_details", .{.root_source_file = b.path("legal_details")});
 
     if (enable_llvm) {
         const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
