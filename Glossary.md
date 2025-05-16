@@ -162,7 +162,23 @@ Note: the term "alias" in the code base does not always refer to a type alias, i
 
 ## Type Variable
 
-TODO
+A placeholder for a type. It allows generic programming that can make your code work with a collection of types.
+For example:
+```roc
+reverse : List a -> List a
+```
+`reverse` can be done on any kind of list, regardless of the type of the element, so we indicate this with the type variable `a`.
+
+Type variables can also be required to have certain [abilities](https://www.roc-lang.org/abilities), for example:
+```roc
+Graph a := Dict a (List a) where a implements Eq
+```
+
+Type variables don't have to be a single letter, they just have to start with a lowercase letter.
+
+Parsing of type vars:
+- new compiler: search `ty_var` in [Parser.zig](src/check/parse/Parser.zig)
+- old compiler: search `parse_type_variable` in [type_annotation.rs](crates/compiler/parse/src/type_annotation.rs)
 
 ## Compiler Phase
 
@@ -283,6 +299,10 @@ Type inference implementation:
 - old compiler: Type inference is spread over multiple crates: [solve](crates/compiler/solve), [late-solve](crates/compiler/solve),[unify](crates/compiler/unify), [constrain](crates/compiler/constrain), ...
 
 ## Type Solving
+
+TODO
+
+## Rank
 
 TODO
 
