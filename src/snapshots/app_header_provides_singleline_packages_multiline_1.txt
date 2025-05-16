@@ -1,0 +1,23 @@
+~~~META
+description=app_header_provides_singleline_packages_multiline (1)
+type=file
+~~~SOURCE
+app [main!] {
+	pf: platform "../main.roc",
+	somePkg: "../main.roc"
+}
+~~~PROBLEMS
+NIL
+~~~TOKENS
+KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),OpenCurly(1:13-1:14),Newline(1:1-1:1),
+LowerIdent(2:2-2:4),OpColon(2:4-2:5),KwPlatform(2:6-2:14),StringStart(2:15-2:16),StringPart(2:16-2:27),StringEnd(2:27-2:28),Comma(2:28-2:29),Newline(1:1-1:1),
+LowerIdent(3:2-3:9),OpColon(3:9-3:10),StringStart(3:11-3:12),StringPart(3:12-3:23),StringEnd(3:23-3:24),Newline(1:1-1:1),
+CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
+~~~PARSE
+(file (app (1:1-4:2) "TODO implement toSExpr for app module header"))
+~~~FORMATTED
+app [main!] {
+	pf: platform "../main.roc",
+	somePkg: "../main.roc",
+}
+~~~END

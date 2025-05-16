@@ -184,35 +184,51 @@ fn printParseErrors(gpa: std.mem.Allocator, source: []const u8, parse_ast: IR) !
     }
 }
 
-/// Formats and writes out well-formed source of a Roc parse IR (AST).
-/// Only returns an error if the underlying writer returns an error.
-pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
+fn formatIRNode(ast: IR, writer: std.io.AnyWriter, formatter: *const fn (*Formatter) anyerror!void) !void {
     const trace = tracy.trace(@src());
     defer trace.end();
 
     var fmt = Formatter.init(ast, writer);
 
-    var ignore_newline_for_first_statement = false;
-
-    fmt.ast.store.emptyScratch();
-    const file = fmt.ast.store.getFile();
-    const header_region = fmt.ast.store.nodes.items.items(.region)[file.header.id];
-    _ = try fmt.flushCommentsBefore(header_region.start);
-    const maybe_output = try fmt.formatHeader(file.header);
-    if (maybe_output == FormattedOutput.nothing_formatted) {
-        ignore_newline_for_first_statement = true;
-    }
-    for (fmt.ast.store.statementSlice(file.statements)) |s| {
-        const region = fmt.nodeRegion(s.id);
-        _ = try fmt.flushCommentsBefore(region.start);
-        _ = try fmt.formatStatement(s);
-    }
-
+    try formatter(&fmt);
     try fmt.flush();
 }
 
-/// The caller may need to know if anything was formatted, to handle newlines correctly.
-const FormattedOutput = enum { something_formatted, nothing_formatted };
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
+/// Only returns an error if the underlying writer returns an error.
+pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
+    return formatIRNode(ast, writer, Formatter.formatFile);
+}
+
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
+/// Only returns an error if the underlying writer returns an error.
+pub fn formatHeader(ast: IR, writer: std.io.AnyWriter) !void {
+    return formatIRNode(ast, writer, formatHeaderInner);
+}
+
+fn formatHeaderInner(fmt: *Formatter) !void {
+    return fmt.formatHeader(.{ .id = fmt.ast.root_node_idx });
+}
+
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
+/// Only returns an error if the underlying writer returns an error.
+pub fn formatStatement(ast: IR, writer: std.io.AnyWriter) !void {
+    return formatIRNode(ast, writer, formatStatementInner);
+}
+
+fn formatStatementInner(fmt: *Formatter) !void {
+    return fmt.formatStatement(.{ .id = fmt.ast.root_node_idx });
+}
+
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
+/// Only returns an error if the underlying writer returns an error.
+pub fn formatExpr(ast: IR, writer: std.io.AnyWriter) !void {
+    return formatIRNode(ast, writer, formatExprNode);
+}
+
+fn formatExprNode(fmt: *Formatter) !void {
+    _ = try fmt.formatExpr(.{ .id = fmt.ast.root_node_idx });
+}
 
 const NewlineBehavior = enum { no_extra_newline, extra_newline_needed };
 
@@ -240,22 +256,21 @@ const Formatter = struct {
 
     /// Emits a string containing the well-formed source of a Roc parse IR (AST).
     /// The resulting string is owned by the caller.
-    pub fn formatFile(fmt: *Formatter) ![]const u8 {
+    pub fn formatFile(fmt: *Formatter) !void {
         fmt.ast.store.emptyScratch();
         const file = fmt.ast.store.getFile();
         const header_region = fmt.ast.store.nodes.items.items(.region)[file.header.id];
         _ = try fmt.flushCommentsBefore(header_region.start);
-        try fmt.formatHeader(file.header);
+        _ = try fmt.formatHeader(file.header);
         const statement_slice = fmt.ast.store.statementSlice(file.statements);
         for (statement_slice) |s| {
             const region = fmt.nodeRegion(s.id);
             _ = try fmt.flushCommentsBefore(region.start);
-            _ = try fmt.formatStatement(s);
+            try fmt.formatStatement(s);
         }
-        return fmt.buffer.toOwnedSlice(fmt.gpa) catch |err| exitOnOom(err);
     }
 
-    fn formatStatement(fmt: *Formatter, si: StatementIdx) !NewlineBehavior {
+    fn formatStatement(fmt: *Formatter, si: StatementIdx) !void {
         const statement = fmt.ast.store.getStatement(si);
         const node_region = fmt.nodeRegion(si.id);
         const multiline = fmt.ast.regionIsMultiline(node_region);
@@ -282,7 +297,6 @@ const Formatter = struct {
                     try fmt.pushIndent();
                 }
                 _ = try fmt.formatExpr(d.body);
-                return .extra_newline_needed;
             },
             .@"var" => |v| {
                 try fmt.pushAll("var");
@@ -308,11 +322,9 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(v.body);
-                return .extra_newline_needed;
             },
             .expr => |e| {
                 _ = try fmt.formatExpr(e.expr);
-                return .extra_newline_needed;
             },
             .import => |i| {
                 try fmt.pushAll("import");
@@ -395,7 +407,6 @@ const Formatter = struct {
                         try fmt.push(braces.end());
                     }
                 }
-                return .extra_newline_needed;
             },
             .type_decl => |d| {
                 const header_region = fmt.nodeRegion(d.header.id);
@@ -422,7 +433,6 @@ const Formatter = struct {
                     try fmt.pushIndent();
                     try fmt.formatWhereConstraint(w);
                 }
-                return .extra_newline_needed;
             },
             .type_anno => |t| {
                 try fmt.pushTokenText(t.name);
@@ -448,7 +458,6 @@ const Formatter = struct {
                     try fmt.pushIndent();
                     try fmt.formatWhereConstraint(w);
                 }
-                return .no_extra_newline;
             },
             .expect => |e| {
                 try fmt.pushAll("expect");
@@ -460,7 +469,6 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(e.body);
-                return .extra_newline_needed;
             },
             .@"for" => |f| {
                 try fmt.pushAll("for");
@@ -494,7 +502,6 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(f.body);
-                return .extra_newline_needed;
             },
             .crash => |c| {
                 try fmt.pushAll("crash");
@@ -506,7 +513,6 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(c.expr);
-                return .extra_newline_needed;
             },
             .@"return" => |r| {
                 try fmt.pushAll("return");
@@ -518,11 +524,9 @@ const Formatter = struct {
                     try fmt.push(' ');
                 }
                 _ = try fmt.formatExpr(r.expr);
-                return .extra_newline_needed;
             },
             .malformed => {
                 // Output nothing for malformed node
-                return .no_extra_newline;
             },
         }
     }
@@ -1129,7 +1133,7 @@ const Formatter = struct {
         return region;
     }
 
-    fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !FormattedOutput {
+    fn formatHeader(fmt: *Formatter, hi: HeaderIdx) !void {
         const header = fmt.ast.store.getHeader(hi);
         const start_indent = fmt.curr_indent;
         defer {
@@ -1239,8 +1243,6 @@ const Formatter = struct {
                 }
 
                 try fmt.push('}');
-
-                return .something_formatted;
             },
             .module => |m| {
                 try fmt.pushAll("module");
@@ -1259,7 +1261,6 @@ const Formatter = struct {
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
-                return .something_formatted;
             },
             .hosted => |h| {
                 try fmt.pushAll("hosted");
@@ -1278,7 +1279,6 @@ const Formatter = struct {
                     fmt.ast.store.exposedItemSlice(.{ .span = exposes.span }),
                     Formatter.formatExposedItem,
                 );
-                return .something_formatted;
             },
             .package => |p| {
                 try fmt.pushAll("package");
@@ -1317,7 +1317,6 @@ const Formatter = struct {
                     fmt.ast.store.recordFieldSlice(.{ .span = packages.span }),
                     Formatter.formatRecordField,
                 );
-                return .something_formatted;
             },
             .platform => |p| {
                 const multiline = fmt.ast.regionIsMultiline(p.region);
@@ -1427,12 +1426,8 @@ const Formatter = struct {
                     Formatter.formatExposedItem,
                 );
             },
-            .malformed => {
-                // Output nothing for a malformed node
-                return .nothing_formatted;
-            },
+            .malformed => {},
         }
-        return .something_formatted;
     }
 
     fn nodeRegion(fmt: *Formatter, idx: u32) IR.Region {
@@ -1449,7 +1444,7 @@ const Formatter = struct {
                 _ = try fmt.flushCommentsBefore(region.start);
                 try fmt.ensureNewline();
                 try fmt.pushIndent();
-                _ = try fmt.formatStatement(s);
+                try fmt.formatStatement(s);
             }
             _ = try fmt.flushCommentsBefore(body.region.end);
             try fmt.ensureNewline();
@@ -1458,7 +1453,7 @@ const Formatter = struct {
             try fmt.push('}');
         } else if (body.statements.span.len == 1) {
             for (fmt.ast.store.statementSlice(body.statements)) |s| {
-                _ = try fmt.formatStatement(s);
+                try fmt.formatStatement(s);
             }
         } else {
             try fmt.pushAll("{}");
@@ -1785,8 +1780,6 @@ const Formatter = struct {
         return true;
     }
 
-    const indent = "    ";
-
     fn push(fmt: *Formatter, c: u8) !void {
         fmt.has_newline = c == '\n';
         try fmt.buffer.writer().writeByte(c);
@@ -1805,7 +1798,7 @@ const Formatter = struct {
             return;
         }
         for (0..fmt.curr_indent) |_| {
-            try fmt.pushAll(indent);
+            try fmt.push('\t');
         }
     }
 
@@ -1974,783 +1967,4 @@ fn parseAndFmt(gpa: std.mem.Allocator, input: []const u8, debug: bool) ![]const 
         std.debug.print("Formatted:\n==========\n{s}\n==========\n\n", .{result.items});
     }
     return result.toOwnedSlice() catch |err| exitOnOom(err);
-}
-
-test "Hello world" {
-    try moduleFmtsSame(
-        \\app [main!] { pf: platform "../basic-cli/platform.roc" }
-        \\
-        \\import pf.Stdout
-        \\
-        \\main! = |_| Stdout.line!("Hello, world!")
-    );
-}
-
-test "Hello world with block" {
-    try moduleFmtsSame(
-        \\# Hello world!
-        \\
-        \\# Multiline comments?
-        \\app [main!] { pf: platform "../basic-cli/platform.roc" }
-        \\
-        \\import pf.Stdout
-        \\
-        \\main! = |_| {
-        \\    world = "World"
-        \\    # Hello
-        \\    Stdout.line!("Hello, world!")
-        \\}
-    );
-}
-
-test "Plain module" {
-    try moduleFmtsSame(
-        \\module [hello!, world]
-        \\
-        \\import pf.Stdout
-        \\
-        \\hello! = Stdout.line!("Hello")
-        \\
-        \\world = "World"
-    );
-    try moduleFmtsSame(
-        \\module [hello!, world]
-        \\import pf.Stdout
-        \\hello! = Stdout.line!("Hello")
-        \\world = "World"
-    );
-}
-
-test "Module - empty" {
-    try moduleFmtsSame(
-        \\module []
-    );
-}
-
-test "Module - nonempty singleline" {
-    try moduleFmtsSame(
-        \\module [something, SomeType]
-    );
-}
-
-test "Module - nonempty multiline" {
-    try moduleFmtsSame(
-        \\module [
-        \\    something,
-        \\    SomeType,
-        \\]
-    );
-
-    try moduleFmtsSame(
-        \\module [ # Comment After exposes open
-        \\    something, # Comment after exposed item
-        \\    SomeType, # Comment after final exposed item
-        \\]
-    );
-
-    try moduleFmtsSame(
-        \\module # Comment after module keyword
-        \\    [ # Comment After exposes open
-        \\        something, # Comment after exposed item
-        \\        SomeType, # Comment after final exposed item
-        \\    ]
-    );
-
-    try moduleFmtsTo(
-        \\module [something, SomeType,]
-    ,
-        \\module [
-        \\    something,
-        \\    SomeType,
-        \\]
-    );
-}
-
-test "Hosted - empty" {
-    try moduleFmtsSame(
-        \\hosted []
-    );
-}
-
-test "Hosted - nonempty singleline" {
-    try moduleFmtsSame(
-        \\hosted [something, SomeType]
-    );
-}
-
-test "Hosted - nonempty multiline" {
-    try moduleFmtsSame(
-        \\hosted [
-        \\    something,
-        \\    SomeType,
-        \\]
-    );
-
-    try moduleFmtsSame(
-        \\hosted [ # Comment After exposes open
-        \\    something, # Comment after exposed item
-        \\    SomeType, # Comment after final exposed item
-        \\]
-    );
-
-    try moduleFmtsSame(
-        \\hosted # Comment after hosted keyword
-        \\    [ # Comment After exposes open
-        \\        something, # Comment after exposed item
-        \\        SomeType, # Comment after final exposed item
-        \\    ]
-    );
-
-    try moduleFmtsTo(
-        \\hosted [something, SomeType,]
-    ,
-        \\hosted [
-        \\    something,
-        \\    SomeType,
-        \\]
-    );
-}
-
-test "Package Header - empty" {
-    try moduleFmtsSame(
-        \\package [] {}
-    );
-}
-
-test "App Header - nonempty singleline" {
-    try moduleFmtsSame(
-        \\app [main!] { pf: platform "../main.roc", other: "../../other/main.roc" }
-    );
-}
-
-test "App Header - nonempty multiline" {
-    try moduleFmtsSame(
-        \\app # This comment is here
-        \\    [main!]
-        \\    { pf: platform "../main.roc", somePkg: "../main.roc" }
-    );
-    try moduleFmtsTo(
-        \\app
-        \\    [main!,]
-        \\    { pf: platform "../main.roc", somePkg: "../main.roc", }
-    ,
-        \\app
-        \\    [
-        \\        main!,
-        \\    ]
-        \\    {
-        \\        pf: platform "../main.roc",
-        \\        somePkg: "../main.roc",
-        \\    }
-    );
-    try moduleFmtsSame(
-        \\app # Comment after keyword
-        \\    [ # Comment after provides open
-        \\        main!, # Comment after exposed item
-        \\    ]
-        \\    { # Comment after packages open
-        \\        pf: platform "../main.roc", # Comment after platform
-        \\        other: "../../other/main.roc", # Comment after last package
-        \\    }
-    );
-}
-
-test "App Header - platform not first" {
-    try moduleFmtsTo(
-        \\app
-        \\    [main!,]
-        \\    { somePkg: "../main.roc", pf: platform "../main.roc", }
-    ,
-        \\app
-        \\    [
-        \\        main!,
-        \\    ]
-        \\    {
-        \\        pf: platform "../main.roc",
-        \\        somePkg: "../main.roc",
-        \\    }
-    );
-}
-
-test "App Header - provides singleline, packages multiline" {
-    try moduleFmtsTo(
-        \\app [main!] {
-        \\    pf: platform "../main.roc",
-        \\    somePkg: "../main.roc"
-        \\}
-    ,
-        \\app [main!] {
-        \\    pf: platform "../main.roc",
-        \\    somePkg: "../main.roc",
-        \\}
-    );
-    try moduleFmtsTo(
-        \\app [main!] {
-        \\    somePkg: "../main.roc",
-        \\    pf: platform "../main.roc"
-        \\}
-    ,
-        \\app [main!] {
-        \\    pf: platform "../main.roc",
-        \\    somePkg: "../main.roc",
-        \\}
-    );
-    try moduleFmtsTo(
-        \\app [main!] {somePkg: "../main.roc",pf: platform "../main.roc",}
-    ,
-        \\app [main!] {
-        \\    pf: platform "../main.roc",
-        \\    somePkg: "../main.roc",
-        \\}
-    );
-}
-
-test "Package Header - nonempty singleline" {
-    try moduleFmtsSame(
-        \\package [something, SomeType] { somePkg: "../main.roc", other: "../../other/main.roc" }
-    );
-}
-
-test "Package Header - nonempty multiline" {
-    try moduleFmtsSame(
-        \\package # This comment is here
-        \\    [something, SomeType]
-        \\    { somePkg: "../main.roc" }
-    );
-    try moduleFmtsTo(
-        \\package
-        \\    [something, SomeType,]
-        \\    { somePkg: "../main.roc", }
-    ,
-        \\package
-        \\    [
-        \\        something,
-        \\        SomeType,
-        \\    ]
-        \\    {
-        \\        somePkg: "../main.roc",
-        \\    }
-    );
-    try moduleFmtsSame(
-        \\package # Comment after keyword
-        \\    [ # Comment after exposes open
-        \\        something, # Comment after exposed item
-        \\        SomeType, # Comment after last exposed item
-        \\    ]
-        \\    { # Comment after packages open
-        \\        somePkg: "../main.roc", # Comment after package
-        \\        other: "../../other/main.roc", # Comment after last package
-        \\    }
-    );
-}
-
-test "Platform header - empty" {
-    try moduleFmtsSame(
-        \\platform "foo"
-        \\    requires {} {}
-        \\    exposes []
-        \\    packages {}
-        \\    provides []
-    );
-
-    try moduleFmtsTo(
-        \\platform "foo" requires {} {} exposes [] packages {} provides []
-    ,
-        \\platform "foo"
-        \\    requires {} {}
-        \\    exposes []
-        \\    packages {}
-        \\    provides []
-    );
-}
-
-test "Platform header - nonempty" {
-    try moduleFmtsSame(
-        \\platform # Comment after platform keyword
-        \\    "foo" # Comment after name
-        \\    requires # Comment after requires keyword
-        \\        { # Comment after rigids open
-        \\            Main, # Comment after rigid member
-        \\        } # Comment after rigids close
-        \\            { # Comment after signatures open
-        \\                main! : List(Str) => {}, # Comment after signature
-        \\            } # Comment after signatures close
-        \\    exposes # Comment after exposes keyword
-        \\        [ # Comment after exposes open
-        \\            foo, # Comment after exposed item
-        \\        ] # Comment after exposes close
-        \\    packages # Comment after packages keyword
-        \\        { # Comment after packages open
-        \\            some_pkg: "../some_pkg.roc", # Comment after package
-        \\        } # Comment after packages close
-        \\    provides # Comment after provides keyword
-        \\        [ # Comment after provides open
-        \\            bar, # Comment after exposed item
-        \\        ]
-    );
-}
-
-test "Where clauses" {
-    try moduleFmtsSame(
-        \\module [Hash]
-        \\
-        \\Hash(a) : a
-        \\    where
-        \\        a.hash(hasher) -> hasher,
-        \\        hasher.Hasher,
-        \\
-        \\Decode(a) : a
-        \\    where
-        \\        module(a).decode(List(U8)) -> a,
-    );
-
-    try moduleFmtsSame(
-        \\module [decode]
-        \\
-        \\import Decode exposing [Decode]
-        \\
-        \\decodeThings : List(List(U8)) -> List(a)
-        \\    where a.Decode
-    );
-
-    try moduleFmtsSame(
-        \\module [Hash]
-        \\
-        \\Hash(a) # After header
-        \\    : # After colon
-        \\        a # After var
-        \\            where # After where
-        \\                a.hash(hasher) # After method
-        \\                    -> # After arrow
-        \\                        hasher, # After first clause
-        \\                hasher.Hasher,
-        \\
-        \\Decode(a) : a
-        \\    where
-        \\        module(a).decode( # After method args open
-        \\            List(U8), # After method arg
-        \\        ) -> a,
-    );
-
-    try moduleFmtsSame(
-        \\module [decode]
-        \\
-        \\import Decode exposing [Decode]
-        \\
-        \\decodeThings # After member name
-        \\    : # After colon
-        \\        List(List(U8)) -> List(a) # After anno
-        \\            where # after where
-        \\                a.Decode,
-    );
-}
-
-test "Syntax grab bag" {
-    try moduleFmtsSame(
-        \\# This is a module comment!
-        \\app [main!] { pf: platform "../basic-cli/platform.roc" }
-        \\
-        \\import pf.Stdout exposing [line!, write!]
-        \\
-        \\import # Comment after import keyword
-        \\    pf # Comment after qualifier
-        \\        .StdoutMultiline # Comment after ident
-        \\        exposing [ # Comment after exposing open
-        \\            line!, # Comment after exposed item
-        \\            write!, # Another after exposed item
-        \\        ] # Comment after exposing close
-        \\
-        \\import pkg.Something exposing [func as function, Type as ValueCategory, Custom.*]
-        \\
-        \\import BadName as GoodName
-        \\import
-        \\    BadNameMultiline
-        \\        as
-        \\        GoodNameMultiline
-        \\
-        \\Map(a, b) : List(a), (a -> b) -> List(b)
-        \\MapML( # Comment here
-        \\    a, # And here
-        \\    b,
-        \\) # And after the last arg
-        \\    : # And after the colon
-        \\        List( # Inside Tag args
-        \\            a, # After tag arg
-        \\        ),
-        \\        (a -> b) -> # After arrow
-        \\            List( # Inside tag args
-        \\                b,
-        \\            ) # And after the type decl
-        \\
-        \\Foo : (Bar, Baz)
-        \\
-        \\FooMultiline : ( # Comment after pattern tuple open
-        \\    Bar, # Comment after pattern tuple item
-        \\    Baz, # Another after pattern tuple item
-        \\) # Comment after pattern tuple close
-        \\
-        \\Some(a) : { foo : Ok(a), bar : Something }
-        \\SomeMl(a) : { # After record open
-        \\    foo : Ok(a), # After field
-        \\    bar : Something, # After last field
-        \\}
-        \\
-        \\SomeMultiline(a) : { # Comment after pattern record open
-        \\    foo # After field name
-        \\        : # Before field anno
-        \\            Ok(a), # Comment after pattern record field
-        \\    bar : Something, # Another after pattern record field
-        \\} # Comment after pattern record close
-        \\
-        \\Maybe(a) : [Some(a), None]
-        \\
-        \\MaybeMultiline(a) : [ # Comment after tag union open
-        \\    Some(a), # Comment after tag union member
-        \\    None, # Another after tag union member
-        \\] # Comment after tag union close
-        \\
-        \\SomeFunc(a) : Maybe(a), a -> Maybe(a)
-        \\
-        \\add_one_oneline = |num| if num 2 else 5
-        \\
-        \\add_one : U64 -> U64
-        \\add_one = |num| {
-        \\    other = 1
-        \\    if num {
-        \\        dbg # After debug
-        \\            some_func() # After debug expr
-        \\        0
-        \\    } else {
-        \\        dbg 123
-        \\        other
-        \\    }
-        \\}
-        \\
-        \\match_time = |
-        \\    a, # After arg
-        \\    b,
-        \\| # After args
-        \\    match a {
-        \\        Blue | Green | Red => {
-        \\            x = 12
-        \\            x
-        \\        }
-        \\        Blue # After pattern in alt
-        \\        | # Before pattern in alt
-        \\            Green
-        \\        | Red # After alt pattern
-        \\            => {
-        \\                x = 12
-        \\                x
-        \\            }
-        \\        lower # After pattern comment
-        \\            => 1
-        \\        "foo" => # After arrow comment
-        \\            100
-        \\        "foo" | "bar" => 200
-        \\        [1, 2, 3, .. as rest] # After pattern comment
-        \\            => # After arrow comment
-        \\                123 # After branch comment
-        \\
-        \\        # Just a random comment
-        \\
-        \\        [1, 2 | 5, 3, .. as rest] => 123
-        \\        [
-        \\            1,
-        \\            2 | 5,
-        \\            3,
-        \\            .. # After DoubleDot
-        \\                as # Before alias
-        \\                    rest, # After last pattern in list
-        \\        ] => 123
-        \\        3.14 => 314
-        \\        3.14 | 6.28 => 314
-        \\        (1, 2, 3) => 123
-        \\        (1, 2 | 5, 3) => 123
-        \\        { foo: 1, bar: 2, ..rest } => 12->add(34)
-        \\        { # After pattern record open
-        \\            foo # After pattern record field name
-        \\                : # Before pattern record field value
-        \\                    1, # After pattern record field
-        \\            bar: 2,
-        \\            .. # After spread operator
-        \\                rest, # After last field
-        \\        } => 12
-        \\        { foo: 1, bar: 2 | 7 } => 12
-        \\        {
-        \\            foo: 1,
-        \\            bar: 2 | 7, # After last record field
-        \\        } => 12
-        \\        Ok(123) => 123
-        \\        Ok(Some(dude)) => dude
-        \\        TwoArgs("hello", Some("world")) => 1000
-        \\    }
-        \\
-        \\expect # Comment after expect keyword
-        \\    blah == 1 # Comment after expect statement
-        \\
-        \\main! : List(String) -> Result({}, _)
-        \\main! = |_| { # Yeah I can leave a comment here
-        \\    world = "World"
-        \\    var number = 123
-        \\    expect blah == 1
-        \\    tag = Blue
-        \\    return # Comment after return keyword
-        \\        tag # Comment after return statement
-        \\
-        \\    # Just a random comment!
-        \\
-        \\    ...
-        \\    match_time(
-        \\        ..., # Single args with comment
-        \\    )
-        \\    some_func(
-        \\        dbg # After debug
-        \\            42, # After debug expr
-        \\    )
-        \\    crash # Comment after crash keyword
-        \\        "Unreachable!" # Comment after crash statement
-        \\    tag_with_payload = Ok(number)
-        \\    interpolated = "Hello, ${world}"
-        \\    list = [
-        \\        add_one(
-        \\            dbg # After dbg in list
-        \\                number, # after dbg expr as arg
-        \\        ), # Comment one
-        \\        456, # Comment two
-        \\        789, # Comment three
-        \\    ]
-        \\    for n in list {
-        \\        Stdout.line!("Adding ${n} to ${number}")
-        \\        number = number + n
-        \\    }
-        \\    record = { foo: 123, bar: "Hello", baz: tag, qux: Ok(world), punned }
-        \\    tuple = (123, "World", tag, Ok(world), (nested, tuple), [1, 2, 3])
-        \\    multiline_tuple = (
-        \\        123,
-        \\        "World",
-        \\        tag1,
-        \\        Ok(world), # This one has a comment
-        \\        (nested, tuple),
-        \\        [1, 2, 3],
-        \\    )
-        \\    bin_op_result = Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5
-        \\    static_dispatch_style = some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?
-        \\    Stdout.line!(interpolated)?
-        \\    Stdout.line!(
-        \\        "How about ${ # Comment after string interpolation open
-        \\            Num.toStr(number) # Comment after string interpolation expr
-        \\        } as a string?",
-        \\    )
-        \\} # Comment after top-level decl
-        \\
-        \\expect {
-        \\    foo = 1 # This should work too
-        \\    blah = 1
-        \\    blah == foo
-        \\}
-    );
-}
-
-test "First BinOp" {
-    const expr = "1 + 2";
-    try exprFmtsSame(expr, .no_debug);
-}
-
-test "BinOp with higher BP right" {
-    const expr = "1 + 2 * 3";
-    try exprFmtsSame(expr, .no_debug);
-    try exprFmtsTo(expr, "(1 + (2 * 3))", .debug_binop);
-    // try exprBinOpIs(expr, .OpStar);
-}
-
-test "Multiline BinOp" {
-    const expr =
-        \\1 # One
-        \\    + # Plus
-        \\
-        \\    # A comment in between
-        \\
-        \\    2 # Two
-        \\        * # Times
-        \\        3
-    ;
-    try exprFmtsSame(expr, .no_debug);
-}
-
-test "Multiline list formatting" {
-    const expr = "[1,2,3,]";
-    const expected =
-        \\[
-        \\    1,
-        \\    2,
-        \\    3,
-        \\]
-    ;
-    try exprFmtsTo(expr, expected, .no_debug);
-    const expr2 =
-        \\[1, 2, # Foo
-        \\  3]
-    ;
-    const expected2 =
-        \\[
-        \\    1,
-        \\    2, # Foo
-        \\    3,
-        \\]
-    ;
-    try exprFmtsTo(expr2, expected2, .no_debug);
-    const expr3 = "[[1], [2], [3,4,], [5]]";
-    const expected3 =
-        \\[
-        \\    [1],
-        \\    [2],
-        \\    [
-        \\        3,
-        \\        4,
-        \\    ],
-        \\    [5],
-        \\]
-    ;
-    try exprFmtsTo(expr3, expected3, .no_debug);
-    const expr4 =
-        \\[ # Open
-        \\    1, # First
-        \\
-        \\    # A comment in the middle
-        \\
-        \\    2, # Second
-        \\    # This comment has no blanks around it
-        \\    3, # Third
-        \\]
-    ;
-    try exprFmtsSame(expr4, .no_debug);
-    try exprFmtsSame(expected, .no_debug);
-    try exprFmtsSame(expected2, .no_debug);
-    try exprFmtsSame(expected3, .no_debug);
-}
-
-test "if_then_else" {
-    try exprFmtsSame(
-        \\if bool 1 else 2
-    , .no_debug);
-    try exprFmtsSame(
-        \\if bool {
-        \\    1
-        \\} else 2
-    , .no_debug);
-    try exprFmtsSame(
-        \\if bool { # Comment after then open
-        \\    1 # Comment after expr
-        \\} else 2
-    , .no_debug);
-    try exprFmtsSame(
-        \\if bool {
-        \\    1
-        \\} else {
-        \\    2
-        \\}
-    , .no_debug);
-    try exprFmtsSame(
-        \\if bool {
-        \\    1
-        \\} else { # Comment after else open
-        \\    2
-        \\}
-    , .no_debug);
-    try exprFmtsSame(
-        \\if # Comment after if
-        \\    bool
-        \\        {
-        \\            1
-        \\        } else {
-        \\            2
-        \\        }
-    , .no_debug);
-    try exprFmtsSame(
-        \\if # Comment after if
-        \\    bool # Comment after cond
-        \\        { # Comment after then open
-        \\            1
-        \\        } else {
-        \\            2
-        \\        }
-    , .no_debug);
-    try exprFmtsSame(
-        \\if # Comment after if
-        \\    bool # Comment after cond
-        \\        { # Comment after then open
-        \\            1
-        \\        } # Comment after then close
-        \\            else # Comment after else
-        \\                { # Comment else open
-        \\                    2
-        \\                }
-    , .no_debug);
-}
-
-test "string multiline formatting (due to templating, not multiline string literal)" {
-    const expr =
-        \\"This is a string with ${some_func(a, #This is a comment
-        \\b)} lines of text due to the template parts"
-    ;
-    const expected =
-        \\"This is a string with ${
-        \\    some_func(
-        \\        a, # This is a comment
-        \\        b,
-        \\    )
-        \\} lines of text due to the template parts"
-    ;
-    try exprFmtsTo(expr, expected, .no_debug);
-    try exprFmtsSame(expected, .no_debug);
-}
-
-test "record access multiline formatting" {
-    const expr =
-        \\some_fn(arg1)?
-        \\    .static_dispatch_method()?
-        \\    .next_static_dispatch_method()?
-        \\    .record_field?
-    ;
-    try exprFmtsSame(expr, .no_debug);
-    const exprWithComments =
-        \\some_fn(arg1)? # Comment 1
-        \\    .static_dispatch_method()? # Comment 2
-        \\    .next_static_dispatch_method()? # Comment 3
-        \\    .record_field?
-    ;
-    try exprFmtsSame(exprWithComments, .no_debug);
-}
-
-test "local dispatch multiline formatting" {
-    const expr =
-        \\some_fn(arg1)?
-        \\    ->static_dispatch_method()?
-        \\    ->next_static_dispatch_method()?
-        \\    ->record_field?
-    ;
-    try exprFmtsSame(expr, .no_debug);
-    const exprWithComments =
-        \\some_fn(arg1)? # Comment 1
-        \\    ->static_dispatch_method()? # Comment 2
-        \\    ->next_static_dispatch_method()? # Comment 3
-        \\    ->record_field?
-    ;
-    try exprFmtsSame(exprWithComments, .no_debug);
-}
-
-test "BinOp omnibus" {
-    const expr = "Err(foo) ?? 12 > 5 * 5 or 13 + 2 < 5 and 10 - 1 >= 16 or 12 <= 3 / 5";
-    const expr_sloppy = "Err(foo)??12>5*5 or 13+2<5 and 10-1>=16 or 12<=3/5";
-    const formatted = "((((Err(foo) ?? 12) > (5 * 5)) or (((13 + 2) < 5) and ((10 - 1) >= 16))) or (12 <= (3 / 5)))";
-    try exprFmtsSame(expr, .no_debug);
-    try exprFmtsTo(expr_sloppy, expr, .no_debug);
-    try exprFmtsTo(expr, formatted, .debug_binop);
-    try exprFmtsTo(expr_sloppy, formatted, .debug_binop);
-}
-
-test "Dot access super test" {
-    const expr = "some_fn(arg1)?.static_dispatch_method()?.next_static_dispatch_method()?.record_field?";
-    try exprFmtsSame(expr, .no_debug);
 }

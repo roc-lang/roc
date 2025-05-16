@@ -30,6 +30,7 @@ source: []const u8,
 tokens: TokenizedBuffer,
 store: NodeStore,
 errors: []const Diagnostic,
+root_node_idx: u32 = 0,
 
 /// Calculate whether this region is - or will be - multiline
 pub fn regionIsMultiline(self: *IR, region: Region) bool {
@@ -3808,6 +3809,20 @@ pub fn toSExprStr(ir: *@This(), env: *base.ModuleEnv, writer: std.io.AnyWriter) 
     defer line_starts.deinit();
 
     var node = file.toSExpr(env, ir, line_starts);
+    defer node.deinit(env.gpa);
+
+    node.toStringPretty(writer);
+}
+
+/// Helper function to convert a specific IR node (i.e., not a file) to a string in S-expression format
+/// and write it to the given writer
+pub fn nodeToSExprStr(ir: *@This(), ir_node: anytype, env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
+    // calculate the offsets of line_starts once and save in the IR
+    // for use in each toSExpr function
+    var line_starts = try base.DiagnosticPosition.findLineStarts(env.gpa, ir.source);
+    defer line_starts.deinit();
+
+    var node = ir_node.toSExpr(env, ir, line_starts);
     defer node.deinit(env.gpa);
 
     node.toStringPretty(writer);

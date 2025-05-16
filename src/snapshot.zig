@@ -217,14 +217,126 @@ const Section = union(enum) {
     };
 };
 
+/// The type of node to parse
+pub const NodeType = enum {
+    file,
+    header,
+    expr,
+    statement,
+
+    const HEADER = "header";
+    const EXPR = "expr";
+    const STMT = "statement";
+    const FILE = "file";
+
+    fn fromString(ty: []const u8) Error!NodeType {
+        if (std.mem.eql(u8, ty, HEADER)) return .header;
+        if (std.mem.eql(u8, ty, EXPR)) return .expr;
+        if (std.mem.eql(u8, ty, STMT)) return .statement;
+        if (std.mem.eql(u8, ty, FILE)) return .file;
+        return Error.InvalidNodeType;
+    }
+
+    fn toString(self: NodeType) []const u8 {
+        return switch (self) {
+            .file => "file",
+            .header => "header",
+            .expr => "expr",
+            .statement => "statement",
+        };
+    }
+};
+
+const Meta = struct {
+    description: []const u8,
+    node_type: NodeType,
+
+    const DESC_START: []const u8 = "description=";
+    const TYPE_START: []const u8 = "type=";
+
+    fn fromString(text: []const u8) Error!Meta {
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        var desc: []const u8 = "";
+        var node_type: NodeType = .file;
+        while (true) {
+            var line = lines.next() orelse break;
+            if (std.mem.startsWith(u8, line, DESC_START)) {
+                desc = line[(DESC_START.len)..];
+            } else if (std.mem.startsWith(u8, line, TYPE_START)) {
+                const ty = line[(TYPE_START.len)..];
+                node_type = try NodeType.fromString(ty);
+            }
+        }
+
+        return .{
+            .description = desc,
+            .node_type = node_type,
+        };
+    }
+
+    fn format(self: Meta, writer: anytype) !void {
+        try writer.writeAll(DESC_START);
+        try writer.writeAll(self.description);
+        try writer.writeAll("\n");
+        try writer.writeAll(TYPE_START);
+        try writer.writeAll(self.node_type.toString());
+    }
+
+    test "Meta.fromString - only description" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+    }
+    test "Meta.fromString - desc and file type" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+            \\type=file
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+        try std.testing.expectEqual(meta.node_type, .file);
+    }
+    test "Meta.fromString - desc and expr type" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+            \\type=expr
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+        try std.testing.expectEqual(meta.node_type, .expr);
+    }
+    test "Meta.fromString - desc and statement type" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+            \\type=statement
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+        try std.testing.expectEqual(meta.node_type, .statement);
+    }
+    test "Meta.fromString - desc and header type" {
+        const meta = try Meta.fromString(
+            \\description=Hello world
+            \\type=header
+        );
+        try std.testing.expectEqualStrings(meta.description, "Hello world");
+        try std.testing.expectEqual(meta.node_type, .header);
+    }
+    test "Meta.fromString - desc and invalid type" {
+        const meta = Meta.fromString(
+            \\description=Hello world
+            \\type=foobar
+        );
+        try std.testing.expectEqual(meta, Error.InvalidNodeType);
+    }
+};
+
 /// Content of a snapshot file, references the Metadata and Source sections etc
 const Content = struct {
-    meta: []const u8,
+    meta: Meta,
     source: []const u8,
     formatted: ?[]const u8,
     has_canonicalize: bool,
 
-    fn init(meta: []const u8, source: []const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
+    fn init(meta: Meta, source: []const u8, formatted: ?[]const u8, has_canonicalize: bool) Content {
         return .{
             .meta = meta,
             .source = source,
@@ -234,16 +346,9 @@ const Content = struct {
     }
 
     fn from_ranges(ranges: std.AutoHashMap(Section, Section.Range), content: []const u8) Error!Content {
-        var meta: []const u8 = undefined;
         var source: []const u8 = undefined;
         var formatted: ?[]const u8 = undefined;
         var has_canonicalize: bool = false;
-
-        if (ranges.get(.meta)) |value| {
-            meta = value.extract(content);
-        } else {
-            return Error.MissingSnapshotHeader;
-        }
 
         if (ranges.get(.source)) |value| {
             source = value.extract(content);
@@ -261,17 +366,26 @@ const Content = struct {
             has_canonicalize = true;
         }
 
-        return Content.init(
-            meta,
-            source,
-            formatted,
-            has_canonicalize,
-        );
+        if (ranges.get(.meta)) |value| {
+            const meta_txt = value.extract(content);
+            const meta = try Meta.fromString(meta_txt);
+            return Content.init(
+                meta,
+                source,
+                formatted,
+                has_canonicalize,
+            );
+        } else {
+            return Error.MissingSnapshotHeader;
+        }
     }
+
     pub fn format(self: Content, comptime fmt_str: []const u8, _: std.fmt.FormatOptions, writer: std.io.AnyWriter) !void {
         _ = fmt_str;
-        try writer.print("SNAPSHOT CONTENTS\n", .{});
-        try writer.print("META:\n{s}\n---\n", .{self.meta});
+        try writer.writeAll("SNAPSHOT CONTENTS\n");
+        try writer.writeAll("META:\n");
+        try self.meta.format(writer);
+        try writer.writeAll("\n---\n");
         try writer.print("SOURCE:\n{s}\n---\n", .{self.source});
         if (self.formatted) |formatted| {
             try writer.print("FORMATTED:\n{s}\n---\n", .{formatted});
@@ -284,6 +398,7 @@ const Content = struct {
 const Error = error{
     MissingSnapshotHeader,
     MissingSnapshotSource,
+    InvalidNodeType,
 };
 
 fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_corpus_path: ?[]const u8) !bool {
@@ -322,7 +437,12 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     defer module_env.deinit();
 
     // Parse the source code
-    var parse_ast = parse.parse(&module_env, content.source);
+    var parse_ast = switch (content.meta.node_type) {
+        .file => parse.parse(&module_env, content.source),
+        .header => parse.parseHeader(&module_env, content.source),
+        .expr => parse.parseExpr(&module_env, content.source),
+        .statement => parse.parseStatement(&module_env, content.source),
+    };
     defer parse_ast.deinit();
 
     // shouldn't be required in future
@@ -337,10 +457,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Copy original META
     {
-        try file.writer().writeAll(Section.META);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(content.meta);
-        try file.writer().writeAll("\n");
+        var writer = file.writer();
+        try writer.writeAll(Section.META);
+        try writer.writeAll("\n");
+        try content.meta.format(writer);
+        try writer.writeAll("\n");
     }
 
     // Copy original SOURCE
@@ -352,10 +473,11 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write out any PROBLEMS
+    const has_problems = module_env.problems.len() > 0;
     {
         try file.writer().writeAll(Section.PROBLEMS);
         try file.writer().writeAll("\n");
-        if (module_env.problems.len() > 0) {
+        if (has_problems) {
             var iter = module_env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
                 const problem = module_env.problems.get(problem_idx);
@@ -399,7 +521,23 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     {
         var parse_buffer = std.ArrayList(u8).init(gpa);
         defer parse_buffer.deinit();
-        try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
+        switch (content.meta.node_type) {
+            .file => {
+                try parse_ast.toSExprStr(&module_env, parse_buffer.writer().any());
+            },
+            .header => {
+                const node = parse_ast.store.getHeader(.{ .id = parse_ast.root_node_idx });
+                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+            },
+            .expr => {
+                const node = parse_ast.store.getExpr(.{ .id = parse_ast.root_node_idx });
+                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+            },
+            .statement => {
+                const node = parse_ast.store.getStatement(.{ .id = parse_ast.root_node_idx });
+                try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
+            },
+        }
         try file.writer().writeAll(Section.PARSE);
         try file.writer().writeAll("\n");
         try file.writer().writeAll(parse_buffer.items);
@@ -407,10 +545,23 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     }
 
     // Write FORMAT SECTION
-    {
+    if (!has_problems) {
         var formatted = std.ArrayList(u8).init(gpa);
         defer formatted.deinit();
-        try fmt.formatAst(parse_ast, formatted.writer().any());
+        switch (content.meta.node_type) {
+            .file => {
+                try fmt.formatAst(parse_ast, formatted.writer().any());
+            },
+            .header => {
+                try fmt.formatHeader(parse_ast, formatted.writer().any());
+            },
+            .expr => {
+                try fmt.formatExpr(parse_ast, formatted.writer().any());
+            },
+            .statement => {
+                try fmt.formatStatement(parse_ast, formatted.writer().any());
+            },
+        }
 
         try file.writer().writeAll(Section.FORMATTED);
         try file.writer().writeAll("\n");
@@ -526,7 +677,8 @@ fn extractSections(gpa: Allocator, content: []const u8) !Content {
 test "extractSections" {
     const input =
         \\~~~META
-        \\meta data line
+        \\description=
+        \\type=file
         \\~~~SOURCE
         \\source code line
         \\~~~FORMATTED
@@ -537,7 +689,13 @@ test "extractSections" {
 
     const content = try extractSections(testing.allocator, input);
 
-    try testing.expectEqualStrings("meta data line", content.meta);
+    var meta_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer meta_buf.deinit(std.testing.allocator);
+    try content.meta.format(meta_buf.writer(std.testing.allocator));
+    try testing.expectEqualStrings(
+        \\description=
+        \\type=file
+    , meta_buf.items[0..]);
     try testing.expectEqualStrings("source code line", content.source);
     try testing.expectEqualStrings("formatted output line", content.formatted.?);
 }
@@ -569,6 +727,7 @@ test "extractSections complex" {
 
     const expected_meta =
         \\description=Basic example to develop the snapshot methodology
+        \\type=file
     ;
 
     const expected_source =
@@ -582,7 +741,10 @@ test "extractSections complex" {
     const expected_formatted = null;
     const content = try extractSections(testing.allocator, input);
 
-    try testing.expectEqualStrings(expected_meta, content.meta);
+    var meta_buf: std.ArrayListUnmanaged(u8) = .{};
+    defer meta_buf.deinit(std.testing.allocator);
+    try content.meta.format(meta_buf.writer(std.testing.allocator));
+    try testing.expectEqualStrings(expected_meta, meta_buf.items[0..]);
     try testing.expectEqualStrings(expected_source, content.source);
     try testing.expectEqual(expected_formatted, content.formatted);
 }

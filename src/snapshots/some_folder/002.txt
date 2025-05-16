@@ -1,5 +1,6 @@
 ~~~META
 description=Basic example to develop the snapshot methodology
+type=file
 ~~~SOURCE
 module [foo, bar]
 
@@ -16,15 +17,15 @@ Newline(1:1-1:1),
 LowerIdent(5:1-5:4),OpAssign(5:5-5:6),StringStart(5:7-5:8),StringPart(5:8-5:11),StringEnd(5:11-5:12),EndOfFile(5:12-5:12),
 ~~~PARSE
 (file
-    (module (1:1-1:18)
-        (exposed_item (lower_ident "foo"))
-        (exposed_item (lower_ident "bar")))
-    (decl (3:1-3:12)
-        (ident (3:1-3:4) "foo")
-        (string (3:7-3:12) (string_part (3:8-3:11) "one")))
-    (decl (5:1-5:12)
-        (ident (5:1-5:4) "bar")
-        (string (5:7-5:12) (string_part (5:8-5:11) "two"))))
+	(module (1:1-1:18)
+		(exposed_item (lower_ident "foo"))
+		(exposed_item (lower_ident "bar")))
+	(decl (3:1-3:12)
+		(ident (3:1-3:4) "foo")
+		(string (3:7-3:12) (string_part (3:8-3:11) "one")))
+	(decl (5:1-5:12)
+		(ident (5:1-5:4) "bar")
+		(string (5:7-5:12) (string_part (5:8-5:11) "two"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

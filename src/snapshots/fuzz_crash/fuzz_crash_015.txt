@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+type=file
 ~~~SOURCE
 0o0.0
 0_0
@@ -19,14 +20,9 @@ Int(3:1-3:4),NoSpaceDotInt(3:4-3:6),Newline(1:1-1:1),
 Int(4:1-4:3),EndOfFile(4:3-4:3),
 ~~~PARSE
 (file
-    (malformed_header (1:1-1:4) "missing_header")
-    (malformed_expr (1:4-1:6) "expr_unexpected_token")
-    (int (2:1-2:4) "0_0")
-    (malformed_expr (3:4-3:6) "expr_no_space_dot_int")
-    (int (4:1-4:3) "0_"))
-~~~FORMATTED
-
-0_0
-
-0_
+	(malformed_header (1:1-1:4) "missing_header")
+	(malformed_expr (1:4-1:6) "expr_unexpected_token")
+	(int (2:1-2:4) "0_0")
+	(malformed_expr (3:4-3:6) "expr_no_space_dot_int")
+	(int (4:1-4:3) "0_"))
 ~~~END

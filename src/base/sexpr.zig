@@ -168,7 +168,7 @@ pub const Expr = union(enum) {
                                     try writer.print("\n", .{});
 
                                     // Print indentation
-                                    try writeIndent(writer, 4 * (indent + 1));
+                                    try writeIndent(writer, indent + 1);
 
                                     try child.toString(writer, indent + 1);
                                 },
@@ -203,9 +203,9 @@ pub const Expr = union(enum) {
     }
 };
 
-fn writeIndent(writer: std.io.AnyWriter, spaces: usize) !void {
-    for (0..spaces) |_| {
-        try writer.writeAll(" ");
+fn writeIndent(writer: std.io.AnyWriter, tabs: usize) !void {
+    for (0..tabs) |_| {
+        try writer.writeByte('\t');
     }
 }
 
@@ -227,11 +227,10 @@ test "s-expression" {
         defer buf.deinit();
         foo.toStringPretty(buf.writer().any());
         const expected =
-            \\(foo
-            \\    "bar"
-            \\    -123
-            \\    (baz 456 7.89e2))
-        ;
+            "(foo\n" ++
+            "\t\"bar\"\n" ++
+            "\t-123\n" ++
+            "\t(baz 456 7.89e2))";
         try testing.expectEqualStrings(expected, buf.items);
     }
 

@@ -1,6 +1,6 @@
 ~~~META
 description=fuzz crash
-verbose-tokens
+type=file
 ~~~SOURCE
  ||(|(l888888888|
 ~~~PROBLEMS
@@ -12,8 +12,6 @@ PARSER: expected_expr_bar
 OpBar(1:2-1:3),OpBar(1:3-1:4),NoSpaceOpenRound(1:4-1:5),OpBar(1:5-1:6),NoSpaceOpenRound(1:6-1:7),LowerIdent(1:7-1:17),OpBar(1:17-1:18),EndOfFile(1:18-1:18),
 ~~~PARSE
 (file
-    (malformed_header (1:2-1:3) "missing_header")
-    (malformed_expr (1:18-1:18) "expected_expr_bar"))
-~~~FORMATTED
-
+	(malformed_header (1:2-1:3) "missing_header")
+	(malformed_expr (1:18-1:18) "expected_expr_bar"))
 ~~~END

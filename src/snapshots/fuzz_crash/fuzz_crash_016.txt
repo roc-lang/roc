@@ -1,5 +1,6 @@
 ~~~META
 description=fuzz crash
+type=file
 ~~~SOURCE
 0|
 ~~~PROBLEMS
@@ -9,8 +10,6 @@ PARSER: expected_expr_bar
 Int(1:1-1:2),OpBar(1:2-1:3),EndOfFile(1:3-1:3),
 ~~~PARSE
 (file
-    (malformed_header (1:1-1:2) "missing_header")
-    (malformed_expr (1:3-1:3) "expected_expr_bar"))
-~~~FORMATTED
-
+	(malformed_header (1:1-1:2) "missing_header")
+	(malformed_expr (1:3-1:3) "expected_expr_bar"))
 ~~~END

@@ -1,5 +1,6 @@
 ~~~META
 description=
+type=file
 ~~~SOURCE
 module
 ~~~PROBLEMS
@@ -8,6 +9,4 @@ PARSER: header_expected_open_square
 KwModule(1:1-1:7),EndOfFile(1:7-1:7),
 ~~~PARSE
 (file (malformed_header (1:7-1:7) "header_expected_open_square"))
-~~~FORMATTED
-
 ~~~END
