@@ -194,12 +194,14 @@ fn formatIRNode(ast: IR, writer: std.io.AnyWriter, formatter: *const fn (*Format
     try fmt.flush();
 }
 
-/// Formats and writes out well-formed source of a Roc parse IR (AST).
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a file.
 /// Only returns an error if the underlying writer returns an error.
 pub fn formatAst(ast: IR, writer: std.io.AnyWriter) !void {
     return formatIRNode(ast, writer, Formatter.formatFile);
 }
 
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a header.
+/// Only returns an error if the underlying writer returns an error.
 pub fn formatHeader(ast: IR, writer: std.io.AnyWriter) !void {
     return formatIRNode(ast, writer, formatHeaderInner);
 }
@@ -208,6 +210,8 @@ fn formatHeaderInner(fmt: *Formatter) !void {
     return fmt.formatHeader(.{ .id = fmt.ast.root_node_idx });
 }
 
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is a statement.
+/// Only returns an error if the underlying writer returns an error.
 pub fn formatStatement(ast: IR, writer: std.io.AnyWriter) !void {
     return formatIRNode(ast, writer, formatStatementInner);
 }
@@ -216,6 +220,8 @@ fn formatStatementInner(fmt: *Formatter) !void {
     return fmt.formatStatement(.{ .id = fmt.ast.root_node_idx });
 }
 
+/// Formats and writes out well-formed source of a Roc parse IR (AST) when the root node is an expression.
+/// Only returns an error if the underlying writer returns an error.
 pub fn formatExpr(ast: IR, writer: std.io.AnyWriter) !void {
     return formatIRNode(ast, writer, formatExprNode);
 }
