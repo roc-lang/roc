@@ -7,134 +7,134 @@ name: CI New Compiler
 permissions: {}
 
 jobs:
-    check-zig:
-        runs-on: ubuntu-22.04
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-            - uses: mlugg/setup-zig@v1
-              with:
-                version: 0.14.0
+  check-zig:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
 
-            - name: zig lints
-              run: |
-                ./ci/zig_lints.sh
+      - name: zig lints
+        run: |
+          ./ci/zig_lints.sh
 
-                zig build check-fmt
+          zig build check-fmt
 
-              # We run zig check with tracy enabled.
-              # This ensure it compiles and doesn't go stale.
-            - name: Checkout Tracy
-              uses: actions/checkout@v4
-              with:
-                path: tracy
-                repository: wolfpld/tracy
-                ref: v0.11.0
+        # We run zig check with tracy enabled.
+        # This ensure it compiles and doesn't go stale.
+      - name: Checkout Tracy
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+        with:
+          path: tracy
+          repository: wolfpld/tracy
+          ref: v0.11.0
 
-            - name: zig check
-              run: |
-                # -Dllvm incurs a costly download step, leave that for later.
-                # Just the do super fast check step for now.
-                zig build -Dno-bin -Dfuzz -Dtracy=./tracy
+      - name: zig check
+        run: |
+          # -Dllvm incurs a costly download step, leave that for later.
+          # Just the do super fast check step for now.
+          zig build -Dno-bin -Dfuzz -Dtracy=./tracy
 
-    zig-tests:
-        needs: check-zig
-        runs-on: ${{ matrix.os }}
-        strategy:
-            fail-fast: false
-            matrix:
-                os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-14 uses arm64
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-            - uses: mlugg/setup-zig@v1
-              with:
-                version: 0.14.0
+  zig-tests:
+    needs: check-zig
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-13, macos-14, ubuntu-22.04, ubuntu-24.04-arm, windows-2022, windows-2025, windows-11-arm] # macos-13 uses x64, macos-14 uses arm64
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
 
-            - name: build roc
-              run: |
-                zig build -Dllvm -Dfuzz -Dsystem-afl=false
+      - name: build roc
+        run: |
+          zig build -Dllvm -Dfuzz -Dsystem-afl=false
 
-            - name: roc executable minimal check (Unix)
-              if: runner.os != 'Windows'
-              run: |
-                ./zig-out/bin/roc -h | grep -q "Usage:"
+      - name: roc executable minimal check (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          ./zig-out/bin/roc -h | grep -q "Usage:"
 
-            - name: roc executable minimal check (Windows)
-              if: runner.os == 'Windows'
-              run: |
-                zig-out\bin\roc.exe -h | findstr "Usage:"
+      - name: roc executable minimal check (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          zig-out\bin\roc.exe -h | findstr "Usage:"
 
-            - name: zig tests
-              run: |
-                zig build test -Dllvm -Dfuzz -Dsystem-afl=false
+      - name: zig tests
+        run: |
+          zig build test -Dllvm -Dfuzz -Dsystem-afl=false
 
-            - name: zig snapshot tests
-              run: zig build snapshot
+      - name: zig snapshot tests
+        run: zig build snapshot
 
-            - name: Check for snapshot changes
-              run: |
-                git diff --exit-code src/snapshots || {
-                  echo ""
-                  echo ""
-                  echo "OOPS! It looks like the snapshots in 'src/snapshots' have changed.";
-                  echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
-                  echo "Here’s what changed:";
-                  echo ""
-                  git diff src/snapshots;
-                  exit 1;
-                }
+      - name: Check for snapshot changes
+        run: |
+          git diff --exit-code src/snapshots || {
+            echo ""
+            echo ""
+            echo "OOPS! It looks like the snapshots in 'src/snapshots' have changed.";
+            echo "Please run 'zig build snapshot' locally, review the updates, and commit the changes.";
+            echo "Here’s what changed:";
+            echo ""
+            git diff src/snapshots;
+            exit 1;
+          }
 
-            - name: check if statically linked (ubuntu)
-              if: startsWith(matrix.os, 'ubuntu')
-              run: |
-                file ./zig-out/bin/roc | grep "statically linked"
+      - name: check if statically linked (ubuntu)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: |
+          file ./zig-out/bin/roc | grep "statically linked"
 
-            - name: check if statically linked (macOS)
-              if: startsWith(matrix.os, 'macos')
-              run: |
-                otool_out="$(otool -L ./zig-out/bin/roc)"
-                num_lines=$(echo "$otool_out" | wc -l)
-                if [ "$num_lines" -ne 2 ]; then
-                  echo "$otool_out"
-                  echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
-                  exit 1
-                fi
+      - name: check if statically linked (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: |
+          otool_out="$(otool -L ./zig-out/bin/roc)"
+          num_lines=$(echo "$otool_out" | wc -l)
+          if [ "$num_lines" -ne 2 ]; then
+            echo "$otool_out"
+            echo "Looks like you added a new dynamic dependency to the Roc executable, we want Roc to be super easy to install, so libSystem should be the only dynamic dependency."
+            exit 1
+          fi
 
-            - name: check if statically linked (Windows)
-              if: startsWith(matrix.os, 'windows')
-              run: |
-                $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
-                if ($imports) {
-                    echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
-                    echo "Dynamic dependencies found:"
-                    $imports | ForEach-Object { echo "  $_" }
-                    exit 1
-                }
+      - name: check if statically linked (Windows)
+        if: startsWith(matrix.os, 'windows')
+        run: |
+          $imports = (Get-Command zig-out\bin\roc.exe).FileVersionInfo.ImportCharacterSet
+          if ($imports) {
+              echo "Looks like the executable has dynamic dependencies. We want Roc to be super easy to install, so it should be statically linked."
+              echo "Dynamic dependencies found:"
+              $imports | ForEach-Object { echo "  $_" }
+              exit 1
+          }
 
-    zig-cross-compile:
-        needs: check-zig
-        runs-on: ubuntu-24.04
-        strategy:
-            fail-fast: false
-            matrix:
-                target:
-                - aarch64-linux-musl
-                - aarch64-macos-none
-                - aarch64-windows-gnu
-                - arm-linux-musleabihf
-                - x86-linux-musl
-                - x86_64-linux-musl
-                - x86_64-macos-none
-                - x86_64-windows-gnu
+  zig-cross-compile:
+    needs: check-zig
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - aarch64-linux-musl
+          - aarch64-macos-none
+          - aarch64-windows-gnu
+          - arm-linux-musleabihf
+          - x86-linux-musl
+          - x86_64-linux-musl
+          - x86_64-macos-none
+          - x86_64-windows-gnu
 
-        steps:
-            - name: Checkout
-              uses: actions/checkout@v4
-            - uses: mlugg/setup-zig@v1
-              with:
-                version: 0.14.0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # ratchet:actions/checkout@v4
+      - uses: mlugg/setup-zig@aa9ad5c14eb3452e235a441c4f9a8e89f20d97bd # ratchet:mlugg/setup-zig@v2
+        with:
+          version: 0.14.0
 
-            - name: cross compile with llvm
-              run: |
-                zig build -Dtarget=${{ matrix.target }} -Dllvm
+      - name: cross compile with llvm
+        run: |
+          zig build -Dtarget=${{ matrix.target }} -Dllvm
