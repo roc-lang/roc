@@ -5,11 +5,11 @@ use roc_build::program::{check_file, CodeGenBackend};
 use roc_cli::{
     annotate_file, build_app, default_linking_strategy, format_files, format_src, test,
     AnnotationProblem, BuildConfig, FormatMode, CMD_BUILD, CMD_CHECK, CMD_DEV, CMD_DOCS,
-    CMD_FORMAT, CMD_FORMAT_ANNOTATE, CMD_GLUE, CMD_PREPROCESS_HOST, CMD_REPL, CMD_RUN, CMD_TEST,
-    CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT, FLAG_LIB, FLAG_MAIN,
-    FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT, FLAG_PP_DYLIB,
-    FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME, FLAG_VERBOSE,
-    GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION, CMD_LICENSES,
+    CMD_FORMAT, CMD_FORMAT_ANNOTATE, CMD_GLUE, CMD_LICENSES, CMD_PREPROCESS_HOST, CMD_REPL,
+    CMD_RUN, CMD_TEST, CMD_VERSION, DIRECTORY_OR_FILES, FLAG_CHECK, FLAG_DEV, FLAG_DOCS_ROOT,
+    FLAG_LIB, FLAG_MAIN, FLAG_MIGRATE, FLAG_NO_COLOR, FLAG_NO_HEADER, FLAG_NO_LINK, FLAG_OUTPUT,
+    FLAG_PP_DYLIB, FLAG_PP_HOST, FLAG_PP_PLATFORM, FLAG_STDIN, FLAG_STDOUT, FLAG_TARGET, FLAG_TIME,
+    FLAG_VERBOSE, GLUE_DIR, GLUE_SPEC, ROC_FILE, VERSION,
 };
 use roc_docs::generate_docs_html;
 use roc_error_macros::{internal_error, user_error};
@@ -495,7 +495,7 @@ fn main() -> io::Result<()> {
             println!("roc {}", VERSION);
             Ok(0)
         }
-        Some((CMD_LICENSES,_)) => {
+        Some((CMD_LICENSES, _)) => {
             println!("{LEGAL_DETAILS_TEXT}");
             Ok(0)
         }
