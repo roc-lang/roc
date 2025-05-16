@@ -81,6 +81,7 @@ pub fn build(b: *std.Build) void {
         .link_libc = true,
     });
     all_tests.root_module.addOptions("build_options", build_options);
+    all_tests.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     if (!no_bin) {
         const run_tests = b.addRunArtifact(all_tests);
