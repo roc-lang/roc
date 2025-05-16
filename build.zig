@@ -211,7 +211,7 @@ fn addMainExe(
     const config = b.addOptions();
     config.addOption(bool, "llvm", enable_llvm);
     exe.root_module.addOptions("config", config);
-    exe.root_module.addAnonymousImport("legal_details", .{.root_source_file = b.path("legal_details")});
+    exe.root_module.addAnonymousImport("legal_details", .{ .root_source_file = b.path("legal_details") });
 
     if (enable_llvm) {
         const llvm_paths = llvmPaths(b, target, use_system_llvm, user_llvm_path) orelse return null;
