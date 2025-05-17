@@ -14,6 +14,7 @@ pub const RocCmd = enum {
     roc_docs,
     roc_glue,
     roc_help,
+    roc_licenses,
 
     pub fn parse(arg_str: []const u8) ?RocCmd {
         const map = std.static_string_map.StaticStringMap(RocCmd).initComptime(.{
@@ -27,6 +28,7 @@ pub const RocCmd = enum {
             .{ "docs", .roc_docs },
             .{ "glue", .roc_glue },
             .{ "help", .roc_help },
+            .{ "licenses", .roc_licenses },
         });
 
         if (map.get(arg_str)) |cmd| {

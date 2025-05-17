@@ -1,3 +1,7 @@
+//! Roc command line interface for the new compiler. Entrypoint of the Roc binary.
+//! Build with `zig build -Dllvm -Dfuzz -Dsystem-afl=false`.
+//! Result is at `./zig-out/bin/roc`
+
 const std = @import("std");
 const fmt = @import("fmt.zig");
 const base = @import("base.zig");
@@ -15,6 +19,8 @@ const Allocator = std.mem.Allocator;
 const exitOnOom = collections.utils.exitOnOom;
 const fatal = collections.utils.fatal;
 
+const legalDetailsFileContent = @embedFile("legal_details");
+
 const usage =
     \\Usage:
     \\
@@ -31,6 +37,7 @@ const usage =
     \\  check           Check the code for problems, but don’t build or run it
     \\  docs            Generate documentation for a Roc package
     \\  glue            Generate glue code between a platform's Roc API and its host language
+    \\  licenses        Prints license info for Roc as well as attributions to other projects used by Roc.
     \\
     \\General Options:
     \\
@@ -88,6 +95,7 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
             .roc_docs => try rocDocs(gpa, opt, cmd_args),
             .roc_glue => try rocGlue(gpa, opt, cmd_args),
             .roc_help => try rocHelp(),
+            .roc_licenses => try rocLicenses(),
         }
     } else if (std.mem.eql(u8, cmd, "-h") or std.mem.eql(u8, cmd, "--help")) {
         try rocHelp();
@@ -95,11 +103,6 @@ fn mainArgs(gpa: Allocator, arena: Allocator, args: []const []const u8) !void {
         try stderr.print("{s}", .{usage});
         fatal("unknown command: {s}", .{cmd});
     }
-}
-
-fn printHelp() !void {
-    try std.io.getStdOut().writeAll(usage);
-    std.process.exit(0);
 }
 
 fn rocRun(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
@@ -210,6 +213,12 @@ fn rocGlue(allocator: Allocator, opt: RocOpt, args: []const []const u8) !void {
     fatal("not implemented", .{});
 }
 
+fn rocLicenses() !void {
+    try std.io.getStdOut().writeAll(legalDetailsFileContent);
+    std.process.exit(0);
+}
+
 fn rocHelp() !void {
     try std.io.getStdOut().writeAll(usage);
+    std.process.exit(0);
 }
