@@ -217,10 +217,6 @@ a:hover code {
     text-decoration: inherit;
 }
 
-li {
-    margin-bottom: 0.5rem;
-}
-
 h1,
 h2,
 h3,
@@ -250,7 +246,6 @@ h2 {
 }
 
 .article-layout p,
-.article-layout li,
 .article-layout pre,
 .article-layout details {
     font-size: 20px;
@@ -496,10 +491,15 @@ td:last-child {
 
 p,
 aside,
-li,
 details {
     font-size: var(--font-size-normal);
     line-height: 1.85rem;
+}
+
+li {
+    font-size: 0.75em;
+    line-height: 1.25rem;
+    margin-bottom: 0.25rem;
 }
 
 /* Homepage */
@@ -574,8 +574,8 @@ details {
 
     #tutorial-toc {
         display: none;
-        position: fixed;
-        top: 0;
+        position: relative !important;
+        top: 0 !important;
         left: 0;
         right: 0;
         bottom: 0;
@@ -583,6 +583,20 @@ details {
         margin: 0 !important;
         padding-right: 120px;
         border: 0;
+        height: fit-content !important;
+        overflow: none;
+    }
+
+    #tutorial-toc-toggle:checked + #tutorial-toc li {
+        display: none;
+    }
+
+    #tutorial-toc-toggle:checked + #tutorial-toc li.tut-1 {
+        display: block;
+    }
+
+    #tutorial-toc ol {
+        padding-bottom: 0 !important;
     }
 
     #homepage-logo {
@@ -1217,7 +1231,7 @@ code .dim {
 #tutorial-main h5 {
     font-family: "Permanent Marker";
     line-height: 1rem;
-    margin-top: 1.75rem;
+    margin-top: 1.5rem;
     margin-bottom: 0;
     border: none;
 }
@@ -1243,8 +1257,8 @@ code .dim {
 }
 
 #tutorial-main h1 {
-    font-size: 7rem;
-    line-height: 7rem;
+    font-size: 4rem;
+    line-height: 4rem;
     color: var(--h1-color);
     margin-top: 24px;
     margin-bottom: 1.75rem;
@@ -1252,23 +1266,23 @@ code .dim {
 }
 
 #tutorial-main h2 {
-    font-size: 4rem;
-    line-height: 4rem;
+    font-size: 2rem;
+    line-height: 2rem;
     text-shadow: 1px 1px 1px #010101;
     padding: 0.8rem 0;
-    margin-top: 2.5rem;
+    margin-top: 1.5rem;
     width: 60rem; /* Without this, "Building an application" wraps and looks awkward */
 }
 
 #tutorial-main h3 {
     font-family: inherit;
-    font-size: 1.65rem;
+    font-size: 1.5rem;
     line-height: 3rem;
     margin-bottom: 0.5rem;
 }
 
 #tutorial-main h4 {
-    font-size: 2rem;
+    font-size: 1.25rem;
     text-shadow: 1px 1px 1px #010101;
 }
 
@@ -1278,15 +1292,24 @@ code .dim {
 }
 
 #tutorial-toc {
-    position: relative;
+    /* Tutorial TOC is fixed on the right and scrollable */
+    position: sticky;
+    top: 30px;
+    height: calc(100vh - 80px); /* Subtract 80 to account for header and bottom margin */
+    overflow: auto;
+
     background-color: var(--gray-bg);
-    flex: 0 0 auto; /* Take up as much space as it needs */
-    margin-top: 30px;
+    margin-top: 40px;
     background: var(--code-bg);
     padding: 12px 24px;
     margin-left: 64px;
     align-self: flex-start; /* Aligns to the start, not stretching in height */
     z-index: 2;
+}
+
+/* Indent the second layer of headings */
+#tutorial-toc .tut-2 {
+    padding-left: 1rem;
 }
 
 #tutorial-toc > ul {
@@ -1316,7 +1339,7 @@ code .dim {
     padding: 3px;
     margin: 8px 0;
     list-style: none;
-    padding-bottom: 0;
+    padding-bottom: 30px;
     margin-bottom: 0;
 }
 
