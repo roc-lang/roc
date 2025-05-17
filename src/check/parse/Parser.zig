@@ -1804,18 +1804,19 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
         .UpperIdent => {
             self.advance(); // Advance past UpperIdent
             if (self.peek() == .NoSpaceDotUpperIdent or self.peek() == .DotUpperIdent) {
+                const second_ident = self.pos;
                 self.advance(); // Advance past NoSpaceDotUpperIdent
                 anno = self.store.addTypeAnno(.{ .mod_ty = .{
                     .region = .{ .start = start, .end = start },
                     .tok = start,
-                    .ty_ident = self.tok_buf.resolve_identifier(start),
-                    .mod_ident = self.tok_buf.resolve_identifier(start + 1),
+                    .ty_ident = self.tok_buf.resolveIdentifier(start).?,
+                    .mod_ident = self.tok_buf.resolveIdentifier(second_ident).?,
                 } });
             } else {
                 anno = self.store.addTypeAnno(.{ .ty = .{
                     .region = .{ .start = start, .end = start },
                     .tok = start,
-                    .ident = self.tok_buf.resolve_identifier(start),
+                    .ident = self.tok_buf.resolveIdentifier(start).?,
                 } });
             }
 
