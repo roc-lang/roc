@@ -1263,7 +1263,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
         }
     }
     if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
-        std.debug.panic("Should have gotten a valid pattern, pos={d} peek={s}\n", .{ self.pos, @tagName(self.peek()) });
+        return self.store.addMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_eof, .{ .start = outer_start, .end = self.pos });
     }
     const last_pattern = self.store.scratch_patterns.items[self.store.scratchPatternTop() - 1];
     const last_pattern_region = self.store.nodes.items.items(.region)[last_pattern.id];
@@ -1611,7 +1611,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         }
         return expression;
     }
-    unreachable;
+    return self.store.addMalformed(IR.NodeStore.ExprIdx, .expr_unexpected_token, .{ .start = start, .end = self.pos });
 }
 
 /// todo
@@ -1822,7 +1822,9 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
             if (self.peek() == .NoSpaceOpenRound) {
                 self.advance(); // Advance past NoSpaceOpenRound
                 const scratch_top = self.store.scratchTypeAnnoTop();
-                self.store.addScratchTypeAnno(anno orelse unreachable);
+                self.store.addScratchTypeAnno(anno orelse {
+                    return self.store.addMalformed(IR.NodeStore.TypeAnnoIdx, .ty_anno_unexpected_token, .{ .start = start, .end = self.pos });
+                });
                 const end = self.parseCollectionSpan(IR.NodeStore.TypeAnnoIdx, .CloseRound, IR.NodeStore.addScratchTypeAnno, parseTypeAnnoInCollection) catch {
                     self.store.clearScratchTypeAnnosFrom(scratch_top);
                     return self.pushMalformed(IR.NodeStore.TypeAnnoIdx, .expected_ty_apply_close_round, start);
@@ -1965,7 +1967,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
         return an;
     }
 
-    std.debug.panic("Never handled type annotation", .{});
+    return self.store.addMalformed(IR.NodeStore.TypeAnnoIdx, .ty_anno_unexpected_token, .{ .start = start, .end = self.pos });
 }
 
 /// todo

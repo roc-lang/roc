@@ -119,6 +119,7 @@ pub const Diagnostic = struct {
         header_expected_close_square,
         header_unexpected_token,
         pattern_unexpected_token,
+        pattern_unexpected_eof,
         ty_anno_unexpected_token,
         statement_unexpected_eof,
         statement_unexpected_token,
