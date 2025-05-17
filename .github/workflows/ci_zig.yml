@@ -51,6 +51,11 @@ jobs:
               with:
                 version: 0.14.0
 
+            - name: Clear Zig Global Cache (Windows)
+              if: runner.os == 'Windows'
+              run: |
+                Remove-Item -Recurse -Force -ErrorAction SilentlyContinue "$env:LOCALAPPDATA\zig"
+
             - name: build roc
               run: |
                 zig build -Dllvm -Dfuzz -Dsystem-afl=false

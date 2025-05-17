@@ -1,7 +1,7 @@
 const std = @import("std");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
-const type_mod = @import("../types/type.zig");
+const types = @import("../types.zig");
 const can = @import("canonicalize.zig");
 const unify = @import("check_types/unify.zig");
 const resolve = @import("resolve_imports.zig");
@@ -12,15 +12,14 @@ const Allocator = std.mem.Allocator;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleWork = base.ModuleWork;
-const Type = type_mod.Type;
 
 /// Solves for the types of expressions in the ResolveIR and populates this
 /// information in the module's type store.
 pub fn checkTypes(
-    type_store: *Type.Store,
+    type_store: *types.Store,
     resolve_ir: *const resolve.IR,
     other_modules: *const ModuleWork(resolve.IR).Store,
-    other_typestores: *const ModuleWork(Type.Store).Store,
+    other_typestores: *const ModuleWork(types.Store).Store,
 ) void {
     _ = type_store;
     _ = resolve_ir;
@@ -43,37 +42,34 @@ test "checkTypes - basic type unification" {
     );
     defer can_irs.deinit(gpa);
 
-    var type_stores = ModuleWork(Type.Store).Store.initFromCanIrs(gpa, &can_irs);
+    var type_stores = ModuleWork(types.Store).Store.initFromCanIrs(gpa, &can_irs);
     defer type_stores.deinit(gpa);
 
     var resolve_irs = ModuleWork(resolve.IR).Store.initFromCanIrs(gpa, &can_irs);
     defer resolve_irs.deinit(gpa);
 
+    var scratch = unify.Scratch.init(gpa);
+    defer scratch.deinit();
+
     var env = &can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
     const type_store = type_stores.getWork(@enumFromInt(0));
 
-    const type_id_1 = type_store.fresh();
-    const type_id_2 = type_store.fresh();
-
     checkTypes(type_store, resolve_ir, &resolve_irs, &type_stores);
 
     // Test that we can perform basic type unification
-    const a_type = Type{ .flex_var = null };
-    const int_name = env.idents.insert(env.gpa, Ident.for_text("Int"), Region.zero());
-    const int_type = Type{ .rigid_var = int_name };
+    const flex = types.Content{ .flex_var = null };
 
-    type_store.set(type_id_1, a_type);
-    type_store.set(type_id_2, int_type);
+    const rigid_name = env.idents.insert(env.gpa, Ident.for_text("b"), Region.zero());
+    const rigid = types.Content{ .rigid_var = rigid_name };
 
-    try testing.expectEqual(type_store.get(type_id_1).*, a_type);
-    try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+    const a_type_var = type_store.freshFromContent(flex);
+    const b_type_var = type_store.freshFromContent(rigid);
 
-    // // After unification, both variables should have the rigid type
-    // const result = try unify.unify(gpa, type_store, type_id_1, type_id_2);
+    // After unification, both variables should have the rigid type
+    const result = unify.unify(type_store, &scratch, a_type_var, b_type_var);
 
-    // try testing.expect(result.mismatches.items.len == 0);
-    // try testing.expect(result.has_changed);
-    // try testing.expectEqual(type_store.get(type_id_1).*, int_type);
-    // try testing.expectEqual(type_store.get(type_id_2).*, int_type);
+    try testing.expectEqual(.ok, result);
+    try testing.expectEqual(rigid, type_store.resolveVar(a_type_var).desc.content);
+    try testing.expectEqual(rigid, type_store.resolveVar(b_type_var).desc.content);
 }
