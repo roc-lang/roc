@@ -137,4 +137,4 @@ jobs:
 
       - name: cross compile with llvm
         run: |
-          zig build -Dtarget=${{ matrix.target }} -Dllvm
+          ./ci/retry_flaky.sh zig build -Dtarget=${{ matrix.target }} -Dllvm
