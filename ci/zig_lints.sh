@@ -12,10 +12,11 @@ while read -r file; do
     errors=$(awk '
         /^pub / {
             if (prev !~ /^\/\/\//) {
-                # Skip doc comment requirements for init, deinit, and @import
+                # Skip doc comment requirements for init, deinit, @import, and pub const re-exports
                 if ($0 !~ /pub.*fn init\(/ && 
                     $0 !~ /pub.*fn deinit/ && 
-                    $0 !~ /pub.*@import/) {
+                    $0 !~ /pub.*@import/ &&
+                    $0 !~ /pub.*const.*=[[:space:]]*[a-z][^[:space:]]*\.[^([:space:]]*;/) {
                     print FILENAME ":" FNR ": pub declaration without doc comment `///`"
                 }
             }

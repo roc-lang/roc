@@ -13,9 +13,7 @@ pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const DiagnosticPosition = @import("base/DiagnosticPosition.zig");
 
-/// re-export ModuleWork
 pub const ModuleWork = module_work.ModuleWork;
-/// re-export ModuleWorkIdx
 pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
 
 /// Whether a function calls itself.
