@@ -1,3 +1,7 @@
+// Since all of these can be passed across the host boundary, and since compiled Roc
+// programs must not depend on libc or on Zig's standard libray, it's important that
+// none of these operations depend on any Zig types like slices or Allocator.
+
 /// All Roc functions that are exposed to the host take 1 argument and return void.
 /// The 1 argument is a pointer to one of these structs, which includes an address
 /// that the Roc call will write the return value into. This design makes Roc's ABI
