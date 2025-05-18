@@ -20,23 +20,28 @@ pub const RocCall = struct {
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
 pub const RocOps = struct {
+    /// The host provides this pointer, and Roc passes it to each of the following
+    /// function pointers as a second argument. This lets the host do things like use
+    /// arena allocators for allocation and deallocation (by putting the arena in here).
+    /// The pointer can be to absolutely anything the host likes, or null if unused.
+    env: *anyopaque,
     /// Like _aligned_malloc (size, alignment) - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
     /// Roc will automatically call roc_crashed if this returns null.
-    roc_alloc: fn (*RocAlloc) void,
+    roc_alloc: fn (*RocAlloc, *anyopaque) void,
     /// Like _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
-    roc_dealloc: fn (*RocDealloc) void,
+    roc_dealloc: fn (*RocDealloc, *anyopaque) void,
     /// Like _aligned_realloc (ptr, size, alignment) - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
     /// Roc will automatically call roc_crashed if this returns null.
-    roc_realloc: fn (*RocRealloc) void,
+    roc_realloc: fn (*RocRealloc, *anyopaque) void,
     /// Called when the Roc program crashes, e.g. due to integer overflow.
     /// It receives a pointer to a UTF-8 string, along with its length in bytes.
     /// This function must not return, because the Roc program assumes it will
     /// not continue to be executed after this function is called.
-    roc_crashed: fn (*RocCrashed) void,
+    roc_crashed: fn (*RocCrashed, *anyopaque) void,
     /// Called when the Roc program has called `dbg` on something.
-    roc_dbg: fn (*RocDbg) void,
+    roc_dbg: fn (*RocDbg, *anyopaque) void,
     /// Called when the Roc program has run an `expect` which failed.
-    roc_expect_failed: fn (*RocExpectFailed) void,
+    roc_expect_failed: fn (*RocExpectFailed, *anyopaque) void,
 };
 
 /// When RocOps.roc_alloc gets called, it will be passed one of these.
@@ -48,7 +53,6 @@ pub const RocAlloc = struct {
     alignment: usize,
     length: usize,
     ret: *anyopaque,
-    ops: *RocOps,
 };
 
 /// When RocOps.roc_dealloc gets called, it will be passed one of these.
@@ -57,7 +61,6 @@ pub const RocAlloc = struct {
 pub const RocDealloc = struct {
     alignment: usize,
     ptr: *anyopaque,
-    ops: *RocOps,
 };
 
 /// When RocOps.roc_realloc gets called, it will be passed one of these.
@@ -69,7 +72,6 @@ pub const RocRealloc = struct {
     alignment: usize,
     new_length: usize,
     ret: *anyopaque,
-    ops: *RocOps,
 };
 
 /// The UTF-8 string message the host receives when a Roc program crashes
