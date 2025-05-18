@@ -3476,6 +3476,17 @@ pub const NodeStore = struct {
         operator: TokenIdx,
         expr: ExprIdx,
         region: Region,
+
+        pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList((u32))) sexpr.Expr {
+            var node = sexpr.Expr.init(env.gpa, "unary");
+            node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+            node.appendStringChild(env.gpa, ir.resolve(self.operator));
+
+            var expr = ir.store.getExpr(self.expr).toSExpr(env, ir, line_starts);
+            node.appendNodeChild(env.gpa, &expr);
+
+            return node;
+        }
     };
 
     pub const DataSpan = struct {
