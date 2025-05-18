@@ -8,10 +8,10 @@
 ///
 /// This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 /// return pointer, args pointers".
-pub fn RocCall(comptime CallEnv: type, comptime Ret: type) type {
+pub fn RocCall(comptime CallEnv: type, comptime HostFns: type, comptime Ret: type) type {
     return fn (
         /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
-        *RocOps(CallEnv),
+        *RocOps(CallEnv, HostFns),
         /// The Roc function will write its returned value into this address.
         ///
         /// (If the Roc function returns a zero-sized type like `{}`, it will
@@ -32,7 +32,7 @@ pub fn RocCall(comptime CallEnv: type, comptime Ret: type) type {
 ///
 /// This is used in both calls from actual hosts as well as evaluation of constants
 /// inside the Roc compiler itself.
-pub fn RocOps(comptime CallEnv: type) type {
+pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
     return struct {
         /// The host provides this pointer, and Roc passes it to each of the following
         /// function pointers as a second argument. This lets the host do things like use
@@ -53,6 +53,10 @@ pub fn RocOps(comptime CallEnv: type) type {
         /// This function must not return, because the Roc program assumes it will
         /// not continue to be executed after this function is called.
         roc_crashed: fn (*RocCrashed, *CallEnv) void,
+        /// At the end of this struct, the host must include all the functions
+        /// it wants to provide to the Roc program for the Roc program to call
+        /// (e.g. I/O operations and such).
+        host_fns: HostFns,
     };
 }
 
