@@ -32,23 +32,20 @@ pub fn RocOps(comptime CallEnv: type) type {
         /// arena allocators for allocation and deallocation (by putting the arena in here).
         /// The pointer can be to absolutely anything the host likes, or null if unused.
         env: *CallEnv,
-        /// Like _aligned_malloc (size, alignment) - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
-        /// Roc will automatically call roc_crashed if this returns null.
+        /// Similar to  _aligned_malloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
         roc_alloc: fn (*RocAlloc, *CallEnv) void,
-        /// Like _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
+        /// Similar to  _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
         roc_dealloc: fn (*RocDealloc, *CallEnv) void,
-        /// Like _aligned_realloc (ptr, size, alignment) - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
-        /// Roc will automatically call roc_crashed if this returns null.
+        /// Similar to  _aligned_realloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
         roc_realloc: fn (*RocRealloc, *CallEnv) void,
-        /// Called when the Roc program crashes, e.g. due to integer overflow.
-        /// It receives a pointer to a UTF-8 string, along with its length in bytes.
-        /// This function must not return, because the Roc program assumes it will
-        /// not continue to be executed after this function is called.
-        roc_crashed: fn (*RocCrashed, *CallEnv) void,
         /// Called when the Roc program has called `dbg` on something.
         roc_dbg: fn (*RocDbg, *CallEnv) void,
         /// Called when the Roc program has run an `expect` which failed.
         roc_expect_failed: fn (*RocExpectFailed, *CallEnv) void,
+        /// Called when the Roc program crashes, e.g. due to integer overflow.
+        /// This function must not return, because the Roc program assumes it will
+        /// not continue to be executed after this function is called.
+        roc_crashed: fn (*RocCrashed, *CallEnv) void,
     };
 }
 
@@ -68,7 +65,7 @@ pub const RocAlloc = struct {
 /// not always known at runtime due to the way seamless slices work.)
 pub const RocDealloc = struct {
     alignment: usize,
-    ptr: *const anyopaque,
+    ptr: *anyopaque,
 };
 
 /// When RocOps.roc_realloc gets called, it will be passed one of these.
