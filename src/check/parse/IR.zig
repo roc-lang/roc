@@ -2393,7 +2393,15 @@ pub const NodeStore = struct {
                 .hosted => |a| {
                     var node = sexpr.Expr.init(env.gpa, "hosted");
                     node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
-                    node.appendStringChild(env.gpa, "TODO implement toSExpr for hosted module header");
+                    const exposes = ir.store.getCollection(a.exposes);
+                    var exposes_node = sexpr.Expr.init(env.gpa, "exposes");
+                    exposes_node.appendRegionChild(env.gpa, ir.regionInfo(exposes.region, line_starts));
+                    for (ir.store.exposedItemSlice(.{ .span = exposes.span })) |exposed| {
+                        const item = ir.store.getExposedItem(exposed);
+                        var item_node = item.toSExpr(env, ir, line_starts);
+                        exposes_node.appendNodeChild(env.gpa, &item_node);
+                    }
+                    node.appendNodeChild(env.gpa, &exposes_node);
                     return node;
                 },
                 .malformed => |a| {
