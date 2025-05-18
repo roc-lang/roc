@@ -410,7 +410,7 @@ LowerIdent(200:2-200:6),OpAssign(200:7-200:8),Int(200:9-200:10),Newline(1:1-1:1)
 LowerIdent(201:2-201:6),OpEquals(201:7-201:9),LowerIdent(201:10-201:13),Newline(1:1-1:1),
 CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 ~~~PARSE
-(file
+(file (1:2-202:2)
 	(app (2:1-2:57)
 		(provides (2:6-2:12) (exposed_item (lower_ident "main!")))
 		(record_field (2:15-2:57)

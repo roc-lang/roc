@@ -48,7 +48,7 @@ OpenSquare(19:3-19:4),Newline(19:6-19:34),
 LowerIdent(20:4-20:7),Comma(20:7-20:8),Newline(20:10-20:37),
 CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~PARSE
-(file
+(file (1:1-21:4)
 	(platform (1:1-21:4)
 		"foo"
 		(rigids (4:3-6:4) (exposed_item (upper_ident "Main")))

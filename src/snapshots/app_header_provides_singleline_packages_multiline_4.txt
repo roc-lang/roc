@@ -14,7 +14,7 @@ LowerIdent(2:2-2:9),OpColon(2:9-2:10),StringStart(2:11-2:12),StringPart(2:12-2:2
 LowerIdent(3:2-3:4),OpColon(3:4-3:5),KwPlatform(3:6-3:14),StringStart(3:15-3:16),StringPart(3:16-3:27),StringEnd(3:27-3:28),Newline(1:1-1:1),
 CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 ~~~PARSE
-(file
+(file (1:1-4:2)
 	(app (1:1-4:2)
 		(provides (1:6-1:12) (exposed_item (lower_ident "main!")))
 		(record_field (1:1-1:1)

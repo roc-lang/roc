@@ -10,7 +10,7 @@ NIL
 KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:12),CloseSquare(1:12-1:13),Newline(1:1-1:1),
 LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 ~~~PARSE
-(file
+(file (1:1-2:12)
 	(module (1:1-1:13)
 		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
 	(statements

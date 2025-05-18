@@ -2191,6 +2191,8 @@ pub const NodeStore = struct {
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             var file_node = sexpr.Expr.init(env.gpa, "file");
 
+            file_node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+
             const header = ir.store.getHeader(self.header);
             var header_node = header.toSExpr(env, ir, line_starts);
 

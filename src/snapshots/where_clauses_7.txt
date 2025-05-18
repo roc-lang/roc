@@ -38,7 +38,7 @@ KwModule(14:3-14:9),NoSpaceOpenRound(14:9-14:10),LowerIdent(14:10-14:11),CloseRo
 UpperIdent(15:4-15:8),NoSpaceOpenRound(15:8-15:9),UpperIdent(15:9-15:11),CloseRound(15:11-15:12),Comma(15:12-15:13),Newline(15:15-15:32),
 CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),Comma(16:9-16:10),EndOfFile(16:10-16:10),
 ~~~PARSE
-(file
+(file (1:1-16:10)
 	(module (1:1-1:14)
 		(exposes (1:8-1:14) (exposed_item (upper_ident "Hash"))))
 	(statements

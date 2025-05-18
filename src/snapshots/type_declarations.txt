@@ -36,7 +36,7 @@ UpperIdent(13:1-13:7),OpColon(13:8-13:9),UpperIdent(13:10-13:13),Newline(1:1-1:1
 Newline(1:1-1:1),
 UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUpperIdent(15:17-15:24),EndOfFile(15:24-15:24),
 ~~~PARSE
-(file
+(file (1:1-15:24)
 	(module (1:1-1:57)
 		(exposes (1:8-1:57)
 			(exposed_item (upper_ident "Map"))

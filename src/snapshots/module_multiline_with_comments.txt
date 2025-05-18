@@ -16,7 +16,7 @@ LowerIdent(3:3-3:12),Comma(3:12-3:13),Newline(3:15-3:42),
 UpperIdent(4:3-4:11),Comma(4:11-4:12),Newline(4:14-4:47),
 CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 ~~~PARSE
-(file
+(file (1:1-5:3)
 	(module (1:1-5:3)
 		(exposes (2:2-5:3)
 			(exposed_item (lower_ident "something"))

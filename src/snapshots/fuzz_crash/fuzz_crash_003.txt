@@ -11,7 +11,7 @@ PARSER: missing_header
 ~~~TOKENS
 OpAssign(1:2-1:3),StringStart(1:4-1:5),StringPart(1:5-1:7),EndOfFile(1:7-1:7),
 ~~~PARSE
-(file
+(file (1:2-1:7)
 	(malformed_header (1:2-1:3) "missing_header")
 	(statements
 		(string (1:4-1:7) (string_part (1:5-1:7) "te"))))

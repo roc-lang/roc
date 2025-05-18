@@ -30,7 +30,7 @@ Newline(10:3-10:9),
 UpperIdent(11:2-11:8),NoSpaceDotLowerIdent(11:8-11:14),NoSpaceOpenRound(11:14-11:15),StringStart(11:15-11:16),StringPart(11:16-11:29),StringEnd(11:29-11:30),CloseRound(11:30-11:31),Newline(1:1-1:1),
 CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~PARSE
-(file
+(file (1:2-12:2)
 	(app (4:1-4:57)
 		(provides (4:6-4:12) (exposed_item (lower_ident "main!")))
 		(record_field (4:15-4:57)

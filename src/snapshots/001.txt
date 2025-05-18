@@ -22,7 +22,7 @@ LowerIdent(6:1-6:4),OpAssign(6:5-6:6),Newline(1:1-1:1),
 Newline(1:1-1:1),
 StringStart(8:5-8:6),StringPart(8:6-8:9),StringEnd(8:9-8:10),EndOfFile(8:10-8:10),
 ~~~PARSE
-(file
+(file (1:1-8:10)
 	(module (1:1-4:7)
 		(exposes (1:12-4:7) (exposed_item (lower_ident "foo"))))
 	(statements
