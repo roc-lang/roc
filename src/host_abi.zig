@@ -8,7 +8,7 @@
 ///
 /// This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
 /// return pointer, args pointers".
-pub fn RocCall(comptime CallEnv: type, comptime HostFns: type, comptime Ret: type) type {
+pub fn RocCall(comptime CallEnv: type, comptime HostFns: type) type {
     return fn (
         /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
         *RocOps(CallEnv, HostFns),
@@ -19,7 +19,7 @@ pub fn RocCall(comptime CallEnv: type, comptime HostFns: type, comptime Ret: typ
         ///
         /// The host must ensure that this address points to enough memory for the
         /// Roc function to write its entire return value into the address.
-        *Ret,
+        *anyopaque,
         /// Varargs, all of which are pointers (to arguments that will be passed
         /// into the Roc function). Arguments with small sizes can be combined into
         /// a struct, and a pointer to that struct can be passed as one of these.
