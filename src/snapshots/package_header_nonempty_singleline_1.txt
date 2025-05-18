@@ -10,7 +10,6 @@ KwPackage(1:1-1:8),OpenSquare(1:9-1:10),LowerIdent(1:10-1:19),Comma(1:19-1:20),U
 ~~~PARSE
 (file
 	(package (1:1-1:88)
-		"TODO implement toSExpr for package module header"
 		(exposes (1:9-1:30)
 			(exposed_item (lower_ident "something"))
 			(exposed_item (upper_ident "SomeType")))

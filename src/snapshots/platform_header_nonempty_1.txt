@@ -48,7 +48,24 @@ OpenSquare(19:3-19:4),Newline(19:6-19:34),
 LowerIdent(20:4-20:7),Comma(20:7-20:8),Newline(20:10-20:37),
 CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 ~~~PARSE
-(file (platform (1:1-21:4) "TODO implement toSExpr for platform module header"))
+(file
+	(platform (1:1-21:4)
+		"foo"
+		(rigids (4:3-6:4) (exposed_item (upper_ident "Main")))
+		(record (7:4-9:5)
+			(anno_record_field (8:5-8:29)
+				"main!"
+				(fn (8:13-8:28)
+					(record (8:26-8:28))
+					(apply (8:13-8:22)
+						(ty "List")
+						(ty "Str")))))
+		(exposes (11:3-13:4) (exposed_item (lower_ident "foo")))
+		(packages (15:3-17:4)
+			(record_field (16:4-16:32)
+				"some_pkg"
+				(string (16:14-16:31) (string_part (16:15-16:30) "../some_pkg.roc"))))
+		(provides (19:3-21:4) (exposed_item (lower_ident "bar")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

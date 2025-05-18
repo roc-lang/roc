@@ -24,7 +24,6 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 ~~~PARSE
 (file
 	(package (1:1-8:3)
-		"TODO implement toSExpr for package module header"
 		(exposes (2:2-5:3)
 			(exposed_item (lower_ident "something"))
 			(exposed_item (upper_ident "SomeType")))
