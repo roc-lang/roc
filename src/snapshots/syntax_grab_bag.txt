@@ -650,9 +650,13 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 							(int (120:20-120:23) "123"))
 						(branch (121:3-122:4)
 							(record (121:3-121:29)
-								(field "foo" (number (121:10-121:11) "1"))
-								(field "bar" (number (121:18-121:19) "2"))
-								(field "rest" "rest"))
+								(field (121:5-121:12)
+									"foo"
+									(number (121:10-121:11) "1"))
+								(field (121:13-121:20)
+									"bar"
+									(number (121:18-121:19) "2"))
+								(field (121:21-121:29) "rest" "rest"))
 							(local_dispatch (121:33-122:4)
 								(int (121:33-121:35) "12")
 								(apply (121:35-121:44)
@@ -660,14 +664,20 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 									(int (121:41-121:43) "34"))))
 						(branch (122:3-130:4)
 							(record (122:3-129:4)
-								(field "foo" (number (125:6-125:7) "1"))
-								(field "bar" (number (126:9-126:10) "2"))
-								(field "rest" "rest"))
+								(field (123:4-125:8)
+									"foo"
+									(number (125:6-125:7) "1"))
+								(field (126:4-126:11)
+									"bar"
+									(number (126:9-126:10) "2"))
+								(field (127:4-128:10) "rest" "rest"))
 							(int (129:8-129:10) "12"))
 						(branch (130:3-131:4)
 							(record (130:3-130:25)
-								(field "foo" (number (130:10-130:11) "1"))
-								(field
+								(field (130:5-130:12)
+									"foo"
+									(number (130:10-130:11) "1"))
+								(field (130:13-130:25)
 									"bar"
 									(alternatives
 										(number (130:18-130:19) "2")
@@ -675,8 +685,10 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 							(int (130:29-130:31) "12"))
 						(branch (131:3-135:5)
 							(record (131:3-134:4)
-								(field "foo" (number (132:9-132:10) "1"))
-								(field
+								(field (132:4-132:11)
+									"foo"
+									(number (132:9-132:10) "1"))
+								(field (133:4-133:15)
 									"bar"
 									(alternatives
 										(number (133:9-133:10) "2")

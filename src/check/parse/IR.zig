@@ -3011,6 +3011,7 @@ pub const NodeStore = struct {
                     for (ir.store.patternRecordFieldSlice(rec.fields)) |field_idx| {
                         const field = ir.store.getPatternRecordField(field_idx);
                         var field_node = sexpr.Expr.init(env.gpa, "field");
+                        field_node.appendRegionChild(env.gpa, ir.regionInfo(field.region, line_starts));
                         field_node.appendStringChild(env.gpa, ir.resolve(field.name));
 
                         if (field.value) |value| {
