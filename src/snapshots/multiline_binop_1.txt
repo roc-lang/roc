@@ -22,10 +22,10 @@ Int(6:2-6:3),Newline(6:5-6:9),
 OpStar(7:3-7:4),Newline(7:6-7:12),
 Int(8:3-8:4),EndOfFile(8:4-8:4),
 ~~~PARSE
-(binop
+(binop (1:1-8:4)
 	"+"
 	(int (1:1-1:2) "1")
-	(binop
+	(binop (6:2-8:4)
 		"*"
 		(int (6:2-6:3) "2")
 		(int (8:3-8:4) "3")))

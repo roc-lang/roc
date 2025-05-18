@@ -12,7 +12,7 @@ PARSER: expected_expr_bar
 ~~~TOKENS
 OpBar(1:1-1:2),OpBar(1:3-1:4),Int(1:4-1:5),EndOfFile(1:5-1:5),
 ~~~PARSE
-(file
+(file (1:1-1:5)
 	(malformed_header (1:1-1:2) "missing_header")
-	(malformed_expr (1:5-1:5) "expected_expr_bar"))
+	(statements (malformed_expr (1:5-1:5) "expected_expr_bar")))
 ~~~END

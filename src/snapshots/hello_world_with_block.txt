@@ -30,20 +30,30 @@ Newline(10:3-10:9),
 UpperIdent(11:2-11:8),NoSpaceDotLowerIdent(11:8-11:14),NoSpaceOpenRound(11:14-11:15),StringStart(11:15-11:16),StringPart(11:16-11:29),StringEnd(11:29-11:30),CloseRound(11:30-11:31),Newline(1:1-1:1),
 CloseCurly(12:1-12:2),EndOfFile(12:2-12:2),
 ~~~PARSE
-(file
-	(app (4:1-4:57) "TODO implement toSExpr for app module header")
-	(import (6:1-6:17) ".Stdout" (qualifier "pf"))
-	(decl (8:1-12:2)
-		(ident (8:1-8:6) "main!")
-		(lambda (8:9-12:2)
-			(args (underscore))
-			(block
-				(decl (9:2-9:17)
-					(ident (9:2-9:7) "world")
-					(string (9:10-9:17) (string_part (9:11-9:16) "World")))
-				(apply (11:2-11:31)
-					(ident (11:2-11:14) "Stdout" ".line!")
-					(string (11:15-11:30) (string_part (11:16-11:29) "Hello, world!")))))))
+(file (1:2-12:2)
+	(app (4:1-4:57)
+		(provides (4:6-4:12) (exposed_item (lower_ident "main!")))
+		(record_field (4:15-4:57)
+			"pf"
+			(string (4:28-4:55) (string_part (4:29-4:54) "../basic-cli/platform.roc")))
+		(packages (4:13-4:57)
+			(record_field (4:15-4:57)
+				"pf"
+				(string (4:28-4:55) (string_part (4:29-4:54) "../basic-cli/platform.roc")))))
+	(statements
+		(import (6:1-6:17) ".Stdout" (qualifier "pf"))
+		(decl (8:1-12:2)
+			(ident (8:1-8:6) "main!")
+			(lambda (8:9-12:2)
+				(args (underscore))
+				(block (8:13-12:2)
+					(statements
+						(decl (9:2-9:17)
+							(ident (9:2-9:7) "world")
+							(string (9:10-9:17) (string_part (9:11-9:16) "World")))
+						(apply (11:2-11:31)
+							(ident (11:2-11:14) "Stdout" ".line!")
+							(string (11:15-11:30) (string_part (11:16-11:29) "Hello, world!")))))))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

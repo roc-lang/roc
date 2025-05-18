@@ -18,8 +18,10 @@ CloseCurly(5:1-5:2),EndOfFile(5:2-5:2),
 ~~~PARSE
 (if_then_else (1:1-5:2)
 	(ident (1:4-1:8) "" "bool")
-	(block (int (2:2-2:3) "1"))
-	(block (int (4:2-4:3) "2")))
+	(block (1:9-3:2)
+		(statements (int (2:2-2:3) "1")))
+	(block (3:8-5:2)
+		(statements (int (4:2-4:3) "2"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
