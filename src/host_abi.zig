@@ -53,7 +53,7 @@ pub fn RocOps(comptime CallEnv: type) type {
 }
 
 /// When RocOps.roc_alloc gets called, it will be passed one of these.
-/// That function should write the allocated memory into `ret`.
+/// That function should write the address to the allocated memory into `ret`.
 /// If it cannot provide a non-null pointer (e.g. due to OOM), it
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
