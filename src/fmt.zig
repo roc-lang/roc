@@ -1621,12 +1621,12 @@ const Formatter = struct {
                 try fmt.pushTokenText(v.tok);
             },
             .ty => |t| {
-                try fmt.pushTokenText(t.tok);
+                try fmt.pushTokenText(t.region.start);
             },
             .mod_ty => |t| {
-                try fmt.pushTokenText(t.tok);
+                try fmt.pushTokenText(t.region.start);
                 try fmt.pushAll(".");
-                try fmt.pushTokenText(t.tok + 1);
+                try fmt.pushTokenText(t.region.end);
             },
             .tuple => |t| {
                 region = t.region;
