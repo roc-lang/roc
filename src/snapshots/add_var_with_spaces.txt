@@ -18,7 +18,7 @@ LowerIdent(3:1-3:5),OpAssign(3:6-3:7),LowerIdent(3:8-3:9),OpPlus(3:10-3:11),Int(
 	(statements
 		(decl (3:1-3:18)
 			(ident (3:1-3:5) "add2")
-			(binop
+			(binop (3:8-3:18)
 				"+"
 				(ident (3:8-3:9) "" "x")
 				(int (3:17-3:18) "2")))))

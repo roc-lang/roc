@@ -3477,6 +3477,7 @@ pub const NodeStore = struct {
         /// (binop <op> <left> <right>) e.g. (binop '+' 1 2)
         pub fn toSExpr(self: *const @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList((u32))) sexpr.Expr {
             var node = sexpr.Expr.init(env.gpa, "binop");
+            node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
             node.appendStringChild(env.gpa, ir.resolve(self.operator));
 
             var left = ir.store.getExpr(self.left).toSExpr(env, ir, line_starts);
