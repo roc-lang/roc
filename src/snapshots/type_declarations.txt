@@ -78,7 +78,12 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 				(anno_record_field (7:26-7:43) "bar" (ty "Something"))))
 		(type_decl (9:1-11:9)
 			(header "Maybe" (ty_var (9:7-9:8) "a"))
-			(tag_union (9:12-9:27) "TODO tags" "TODO open_anno"))
+			(tag_union (9:12-9:27)
+				(tags
+					(apply (9:13-9:20)
+						(ty "Some")
+						(ty_var (9:18-9:19) "a"))
+					(ty "None"))))
 		(type_decl (11:1-13:7)
 			(header "SomeFunc" (ty_var (11:10-11:11) "a"))
 			(fn (11:15-11:38)

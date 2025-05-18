@@ -2812,8 +2812,19 @@ pub const NodeStore = struct {
 
                     node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
 
-                    node.appendStringChild(env.gpa, "TODO tags");
-                    node.appendStringChild(env.gpa, "TODO open_anno");
+                    const tags = ir.store.typeAnnoSlice(a.tags);
+                    var tags_node = sexpr.Expr.init(env.gpa, "tags");
+                    for (tags) |tag_idx| {
+                        const tag = ir.store.getTypeAnno(tag_idx);
+                        var tag_node = tag.toSExpr(env, ir, line_starts);
+                        tags_node.appendNodeChild(env.gpa, &tag_node);
+                    }
+                    node.appendNodeChild(env.gpa, &tags_node);
+                    if (a.open_anno) |anno_idx| {
+                        const anno = ir.store.getTypeAnno(anno_idx);
+                        var anno_node = anno.toSExpr(env, ir, line_starts);
+                        node.appendNodeChild(env.gpa, &anno_node);
+                    }
                     return node;
                 },
                 // (tuple [<elems>])
