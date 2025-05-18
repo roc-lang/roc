@@ -1411,13 +1411,13 @@ pub const NodeStore = struct {
             .ty => |t| {
                 node.tag = .ty_ty;
                 node.region = t.region;
-                node.main_token = t.tok;
+                node.main_token = t.region.start;
                 node.data.rhs = @bitCast(t.ident);
             },
             .mod_ty => |t| {
                 node.tag = .ty_mod_ty;
                 node.region = t.region;
-                node.main_token = t.tok;
+                node.main_token = t.region.start;
                 node.data.lhs = @bitCast(t.mod_ident);
                 node.data.rhs = @bitCast(t.ty_ident);
             },
@@ -2097,14 +2097,12 @@ pub const NodeStore = struct {
             },
             .ty_ty => {
                 return .{ .ty = .{
-                    .tok = node.main_token,
                     .ident = @bitCast(node.data.rhs),
                     .region = node.region,
                 } };
             },
             .ty_mod_ty => {
                 return .{ .mod_ty = .{
-                    .tok = node.main_token,
                     .mod_ident = @bitCast(node.data.lhs),
                     .ty_ident = @bitCast(node.data.rhs),
                     .region = node.region,
@@ -2615,14 +2613,14 @@ pub const NodeStore = struct {
             region: Region,
         },
         ty: struct {
-            tok: TokenIdx,
             ident: base.Ident.Idx,
+            // Region starts with the type token.
             region: Region,
         },
         mod_ty: struct {
-            tok: TokenIdx,
             mod_ident: base.Ident.Idx,
             ty_ident: base.Ident.Idx,
+            // Region starts with the mod token and ends with the type token.
             region: Region,
         },
         tag_union: struct {
@@ -2687,14 +2685,14 @@ pub const NodeStore = struct {
                 // (ty name)
                 .ty => |a| {
                     var node = sexpr.Expr.init(env.gpa, "ty");
-                    node.appendStringChild(env.gpa, ir.resolve(a.tok));
+                    node.appendStringChild(env.gpa, ir.resolve(a.region.start));
                     return node;
                 },
                 // (mod_ty mod ty)
                 .mod_ty => |a| {
                     var node = sexpr.Expr.init(env.gpa, "mod_ty");
-                    node.appendStringChild(env.gpa, ir.resolve(a.tok));
-                    node.appendStringChild(env.gpa, ir.resolve(a.tok + 1));
+                    node.appendStringChild(env.gpa, ir.resolve(a.region.start));
+                    node.appendStringChild(env.gpa, ir.resolve(a.region.end));
                     return node;
                 },
                 .tag_union => |a| {

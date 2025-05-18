@@ -14,5 +14,5 @@ DotUpperIdent(2:1-2:3),EndOfFile(2:3-2:3),
 	(malformed_header (1:1-1:2) "missing_header")
 	(type_anno (1:3-2:3)
 		"b"
-		(mod_ty "S" "")))
+		(mod_ty "S" ".R")))
 ~~~END
