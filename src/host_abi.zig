@@ -68,7 +68,7 @@ pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
 pub const RocAlloc = struct {
     alignment: usize,
     length: usize,
-    ret: *anyopaque,
+    answer: *anyopaque,
 };
 
 /// When RocOps.roc_dealloc gets called, it will be passed one of these.
@@ -87,7 +87,7 @@ pub const RocDealloc = struct {
 pub const RocRealloc = struct {
     alignment: usize,
     new_length: usize,
-    ret: *anyopaque,
+    answer: *anyopaque,
 };
 
 /// The UTF-8 string message the host receives when a Roc program crashes
