@@ -2616,14 +2616,18 @@ pub const NodeStore = struct {
                     // pattern
                     {
                         const ty_header = ir.store.getTypeHeader(a.header);
+                        header.appendRegionChild(env.gpa, ir.regionInfo(ty_header.region, line_starts));
 
                         header.appendStringChild(env.gpa, ir.resolve(ty_header.name));
+
+                        var args_node = sexpr.Expr.init(env.gpa, "args");
 
                         for (ir.store.typeAnnoSlice(ty_header.args)) |b| {
                             const anno = ir.store.getTypeAnno(b);
                             var anno_sexpr = anno.toSExpr(env, ir, line_starts);
-                            header.appendNodeChild(env.gpa, &anno_sexpr);
+                            args_node.appendNodeChild(env.gpa, &anno_sexpr);
                         }
+                        header.appendNodeChild(env.gpa, &args_node);
 
                         node.appendNodeChild(env.gpa, &header);
                     }

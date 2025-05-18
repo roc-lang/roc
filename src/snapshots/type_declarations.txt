@@ -48,10 +48,11 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 			(exposed_item (lower_ident "main!"))))
 	(statements
 		(type_decl (3:1-5:4)
-			(header
+			(header (3:1-3:10)
 				"Map"
-				(ty_var (3:5-3:6) "a")
-				(ty_var (3:8-3:9) "b"))
+				(args
+					(ty_var (3:5-3:6) "a")
+					(ty_var (3:8-3:9) "b")))
 			(fn (3:13-3:41)
 				(apply (3:34-3:41)
 					(ty "List")
@@ -63,12 +64,14 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 					(ty_var (3:28-3:29) "b")
 					(ty_var (3:23-3:24) "a"))))
 		(type_decl (5:1-7:5)
-			(header "Foo")
+			(header (5:1-5:4) "Foo" (args))
 			(tuple (5:7-5:17)
 				(ty "Bar")
 				(ty "Baz")))
 		(type_decl (7:1-9:6)
-			(header "Some" (ty_var (7:6-7:7) "a"))
+			(header (7:1-7:8)
+				"Some"
+				(args (ty_var (7:6-7:7) "a")))
 			(record (7:11-7:43)
 				(anno_record_field (7:13-7:25)
 					"foo"
@@ -77,7 +80,9 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 						(ty_var (7:22-7:23) "a")))
 				(anno_record_field (7:26-7:43) "bar" (ty "Something"))))
 		(type_decl (9:1-11:9)
-			(header "Maybe" (ty_var (9:7-9:8) "a"))
+			(header (9:1-9:9)
+				"Maybe"
+				(args (ty_var (9:7-9:8) "a")))
 			(tag_union (9:12-9:27)
 				(tags
 					(apply (9:13-9:20)
@@ -85,7 +90,9 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 						(ty_var (9:18-9:19) "a"))
 					(ty "None"))))
 		(type_decl (11:1-13:7)
-			(header "SomeFunc" (ty_var (11:10-11:11) "a"))
+			(header (11:1-11:12)
+				"SomeFunc"
+				(args (ty_var (11:10-11:11) "a")))
 			(fn (11:15-11:38)
 				(apply (11:30-11:38)
 					(ty "Maybe")
@@ -95,10 +102,10 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 					(ty_var (11:21-11:22) "a"))
 				(ty_var (11:25-11:26) "a")))
 		(type_decl (13:1-15:8)
-			(header "MyType")
+			(header (13:1-13:7) "MyType" (args))
 			(ty "U64"))
 		(type_decl (15:1-15:24)
-			(header "MyType2")
+			(header (15:1-15:8) "MyType2" (args))
 			(mod_ty "Module" ".Thingy"))))
 ~~~FORMATTED
 NO CHANGE
