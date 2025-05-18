@@ -2,26 +2,29 @@
 // programs must not depend on libc or on Zig's standard libray, it's important that
 // none of these operations depend on any Zig types like slices or Allocator.
 
-/// All Roc functions that are exposed to the host take 1 argument and return void.
-/// The 1 argument is a pointer to one of these structs, which includes an address
-/// that the Roc call will write the return value into. This design makes Roc's ABI
-/// very simple; the calling convention is just "pass a single pointer".
-pub fn RocCall(
-    comptime Arg: type,
-    comptime Ret: type,
-    comptime CallEnv: type,
-) type {
-    return struct {
+/// All Roc functions that are exposed to the host return `void` and take a `*RocOps`
+/// followed by the address of the return type (which the Roc function will write into)
+/// and varargs (all pointers) to arguments to pass into the Roc function.
+///
+/// This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
+/// return pointer, args pointers".
+pub fn RocCall(comptime CallEnv: type, comptime Ret: type) type {
+    return fn (
         /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
-        ops: *RocOps(CallEnv),
-        /// The argument that the Roc entrypoint function will receive from the host.
-        /// (If multiple arguments are needed, this should be a pointer to a struct.)
-        arg: *Arg,
-        /// What the Roc entrypoint function will return to the host.
-        /// (The caller should have allocated enough space for the Roc function to write
-        /// the entire return value into this.)
-        ret: *Ret,
-    };
+        *RocOps(CallEnv),
+        /// The Roc function will write its returned value into this address.
+        ///
+        /// (If the Roc function returns a zero-sized type like `{}`, it will
+        /// not write anything into this address.)
+        ///
+        /// The host must ensure that this address points to enough memory for the
+        /// Roc function to write its entire return value into the address.
+        *Ret,
+        /// Varargs, all of which are pointers (to arguments that will be passed
+        /// into the Roc function). Arguments with small sizes can be combined into
+        /// a struct, and a pointer to that struct can be passed as one of these.
+        anytype,
+    ) void;
 }
 
 /// The operations (in the form of function pointers) that a running Roc program
