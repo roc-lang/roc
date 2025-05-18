@@ -46,7 +46,7 @@ pub const RocOps = struct {
 
 /// When RocOps.roc_alloc gets called, it will be passed one of these.
 /// That function should write the allocated memory into `ret`.
-/// If it cannot proivde a non-null pointer (e.g. due to OOM), it
+/// If it cannot provide a non-null pointer (e.g. due to OOM), it
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
 pub const RocAlloc = struct {
@@ -65,7 +65,7 @@ pub const RocDealloc = struct {
 
 /// When RocOps.roc_realloc gets called, it will be passed one of these.
 /// That function should write the allocated memory into `ret`.
-/// If it cannot proivde a non-null pointer (e.g. due to OOM), it
+/// If it cannot provide a non-null pointer (e.g. due to OOM), it
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
 pub const RocRealloc = struct {
