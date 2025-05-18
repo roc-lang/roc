@@ -23,8 +23,7 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:6),OpColon(3:6-3:7),KwPlatform(3:8-3:16),Str
 			(string (3:17-3:30) (string_part (3:18-3:29) "../main.roc")))
 		(record_field (3:32-3:55)
 			"somePkg"
-			(string (3:41-3:54) (string_part (3:42-3:53) "../main.roc"))))
-	"TODO implement toSExpr for app module header")
+			(string (3:41-3:54) (string_part (3:42-3:53) "../main.roc")))))
 ~~~FORMATTED
 app
 	[

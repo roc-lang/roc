@@ -26,8 +26,7 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 				(string (2:11-2:24) (string_part (2:12-2:23) "../main.roc")))
 			(record_field (1:1-1:1)
 				"pf"
-				(string (3:15-3:28) (string_part (3:16-3:27) "../main.roc"))))
-		"TODO implement toSExpr for app module header"))
+				(string (3:15-3:28) (string_part (3:16-3:27) "../main.roc"))))))
 ~~~FORMATTED
 app [main!] {
 	pf: platform "../main.roc",

@@ -419,8 +419,7 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 		(packages (2:13-2:57)
 			(record_field (2:15-2:57)
 				"pf"
-				(string (2:28-2:55) (string_part (2:29-2:54) "../basic-cli/platform.roc"))))
-		"TODO implement toSExpr for app module header")
+				(string (2:28-2:55) (string_part (2:29-2:54) "../basic-cli/platform.roc")))))
 	(import (4:1-4:42)
 		".Stdout"
 		(qualifier "pf")

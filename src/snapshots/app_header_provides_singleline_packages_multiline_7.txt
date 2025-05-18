@@ -20,8 +20,7 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 				(string (1:23-1:36) (string_part (1:24-1:35) "../main.roc")))
 			(record_field (1:37-1:64)
 				"pf"
-				(string (1:50-1:63) (string_part (1:51-1:62) "../main.roc"))))
-		"TODO implement toSExpr for app module header"))
+				(string (1:50-1:63) (string_part (1:51-1:62) "../main.roc"))))))
 ~~~FORMATTED
 app [main!] {
 	pf: platform "../main.roc",

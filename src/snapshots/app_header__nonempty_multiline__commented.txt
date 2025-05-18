@@ -33,8 +33,7 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 			(string (6:16-6:29) (string_part (6:17-6:28) "../main.roc")))
 		(record_field (7:3-7:33)
 			"other"
-			(string (7:10-7:32) (string_part (7:11-7:31) "../../other/main.roc"))))
-	"TODO implement toSExpr for app module header")
+			(string (7:10-7:32) (string_part (7:11-7:31) "../../other/main.roc")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

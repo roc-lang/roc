@@ -19,8 +19,7 @@ KwApp(1:1-1:4),OpenSquare(1:5-1:6),LowerIdent(1:6-1:11),CloseSquare(1:11-1:12),O
 			(string (1:28-1:41) (string_part (1:29-1:40) "../main.roc")))
 		(record_field (1:43-1:74)
 			"other"
-			(string (1:50-1:72) (string_part (1:51-1:71) "../../other/main.roc"))))
-	"TODO implement toSExpr for app module header")
+			(string (1:50-1:72) (string_part (1:51-1:71) "../../other/main.roc")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
