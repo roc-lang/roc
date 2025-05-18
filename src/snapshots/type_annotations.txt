@@ -21,7 +21,7 @@ LowerIdent(6:1-6:8),OpColon(6:9-6:10),OpenRound(6:11-6:12),UpperIdent(6:12-6:14)
 LowerIdent(7:1-7:6),OpColon(7:7-7:8),UpperIdent(7:9-7:13),NoSpaceOpenRound(7:13-7:14),UpperIdent(7:14-7:20),CloseRound(7:20-7:21),OpArrow(7:22-7:24),UpperIdent(7:25-7:31),NoSpaceOpenRound(7:31-7:32),OpenCurly(7:32-7:33),CloseCurly(7:33-7:34),Comma(7:34-7:35),Underscore(7:36-7:37),CloseRound(7:37-7:38),EndOfFile(7:38-7:38),
 ~~~PARSE
 (file
-	(module (1:1-1:10))
+	(module (1:1-1:10) (exposes (1:8-1:10)))
 	(type_anno (3:1-4:4) "foo" (ty "U64"))
 	(type_anno (4:1-5:4)
 		"bar"

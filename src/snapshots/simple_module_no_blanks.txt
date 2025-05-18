@@ -16,8 +16,9 @@ LowerIdent(4:1-4:6),OpAssign(4:7-4:8),StringStart(4:9-4:10),StringPart(4:10-4:15
 ~~~PARSE
 (file
 	(module (1:1-1:23)
-		(exposed_item (lower_ident "hello!"))
-		(exposed_item (lower_ident "world")))
+		(exposes (1:8-1:23)
+			(exposed_item (lower_ident "hello!"))
+			(exposed_item (lower_ident "world"))))
 	(import (2:1-2:17) ".Stdout" (qualifier "pf"))
 	(decl (3:1-3:31)
 		(ident (3:1-3:7) "hello!")

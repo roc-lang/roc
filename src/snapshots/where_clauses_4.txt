@@ -19,7 +19,8 @@ LowerIdent(5:1-5:13),OpColon(5:14-5:15),UpperIdent(5:16-5:20),NoSpaceOpenRound(5
 KwWhere(6:2-6:7),LowerIdent(6:8-6:9),NoSpaceDotUpperIdent(6:9-6:16),EndOfFile(6:16-6:16),
 ~~~PARSE
 (file
-	(module (1:1-1:16) (exposed_item (lower_ident "decode")))
+	(module (1:1-1:16)
+		(exposes (1:8-1:16) (exposed_item (lower_ident "decode"))))
 	(import (3:1-3:32)
 		"Decode"
 		(exposing (exposed_item (upper_ident "Decode"))))

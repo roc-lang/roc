@@ -411,7 +411,16 @@ LowerIdent(201:2-201:6),OpEquals(201:7-201:9),LowerIdent(201:10-201:13),Newline(
 CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 ~~~PARSE
 (file
-	(app (2:1-2:57) "TODO implement toSExpr for app module header")
+	(app (2:1-2:57)
+		(provides (2:6-2:12) (exposed_item (lower_ident "main!")))
+		(record_field (2:15-2:57)
+			"pf"
+			(string (2:28-2:55) (string_part (2:29-2:54) "../basic-cli/platform.roc")))
+		(packages (2:13-2:57)
+			(record_field (2:15-2:57)
+				"pf"
+				(string (2:28-2:55) (string_part (2:29-2:54) "../basic-cli/platform.roc"))))
+		"TODO implement toSExpr for app module header")
 	(import (4:1-4:42)
 		".Stdout"
 		(qualifier "pf")

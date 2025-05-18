@@ -38,13 +38,14 @@ UpperIdent(15:1-15:8),OpColon(15:9-15:10),UpperIdent(15:11-15:17),NoSpaceDotUppe
 ~~~PARSE
 (file
 	(module (1:1-1:57)
-		(exposed_item (upper_ident "Map"))
-		(exposed_item (upper_ident "Foo"))
-		(exposed_item (upper_ident "Some"))
-		(exposed_item (upper_ident "Maybe"))
-		(exposed_item (upper_ident "SomeFunc"))
-		(exposed_item (lower_ident "add_one"))
-		(exposed_item (lower_ident "main!")))
+		(exposes (1:8-1:57)
+			(exposed_item (upper_ident "Map"))
+			(exposed_item (upper_ident "Foo"))
+			(exposed_item (upper_ident "Some"))
+			(exposed_item (upper_ident "Maybe"))
+			(exposed_item (upper_ident "SomeFunc"))
+			(exposed_item (lower_ident "add_one"))
+			(exposed_item (lower_ident "main!"))))
 	(type_decl (3:1-5:4)
 		(header
 			"Map"

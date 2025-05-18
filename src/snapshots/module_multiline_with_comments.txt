@@ -18,8 +18,9 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 ~~~PARSE
 (file
 	(module (1:1-5:3)
-		(exposed_item (lower_ident "something"))
-		(exposed_item (upper_ident "SomeType"))))
+		(exposes (2:2-5:3)
+			(exposed_item (lower_ident "something"))
+			(exposed_item (upper_ident "SomeType")))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

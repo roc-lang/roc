@@ -13,7 +13,8 @@ LowerIdent(2:1-2:5),OpAssign(2:6-2:7),StringStart(2:8-2:9),StringPart(2:9-2:12),
 LowerIdent(3:1-3:4),OpAssign(3:5-3:6),StringStart(3:7-3:8),StringPart(3:8-3:14),OpenStringInterpolation(3:14-3:16),LowerIdent(3:16-3:20),CloseStringInterpolation(3:20-3:21),StringPart(3:21-3:21),StringEnd(3:21-3:22),EndOfFile(3:22-3:22),
 ~~~PARSE
 (file
-	(module (1:1-1:13) (exposed_item (lower_ident "foo")))
+	(module (1:1-1:13)
+		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
 	(decl (2:1-2:13)
 		(ident (2:1-2:5) "name")
 		(string (2:8-2:13) (string_part (2:9-2:12) "luc")))

@@ -25,7 +25,8 @@ KwWhere(8:4-8:9),Newline(8:11-8:23),
 LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:14-9:14),
 ~~~PARSE
 (file
-	(module (1:1-1:16) (exposed_item (lower_ident "decode")))
+	(module (1:1-1:16)
+		(exposes (1:8-1:16) (exposed_item (lower_ident "decode"))))
 	(import (3:1-3:32)
 		"Decode"
 		(exposing (exposed_item (upper_ident "Decode"))))
