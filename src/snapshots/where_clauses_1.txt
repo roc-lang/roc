@@ -29,12 +29,13 @@ KwModule(10:3-10:9),NoSpaceOpenRound(10:9-10:10),LowerIdent(10:10-10:11),CloseRo
 (file
 	(module (1:1-1:14)
 		(exposes (1:8-1:14) (exposed_item (upper_ident "Hash"))))
-	(type_decl (3:1-8:7)
-		(header "Hash" (ty_var (3:6-3:7) "a"))
-		(ty_var (3:11-3:12) "a"))
-	(type_decl (8:1-10:35)
-		(header "Decode" (ty_var (8:8-8:9) "a"))
-		(ty_var (8:13-8:14) "a")))
+	(statements
+		(type_decl (3:1-8:7)
+			(header "Hash" (ty_var (3:6-3:7) "a"))
+			(ty_var (3:11-3:12) "a"))
+		(type_decl (8:1-10:35)
+			(header "Decode" (ty_var (8:8-8:9) "a"))
+			(ty_var (8:13-8:14) "a"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -13,5 +13,5 @@ OpBar(1:2-1:3),OpBar(1:3-1:4),NoSpaceOpenRound(1:4-1:5),OpBar(1:5-1:6),NoSpaceOp
 ~~~PARSE
 (file
 	(malformed_header (1:2-1:3) "missing_header")
-	(malformed_expr (1:18-1:18) "expected_expr_bar"))
+	(statements (malformed_expr (1:18-1:18) "expected_expr_bar")))
 ~~~END

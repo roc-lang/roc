@@ -20,7 +20,8 @@ OpenCurly(3:2-3:3),LowerIdent(3:4-3:11),OpColon(3:11-3:12),StringStart(3:13-3:14
 		(packages (3:2-3:28)
 			(record_field (3:4-3:28)
 				"somePkg"
-				(string (3:13-3:26) (string_part (3:14-3:25) "../main.roc"))))))
+				(string (3:13-3:26) (string_part (3:14-3:25) "../main.roc")))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

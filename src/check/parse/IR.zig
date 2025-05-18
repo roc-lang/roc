@@ -2196,11 +2196,15 @@ pub const NodeStore = struct {
 
             file_node.appendNodeChild(env.gpa, &header_node);
 
+            var statements_node = sexpr.Expr.init(env.gpa, "statements");
+
             for (ir.store.statementSlice(self.statements)) |stmt_id| {
                 const stmt = ir.store.getStatement(stmt_id);
                 var stmt_node = stmt.toSExpr(env, ir, line_starts);
-                file_node.appendNodeChild(env.gpa, &stmt_node);
+                statements_node.appendNodeChild(env.gpa, &stmt_node);
             }
+
+            file_node.appendNodeChild(env.gpa, &statements_node);
 
             return file_node;
         }

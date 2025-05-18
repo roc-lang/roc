@@ -65,7 +65,8 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 			(record_field (16:4-16:32)
 				"some_pkg"
 				(string (16:14-16:31) (string_part (16:15-16:30) "../some_pkg.roc"))))
-		(provides (19:3-21:4) (exposed_item (lower_ident "bar")))))
+		(provides (19:3-21:4) (exposed_item (lower_ident "bar"))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

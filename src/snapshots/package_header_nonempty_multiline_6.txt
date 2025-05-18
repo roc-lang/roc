@@ -35,7 +35,8 @@ CloseCurly(9:2-9:3),EndOfFile(9:3-9:3),
 				(string (7:12-7:25) (string_part (7:13-7:24) "../main.roc")))
 			(record_field (8:3-8:33)
 				"other"
-				(string (8:10-8:32) (string_part (8:11-8:31) "../../other/main.roc"))))))
+				(string (8:10-8:32) (string_part (8:11-8:31) "../../other/main.roc")))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

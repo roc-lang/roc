@@ -12,7 +12,8 @@ KwModule(1:1-1:7),OpenSquare(1:8-1:9),LowerIdent(1:9-1:18),Comma(1:18-1:19),Uppe
 	(module (1:1-1:30)
 		(exposes (1:8-1:30)
 			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType")))))
+			(exposed_item (upper_ident "SomeType"))))
+	(statements))
 ~~~FORMATTED
 module [
 	something,

@@ -15,7 +15,8 @@ KwPlatform(1:1-1:9),StringStart(1:10-1:11),StringPart(1:11-1:14),StringEnd(1:14-
 		(record (1:28-1:30))
 		(exposes (1:39-1:41))
 		(packages (1:51-1:53))
-		(provides (1:63-1:65))))
+		(provides (1:63-1:65)))
+	(statements))
 ~~~FORMATTED
 platform "foo"
 	requires {} {}

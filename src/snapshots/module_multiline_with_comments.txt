@@ -20,7 +20,8 @@ CloseSquare(5:2-5:3),EndOfFile(5:3-5:3),
 	(module (1:1-5:3)
 		(exposes (2:2-5:3)
 			(exposed_item (lower_ident "something"))
-			(exposed_item (upper_ident "SomeType")))))
+			(exposed_item (upper_ident "SomeType"))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -41,12 +41,13 @@ CloseRound(16:3-16:4),OpArrow(16:5-16:7),LowerIdent(16:8-16:9),Comma(16:9-16:10)
 (file
 	(module (1:1-1:14)
 		(exposes (1:8-1:14) (exposed_item (upper_ident "Hash"))))
-	(type_decl (3:1-12:7)
-		(header "Hash" (ty_var (3:6-3:7) "a"))
-		(ty_var (5:3-5:4) "a"))
-	(type_decl (12:1-16:10)
-		(header "Decode" (ty_var (12:8-12:9) "a"))
-		(ty_var (12:13-12:14) "a")))
+	(statements
+		(type_decl (3:1-12:7)
+			(header "Hash" (ty_var (3:6-3:7) "a"))
+			(ty_var (5:3-5:4) "a"))
+		(type_decl (12:1-16:10)
+			(header "Decode" (ty_var (12:8-12:9) "a"))
+			(ty_var (12:13-12:14) "a"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

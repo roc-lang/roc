@@ -12,6 +12,7 @@ LowerIdent(1:1-1:4),NoSpaceDotInt(1:4-1:6),NoSpaceDotLowerIdent(1:6-1:8),EndOfFi
 ~~~PARSE
 (file
 	(malformed_header (1:1-1:4) "missing_header")
-	(malformed_expr (1:4-1:6) "expr_unexpected_token")
-	(malformed_expr (1:6-1:8) "expr_unexpected_token"))
+	(statements
+		(malformed_expr (1:4-1:6) "expr_unexpected_token")
+		(malformed_expr (1:6-1:8) "expr_unexpected_token")))
 ~~~END

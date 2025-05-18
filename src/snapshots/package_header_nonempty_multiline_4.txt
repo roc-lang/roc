@@ -30,7 +30,8 @@ CloseCurly(8:2-8:3),EndOfFile(8:3-8:3),
 		(packages (6:2-8:3)
 			(record_field (7:3-7:26)
 				"somePkg"
-				(string (7:12-7:25) (string_part (7:13-7:24) "../main.roc"))))))
+				(string (7:12-7:25) (string_part (7:13-7:24) "../main.roc")))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

@@ -13,9 +13,10 @@ LowerIdent(2:1-2:4),OpAssign(2:5-2:6),Float(2:7-2:12),EndOfFile(2:12-2:12),
 (file
 	(module (1:1-1:13)
 		(exposes (1:8-1:13) (exposed_item (lower_ident "foo"))))
-	(decl (2:1-2:12)
-		(ident (2:1-2:4) "foo")
-		(float (2:7-2:12) "12.34")))
+	(statements
+		(decl (2:1-2:12)
+			(ident (2:1-2:4) "foo")
+			(float (2:7-2:12) "12.34"))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

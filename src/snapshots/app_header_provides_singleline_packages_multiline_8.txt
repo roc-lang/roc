@@ -26,7 +26,8 @@ CloseCurly(4:1-4:2),EndOfFile(4:2-4:2),
 				(string (2:15-2:28) (string_part (2:16-2:27) "../main.roc")))
 			(record_field (3:2-3:25)
 				"somePkg"
-				(string (3:11-3:24) (string_part (3:12-3:23) "../main.roc"))))))
+				(string (3:11-3:24) (string_part (3:12-3:23) "../main.roc")))))
+	(statements))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
