@@ -2214,14 +2214,18 @@ pub const NodeStore = struct {
 
         pub fn toSExpr(self: @This(), env: *base.ModuleEnv, ir: *IR, line_starts: std.ArrayList(u32)) sexpr.Expr {
             var block_node = sexpr.Expr.init(env.gpa, "block");
+            block_node.appendRegionChild(env.gpa, ir.regionInfo(self.region, line_starts));
+            var statements_node = sexpr.Expr.init(env.gpa, "statements");
 
             for (ir.store.statementSlice(self.statements)) |stmt_idx| {
                 const stmt = ir.store.getStatement(stmt_idx);
 
                 var stmt_node = stmt.toSExpr(env, ir, line_starts);
 
-                block_node.appendNodeChild(env.gpa, &stmt_node);
+                statements_node.appendNodeChild(env.gpa, &stmt_node);
             }
+
+            block_node.appendNodeChild(env.gpa, &statements_node);
 
             return block_node;
         }

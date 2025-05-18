@@ -541,20 +541,23 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 		(ident (68:1-68:8) "add_one")
 		(lambda (68:11-78:2)
 			(args (ident (68:12-68:15) "num"))
-			(block
-				(decl (69:2-69:11)
-					(ident (69:2-69:7) "other")
-					(int (69:10-69:11) "1"))
-				(if_then_else (70:2-78:2)
-					(ident (70:5-70:8) "" "num")
-					(block
-						(dbg
-							(apply (72:4-72:15)
-								(ident (72:4-72:13) "" "some_func")))
-						(int (73:3-73:4) "0"))
-					(block
-						(dbg (int (75:7-75:10) "123"))
-						(ident (76:3-76:8) "" "other"))))))
+			(block (68:17-78:2)
+				(statements
+					(decl (69:2-69:11)
+						(ident (69:2-69:7) "other")
+						(int (69:10-69:11) "1"))
+					(if_then_else (70:2-78:2)
+						(ident (70:5-70:8) "" "num")
+						(block (70:9-74:3)
+							(statements
+								(dbg
+									(apply (72:4-72:15)
+										(ident (72:4-72:13) "" "some_func")))
+								(int (73:3-73:4) "0")))
+						(block (74:9-77:3)
+							(statements
+								(dbg (int (75:7-75:10) "123"))
+								(ident (76:3-76:8) "" "other"))))))))
 	(decl (80:1-140:7)
 		(ident (80:1-80:11) "match_time")
 		(lambda (80:14-140:7)
@@ -569,21 +572,23 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 							(tag (85:3-85:7) "Blue")
 							(tag (85:10-85:15) "Green")
 							(tag (85:18-85:21) "Red"))
-						(block
-							(decl (86:4-86:10)
-								(ident (86:4-86:5) "x")
-								(int (86:8-86:10) "12"))
-							(ident (87:4-87:5) "" "x")))
+						(block (85:25-88:4)
+							(statements
+								(decl (86:4-86:10)
+									(ident (86:4-86:5) "x")
+									(int (86:8-86:10) "12"))
+								(ident (87:4-87:5) "" "x"))))
 					(branch (89:3-97:8)
 						(alternatives
 							(tag (89:3-89:7) "Blue")
 							(tag (91:4-91:9) "Green")
 							(tag (92:5-92:8) "Red"))
-						(block
-							(decl (94:5-94:11)
-								(ident (94:5-94:6) "x")
-								(int (94:9-94:11) "12"))
-							(ident (95:5-95:6) "" "x")))
+						(block (93:7-96:5)
+							(statements
+								(decl (94:5-94:11)
+									(ident (94:5-94:6) "x")
+									(int (94:9-94:11) "12"))
+								(ident (95:5-95:6) "" "x"))))
 					(branch (97:3-99:4)
 						(ident (97:3-97:8) "lower")
 						(int (98:7-98:8) "1"))
@@ -715,205 +720,208 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 		(ident (144:1-144:6) "main!")
 		(lambda (144:9-196:2)
 			(args (underscore))
-			(block
-				(decl (145:2-145:17)
-					(ident (145:2-145:7) "world")
-					(string (145:10-145:17) (string_part (145:11-145:16) "World")))
-				(var (146:2-147:8)
-					(name "number")
-					(int (146:15-146:18) "123"))
-				(expect (147:2-148:5)
-					(binop
-						"=="
-						(ident (147:9-147:13) "" "blah")
-						(int (147:17-147:18) "1")))
-				(decl (148:2-148:12)
-					(ident (148:2-148:5) "tag")
-					(tag (148:8-148:12) "Blue"))
-				(return (149:2-154:5)
-					(ident (150:3-150:6) "" "tag"))
-				(ellipsis)
-				(apply (155:2-157:3)
-					(ident (155:2-155:12) "" "match_time")
-					(ellipsis))
-				(apply (158:2-161:3)
-					(ident (158:2-158:11) "" "some_func")
-					(dbg (int (160:4-160:6) "42")))
-				(crash (162:2-163:49)
-					(string (163:3-163:17) (string_part (163:4-163:16) "Unreachable!")))
-				(decl (164:2-164:31)
-					(ident (164:2-164:18) "tag_with_payload")
-					(apply (164:21-164:31)
-						(tag (164:21-164:23) "Ok")
-						(ident (164:24-164:30) "" "number")))
-				(decl (165:2-165:34)
-					(ident (165:2-165:14) "interpolated")
-					(string (165:17-165:34)
-						(string_part (165:18-165:25) "Hello, ")
-						(ident (165:27-165:32) "" "world")
-						(string_part (165:33-165:33) "")))
-				(decl (166:2-173:3)
-					(ident (166:2-166:6) "list")
-					(list (166:9-173:3)
-						(apply (167:3-170:4)
-							(ident (167:3-167:10) "" "add_one")
-							(dbg (ident (169:5-169:11) "" "number")))
-						(int (171:3-171:6) "456")
-						(int (172:3-172:6) "789")))
-				(for
-					(ident (174:6-174:7) "n")
-					(ident (174:11-174:15) "" "list")
-					(block
-						(apply (175:3-175:43)
-							(ident (175:3-175:15) "Stdout" ".line!")
-							(string (175:16-175:42)
-								(string_part (175:17-175:24) "Adding ")
-								(ident (175:26-175:27) "" "n")
-								(string_part (175:28-175:32) " to ")
-								(ident (175:34-175:40) "" "number")
-								(string_part (175:41-175:41) "")))
-						(decl (176:3-177:3)
-							(ident (176:3-176:9) "number")
-							(binop
-								"+"
-								(ident (176:12-176:18) "" "number")
-								(ident (176:21-176:22) "" "n")))))
-				(decl (178:2-178:71)
-					(ident (178:2-178:8) "record")
-					(record (178:11-178:71)
-						(field "foo" (int (178:18-178:21) "123"))
-						(field
-							"bar"
-							(string (178:28-178:35) (string_part (178:29-178:34) "Hello")))
-						(field
-							"baz"
-							(ident (178:42-178:45) "" "tag"))
-						(field
-							"qux"
-							(apply (178:52-178:61)
-								(tag (178:52-178:54) "Ok")
-								(ident (178:55-178:60) "" "world")))
-						(field "punned")))
-				(decl (179:2-179:68)
-					(ident (179:2-179:7) "tuple")
-					(tuple (179:10-179:68)
-						(int (179:11-179:14) "123")
-						(string (179:16-179:23) (string_part (179:17-179:22) "World"))
-						(ident (179:25-179:28) "" "tag")
-						(apply (179:30-179:39)
-							(tag (179:30-179:32) "Ok")
-							(ident (179:33-179:38) "" "world"))
-						(tuple (179:41-179:56)
-							(ident (179:42-179:48) "" "nested")
-							(ident (179:50-179:55) "" "tuple"))
-						(list (179:58-179:67)
-							(int (179:59-179:60) "1")
-							(int (179:62-179:63) "2")
-							(int (179:65-179:66) "3"))))
-				(decl (180:2-187:3)
-					(ident (180:2-180:17) "multiline_tuple")
-					(tuple (180:20-187:3)
-						(int (181:3-181:6) "123")
-						(string (182:3-182:10) (string_part (182:4-182:9) "World"))
-						(ident (183:3-183:7) "" "tag1")
-						(apply (184:3-184:12)
-							(tag (184:3-184:5) "Ok")
-							(ident (184:6-184:11) "" "world"))
-						(tuple (185:3-185:18)
-							(ident (185:4-185:10) "" "nested")
-							(ident (185:12-185:17) "" "tuple"))
-						(list (186:3-186:12)
-							(int (186:4-186:5) "1")
-							(int (186:7-186:8) "2")
-							(int (186:10-186:11) "3"))))
-				(decl (188:2-189:23)
-					(ident (188:2-188:15) "bin_op_result")
-					(binop
-						"or"
+			(block (144:13-196:2)
+				(statements
+					(decl (145:2-145:17)
+						(ident (145:2-145:7) "world")
+						(string (145:10-145:17) (string_part (145:11-145:16) "World")))
+					(var (146:2-147:8)
+						(name "number")
+						(int (146:15-146:18) "123"))
+					(expect (147:2-148:5)
+						(binop
+							"=="
+							(ident (147:9-147:13) "" "blah")
+							(int (147:17-147:18) "1")))
+					(decl (148:2-148:12)
+						(ident (148:2-148:5) "tag")
+						(tag (148:8-148:12) "Blue"))
+					(return (149:2-154:5)
+						(ident (150:3-150:6) "" "tag"))
+					(ellipsis)
+					(apply (155:2-157:3)
+						(ident (155:2-155:12) "" "match_time")
+						(ellipsis))
+					(apply (158:2-161:3)
+						(ident (158:2-158:11) "" "some_func")
+						(dbg (int (160:4-160:6) "42")))
+					(crash (162:2-163:49)
+						(string (163:3-163:17) (string_part (163:4-163:16) "Unreachable!")))
+					(decl (164:2-164:31)
+						(ident (164:2-164:18) "tag_with_payload")
+						(apply (164:21-164:31)
+							(tag (164:21-164:23) "Ok")
+							(ident (164:24-164:30) "" "number")))
+					(decl (165:2-165:34)
+						(ident (165:2-165:14) "interpolated")
+						(string (165:17-165:34)
+							(string_part (165:18-165:25) "Hello, ")
+							(ident (165:27-165:32) "" "world")
+							(string_part (165:33-165:33) "")))
+					(decl (166:2-173:3)
+						(ident (166:2-166:6) "list")
+						(list (166:9-173:3)
+							(apply (167:3-170:4)
+								(ident (167:3-167:10) "" "add_one")
+								(dbg (ident (169:5-169:11) "" "number")))
+							(int (171:3-171:6) "456")
+							(int (172:3-172:6) "789")))
+					(for
+						(ident (174:6-174:7) "n")
+						(ident (174:11-174:15) "" "list")
+						(block (174:16-177:3)
+							(statements
+								(apply (175:3-175:43)
+									(ident (175:3-175:15) "Stdout" ".line!")
+									(string (175:16-175:42)
+										(string_part (175:17-175:24) "Adding ")
+										(ident (175:26-175:27) "" "n")
+										(string_part (175:28-175:32) " to ")
+										(ident (175:34-175:40) "" "number")
+										(string_part (175:41-175:41) "")))
+								(decl (176:3-177:3)
+									(ident (176:3-176:9) "number")
+									(binop
+										"+"
+										(ident (176:12-176:18) "" "number")
+										(ident (176:21-176:22) "" "n"))))))
+					(decl (178:2-178:71)
+						(ident (178:2-178:8) "record")
+						(record (178:11-178:71)
+							(field "foo" (int (178:18-178:21) "123"))
+							(field
+								"bar"
+								(string (178:28-178:35) (string_part (178:29-178:34) "Hello")))
+							(field
+								"baz"
+								(ident (178:42-178:45) "" "tag"))
+							(field
+								"qux"
+								(apply (178:52-178:61)
+									(tag (178:52-178:54) "Ok")
+									(ident (178:55-178:60) "" "world")))
+							(field "punned")))
+					(decl (179:2-179:68)
+						(ident (179:2-179:7) "tuple")
+						(tuple (179:10-179:68)
+							(int (179:11-179:14) "123")
+							(string (179:16-179:23) (string_part (179:17-179:22) "World"))
+							(ident (179:25-179:28) "" "tag")
+							(apply (179:30-179:39)
+								(tag (179:30-179:32) "Ok")
+								(ident (179:33-179:38) "" "world"))
+							(tuple (179:41-179:56)
+								(ident (179:42-179:48) "" "nested")
+								(ident (179:50-179:55) "" "tuple"))
+							(list (179:58-179:67)
+								(int (179:59-179:60) "1")
+								(int (179:62-179:63) "2")
+								(int (179:65-179:66) "3"))))
+					(decl (180:2-187:3)
+						(ident (180:2-180:17) "multiline_tuple")
+						(tuple (180:20-187:3)
+							(int (181:3-181:6) "123")
+							(string (182:3-182:10) (string_part (182:4-182:9) "World"))
+							(ident (183:3-183:7) "" "tag1")
+							(apply (184:3-184:12)
+								(tag (184:3-184:5) "Ok")
+								(ident (184:6-184:11) "" "world"))
+							(tuple (185:3-185:18)
+								(ident (185:4-185:10) "" "nested")
+								(ident (185:12-185:17) "" "tuple"))
+							(list (186:3-186:12)
+								(int (186:4-186:5) "1")
+								(int (186:7-186:8) "2")
+								(int (186:10-186:11) "3"))))
+					(decl (188:2-189:23)
+						(ident (188:2-188:15) "bin_op_result")
 						(binop
 							"or"
 							(binop
-								">"
+								"or"
 								(binop
-									"??"
-									(apply (188:18-188:26)
-										(tag (188:18-188:21) "Err")
-										(ident (188:22-188:25) "" "foo"))
-									(int (188:30-188:32) "12"))
-								(binop
-									"*"
-									(int (188:35-188:36) "5")
-									(int (188:39-188:40) "5")))
-							(binop
-								"and"
-								(binop
-									"<"
+									">"
 									(binop
-										"+"
-										(int (188:44-188:46) "13")
-										(int (188:49-188:50) "2"))
-									(int (188:53-188:54) "5"))
-								(binop
-									">="
+										"??"
+										(apply (188:18-188:26)
+											(tag (188:18-188:21) "Err")
+											(ident (188:22-188:25) "" "foo"))
+										(int (188:30-188:32) "12"))
 									(binop
-										"-"
-										(int (188:59-188:61) "10")
-										(int (188:64-188:65) "1"))
-									(int (188:69-188:71) "16"))))
-						(binop
-							"<="
-							(int (188:75-188:77) "12")
-							(binop
-								"/"
-								(int (188:81-188:82) "3")
-								(int (188:85-188:86) "5")))))
-				(decl (189:2-190:8)
-					(ident (189:2-189:23) "static_dispatch_style")
-					(field_access (189:26-190:8)
-						(binop
-							" This is a module comment!"
-							(field_access (189:26-189:110)
+										"*"
+										(int (188:35-188:36) "5")
+										(int (188:39-188:40) "5")))
 								(binop
-									" This is a module comment!"
-									(field_access (189:26-189:94)
+									"and"
+									(binop
+										"<"
 										(binop
-											" This is a module comment!"
-											(suffix_single_question (189:26-189:40)
-												(apply (189:26-189:39)
-													(ident (189:26-189:33) "" "some_fn")
-													(ident (189:34-189:38) "" "arg1")))
-											(suffix_single_question (189:40-189:66)
-												(apply (189:40-189:65)
-													(ident (189:40-189:63) "" ".static_dispatch_method")))))
-									(suffix_single_question (189:66-189:97)
-										(apply (189:66-189:96)
-											(ident (189:66-189:94) "" ".next_static_dispatch_method")))))
-							(suffix_single_question (189:97-189:111)
-								(ident (189:97-189:110) "" ".record_field")))))
-				(suffix_single_question (190:2-190:29)
-					(apply (190:2-190:28)
-						(ident (190:2-190:14) "Stdout" ".line!")
-						(ident (190:15-190:27) "" "interpolated")))
-				(apply (191:2-195:3)
-					(ident (191:2-191:14) "Stdout" ".line!")
-					(string (192:3-194:18)
-						(string_part (192:4-192:14) "How about ")
-						(apply (193:4-193:21)
-							(ident (193:4-193:13) "Num" ".toStr")
-							(ident (193:14-193:20) "" "number"))
-						(string_part (194:4-194:17) " as a string?"))))))
+											"+"
+											(int (188:44-188:46) "13")
+											(int (188:49-188:50) "2"))
+										(int (188:53-188:54) "5"))
+									(binop
+										">="
+										(binop
+											"-"
+											(int (188:59-188:61) "10")
+											(int (188:64-188:65) "1"))
+										(int (188:69-188:71) "16"))))
+							(binop
+								"<="
+								(int (188:75-188:77) "12")
+								(binop
+									"/"
+									(int (188:81-188:82) "3")
+									(int (188:85-188:86) "5")))))
+					(decl (189:2-190:8)
+						(ident (189:2-189:23) "static_dispatch_style")
+						(field_access (189:26-190:8)
+							(binop
+								" This is a module comment!"
+								(field_access (189:26-189:110)
+									(binop
+										" This is a module comment!"
+										(field_access (189:26-189:94)
+											(binop
+												" This is a module comment!"
+												(suffix_single_question (189:26-189:40)
+													(apply (189:26-189:39)
+														(ident (189:26-189:33) "" "some_fn")
+														(ident (189:34-189:38) "" "arg1")))
+												(suffix_single_question (189:40-189:66)
+													(apply (189:40-189:65)
+														(ident (189:40-189:63) "" ".static_dispatch_method")))))
+										(suffix_single_question (189:66-189:97)
+											(apply (189:66-189:96)
+												(ident (189:66-189:94) "" ".next_static_dispatch_method")))))
+								(suffix_single_question (189:97-189:111)
+									(ident (189:97-189:110) "" ".record_field")))))
+					(suffix_single_question (190:2-190:29)
+						(apply (190:2-190:28)
+							(ident (190:2-190:14) "Stdout" ".line!")
+							(ident (190:15-190:27) "" "interpolated")))
+					(apply (191:2-195:3)
+						(ident (191:2-191:14) "Stdout" ".line!")
+						(string (192:3-194:18)
+							(string_part (192:4-192:14) "How about ")
+							(apply (193:4-193:21)
+								(ident (193:4-193:13) "Num" ".toStr")
+								(ident (193:14-193:20) "" "number"))
+							(string_part (194:4-194:17) " as a string?")))))))
 	(expect (198:1-202:2)
-		(block
-			(decl (199:2-199:9)
-				(ident (199:2-199:5) "foo")
-				(int (199:8-199:9) "1"))
-			(decl (200:2-200:10)
-				(ident (200:2-200:6) "blah")
-				(int (200:9-200:10) "1"))
-			(binop
-				"=="
-				(ident (201:2-201:6) "" "blah")
-				(ident (201:10-201:13) "" "foo")))))
+		(block (198:8-202:2)
+			(statements
+				(decl (199:2-199:9)
+					(ident (199:2-199:5) "foo")
+					(int (199:8-199:9) "1"))
+				(decl (200:2-200:10)
+					(ident (200:2-200:6) "blah")
+					(int (200:9-200:10) "1"))
+				(binop
+					"=="
+					(ident (201:2-201:6) "" "blah")
+					(ident (201:10-201:13) "" "foo"))))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
