@@ -34,14 +34,14 @@ LowerIdent(9:5-9:6),NoSpaceDotUpperIdent(9:6-9:13),Comma(9:13-9:14),EndOfFile(9:
 		(type_anno (5:1-9:14)
 			"decodeThings"
 			(fn (7:3-7:28)
-				(apply (7:21-7:28)
-					(ty "List")
-					(ty_var (7:26-7:27) "a"))
 				(apply (7:3-7:17)
 					(ty "List")
 					(apply (7:8-7:16)
 						(ty "List")
-						(ty "U8")))))))
+						(ty "U8")))
+				(apply (7:21-7:28)
+					(ty "List")
+					(ty_var (7:26-7:27) "a"))))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END

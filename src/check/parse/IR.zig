@@ -2862,15 +2862,15 @@ pub const NodeStore = struct {
 
                     node.appendRegionChild(env.gpa, ir.regionInfo(a.region, line_starts));
 
-                    // return value
-                    var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir, line_starts);
-                    node.appendNodeChild(env.gpa, &ret);
-
                     // arguments
                     for (ir.store.typeAnnoSlice(a.args)) |b| {
                         var child = ir.store.getTypeAnno(b).toSExpr(env, ir, line_starts);
                         node.appendNodeChild(env.gpa, &child);
                     }
+
+                    // return value
+                    var ret = ir.store.getTypeAnno(a.ret).toSExpr(env, ir, line_starts);
+                    node.appendNodeChild(env.gpa, &ret);
 
                     return node;
                 },

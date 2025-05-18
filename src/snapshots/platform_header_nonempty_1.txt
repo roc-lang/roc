@@ -56,10 +56,10 @@ CloseSquare(21:3-21:4),EndOfFile(21:4-21:4),
 			(anno_record_field (8:5-8:29)
 				"main!"
 				(fn (8:13-8:28)
-					(record (8:26-8:28))
 					(apply (8:13-8:22)
 						(ty "List")
-						(ty "Str")))))
+						(ty "Str"))
+					(record (8:26-8:28)))))
 		(exposes (11:3-13:4) (exposed_item (lower_ident "foo")))
 		(packages (15:3-17:4)
 			(record_field (16:4-16:32)
