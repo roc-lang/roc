@@ -54,3 +54,7 @@ Sadly, this is not nearly as fast due to building binaries.
 One day, we will get dev zig backends, and it should be fast.
 
 Try it with `zig build test -fincremental --watch`
+
+## Overview
+
+![Zig Dependency Graph](https://anton-4.github.io/roc-compiler-vis/zig_dependency_graph.png)
