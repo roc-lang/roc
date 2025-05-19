@@ -65,7 +65,7 @@ pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
 /// If it cannot provide a non-null pointer (e.g. due to OOM), it
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
-pub const RocAlloc = struct {
+pub const RocAlloc = extern struct {
     alignment: usize,
     length: usize,
     answer: *anyopaque,
@@ -74,7 +74,7 @@ pub const RocAlloc = struct {
 /// When RocOps.roc_dealloc gets called, it will be passed one of these.
 /// (The length of the allocation cannot be provided, because it is
 /// not always known at runtime due to the way seamless slices work.)
-pub const RocDealloc = struct {
+pub const RocDealloc = extern struct {
     alignment: usize,
     ptr: *anyopaque,
 };
@@ -95,7 +95,7 @@ pub const RocRealloc = extern struct {
 ///
 /// The pointer to the UTF-8 bytes is guaranteed to be non-null,
 /// but it is *not* guaranteed to be null-terminated.
-pub const RocCrashed = struct {
+pub const RocCrashed = extern struct {
     utf8_bytes: *u8,
     len: usize,
 };
@@ -104,7 +104,7 @@ pub const RocCrashed = struct {
 ///
 /// The pointer to the UTF-8 bytes is guaranteed to be non-null,
 /// but it is *not* guaranteed to be null-terminated.
-pub const RocDbg = struct {
+pub const RocDbg = extern struct {
     // TODO make this be structured instead of just a string, so that
     // the host can format things more nicely (e.g. syntax highlighting).
     utf8_bytes: *u8,
@@ -116,7 +116,7 @@ pub const RocDbg = struct {
 ///
 /// The pointer to the UTF-8 bytes is guaranteed to be non-null,
 /// but it is *not* guaranteed to be null-terminated.
-pub const RocExpectFailed = struct {
+pub const RocExpectFailed = extern struct {
     // TODO make this be structured instead of just a string, so that
     // the host can format things more nicely (e.g. syntax highlighting).
     utf8_bytes: *u8,
