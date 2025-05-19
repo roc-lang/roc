@@ -180,6 +180,10 @@ Parsing of type vars:
 - new compiler: search `ty_var` in [Parser.zig](src/check/parse/Parser.zig)
 - old compiler: search `parse_type_variable` in [type_annotation.rs](crates/compiler/parse/src/type_annotation.rs)
 
+## Builtin
+
+TODO
+
 ## Compiler Phase
 
 A compiler phase is a distinct stage in the process the compiler goes through to translate high-level source code into machine code that a computer can execute. Compilers don’t just do this in one big step, they break it down into several phases, each handling a specific task. Some examples of phases: [tokenization](#tokenization), [parsing](#parsing), [code generation](#code-gen),... .
@@ -362,6 +366,20 @@ Related Files:
 ## Code Gen
 
 ## Host
+
+## Heap
+
+## Stack
+
+## Boxing
+
+Wrapping a value or function in a generic, opaque representation (box) that can easily be passed to the platform.
+A boxed value is allocated on the [heap](#heap).
+You can box something in Roc with the [builtin](#builtin) [Box.box](https://www.roc-lang.org/builtins/Box#box) and unbox it with [Box.unbox](https://www.roc-lang.org/builtins/Box#unbox).
+
+[Example handling of boxes in basic-cli](https://github.com/search?q=repo%3Aroc-lang%2Fbasic-cli%20Box&type=code).
+
+See also [std::boxed::Box](https://doc.rust-lang.org/std/boxed/struct.Box.html) in Rust.
 
 ## Linking
 
