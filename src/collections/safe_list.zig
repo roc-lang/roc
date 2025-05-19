@@ -16,8 +16,18 @@ const exitOnOom = utils.exitOnOom;
 /// This range is inclusive on the lower bound, exclusive on the upper bound.
 pub fn SafeRange(comptime Idx: type) type {
     return struct {
+        const Self = @This();
+
         start: Idx,
         end: Idx,
+
+        /// An empty range
+        pub const empty: Self = .{ .start = @enumFromInt(0), .end = @enumFromInt(0) };
+
+        /// Get the length of a range slice
+        pub fn len(self: @This()) usize {
+            return @intFromEnum(self.end) - @intFromEnum(self.start);
+        }
     };
 }
 
@@ -106,7 +116,7 @@ pub fn SafeList(comptime T: type) type {
             std.debug.assert(start <= end);
             std.debug.assert(end <= self.items.items.len);
 
-            return self.items.items[@intFromEnum(range.start)..@intFromEnum(range.end)];
+            return self.items.items[start..end];
         }
 
         /// Get an item from this list without worrying about out-of-bounds errors.
