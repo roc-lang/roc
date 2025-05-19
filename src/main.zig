@@ -11,6 +11,7 @@ const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
+const eval = @import("eval/eval.zig").eval;
 
 const _ = @import("eval/stack.zig"); // TODO this is just so stack.zig gets tested; remove it once it's actually used!
 
@@ -134,6 +135,7 @@ fn rocTest(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
 }
 
 fn rocRepl(gpa: Allocator, opt: RocOpt, args: []const []const u8) !void {
+    _ = eval;
     _ = gpa;
 
     std.debug.print("TODO roc repl\n{}\n{s}\n\n", .{ opt, args });

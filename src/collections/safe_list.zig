@@ -82,6 +82,13 @@ pub fn SafeList(comptime T: type) type {
             return self.items.items.len;
         }
 
+        /// Remove and return the last element from this list.
+        /// If the list is empty, returns `null`.
+        /// Invalidates pointers to last element.
+        pub fn pop(self: *SafeList(T)) ?T {
+            return self.items.pop();
+        }
+
         /// Add an item to the end of this list.
         pub fn append(self: *SafeList(T), gpa: Allocator, item: T) Idx {
             const length = self.len();

@@ -220,7 +220,7 @@ pub const Expr = union(enum) {
     },
 
     /// Compiles, but will crash if reached
-    RuntimeError: Problem.Idx,
+    compilation_error: Problem.Idx,
 
     /// A list of canonicalized expressions.
     pub const List = collections.SafeList(@This());
@@ -416,7 +416,7 @@ pub const Expr = union(enum) {
                 appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 return node;
             },
-            .RuntimeError => |problem_idx| {
+            .compilation_error => |problem_idx| {
                 var node = sexpr.Expr.init(gpa, "runtime_error");
                 // TODO: Maybe resolve problem description?
                 node.appendUnsignedIntChild(gpa, @intFromEnum(problem_idx));

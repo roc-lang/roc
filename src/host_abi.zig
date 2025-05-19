@@ -1,8 +1,16 @@
+<<<<<<< HEAD
 //! TODO
 
 // Since all of these can be passed across the host boundary, and since compiled Roc
 // programs must not depend on libc or on Zig's standard library, it's important that
 // none of these operations depend on any Zig types like slices or Allocator.
+||||||| parent of 7c58be7d45 (Add a preliminary interpreter)
+// Since all of these can be passed across the host boundary, and since compiled Roc
+// programs must not depend on libc or on Zig's standard library, it's important that
+// none of these operations depend on any Zig types like slices or Allocator.
+=======
+const std = @import("std"); // Used only for testing
+>>>>>>> 7c58be7d45 (Add a preliminary interpreter)
 
 /// All Roc functions that are exposed to the host return `void` and take a `*RocOps`
 /// followed by the address of the return type (which the Roc function will write into)
@@ -40,21 +48,21 @@ pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
         /// function pointers as a second argument. This lets the host do things like use
         /// arena allocators for allocation and deallocation (by putting the arena in here).
         /// The pointer can be to absolutely anything the host likes, or null if unused.
-        env: *CallEnv,
+        env: CallEnv,
         /// Similar to  _aligned_malloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-malloc
-        roc_alloc: fn (*RocAlloc, *CallEnv) void,
+        roc_alloc: *const fn (*RocAlloc, *CallEnv) void,
         /// Similar to  _aligned_free - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-free
-        roc_dealloc: fn (*RocDealloc, *CallEnv) void,
+        roc_dealloc: *const fn (*const RocDealloc, *CallEnv) void,
         /// Similar to  _aligned_realloc - https://learn.microsoft.com/en-us/cpp/c-runtime-library/reference/aligned-realloc
-        roc_realloc: fn (*RocRealloc, *CallEnv) void,
+        roc_realloc: *const fn (*RocRealloc, *CallEnv) void,
         /// Called when the Roc program has called `dbg` on something.
-        roc_dbg: fn (*RocDbg, *CallEnv) void,
+        roc_dbg: *const fn (*const RocDbg, *CallEnv) void,
         /// Called when the Roc program has run an `expect` which failed.
-        roc_expect_failed: fn (*RocExpectFailed, *CallEnv) void,
+        roc_expect_failed: *const fn (*const RocExpectFailed, *CallEnv) void,
         /// Called when the Roc program crashes, e.g. due to integer overflow.
         /// This function must not return, because the Roc program assumes it will
         /// not continue to be executed after this function is called.
-        roc_crashed: fn (*RocCrashed, *CallEnv) void,
+        roc_crashed: *const fn (*const RocCrashed, *CallEnv) void,
         /// At the end of this struct, the host must include all the functions
         /// it wants to provide to the Roc program for the Roc program to call
         /// (e.g. I/O operations and such).
@@ -69,8 +77,8 @@ pub fn RocOps(comptime CallEnv: type, comptime HostFns: type) type {
 /// of roc_crashed.
 pub const RocAlloc = extern struct {
     alignment: usize,
-    length: usize,
-    answer: *anyopaque,
+    len: usize,
+    answer: [*]u8,
 };
 
 /// When RocOps.roc_dealloc gets called, it will be passed one of these.
@@ -78,7 +86,7 @@ pub const RocAlloc = extern struct {
 /// not always known at runtime due to the way seamless slices work.)
 pub const RocDealloc = extern struct {
     alignment: usize,
-    ptr: *anyopaque,
+    ptr: [*]u8,
 };
 
 /// When RocOps.roc_realloc gets called, it will be passed one of these.
@@ -87,9 +95,10 @@ pub const RocDealloc = extern struct {
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
 pub const RocRealloc = extern struct {
+    ptr: *anyopaque,
     alignment: usize,
-    new_length: usize,
-    answer: *anyopaque,
+    new_len: usize,
+    answer: [*]u8,
 };
 
 /// The UTF-8 string message the host receives when a Roc program crashes
@@ -98,8 +107,12 @@ pub const RocRealloc = extern struct {
 /// The pointer to the UTF-8 bytes is guaranteed to be non-null,
 /// but it is *not* guaranteed to be null-terminated.
 pub const RocCrashed = extern struct {
-    utf8_bytes: *u8,
+    utf8_bytes: [*]u8,
     len: usize,
+
+    pub fn toString(self: *const RocCrashed) []u8 {
+        return self.utf8_bytes[0..self.len];
+    }
 };
 
 /// The information the host receives when a Roc program runs a `dbg`.
@@ -109,8 +122,12 @@ pub const RocCrashed = extern struct {
 pub const RocDbg = extern struct {
     // TODO make this be structured instead of just a string, so that
     // the host can format things more nicely (e.g. syntax highlighting).
-    utf8_bytes: *u8,
+    utf8_bytes: [*]u8,
     len: usize,
+
+    pub fn toString(self: *const RocDbg) []u8 {
+        return self.utf8_bytes[0..self.len];
+    }
 };
 
 /// The information the host receives when a Roc program runs an inline `expect`
@@ -121,6 +138,10 @@ pub const RocDbg = extern struct {
 pub const RocExpectFailed = extern struct {
     // TODO make this be structured instead of just a string, so that
     // the host can format things more nicely (e.g. syntax highlighting).
-    utf8_bytes: *u8,
+    utf8_bytes: [*]u8,
     len: usize,
+
+    pub fn toString(self: *const RocExpectFailed) []u8 {
+        return self.utf8_bytes[0..self.len];
+    }
 };
