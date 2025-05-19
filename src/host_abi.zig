@@ -84,7 +84,7 @@ pub const RocDealloc = struct {
 /// If it cannot provide a non-null pointer (e.g. due to OOM), it
 /// must not return, and must instead do something along the lines
 /// of roc_crashed.
-pub const RocRealloc = struct {
+pub const RocRealloc = extern struct {
     alignment: usize,
     new_length: usize,
     answer: *anyopaque,
