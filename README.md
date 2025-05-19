@@ -55,5 +55,6 @@ We'd also like to express our gratitude to our generous [individual sponsors](ht
 - [Shritesh Bhattarai](https://github.com/shritesh)
 - [Richard Feldman](https://github.com/rtfeldman)
 - [Ayaz Hafiz](https://github.com/ayazhafiz)
+- [Anthony Bullard](https://github.com/gamebox)
 
 Thank you all so much for helping Roc progress!
