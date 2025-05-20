@@ -1561,6 +1561,7 @@ pub fn fromUtf8Lossy(
     return str;
 }
 
+/// TODO: Document fromUtf8.
 pub fn fromUtf8(
     list: RocList,
     update_mode: UpdateMode,
@@ -1681,7 +1682,8 @@ const Utf8DecodeError = error{
 ///
 /// Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
 /// but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
-// TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
+///
+/// TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
 pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
     const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
     const codepoint_end_index = index + codepoint_len;
@@ -1692,8 +1694,8 @@ pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeErr
     return codepoint_end_index - index;
 }
 
-// Return types for validateUtf8Bytes
-// Values must be in alphabetical order. That is, lowest values are the first alphabetically.
+/// Return types for validateUtf8Bytes
+/// Values must be in alphabetical order. That is, lowest values are the first alphabetically.
 pub const Utf8ByteProblem = enum(u8) {
     CodepointTooLarge = 0,
     EncodesSurrogateHalf = 1,

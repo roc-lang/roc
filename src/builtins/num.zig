@@ -6,7 +6,7 @@ const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
 const roc_panic = @import("panic.zig").panic_help;
 
-/// TODO: Document NumParseResult.
+/// Result type for numeric parsing, with value and error code.
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
     // always works out (no number with smaller alignment than 1)
@@ -16,27 +16,27 @@ pub fn NumParseResult(comptime T: type) type {
     };
 }
 
-/// TODO: Document F32Parts.
+/// Bitwise parts of a 32-bit float.
 pub const F32Parts = extern struct {
     fraction: u32,
     exponent: u8,
     sign: bool,
 };
 
-/// TODO: Document F64Parts.
+/// Bitwise parts of a 64-bit float.
 pub const F64Parts = extern struct {
     fraction: u64,
     exponent: u16,
     sign: bool,
 };
 
-/// TODO: Document U256.
+/// 256-bit unsigned integer, as two 128-bit values.
 pub const U256 = struct {
     hi: u128,
     lo: u128,
 };
 
-/// TODO: Document mul_u128.
+/// Multiplies two u128 values, returning a 256-bit result.
 pub fn mul_u128(a: u128, b: u128) U256 {
     var hi: u128 = undefined;
     var lo: u128 = undefined;
@@ -71,7 +71,7 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
-/// TODO: Document exportParseInt.
+/// Exports a function to parse an integer from a string.
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
@@ -91,7 +91,7 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportParseFloat.
+/// Parse a float from a string.
 pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
@@ -105,7 +105,7 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportNumToFloatCast.
+/// Cast an integer to a float.
 pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
     const f = struct {
         fn func(x: T) callconv(.C) F {
@@ -115,7 +115,7 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportPow.
+/// Raise a number to a power, with overflow handling.
 pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(base: T, exp: T) callconv(.C) T {
@@ -139,7 +139,7 @@ pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportIsNan.
+/// Check if a value is NaN.
 pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -149,7 +149,7 @@ pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportIsInfinite.
+/// Check if a value is infinite.
 pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -159,6 +159,7 @@ pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Check if a value is finite.
 pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -168,6 +169,7 @@ pub fn exportIsFinite(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute arcsine using zig std.math.
 pub fn exportAsin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -177,6 +179,7 @@ pub fn exportAsin(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute arccosine using zig std.math.
 pub fn exportAcos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -186,6 +189,7 @@ pub fn exportAcos(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute arctangent using zig std.math.
 pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -195,6 +199,7 @@ pub fn exportAtan(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute sine using zig std.math.
 pub fn exportSin(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -204,6 +209,7 @@ pub fn exportSin(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute cosine using zig std.math.
 pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -213,6 +219,7 @@ pub fn exportCos(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute tangent using zig std.math.
 pub fn exportTan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -222,6 +229,7 @@ pub fn exportTan(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute natural logarithm using zig @log builtin.
 pub fn exportLog(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -231,6 +239,7 @@ pub fn exportLog(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute absolute value using zig @abs builtin.
 pub fn exportFAbs(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -240,6 +249,7 @@ pub fn exportFAbs(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Compute square root using zig std.math.
 pub fn exportSqrt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) T {
@@ -249,6 +259,7 @@ pub fn exportSqrt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Round a float to the nearest integer using zig std.math.
 pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.C) T {
@@ -258,6 +269,7 @@ pub fn exportRound(comptime F: type, comptime T: type, comptime name: []const u8
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Round a float down to the nearest integer using zig std.math.
 pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.C) T {
@@ -267,6 +279,7 @@ pub fn exportFloor(comptime F: type, comptime T: type, comptime name: []const u8
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Round a float up to the nearest integer using zig std.math.
 pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: F) callconv(.C) T {
@@ -276,6 +289,7 @@ pub fn exportCeiling(comptime F: type, comptime T: type, comptime name: []const 
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Integer division with ceiling using zig std.math.
 pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(a: T, b: T) callconv(.C) T {
@@ -287,6 +301,7 @@ pub fn exportDivCeil(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Result type for checked integer conversions.
 pub fn ToIntCheckedResult(comptime T: type) type {
     // On the Roc side we sort by alignment; putting the errorcode last
     // always works out (no number with smaller alignment than 1).
@@ -296,6 +311,7 @@ pub fn ToIntCheckedResult(comptime T: type) type {
     };
 }
 
+/// Exports a function to convert to integer, checking only max bound.
 pub fn exportToIntCheckingMax(comptime From: type, comptime To: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: From) callconv(.C) ToIntCheckedResult(To) {
@@ -308,6 +324,7 @@ pub fn exportToIntCheckingMax(comptime From: type, comptime To: type, comptime n
     @export(&f, .{ .name = name ++ @typeName(From), .linkage = .strong });
 }
 
+/// Exports a function to convert to integer, checking both bounds.
 pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: From) callconv(.C) ToIntCheckedResult(To) {
@@ -320,6 +337,7 @@ pub fn exportToIntCheckingMaxAndMin(comptime From: type, comptime To: type, comp
     @export(&f, .{ .name = name ++ @typeName(From), .linkage = .strong });
 }
 
+/// Returns true if lhs is a multiple of rhs.
 fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
     if (rhs == 0 or rhs == -1) {
         // lhs is a multiple of rhs iff
@@ -335,6 +353,7 @@ fn isMultipleOf(comptime T: type, lhs: T, rhs: T) bool {
     }
 }
 
+/// Exports a function to check if a value is a multiple of another.
 pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) bool {
@@ -344,6 +363,7 @@ pub fn exportIsMultipleOf(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Adds two numbers, returning result and overflow flag.
 fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
@@ -358,6 +378,7 @@ fn addWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     }
 }
 
+/// Exports a function to add two numbers, returning overflow info.
 pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
@@ -367,6 +388,7 @@ pub fn exportAddWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to add two integers, saturating on overflow.
 pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -386,6 +408,7 @@ pub fn exportAddSaturatedInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to add two integers, wrapping on overflow.
 pub fn exportAddWrappedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -395,6 +418,7 @@ pub fn exportAddWrappedInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to add two numbers, panicking on overflow.
 pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -409,6 +433,7 @@ pub fn exportAddOrPanic(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Subtracts two numbers, returning result and overflow flag.
 fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
@@ -423,6 +448,7 @@ fn subWithOverflow(comptime T: type, self: T, other: T) WithOverflow(T) {
     }
 }
 
+/// Exports a function to subtract two numbers, returning overflow info.
 pub fn exportSubWithOverflow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
@@ -432,6 +458,7 @@ pub fn exportSubWithOverflow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to subtract two integers, saturating on overflow.
 pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -452,6 +479,7 @@ pub fn exportSubSaturatedInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to subtract two integers, wrapping on overflow.
 pub fn exportSubWrappedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -461,6 +489,7 @@ pub fn exportSubWrappedInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to subtract two numbers, panicking on overflow.
 pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -475,6 +504,7 @@ pub fn exportSubOrPanic(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Multiplies two numbers, returning result and overflow flag.
 fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOverflow(T) {
     switch (@typeInfo(T)) {
         .int => {
@@ -551,6 +581,7 @@ fn mulWithOverflow(comptime T: type, comptime W: type, self: T, other: T) WithOv
     }
 }
 
+/// Exports a function to multiply two numbers, returning overflow info.
 pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) WithOverflow(T) {
@@ -560,6 +591,7 @@ pub fn exportMulWithOverflow(comptime T: type, comptime W: type, comptime name: 
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to multiply two integers, saturating on overflow.
 pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -570,6 +602,7 @@ pub fn exportMulSaturatedInt(comptime T: type, comptime W: type, comptime name: 
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Exports a function to multiply two integers, wrapping on overflow.
 pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -579,6 +612,7 @@ pub fn exportMulWrappedInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// Shifts an i128 right with zero fill.
 pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.C) i128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
@@ -587,6 +621,7 @@ pub fn shiftRightZeroFillI128(self: i128, other: u8) callconv(.C) i128 {
     }
 }
 
+/// Shifts a u128 right with zero fill.
 pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.C) u128 {
     if (other & 0b1000_0000 > 0) {
         return 0;
@@ -595,6 +630,7 @@ pub fn shiftRightZeroFillU128(self: u128, other: u8) callconv(.C) u128 {
     }
 }
 
+/// Compares two i128 values, returning ordering.
 pub fn compareI128(self: i128, other: i128) callconv(.C) Ordering {
     if (self == other) {
         return Ordering.EQ;
@@ -605,6 +641,7 @@ pub fn compareI128(self: i128, other: i128) callconv(.C) Ordering {
     }
 }
 
+/// Compares two u128 values, returning ordering.
 pub fn compareU128(self: u128, other: u128) callconv(.C) Ordering {
     if (self == other) {
         return Ordering.EQ;
@@ -615,47 +652,47 @@ pub fn compareU128(self: u128, other: u128) callconv(.C) Ordering {
     }
 }
 
-/// TODO: Document lessThanI128.
+/// Returns true if self < other for i128.
 pub fn lessThanI128(self: i128, other: i128) callconv(.C) bool {
     return self < other;
 }
 
-/// TODO: Document lessThanOrEqualI128.
+/// Returns true if self <= other for i128.
 pub fn lessThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
     return self <= other;
 }
 
-/// TODO: Document greaterThanI128.
+/// Returns true if self > other for i128.
 pub fn greaterThanI128(self: i128, other: i128) callconv(.C) bool {
     return self > other;
 }
 
-/// TODO: Document greaterThanOrEqualI128.
+/// Returns true if self >= other for i128.
 pub fn greaterThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
     return self >= other;
 }
 
-/// TODO: Document lessThanU128.
+/// Returns true if self < other for u128.
 pub fn lessThanU128(self: u128, other: u128) callconv(.C) bool {
     return self < other;
 }
 
-/// TODO: Document lessThanOrEqualU128.
+/// Returns true if self <= other for u128.
 pub fn lessThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
     return self <= other;
 }
 
-/// TODO: Document greaterThanU128.
+/// Returns true if self > other for u128.
 pub fn greaterThanU128(self: u128, other: u128) callconv(.C) bool {
     return self > other;
 }
 
-/// TODO: Document greaterThanOrEqualU128.
+/// Returns true if self >= other for u128.
 pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
     return self >= other;
 }
 
-/// TODO: Document exportMulOrPanic.
+/// Exports a function to multiply two numbers, panicking on overflow.
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -670,7 +707,7 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportCountLeadingZeroBits.
+/// Exports a function to count leading zero bits.
 pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -680,7 +717,7 @@ pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) v
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportCountTrailingZeroBits.
+/// Exports a function to count trailing zero bits.
 pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -690,7 +727,7 @@ pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) 
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document exportCountOneBits.
+/// Exports a function to count one bits (population count).
 pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -700,7 +737,7 @@ pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
-/// TODO: Document f32ToParts.
+/// Returns the bitwise parts of an f32.
 pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
     const u32Value = @as(u32, @bitCast(self));
     return F32Parts{
@@ -710,7 +747,7 @@ pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
     };
 }
 
-/// TODO: Document f64ToParts.
+/// Returns the bitwise parts of an f64.
 pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
     const u64Value = @as(u64, @bitCast(self));
     return F64Parts{
@@ -720,42 +757,42 @@ pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
     };
 }
 
-/// TODO: Document f32FromParts.
+/// Constructs an f32 from its bitwise parts.
 pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
     return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
 }
 
-/// TODO: Document f64FromParts.
+/// Constructs an f64 from its bitwise parts.
 pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
     return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }
 
-/// TODO: Document f32ToBits.
+/// Returns the bit pattern of an f32 as u32.
 pub fn f32ToBits(self: f32) callconv(.C) u32 {
     return @as(u32, @bitCast(self));
 }
 
-/// TODO: Document f64ToBits.
+/// Returns the bit pattern of an f64 as u64.
 pub fn f64ToBits(self: f64) callconv(.C) u64 {
     return @as(u64, @bitCast(self));
 }
 
-/// TODO: Document i128ToBits.
+/// Returns the bit pattern of an i128 as u128.
 pub fn i128ToBits(self: i128) callconv(.C) u128 {
     return @as(u128, @bitCast(self));
 }
 
-/// TODO: Document f32FromBits.
+/// Constructs an f32 from its bit pattern.
 pub fn f32FromBits(bits: u32) callconv(.C) f32 {
     return @as(f32, @bitCast(bits));
 }
 
-/// TODO: Document f64FromBits.
+/// Constructs an f64 from its bit pattern.
 pub fn f64FromBits(bits: u64) callconv(.C) f64 {
     return @as(f64, @bitCast(bits));
 }
 
-/// TODO: Document i128FromBits.
+/// Constructs an i128 from its bit pattern.
 pub fn i128FromBits(bits: u128) callconv(.C) i128 {
     return @as(i128, @bitCast(bits));
 }
