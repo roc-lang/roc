@@ -521,7 +521,7 @@ pub const RocDec = extern struct {
         // b is 2*pi as a dec. which is 6.2831853071795864769252867665590057684
         // as dec is times 10^18 so 6283185307179586476.9252867665590057684
         const b0: u64 = 6283185307179586476;
-        // Fraction that reprensents 64 bits of precision past what dec normally supports.
+        // Fraction that represents 64 bits of precision past what dec normally supports.
         // 0.9252867665590057684 as binary to 64 places.
         const b1: u64 = 0b1110110011011111100101111111000111001010111000100101011111110111;
 
@@ -554,7 +554,7 @@ pub const RocDec = extern struct {
         return fromF64(@log(self.toF64())).?;
     }
 
-    // I belive the output of the trig functions is always in range of Dec.
+    // I believe the output of the trig functions is always in range of Dec.
     // If not, we probably should just make it saturate the Dec.
     // I don't think this should crash or return errors.
     pub fn sin(self: RocDec) RocDec {
@@ -582,7 +582,7 @@ pub const RocDec = extern struct {
     }
 };
 
-// A number has `k` trailling zeros if `10^k` divides into it cleanly
+// A number has `k` trailing zeros if `10^k` divides into it cleanly
 inline fn count_trailing_zeros_base10(input: i128) u6 {
     if (input == 0) {
         // this should not happen in practice
@@ -742,7 +742,7 @@ fn mul_and_decimalize(a: u128, b: u128) WithOverflow(i128) {
 // When translating this to Zig, we often have to use math.shr/shl instead of >>/<<
 // This is because casting to the right types for Zig can be kind of tricky.
 // See https://github.com/ziglang/zig/issues/7605
-fn div_u256_by_u128(numer: U256, denom: u128) U256 {
+fn div_u256_by_u128(numerator: U256, denominator: u128) U256 {
     const N_UDWORD_BITS: u8 = 128;
     const N_UTWORD_BITS: u9 = 256;
 
@@ -751,82 +751,82 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
     var sr: u8 = undefined;
 
     // special case
-    if (numer.hi == 0) {
+    if (numerator.hi == 0) {
         // 0 X
         // ---
         // 0 X
         return .{
             .hi = 0,
-            .lo = numer.lo / denom,
+            .lo = numerator.lo / denominator,
         };
     }
 
-    // numer.hi != 0
-    if (denom == 0) {
+    // numerator.hi != 0
+    if (denominator == 0) {
         // K X
         // ---
         // 0 0
         return .{
             .hi = 0,
-            .lo = numer.hi / denom,
+            .lo = numerator.hi / denominator,
         };
     } else {
         // K X
         // ---
         // 0 K
         // NOTE: Modified from `if (d.low() & (d.low() - 1)) == 0`.
-        if (math.isPowerOfTwo(denom)) {
+        if (math.isPowerOfTwo(denominator)) {
             // if d is a power of 2
-            if (denom == 1) {
-                return numer;
+            if (denominator == 1) {
+                return numerator;
             }
 
-            sr = @ctz(denom);
+            sr = @ctz(denominator);
 
             return .{
-                .hi = math.shr(u128, numer.hi, sr),
-                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+                .hi = math.shr(u128, numerator.hi, sr),
+                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
             };
         }
 
         // K X
         // ---
         // 0 K
-        const denom_leading_zeros = @clz(denom);
-        const numer_hi_leading_zeros = @clz(numer.hi);
-        sr = 1 + N_UDWORD_BITS + denom_leading_zeros - numer_hi_leading_zeros;
+        const denominator_leading_zeros = @clz(denominator);
+        const numerator_hi_leading_zeros = @clz(numerator.hi);
+        sr = 1 + N_UDWORD_BITS + denominator_leading_zeros - numerator_hi_leading_zeros;
         // 2 <= sr <= N_UTWORD_BITS - 1
         // q.all = n.all << (N_UTWORD_BITS - sr);
         // r.all = n.all >> sr;
         // #[allow(clippy::comparison_chain)]
         if (sr == N_UDWORD_BITS) {
             q = .{
-                .hi = numer.lo,
+                .hi = numerator.lo,
                 .lo = 0,
             };
             r = .{
                 .hi = 0,
-                .lo = numer.hi,
+                .lo = numerator.hi,
             };
         } else if (sr < N_UDWORD_BITS) {
             // 2 <= sr <= N_UDWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numer.lo, N_UDWORD_BITS - sr),
+                .hi = math.shl(u128, numerator.lo, N_UDWORD_BITS - sr),
                 .lo = 0,
             };
             r = .{
-                .hi = math.shr(u128, numer.hi, sr),
-                .lo = math.shl(u128, numer.hi, N_UDWORD_BITS - sr) | math.shr(u128, numer.lo, sr),
+                .hi = math.shr(u128, numerator.hi, sr),
+                .lo = math.shl(u128, numerator.hi, N_UDWORD_BITS - sr) | math.shr(u128, numerator.lo, sr),
             };
         } else {
             // N_UDWORD_BITS + 1 <= sr <= N_UTWORD_BITS - 1
             q = .{
-                .hi = math.shl(u128, numer.hi, N_UTWORD_BITS - sr) | math.shr(u128, numer.lo, sr - N_UDWORD_BITS),
-                .lo = math.shl(u128, numer.lo, N_UTWORD_BITS - sr),
+                .hi = math.shl(u128, numerator.hi, N_UTWORD_BITS - sr) | math.shr(u128, numerator.lo, sr - N_UDWORD_BITS),
+                .lo = math.shl(u128, numerator.lo, N_UTWORD_BITS - sr),
             };
             r = .{
                 .hi = 0,
-                .lo = math.shr(u128, numer.hi, sr - N_UDWORD_BITS),
+                .lo = math.shr(u128, numerator.hi, sr - N_UDWORD_BITS),
             };
         }
     }
@@ -854,7 +854,7 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         // NOTE: Modified from `(d - r - 1) >> (N_UTWORD_BITS - 1)` to be an
         // **arithmetic** shift.
 
-        var answer = @subWithOverflow(denom, r.lo);
+        var answer = @subWithOverflow(denominator, r.lo);
         var lo = answer[0];
         var lo_overflowed = answer[1];
         var hi = 0 -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed)))) -% r.hi;
@@ -888,7 +888,7 @@ fn div_u256_by_u128(numer: U256, denom: u128) U256 {
         carry = s.lo & 1;
 
         // var (lo, carry) = r.lo.overflowing_sub(denom & s.lo);
-        answer = @subWithOverflow(r.lo, (denom & s.lo));
+        answer = @subWithOverflow(r.lo, (denominator & s.lo));
         lo = answer[0];
         lo_overflowed = answer[1];
         hi = r.hi -% @as(u128, @intCast(@as(u1, @bitCast(lo_overflowed))));
@@ -1244,7 +1244,7 @@ test "div: 8 / 5" {
 }
 
 test "div: 10 / 3" {
-    var numer: RocDec = RocDec.fromU64(10);
+    var numerator: RocDec = RocDec.fromU64(10);
     const denom: RocDec = RocDec.fromU64(3);
 
     var roc_str = RocStr.init("3.333333333333333333", 20);
@@ -1253,7 +1253,7 @@ test "div: 10 / 3" {
 
     const res: RocDec = RocDec.fromStr(roc_str).?;
 
-    try expectEqual(res, numer.div(denom));
+    try expectEqual(res, numerator.div(denom));
 }
 
 test "div: 341 / 341" {

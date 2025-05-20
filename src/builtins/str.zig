@@ -1193,10 +1193,10 @@ pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
     return ret_string;
 }
 
-test "startsWith: foo starts with fo" {
+test "startsWith: food starts with foo" {
+    const food = RocStr.fromSlice("food");
     const foo = RocStr.fromSlice("foo");
-    const fo = RocStr.fromSlice("fo");
-    try expect(startsWith(foo, fo));
+    try expect(startsWith(food, foo));
 }
 
 test "startsWith: 123456789123456789 starts with 123456789123456789" {

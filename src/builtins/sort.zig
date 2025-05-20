@@ -531,10 +531,10 @@ fn flux_partition(
 /// Partition x into array and swap (less than or equal to pivot).
 /// Finally, copy from swap into array and potentially finish sorting.
 /// Will return early if the array is highly unordered (allows for more quicksort).
-/// Will return early if all elements went before the pivot (maybe all elements are same and can reverse parition next?).
-/// Othewise, will complete the sort with quadsort.
+/// Will return early if all elements went before the pivot (maybe all elements are same and can reverse partition next?).
+/// Otherwise, will complete the sort with quadsort.
 ///
-/// Warning, on early return, the paritions of the array will be split over array and swap.
+/// Warning, on early return, the partitions of the array will be split over array and swap.
 /// The returned size is the number of elements in the array.
 fn flux_default_partition(
     array: [*]u8,
@@ -1006,21 +1006,21 @@ test "median_of_nine" {
         arr = [9]i64{ 1, 2, 3, 4, 5, 6, 7, 8, 9 };
         median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
         try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be extact. in this case:
+        // Note: median is not guaranteed to be exact. in this case:
         // [2, 3], [6, 7] -> [3, 6] -> [3, 6, 9] -> 6
         try testing.expectEqual(out, 6);
 
         arr = [9]i64{ 1, 3, 5, 7, 9, 2, 4, 6, 8 };
         median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
         try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be extact. in this case:
+        // Note: median is not guaranteed to be exact. in this case:
         // [3, 5], [4, 6] -> [4, 5] -> [4, 5, 8] -> 5
         try testing.expectEqual(out, 5);
 
         arr = [9]i64{ 2, 3, 9, 4, 5, 7, 8, 6, 1 };
         median_of_nine(arr_ptr, 10, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, @ptrCast(&out), false);
         try testing.expectEqual(test_count, 0);
-        // Note: median is not guaranteed to be extact. in this case:
+        // Note: median is not guaranteed to be exact. in this case:
         // [3, 4], [5, 6] -> [4, 5] -> [1, 4, 5] -> 4
         try testing.expectEqual(out, 4);
     }
@@ -1189,7 +1189,7 @@ fn quadsort_direct(
         // TODO: This is a solid amount of stack space. Is that ok?
         // That said, it only ever allocates once (not recursive).
         // Aside from embedded is probably ok. Just a 3 KB with 96 byte MAX_ELEMENT_BUFFER_SIZE.
-        // Also, zig doesn't hav alloca, so we always do max size here.
+        // Also, zig doesn't have alloca, so we always do max size here.
         var swap_buffer: [MAX_ELEMENT_BUFFER_SIZE * 32]u8 align(BufferAlign) = undefined;
         const swap = @as([*]u8, @ptrCast(&swap_buffer[0]));
         tail_swap(arr_ptr, len, swap, cmp, cmp_data, element_width, copy, data_is_owned, inc_n_data, indirect);
@@ -1736,7 +1736,7 @@ fn partial_backwards_merge(
 
     var right_tail = swap + (right_len - 1) * element_width;
 
-    // For backards, we first try to do really large chunks, of 16 elements.
+    // For backwards, we first try to do really large chunks, of 16 elements.
     outer: while (@intFromPtr(left_tail) > @intFromPtr(array + 16 * element_width) and @intFromPtr(right_tail) > @intFromPtr(swap + 16 * element_width)) {
         // Due to if looping, these must use `compare_inc`
         while (compare_inc(cmp, cmp_data, left_tail, right_tail - 15 * element_width, data_is_owned, inc_n_data, indirect) != GT) {
@@ -2424,7 +2424,7 @@ fn cross_merge(
         if (@intFromPtr(dest_tail) - @intFromPtr(dest_head) < 16 * element_width)
             break;
 
-        // Large enough to warrent a two way merge.
+        // Large enough to warrant a two way merge.
         // 16 guaranteed compares.
         if (data_is_owned) {
             inc_n_data(cmp_data, 16);
@@ -2783,7 +2783,7 @@ fn quad_swap(
                             continue;
                         }
 
-                        // Just an unorderd block, do it inplace.
+                        // Just an unordered block, do it inplace.
                         inline for ([4]u4{ v1, v2, v3, v4 }) |v| {
                             const x = if (v == 0) element_width else 0;
                             const not_x = if (v != 0) element_width else 0;
@@ -2809,7 +2809,7 @@ fn quad_swap(
                     // Handle tail block when reversing.
                     const rem = len % 8;
                     reverse_block: {
-                        // Due to chance of breaking and not running, must use `comapare_inc`.
+                        // Due to chance of breaking and not running, must use `compare_inc`.
                         if (rem == 7 and compare_inc(cmp, cmp_data, arr_ptr + 5 * element_width, arr_ptr + 6 * element_width, data_is_owned, inc_n_data, indirect) != GT)
                             break :reverse_block;
                         if (rem >= 6 and compare_inc(cmp, cmp_data, arr_ptr + 4 * element_width, arr_ptr + 5 * element_width, data_is_owned, inc_n_data, indirect) != GT)
@@ -3657,7 +3657,7 @@ inline fn parity_merge_two(
     copy(dest_ptr, to_copy);
 }
 
-/// Moves the smaller element from left and rigth to dest.
+/// Moves the smaller element from left and right to dest.
 /// Will increment both dest and the smaller element ptr to their next index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
@@ -3673,7 +3673,7 @@ inline fn head_branchless_merge(
     comptime indirect: bool,
 ) void {
     // Note equivalent c code:
-    //    *ptd++ = cmp(ptl, ptr) <= 0 ? *ptl++ : *ptr++;
+    //    *pt_d++ = cmp(pt_l, ptr) <= 0 ? *pt_l++ : *pt_r++;
     // While not guaranteed branchless, tested in godbolt for x86_64, aarch32, aarch64, riscv64, and wasm32.
     const lte = compare(cmp, cmp_data, left.*, right.*, indirect) != GT;
     const from = if (lte) left else right;
@@ -3682,7 +3682,7 @@ inline fn head_branchless_merge(
     dest.* += element_width;
 }
 
-/// Moves the smaller element from left and rigth to dest.
+/// Moves the smaller element from left and right to dest.
 /// Will decrement both dest and the smaller element ptr to their previous index.
 /// Inlining will remove the extra level of pointer indirection here.
 /// It is just used to allow mutating the input pointers.
@@ -3764,7 +3764,7 @@ inline fn compare(
 /// Only use this as a last resort.
 /// It will increment the refcount before comparing.
 /// Incrementing for each individual compare is slow.
-/// Perfer to increment in batches where possible.
+/// Prefer to increment in batches where possible.
 inline fn compare_inc(
     cmp: CompareFn,
     cmp_data: Opaque,

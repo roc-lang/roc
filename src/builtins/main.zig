@@ -394,7 +394,7 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 // Custom panic function, as builtin Zig version errors during LLVM verification
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.target.cpu.arch != .wasm32) {
-        std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard libarry bug\n{s}: {?}", .{ message, stacktrace });
+        std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });
         std.process.abort();
     } else {
         // Can't call abort or print from wasm. Just leave it as unreachable.

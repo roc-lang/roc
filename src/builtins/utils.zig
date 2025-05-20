@@ -362,7 +362,7 @@ inline fn decref_ptr_to_refcount(
         std.debug.print("| decrement {*}: ", .{refcount_ptr});
     }
 
-    // Due to RC alignmen tmust take into acount pointer size.
+    // Due to RC alignment tmust take into account pointer size.
     const ptr_width = @sizeOf(usize);
     const alignment = @max(ptr_width, element_alignment);
 
@@ -455,7 +455,7 @@ pub inline fn rcConstant(refcount: isize) bool {
 //     This does not apply to very small or very large fbvectors. This is a
 //     heuristic.
 //
-// In our case, we exposed allocate and reallocate, which will use a smart growth stategy.
+// In our case, we exposed allocate and reallocate, which will use a smart growth strategy.
 // We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
 
 // calculateCapacity should only be called in cases the list will be growing.
