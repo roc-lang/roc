@@ -267,7 +267,8 @@ pub fn decrefCheckNullC(
     }
 }
 
-/// TODO: Document decrefDataPtrC.
+/// Decrements the reference count for a data pointer, freeing memory if needed.
+/// Used for reference-counted data structures.
 pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -285,7 +286,8 @@ pub fn decrefDataPtrC(
     return decrefRcPtrC(rc_ptr, alignment, elements_refcounted);
 }
 
-/// TODO: Document increfDataPtrC.
+/// Increments the reference count for a data pointer by the specified amount.
+/// Used for reference-counted data structures.
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
@@ -301,7 +303,8 @@ pub fn increfDataPtrC(
     return increfRcPtrC(isizes, inc_amount);
 }
 
-/// TODO: Document freeDataPtrC.
+/// Frees the memory associated with a data pointer, considering alignment and refcounted elements.
+/// Used for reference-counted data structures.
 pub fn freeDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -319,7 +322,8 @@ pub fn freeDataPtrC(
     return freeRcPtrC(isizes - 1, alignment, elements_refcounted);
 }
 
-/// TODO: Document freeRcPtrC.
+/// Frees the memory associated with a reference count pointer.
+/// Used internally for reference-counted allocations.
 pub fn freeRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
@@ -408,7 +412,7 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
-/// TODO: Document isUnique.
+/// Returns true if the reference count for the given pointer is unique.
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
 ) callconv(.C) bool {
@@ -429,7 +433,7 @@ pub fn isUnique(
     return rcUnique(refcount);
 }
 
-/// TODO: Document rcUnique.
+/// Returns true if the given refcount value indicates uniqueness (i.e., equals 1).
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
@@ -444,7 +448,7 @@ pub inline fn rcUnique(refcount: isize) bool {
     }
 }
 
-/// TODO: Document rcConstant.
+/// Returns true if the given refcount value is considered constant (i.e., not reference-counted).
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
@@ -475,8 +479,11 @@ pub inline fn rcConstant(refcount: isize) bool {
 // In our case, we exposed allocate and reallocate, which will use a smart growth strategy.
 // We also expose allocateExact and reallocateExact for case where a specific number of elements is requested.
 
-// calculateCapacity should only be called in cases the list will be growing.
-// requested_length should always be greater than old_capacity.
+/// Calculates the new capacity for a growing list, based on the old capacity, requested length, and element width.
+///
+/// Should only be called in cases the list will be growing.
+///
+/// `requested_length` should always be greater than old_capacity.
 pub inline fn calculateCapacity(
     old_capacity: usize,
     requested_length: usize,
@@ -508,6 +515,8 @@ pub inline fn calculateCapacity(
     return @max(new_capacity, requested_length);
 }
 
+/// Allocates memory with space for a reference count, for use with C calling convention.
+/// Returns a pointer to the allocated memory.
 pub fn allocateWithRefcountC(
     data_bytes: usize,
     element_alignment: u32,
@@ -516,6 +525,8 @@ pub fn allocateWithRefcountC(
     return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted);
 }
 
+/// Allocates memory with space for a reference count.
+/// Returns a pointer to the allocated memory.
 pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,
@@ -547,6 +558,8 @@ pub const CSlice = extern struct {
     len: usize,
 };
 
+/// Reallocates memory for a list.
+/// Returns a pointer to the reallocated memory.
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
     alignment: u32,
@@ -600,14 +613,23 @@ test "increfC, static data" {
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
 
-// This returns a compilation dependent pseudo random seed for dictionaries.
-// The seed is the address of this function.
-// This avoids all roc Dicts using a known seed and being trivial to DOS.
-// Still not as secure as true random, but a lot better.
-// This value must not change between calls unless Dict is changed to store the seed on creation.
-// Note: On esstentially all OSes, this will be affected by ASLR and different each run.
-// In wasm, the value will be constant to the build as a whole.
-// Either way, it can not be know by an attacker unless they get access to the executable.
+/// Returns a pseudo-random seed for dictionary hashing, based on the address of this function.
+/// Used to avoid predictable hash seeds across runs.
+///
+/// This returns a compilation dependent pseudo random seed for dictionaries.
+/// The seed is the address of this function.
+///
+/// This avoids all roc Dicts using a known seed and being trivial to DOS.
+///
+/// Still not as secure as true random, but a lot better.
+///
+/// This value must not change between calls unless Dict is changed to store the seed on creation.
+///
+/// Note: On esstentially all OSes, this will be affected by ASLR and different each run.
+///
+/// In wasm, the value will be constant to the build as a whole.
+///
+/// Either way, it can not be know by an attacker unless they get access to the executable.
 pub fn dictPseudoSeed() callconv(.C) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }

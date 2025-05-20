@@ -533,6 +533,7 @@ pub fn listSwap(
     return newList;
 }
 
+/// Returns a sublist of the given list
 pub fn listSublist(
     list: RocList,
     alignment: u32,

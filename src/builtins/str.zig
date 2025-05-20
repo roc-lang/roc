@@ -1622,6 +1622,7 @@ fn errorToProblem(bytes: []const u8) struct { index: usize, problem: Utf8BytePro
     unreachable;
 }
 
+/// Returns true if the given buffer contains valid Unicode data.
 pub fn isValidUnicode(buf: []const u8) bool {
     const size = @sizeOf(u64);
     // TODO: we should test changing the step on other platforms.
@@ -1675,8 +1676,11 @@ const Utf8DecodeError = error{
     Utf8CodepointTooLarge,
 };
 
-// Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
-// but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
+/// Returns the number of bytes in the next codepoint starting at the given index in the byte slice.
+/// Returns an error if the bytes are not valid UTF-8.
+///
+/// Essentially unicode.utf8ValidateSlice -> https://github.com/ziglang/zig/blob/0.7.x/lib/std/unicode.zig#L156
+/// but only for the next codepoint from the index. Then we return the number of bytes of that codepoint.
 // TODO: we only ever use the values 0-4, so can we use smaller int than `usize`?
 pub fn numberOfNextCodepointBytes(bytes: []const u8, index: usize) Utf8DecodeError!usize {
     const codepoint_len = try unicode.utf8ByteSequenceLength(bytes[index]);
@@ -2684,6 +2688,7 @@ test "capacity: big string" {
     try expect(data.getCapacity() >= data_bytes.len);
 }
 
+/// Ensures the RocStr has at least the specified spare capacity, reallocating if necessary.
 pub fn reserveC(string: RocStr, spare_u64: u64) callconv(.C) RocStr {
     return reserve(string, @intCast(spare_u64));
 }
@@ -2700,12 +2705,14 @@ fn reserve(string: RocStr, spare: usize) RocStr {
     }
 }
 
+/// Creates a new RocStr with the specified capacity.
 pub fn withCapacityC(capacity: u64) callconv(.C) RocStr {
     var str = RocStr.allocate(@intCast(capacity));
     str.setLen(0);
     return str;
 }
 
+/// Clones the contents of the given RocStr into the provided pointer, starting at the given offset and extra_offset.
 pub fn strCloneTo(
     string: RocStr,
     ptr: [*]u8,
@@ -2739,13 +2746,14 @@ pub fn strCloneTo(
     }
 }
 
-/// TODO: Document strAllocationPtr.
+/// Returns a pointer to the allocation backing the given RocStr
 pub fn strAllocationPtr(
     string: RocStr,
 ) callconv(.C) ?[*]u8 {
     return string.getAllocationPtr();
 }
 
+/// Release excess capacity
 pub fn strReleaseExcessCapacity(
     string: RocStr,
 ) callconv(.C) RocStr {

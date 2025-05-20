@@ -1115,6 +1115,7 @@ pub fn quadsort_swap(
     }
 }
 
+/// Sorts the given array in-place using the quadsort algorithm.
 pub fn quadsort(
     array: [*]u8,
     len: usize,
@@ -3889,6 +3890,8 @@ test "swap" {
     try testing.expectEqual(arr, [2]i64{ -22, -22 });
 }
 
+/// Copies the value pointed to by `src_ptr` into the location pointed to by `dst_ptr`.
+/// Both pointers must be valid and properly aligned.
 pub fn pointer_copy(dst_ptr: Opaque, src_ptr: Opaque) callconv(.C) void {
     @as(*usize, @alignCast(@ptrCast(dst_ptr))).* = @as(*usize, @alignCast(@ptrCast(src_ptr))).*;
 }
