@@ -44,7 +44,6 @@ pub const Kind = union(enum) {
 /// The data for a nominal alias, e.g. `Foo := [Foo(Str)]`
 pub const Nominal = struct {
     type_variables: Var.Range,
-    recursion_variables: std.AutoHashMap(TypeVar, Ident.Idx),
 };
 /// The data for a structural alias, e.g. `Foo : { bar : Str }`
 pub const Structural = struct {

@@ -78,14 +78,14 @@ pub const DeclarationTag = union(enum) {
     Destructure: collections.SafeList(DestructureDef).Idx,
     MutualRecursion: struct {
         length: u16,
-        cycle_mark: IllegalCycleMark,
+        cycle_mark: InfiniteMutualRecursion,
     },
 
     pub const List = collections.SafeList(@This());
 };
 
 /// Marks whether a recursive let-cycle was determined to be illegal during solving.
-pub const IllegalCycleMark = ?TypeVar;
+pub const InfiniteMutualRecursion = ?TypeVar;
 
 /// todo
 pub const FunctionDef = struct {
