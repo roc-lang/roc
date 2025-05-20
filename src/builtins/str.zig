@@ -563,7 +563,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
 
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 fn strFromIntHelp(comptime T: type, int: T) RocStr {
@@ -591,7 +591,7 @@ pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
         }
     }.func;
 
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 fn strFromFloatHelp(comptime T: type, float: T) RocStr {
@@ -625,17 +625,16 @@ fn strSplitOnHelp(array: [*]RocStr, string: RocStr, delimiter: RocStr) void {
         return;
     }
 
-    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
+    var it = std.mem.splitSequence(u8, string.asSlice(), delimiter.asSlice());
 
     var i: usize = 0;
     var offset: usize = 0;
 
-    while (it.next()) |zig_slice| {
-        const roc_slice = substringUnsafe(string, offset, zig_slice.len);
+    while (it.next()) |zig_slice| : (i += 1) {
+        const slice_offset = @intFromPtr(zig_slice.ptr) - @intFromPtr(string.asSlice().ptr);
+        const roc_slice = substringUnsafe(string, slice_offset, zig_slice.len);
         array[i] = roc_slice;
-
-        i += 1;
-        offset += zig_slice.len + delimiter.len();
+        offset = slice_offset + zig_slice.len + delimiter.len();
     }
 
     // Correct refcount for all of the splits made.
@@ -969,7 +968,7 @@ pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
         return 1;
     }
 
-    var it = std.mem.split(u8, string.asSlice(), delimiter.asSlice());
+    var it = std.mem.splitSequence(u8, string.asSlice(), delimiter.asSlice());
     var count: usize = 0;
 
     while (it.next()) |_| : (count += 1) {}
@@ -2377,9 +2376,9 @@ const ReverseUtf8Iterator = struct {
 
         return switch (slice.len) {
             1 => @as(u21, slice[0]),
-            2 => unicode.utf8Decode2(slice) catch unreachable,
-            3 => unicode.utf8Decode3(slice) catch unreachable,
-            4 => unicode.utf8Decode4(slice) catch unreachable,
+            2 => unicode.utf8Decode2([2]u8{ slice[0], slice[1] }) catch unreachable,
+            3 => unicode.utf8Decode3([3]u8{ slice[0], slice[1], slice[2] }) catch unreachable,
+            4 => unicode.utf8Decode4([4]u8{ slice[0], slice[1], slice[2], slice[3] }) catch unreachable,
             else => unreachable,
         };
     }

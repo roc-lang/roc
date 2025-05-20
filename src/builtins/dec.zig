@@ -1481,7 +1481,7 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
             }
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn fromU64C(arg: u64) callconv(.C) i128 {
@@ -1595,7 +1595,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.round().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
@@ -1604,7 +1604,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.floor().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
@@ -1613,5 +1613,5 @@ pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
             return @as(T, @intCast(@divFloor(input.ceiling().num, RocDec.one_point_zero_i128)));
         }
     }.func;
-    @export(f, .{ .name = name ++ @typeName(T), .linkage = .strong });
+    @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }

@@ -3141,7 +3141,7 @@ test "tail_swap" {
     const arr_ptr = @as([*]u8, @ptrCast(&arr[0]));
 
     for (0..10) |seed| {
-        var rng = std.rand.DefaultPrng.init(seed);
+        var rng = std.Random.DefaultPrng.init(seed);
         rng.random().shuffle(i64, arr[0..]);
 
         tail_swap(arr_ptr, 31, swap_ptr, &test_i64_compare_refcounted, @ptrCast(&test_count), @sizeOf(i64), &test_i64_copy, true, &test_inc_n_data, false);

@@ -55,20 +55,20 @@ fn testing_roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callco
 comptime {
     // During tests, use the testing allocators to satisfy these functions.
     if (builtin.is_test) {
-        @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .strong });
-        @export(testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .strong });
-        @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .strong });
-        @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .strong });
-        @export(testing_roc_dbg, .{ .name = "roc_dbg", .linkage = .strong });
+        @export(&testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .strong });
+        @export(&testing_roc_realloc, .{ .name = "roc_realloc", .linkage = .strong });
+        @export(&testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .strong });
+        @export(&testing_roc_panic, .{ .name = "roc_panic", .linkage = .strong });
+        @export(&testing_roc_dbg, .{ .name = "roc_dbg", .linkage = .strong });
 
         if (builtin.os.tag == .macos or builtin.os.tag == .linux) {
-            @export(testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
-            @export(testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
-            @export(testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
+            @export(&testing_roc_getppid, .{ .name = "roc_getppid", .linkage = .strong });
+            @export(&testing_roc_mmap, .{ .name = "roc_mmap", .linkage = .strong });
+            @export(&testing_roc_shm_open, .{ .name = "roc_shm_open", .linkage = .strong });
         }
 
         if (builtin.os.tag == .windows) {
-            @export(roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
+            @export(&roc_getppid_windows_stub, .{ .name = "roc_getppid", .linkage = .strong });
         }
     }
 }

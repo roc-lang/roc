@@ -16,7 +16,7 @@ const dec = @import("dec.zig");
 var FLTUSED: i32 = 0;
 comptime {
     if (builtin.os.tag == .windows) {
-        @export(FLTUSED, .{ .name = "_fltused", .linkage = .weak });
+        @export(&FLTUSED, .{ .name = "_fltused", .linkage = .weak });
     }
 }
 
@@ -248,8 +248,8 @@ comptime {
     exportUtilsFn(utils.allocateWithRefcountC, "allocate_with_refcount");
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
-    @export(panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .weak });
-    @export(dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .weak });
+    @export(&panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .weak });
+    @export(&dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .weak });
 
     if (builtin.target.cpu.arch != .wasm32) {
         exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
@@ -257,17 +257,17 @@ comptime {
         exportUtilsFn(expect.notifyParentExpect, "notify_parent_expect");
 
         // sets the buffer used for expect failures
-        @export(expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .weak });
+        @export(&expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .weak });
 
         exportUtilsFn(expect.readSharedBufferEnv, "read_env_shared_buffer");
     }
 
     if (builtin.target.cpu.arch == .aarch64) {
-        @export(__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .weak });
-        @export(__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .weak });
+        @export(&__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .weak });
+        @export(&__roc_force_longjmp, .{ .name = "__roc_force_longjmp", .linkage = .weak });
     } else if (builtin.os.tag == .windows) {
-        @export(__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .weak });
-        @export(__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .weak });
+        @export(&__roc_force_setjmp_windows, .{ .name = "__roc_force_setjmp", .linkage = .weak });
+        @export(&__roc_force_longjmp_windows, .{ .name = "__roc_force_longjmp", .linkage = .weak });
     }
 }
 
@@ -382,7 +382,8 @@ comptime {
 
 // Export helpers - Must be run inside a comptime
 fn exportBuiltinFn(comptime func: anytype, comptime func_name: []const u8) void {
-    @export(func, .{ .name = "roc_builtins." ++ func_name, .linkage = .strong });
+    const func_ptr = &func;
+    @export(func_ptr, .{ .name = "roc_builtins." ++ func_name, .linkage = .strong });
 }
 fn exportNumFn(comptime func: anytype, comptime func_name: []const u8) void {
     exportBuiltinFn(func, "num." ++ func_name);

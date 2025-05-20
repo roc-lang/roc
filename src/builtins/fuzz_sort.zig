@@ -10,7 +10,7 @@ fn cMain() callconv(.C) i32 {
 }
 
 comptime {
-    @export(cMain, .{ .name = "main", .linkage = .Strong });
+    @export(&cMain, .{ .name = "main", .linkage = .Strong });
 }
 
 const DEBUG = false;
@@ -72,9 +72,9 @@ fn test_inc_n_data(count_ptr: Opaque, n: usize) callconv(.C) void {
 }
 
 comptime {
-    @export(testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
-    @export(testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
-    @export(testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
+    @export(&testing_roc_alloc, .{ .name = "roc_alloc", .linkage = .Strong });
+    @export(&testing_roc_dealloc, .{ .name = "roc_dealloc", .linkage = .Strong });
+    @export(&testing_roc_panic, .{ .name = "roc_panic", .linkage = .Strong });
 }
 
 fn testing_roc_alloc(size: usize, _: u32) callconv(.C) ?*anyopaque {
