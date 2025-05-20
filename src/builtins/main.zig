@@ -2,9 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;
 const utils = @import("utils.zig");
-const expect = @import("expect.zig");
 const panic_utils = @import("panic.zig");
-const dbg_utils = @import("dbg.zig");
 
 const ROC_BUILTINS = "roc_builtins";
 const NUM = "num";
@@ -249,18 +247,6 @@ comptime {
     exportUtilsFn(utils.dictPseudoSeed, "dict_pseudo_seed");
 
     @export(&panic_utils.panic, .{ .name = "roc_builtins.utils." ++ "panic", .linkage = .weak });
-    @export(&dbg_utils.dbg_impl, .{ .name = "roc_builtins.utils." ++ "dbg_impl", .linkage = .weak });
-
-    if (builtin.target.cpu.arch != .wasm32) {
-        exportUtilsFn(expect.expectFailedStartSharedBuffer, "expect_failed_start_shared_buffer");
-        exportUtilsFn(expect.expectFailedStartSharedFile, "expect_failed_start_shared_file");
-        exportUtilsFn(expect.notifyParentExpect, "notify_parent_expect");
-
-        // sets the buffer used for expect failures
-        @export(&expect.setSharedBuffer, .{ .name = "set_shared_buffer", .linkage = .weak });
-
-        exportUtilsFn(expect.readSharedBufferEnv, "read_env_shared_buffer");
-    }
 
     if (builtin.target.cpu.arch == .aarch64) {
         @export(&__roc_force_setjmp, .{ .name = "__roc_force_setjmp", .linkage = .weak });
