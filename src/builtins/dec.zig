@@ -10,6 +10,7 @@ const roc_panic = @import("panic.zig").panic_help;
 const U256 = num_.U256;
 const mul_u128 = num_.mul_u128;
 
+/// TODO: Document the RocDec struct.
 pub const RocDec = extern struct {
     num: i128,
 
@@ -1435,6 +1436,7 @@ test "pow: 0.5 ^ 2.0" {
 
 // exports
 
+/// TODO: Document fromStr.
 pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
     if (@call(.always_inline, RocDec.fromStr, .{arg})) |dec| {
         return .{ .errorcode = 0, .value = dec.num };
@@ -1443,10 +1445,12 @@ pub fn fromStr(arg: RocStr) callconv(.C) num_.NumParseResult(i128) {
     }
 }
 
+/// TODO: Document to_str.
 pub fn to_str(arg: RocDec) callconv(.C) RocStr {
     return @call(.always_inline, RocDec.to_str, .{arg});
 }
 
+/// TODO: Document fromF64C.
 pub fn fromF64C(arg: f64) callconv(.C) i128 {
     if (@call(.always_inline, RocDec.fromF64, .{arg})) |dec| {
         return dec.num;
@@ -1455,6 +1459,7 @@ pub fn fromF64C(arg: f64) callconv(.C) i128 {
     }
 }
 
+/// TODO: Document fromF32C.
 pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     const arg_f64 = arg_f32;
     if (@call(.always_inline, RocDec.fromF64, .{arg_f64})) |dec| {
@@ -1464,10 +1469,12 @@ pub fn fromF32C(arg_f32: f32) callconv(.C) i128 {
     }
 }
 
+/// TODO: Document toF64.
 pub fn toF64(arg: RocDec) callconv(.C) f64 {
     return @call(.always_inline, RocDec.toF64, .{arg});
 }
 
+/// TODO: Document exportFromInt.
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) i128 {
@@ -1484,32 +1491,39 @@ pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document fromU64C.
 pub fn fromU64C(arg: u64) callconv(.C) i128 {
     return @call(.always_inline, RocDec.fromU64, .{arg}).toI128();
 }
 
+/// TODO: Document toI128.
 pub fn toI128(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.toI128, .{arg});
 }
 
+/// TODO: Document fromI128.
 pub fn fromI128(arg: i128) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.fromI128, .{arg});
 }
 
+/// TODO: Document eqC.
 pub fn eqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
     return @call(.always_inline, RocDec.eq, .{ arg1, arg2 });
 }
 
+/// TODO: Document neqC.
 pub fn neqC(arg1: RocDec, arg2: RocDec) callconv(.C) bool {
     return @call(.always_inline, RocDec.neq, .{ arg1, arg2 });
 }
 
+/// TODO: Document negateC.
 pub fn negateC(arg: RocDec) callconv(.C) i128 {
     return if (@call(.always_inline, RocDec.negate, .{arg})) |dec| dec.num else {
         roc_panic("Decimal negation overflow!", 0);
     };
 }
 
+/// TODO: Document absC.
 pub fn absC(arg: RocDec) callconv(.C) i128 {
     const result = @call(.always_inline, RocDec.abs, .{arg}) catch {
         roc_panic("Decimal absolute value overflow!", 0);
@@ -1517,78 +1531,97 @@ pub fn absC(arg: RocDec) callconv(.C) i128 {
     return result.num;
 }
 
+/// TODO: Document addC.
 pub fn addC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.addWithOverflow, .{ arg1, arg2 });
 }
 
+/// TODO: Document subC.
 pub fn subC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.subWithOverflow, .{ arg1, arg2 });
 }
 
+/// TODO: Document mulC.
 pub fn mulC(arg1: RocDec, arg2: RocDec) callconv(.C) WithOverflow(RocDec) {
     return @call(.always_inline, RocDec.mulWithOverflow, .{ arg1, arg2 });
 }
 
+/// TODO: Document divC.
 pub fn divC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.div, .{ arg1, arg2 }).num;
 }
 
+/// TODO: Document logC.
 pub fn logC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.log, .{arg}).num;
 }
 
+/// TODO: Document powC.
 pub fn powC(arg1: RocDec, arg2: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.pow, .{ arg1, arg2 }).num;
 }
 
+/// TODO: Document sinC.
 pub fn sinC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.sin, .{arg}).num;
 }
 
+/// TODO: Document cosC.
 pub fn cosC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.cos, .{arg}).num;
 }
 
+/// TODO: Document tanC.
 pub fn tanC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.tan, .{arg}).num;
 }
 
+/// TODO: Document asinC.
 pub fn asinC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.asin, .{arg}).num;
 }
 
+/// TODO: Document acosC.
 pub fn acosC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.acos, .{arg}).num;
 }
 
+/// TODO: Document atanC.
 pub fn atanC(arg: RocDec) callconv(.C) i128 {
     return @call(.always_inline, RocDec.atan, .{arg}).num;
 }
 
+/// TODO: Document addOrPanicC.
 pub fn addOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.add, .{ arg1, arg2 });
 }
 
+/// TODO: Document addSaturatedC.
 pub fn addSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.addSaturated, .{ arg1, arg2 });
 }
 
+/// TODO: Document subOrPanicC.
 pub fn subOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.sub, .{ arg1, arg2 });
 }
 
+/// TODO: Document subSaturatedC.
 pub fn subSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.subSaturated, .{ arg1, arg2 });
 }
 
+/// TODO: Document mulOrPanicC.
 pub fn mulOrPanicC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.mul, .{ arg1, arg2 });
 }
 
+/// TODO: Document mulSaturatedC.
 pub fn mulSaturatedC(arg1: RocDec, arg2: RocDec) callconv(.C) RocDec {
     return @call(.always_inline, RocDec.mulSaturated, .{ arg1, arg2 });
 }
 
+/// TODO: Document exportRound.
 pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: RocDec) callconv(.C) T {
@@ -1598,6 +1631,7 @@ pub fn exportRound(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportFloor.
 pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: RocDec) callconv(.C) T {
@@ -1607,6 +1641,7 @@ pub fn exportFloor(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportCeiling.
 pub fn exportCeiling(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: RocDec) callconv(.C) T {

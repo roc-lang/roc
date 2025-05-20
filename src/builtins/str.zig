@@ -33,6 +33,7 @@ fn init_blank_small_string(comptime n: usize) [n]u8 {
     return prime_list;
 }
 
+/// TODO: Document RocStr struct.
 pub const RocStr = extern struct {
     bytes: ?[*]u8,
     length: usize,
@@ -546,16 +547,19 @@ pub fn init(bytes_ptr: [*]const u8, length: usize) callconv(.C) RocStr {
 }
 
 // Str.equal
+/// TODO: Document strEqual.
 pub fn strEqual(self: RocStr, other: RocStr) callconv(.C) bool {
     return self.eq(other);
 }
 
 // Str.numberOfBytes
+/// TODO: Document strNumberOfBytes.
 pub fn strNumberOfBytes(string: RocStr) callconv(.C) usize {
     return string.len();
 }
 
 // Str.fromInt
+/// TODO: Document exportFromInt.
 pub fn exportFromInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(int: T) callconv(.C) RocStr {
@@ -584,6 +588,7 @@ fn strFromIntHelp(comptime T: type, int: T) RocStr {
 }
 
 // Str.fromFloat
+/// TODO: Document exportFromFloat.
 pub fn exportFromFloat(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(float: T) callconv(.C) RocStr {
@@ -602,6 +607,7 @@ fn strFromFloatHelp(comptime T: type, float: T) RocStr {
 }
 
 // Str.splitOn
+/// TODO: Document strSplitOn.
 pub fn strSplitOn(string: RocStr, delimiter: RocStr) callconv(.C) RocList {
     const segment_count = countSegments(string, delimiter);
     const list = RocList.allocate(@alignOf(RocStr), segment_count, @sizeOf(RocStr), true);
@@ -963,6 +969,7 @@ test "strSplitHelp: overlapping delimiter 2" {
 // It is used to count how many segments the input `_str`
 // needs to be broken into, so that we can allocate a array
 // of that size. It always returns at least 1.
+/// TODO: Document countSegments.
 pub fn countSegments(string: RocStr, delimiter: RocStr) callconv(.C) usize {
     if (delimiter.isEmpty()) {
         return 1;
@@ -1061,18 +1068,22 @@ test "countSegments: overlapping delimiter 2" {
     try expectEqual(segments_count, 3);
 }
 
+/// TODO: Document countUtf8Bytes.
 pub fn countUtf8Bytes(string: RocStr) callconv(.C) u64 {
     return @intCast(string.len());
 }
 
+/// TODO: Document isEmpty.
 pub fn isEmpty(string: RocStr) callconv(.C) bool {
     return string.isEmpty();
 }
 
+/// TODO: Document getCapacity.
 pub fn getCapacity(string: RocStr) callconv(.C) usize {
     return string.getCapacity();
 }
 
+/// TODO: Document substringUnsafeC.
 pub fn substringUnsafeC(string: RocStr, start_u64: u64, length_u64: u64) callconv(.C) RocStr {
     const start: usize = @intCast(start_u64);
     const length: usize = @intCast(length_u64);
@@ -1112,6 +1123,7 @@ fn substringUnsafe(string: RocStr, start: usize, length: usize) RocStr {
     return RocStr.empty();
 }
 
+/// TODO: Document getUnsafeC.
 pub fn getUnsafeC(string: RocStr, index: u64) callconv(.C) u8 {
     return string.getUnchecked(@intCast(index));
 }
@@ -1153,6 +1165,7 @@ test "substringUnsafe: end" {
 }
 
 // Str.startsWith
+/// TODO: Document startsWith.
 pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -1176,6 +1189,7 @@ pub fn startsWith(string: RocStr, prefix: RocStr) callconv(.C) bool {
 }
 
 // Str.repeat
+/// TODO: Document repeatC.
 pub fn repeatC(string: RocStr, count_u64: u64) callconv(.C) RocStr {
     const count: usize = @intCast(count_u64);
     const bytes_len = string.len();
@@ -1214,7 +1228,7 @@ test "startsWith: 12345678912345678910 starts with 123456789123456789" {
     try expect(startsWith(str, prefix));
 }
 
-// Str.endsWith
+/// Str.endsWith
 pub fn endsWith(string: RocStr, suffix: RocStr) callconv(.C) bool {
     const bytes_len = string.len();
     const bytes_ptr = string.asU8ptr();
@@ -1270,7 +1284,7 @@ test "endsWith: hello world ends with world" {
     try expect(endsWith(str, suffix));
 }
 
-// Str.concat
+/// Str.concat
 pub fn strConcatC(arg1: RocStr, arg2: RocStr) callconv(.C) RocStr {
     return @call(.always_inline, strConcat, .{ arg1, arg2 });
 }
@@ -1320,13 +1334,14 @@ test "RocStr.concat: small concat small" {
     try expect(roc_str3.eq(result));
 }
 
+/// TODO: Document RocListStr.
 pub const RocListStr = extern struct {
     list_elements: ?[*]RocStr,
     list_length: usize,
     list_capacity_or_alloc_ptr: usize,
 };
 
-// Str.joinWith
+/// Str.joinWith
 pub fn strJoinWithC(list: RocList, separator: RocStr) callconv(.C) RocStr {
     const roc_list_str = RocListStr{
         .list_elements = @as(?[*]RocStr, @ptrCast(@alignCast(list.bytes))),
@@ -1410,7 +1425,7 @@ test "RocStr.joinWith: result is big" {
     try expect(roc_result.eq(result));
 }
 
-// Str.toUtf8
+/// Str.toUtf8
 pub fn strToUtf8C(arg: RocStr) callconv(.C) RocList {
     return strToBytes(arg);
 }
@@ -1438,6 +1453,7 @@ const FromUtf8Result = extern struct {
     problem_code: Utf8ByteProblem,
 };
 
+/// TODO: Document fromUtf8C.
 pub fn fromUtf8C(
     list: RocList,
     update_mode: UpdateMode,
@@ -1517,6 +1533,7 @@ fn utf8EncodeLossy(c: u32, out: []u8) u3 {
     return unicode.utf8Encode(UNICODE_REPLACEMENT, out) catch unreachable;
 }
 
+/// TODO: Document fromUtf8Lossy.
 pub fn fromUtf8Lossy(
     list: RocList,
 ) callconv(.C) RocStr {
@@ -1957,6 +1974,7 @@ test "isWhitespace" {
     try expect(!isWhitespace('x'));
 }
 
+/// TODO: Document strTrim.
 pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
@@ -2006,6 +2024,7 @@ pub fn strTrim(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
+/// TODO: Document strTrimStart.
 pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
@@ -2054,6 +2073,7 @@ pub fn strTrimStart(input_string: RocStr) callconv(.C) RocStr {
     }
 }
 
+/// TODO: Document strTrimEnd.
 pub fn strTrimEnd(input_string: RocStr) callconv(.C) RocStr {
     var string = input_string;
 
@@ -2134,7 +2154,7 @@ fn countTrailingWhitespaceBytes(string: RocStr) usize {
     return byte_count;
 }
 
-// Str.with_ascii_lowercased
+/// Str.with_ascii_lowercased
 pub fn strWithAsciiLowercased(string: RocStr) callconv(.C) RocStr {
     var new_str = if (string.isUnique())
         string
@@ -2194,7 +2214,7 @@ test "withAsciiLowercased: seamless slice" {
     try expect(str_result.eq(expected));
 }
 
-// Str.with_ascii_uppercased
+/// Str.with_ascii_uppercased
 pub fn strWithAsciiUppercased(string: RocStr) callconv(.C) RocStr {
     var new_str = if (string.isUnique())
         string
@@ -2254,6 +2274,7 @@ test "withAsciiUppercased: seamless slice" {
     try expect(str_result.eq(expected));
 }
 
+/// TODO: Document strCaselessAsciiEquals.
 pub fn strCaselessAsciiEquals(self: RocStr, other: RocStr) callconv(.C) bool {
     if (self.bytes == other.bytes and self.length == other.length) {
         return true;
@@ -2718,6 +2739,7 @@ pub fn strCloneTo(
     }
 }
 
+/// TODO: Document strAllocationPtr.
 pub fn strAllocationPtr(
     string: RocStr,
 ) callconv(.C) ?[*]u8 {

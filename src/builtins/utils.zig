@@ -5,6 +5,7 @@ const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
 const DEBUG_ALLOC = false;
 
+/// TODO: Document WithOverflow.
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
 }
@@ -21,7 +22,8 @@ extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void;
 
-// Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
+/// TODO: Document test_dbg.
+/// Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
 pub fn test_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void {
     roc_dbg(loc, message, src);
 }
@@ -145,10 +147,12 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
+/// TODO: Document alloc.
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
     return @as(?[*]u8, @ptrCast(roc_alloc(size, alignment)));
 }
 
+/// TODO: Document realloc.
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("- realloc {*}\n", .{c_ptr});
@@ -156,12 +160,14 @@ pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [
     return @as([*]u8, @ptrCast(roc_realloc(c_ptr, new_size, old_size, alignment)));
 }
 
+/// TODO: Document dealloc.
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return roc_dealloc(c_ptr, alignment);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
+/// TODO: Document test_panic.
 pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     _ = c_ptr;
     _ = crash_tag;
@@ -174,12 +180,16 @@ pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     //    std.c.exit(1);
 }
 
+/// TODO: Document Inc.
 pub const Inc = fn (?[*]u8) callconv(.C) void;
+/// TODO: Document IncN.
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
+/// TODO: Document Dec.
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
 
+/// TODO: Document IntWidth.
 pub const IntWidth = enum(u8) {
     U8 = 0,
     U16 = 1,
@@ -257,6 +267,7 @@ pub fn decrefCheckNullC(
     }
 }
 
+/// TODO: Document decrefDataPtrC.
 pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -274,6 +285,7 @@ pub fn decrefDataPtrC(
     return decrefRcPtrC(rc_ptr, alignment, elements_refcounted);
 }
 
+/// TODO: Document increfDataPtrC.
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
@@ -289,6 +301,7 @@ pub fn increfDataPtrC(
     return increfRcPtrC(isizes, inc_amount);
 }
 
+/// TODO: Document freeDataPtrC.
 pub fn freeDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -306,6 +319,7 @@ pub fn freeDataPtrC(
     return freeRcPtrC(isizes - 1, alignment, elements_refcounted);
 }
 
+/// TODO: Document freeRcPtrC.
 pub fn freeRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
@@ -394,6 +408,7 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
+/// TODO: Document isUnique.
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
 ) callconv(.C) bool {
@@ -414,6 +429,7 @@ pub fn isUnique(
     return rcUnique(refcount);
 }
 
+/// TODO: Document rcUnique.
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
@@ -428,6 +444,7 @@ pub inline fn rcUnique(refcount: isize) bool {
     }
 }
 
+/// TODO: Document rcConstant.
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {

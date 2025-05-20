@@ -262,12 +262,19 @@ comptime {
 // setjmp/longjmp. LLVM is unable to generate code for longjmp on AArch64 (https://github.com/roc-lang/roc/issues/2965),
 // so instead we ask Zig to please provide implementations for us, which is does
 // (seemingly via musl).
+/// TODO: Document setjmp.
 pub extern fn setjmp([*c]c_int) c_int;
+/// TODO: Document longjmp.
 pub extern fn longjmp([*c]c_int, c_int) noreturn;
+/// TODO: Document _setjmp.
 pub extern fn _setjmp([*c]c_int) c_int;
+/// TODO: Document _longjmp.
 pub extern fn _longjmp([*c]c_int, c_int) noreturn;
+/// TODO: Document sigsetjmp.
 pub extern fn sigsetjmp([*c]c_int, c_int) c_int;
+/// TODO: Document siglongjmp.
 pub extern fn siglongjmp([*c]c_int, c_int) noreturn;
+/// TODO: Document longjmperror.
 pub extern fn longjmperror() void;
 
 // Zig won't expose the externs (and hence link correctly) unless we force them to be used.
@@ -279,7 +286,9 @@ fn __roc_force_longjmp(a0: [*c]c_int, a1: c_int) callconv(.C) noreturn {
     longjmp(a0, a1);
 }
 
+/// TODO: Document windows_setjmp.
 pub extern fn windows_setjmp([*c]c_int) c_int;
+/// TODO: Document windows_longjmp.
 pub extern fn windows_longjmp([*c]c_int, c_int) noreturn;
 
 fn __roc_force_setjmp_windows(it: [*c]c_int) callconv(.C) c_int {
@@ -392,6 +401,7 @@ fn exportUtilsFn(comptime func: anytype, comptime func_name: []const u8) void {
 }
 
 // Custom panic function, as builtin Zig version errors during LLVM verification
+/// TODO: Document panic.
 pub fn panic(message: []const u8, stacktrace: ?*std.builtin.StackTrace, _: ?usize) noreturn {
     if (builtin.target.cpu.arch != .wasm32) {
         std.debug.print("\nSomehow in unreachable zig panic!\nThis is a roc standard library bug\n{s}: {?}", .{ message, stacktrace });

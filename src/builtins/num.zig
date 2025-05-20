@@ -6,6 +6,7 @@ const WithOverflow = @import("utils.zig").WithOverflow;
 const Ordering = @import("utils.zig").Ordering;
 const roc_panic = @import("panic.zig").panic_help;
 
+/// TODO: Document NumParseResult.
 pub fn NumParseResult(comptime T: type) type {
     // on the roc side we sort by alignment; putting the errorcode last
     // always works out (no number with smaller alignment than 1)
@@ -15,23 +16,27 @@ pub fn NumParseResult(comptime T: type) type {
     };
 }
 
+/// TODO: Document F32Parts.
 pub const F32Parts = extern struct {
     fraction: u32,
     exponent: u8,
     sign: bool,
 };
 
+/// TODO: Document F64Parts.
 pub const F64Parts = extern struct {
     fraction: u64,
     exponent: u16,
     sign: bool,
 };
 
+/// TODO: Document U256.
 pub const U256 = struct {
     hi: u128,
     lo: u128,
 };
 
+/// TODO: Document mul_u128.
 pub fn mul_u128(a: u128, b: u128) U256 {
     var hi: u128 = undefined;
     var lo: u128 = undefined;
@@ -66,6 +71,7 @@ pub fn mul_u128(a: u128, b: u128) U256 {
     return .{ .hi = hi, .lo = lo };
 }
 
+/// TODO: Document exportParseInt.
 pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
@@ -85,6 +91,7 @@ pub fn exportParseInt(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportParseFloat.
 pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(buf: RocStr) callconv(.C) NumParseResult(T) {
@@ -98,6 +105,7 @@ pub fn exportParseFloat(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportNumToFloatCast.
 pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: []const u8) void {
     const f = struct {
         fn func(x: T) callconv(.C) F {
@@ -107,6 +115,7 @@ pub fn exportNumToFloatCast(comptime T: type, comptime F: type, comptime name: [
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportPow.
 pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(base: T, exp: T) callconv(.C) T {
@@ -130,6 +139,7 @@ pub fn exportPow(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportIsNan.
 pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -139,6 +149,7 @@ pub fn exportIsNan(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportIsInfinite.
 pub fn exportIsInfinite(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(input: T) callconv(.C) bool {
@@ -604,38 +615,47 @@ pub fn compareU128(self: u128, other: u128) callconv(.C) Ordering {
     }
 }
 
+/// TODO: Document lessThanI128.
 pub fn lessThanI128(self: i128, other: i128) callconv(.C) bool {
     return self < other;
 }
 
+/// TODO: Document lessThanOrEqualI128.
 pub fn lessThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
     return self <= other;
 }
 
+/// TODO: Document greaterThanI128.
 pub fn greaterThanI128(self: i128, other: i128) callconv(.C) bool {
     return self > other;
 }
 
+/// TODO: Document greaterThanOrEqualI128.
 pub fn greaterThanOrEqualI128(self: i128, other: i128) callconv(.C) bool {
     return self >= other;
 }
 
+/// TODO: Document lessThanU128.
 pub fn lessThanU128(self: u128, other: u128) callconv(.C) bool {
     return self < other;
 }
 
+/// TODO: Document lessThanOrEqualU128.
 pub fn lessThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
     return self <= other;
 }
 
+/// TODO: Document greaterThanU128.
 pub fn greaterThanU128(self: u128, other: u128) callconv(.C) bool {
     return self > other;
 }
 
+/// TODO: Document greaterThanOrEqualU128.
 pub fn greaterThanOrEqualU128(self: u128, other: u128) callconv(.C) bool {
     return self >= other;
 }
 
+/// TODO: Document exportMulOrPanic.
 pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T, other: T) callconv(.C) T {
@@ -650,6 +670,7 @@ pub fn exportMulOrPanic(comptime T: type, comptime W: type, comptime name: []con
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportCountLeadingZeroBits.
 pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -659,6 +680,7 @@ pub fn exportCountLeadingZeroBits(comptime T: type, comptime name: []const u8) v
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportCountTrailingZeroBits.
 pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -668,6 +690,7 @@ pub fn exportCountTrailingZeroBits(comptime T: type, comptime name: []const u8) 
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document exportCountOneBits.
 pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
     const f = struct {
         fn func(self: T) callconv(.C) u8 {
@@ -677,6 +700,7 @@ pub fn exportCountOneBits(comptime T: type, comptime name: []const u8) void {
     @export(&f, .{ .name = name ++ @typeName(T), .linkage = .strong });
 }
 
+/// TODO: Document f32ToParts.
 pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
     const u32Value = @as(u32, @bitCast(self));
     return F32Parts{
@@ -686,6 +710,7 @@ pub fn f32ToParts(self: f32) callconv(.C) F32Parts {
     };
 }
 
+/// TODO: Document f64ToParts.
 pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
     const u64Value = @as(u64, @bitCast(self));
     return F64Parts{
@@ -695,34 +720,42 @@ pub fn f64ToParts(self: f64) callconv(.C) F64Parts {
     };
 }
 
+/// TODO: Document f32FromParts.
 pub fn f32FromParts(parts: F32Parts) callconv(.C) f32 {
     return @as(f32, @bitCast(parts.fraction & 0x7fffff | (@as(u32, parts.exponent) << 23) | (@as(u32, @intFromBool(parts.sign)) << 31)));
 }
 
+/// TODO: Document f64FromParts.
 pub fn f64FromParts(parts: F64Parts) callconv(.C) f64 {
     return @as(f64, @bitCast(parts.fraction & 0xfffffffffffff | (@as(u64, parts.exponent & 0x7ff) << 52) | (@as(u64, @intFromBool(parts.sign)) << 63)));
 }
 
+/// TODO: Document f32ToBits.
 pub fn f32ToBits(self: f32) callconv(.C) u32 {
     return @as(u32, @bitCast(self));
 }
 
+/// TODO: Document f64ToBits.
 pub fn f64ToBits(self: f64) callconv(.C) u64 {
     return @as(u64, @bitCast(self));
 }
 
+/// TODO: Document i128ToBits.
 pub fn i128ToBits(self: i128) callconv(.C) u128 {
     return @as(u128, @bitCast(self));
 }
 
+/// TODO: Document f32FromBits.
 pub fn f32FromBits(bits: u32) callconv(.C) f32 {
     return @as(f32, @bitCast(bits));
 }
 
+/// TODO: Document f64FromBits.
 pub fn f64FromBits(bits: u64) callconv(.C) f64 {
     return @as(f64, @bitCast(bits));
 }
 
+/// TODO: Document i128FromBits.
 pub fn i128FromBits(bits: u128) callconv(.C) i128 {
     return @as(i128, @bitCast(bits));
 }
