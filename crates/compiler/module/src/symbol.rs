@@ -1532,6 +1532,7 @@ define_builtins! {
         94 LIST_SPLIT_ON_LIST: "split_on_list"
         95 LIST_WALK_TRY_FX: "walk_try!"
         96 LIST_MAP_TRY_FX: "map_try!"
+        97 LIST_KEEP_IF_TRY_FX: "keep_if_try!"
     }
     7 RESULT: "Result" => {
         0 RESULT_RESULT: "Result" exposed_type=true // the Result.Result type alias
