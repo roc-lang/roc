@@ -1,3 +1,4 @@
+//! Implementation of the Roc builtins
 const std = @import("std");
 const builtin = @import("builtin");
 const math = std.math;

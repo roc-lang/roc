@@ -1,3 +1,9 @@
+//! Fuzzing utility for sorting algorithms with memory leak detection and testing.
+//!
+//! This module provides a fuzz testing implementation for sorting functions,
+//! featuring memory allocation tracking, sorting verification, and reference-counted
+//! comparison mechanisms.
+
 const std = @import("std");
 const sort = @import("sort.zig");
 
