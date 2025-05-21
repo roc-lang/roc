@@ -1050,6 +1050,23 @@ mod cli_tests {
             let cli_dev_out = cli_dev.run();
             cli_dev_out.assert_clean_success();
         }
+
+        #[test]
+        #[cfg_attr(windows, ignore)]
+        fn effectful_keep_if_try() {
+            build_platform_host();
+
+            let cli_dev = ExecCli::new(
+                roc_cli::CMD_DEV,
+                file_from_root(
+                    "crates/cli/tests/test-projects/effectful",
+                    "keep_if_try.roc",
+                ),
+            );
+
+            let cli_dev_out = cli_dev.run();
+            cli_dev_out.assert_clean_success();
+        }
     }
 
     // this is for testing the benchmarks (on small inputs), to perform proper benchmarks see crates/cli/benches/README.md
