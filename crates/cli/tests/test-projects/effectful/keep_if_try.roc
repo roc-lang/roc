@@ -40,7 +40,7 @@ run! = \{} ->
 
 is_zero! : U64 => Result Bool [NotZeroOrOne]
 is_zero! = \num ->
-    _hey = Effect.id_effectful!(num)
+    _ = Effect.id_effectful!(num)
     if num == 0 then
         Ok(Bool.true)
     else if num == 1 then
