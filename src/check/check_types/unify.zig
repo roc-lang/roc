@@ -2,6 +2,7 @@
 //! * type aliases
 //! * effect and purity tracking
 //! * extensible row-based record types
+//! * nominal rigid variables
 //!
 //! The primary entrypoint is `unify`, which takes two type variables (`Var`) and attempts
 //! to unify their structure in the given `Store`, using a mutable `Scratch` context
@@ -18,7 +19,28 @@
 //! NOTE: Subsequent calls to `unify` will reset `fresh_vars`. It is up to the caller
 //! to use/store them if necessary.
 //!
-//! Example:
+//! ### Rigid variable unification
+//!
+//! Unlike Elm's type system, which represents rigid variables via unique Descriptor
+//! nodes and compares them by pointer identity, this system uses *nominal rigid variables*.c
+//!
+//! Rigid variables are represented as `.rigid_var(Ident.Idx)` inside type descriptors
+//! (e.g. `Num.Int`, `Num.Frac`, or directly in `Descriptor.content`).
+//!
+//! Unification between rigid variables is allowed in two cases:
+//! - If both variables are **already equivalent** in the types store (i.e.
+//!   pointing to the exact same Descriptor)
+//! - If both variables have a `.rigid_var(id)` descriptor and the `Ident.Idx`
+//!   values are equal
+//!
+//! This nominal model allows types like `Num a, Num a -> Num a` to share a
+//! common rigid identifier across positions, while still preserving compactness
+//! and predictable unification behavior.
+//!
+//! Rigid variables with different `Ident.Idx` values will not unify — even if they
+//! share the same string name — ensuring shadowing and scope tracking are sound.
+//!
+//! ### Example
 //!
 //! ```zig
 //! const result = unify(&types_store, &scratch, a_var, b_var);
@@ -193,8 +215,8 @@ const Unifier = struct {
                     .flex_var => |mb_a_ident| {
                         self.unifyFlex(&vars, mb_a_ident, vars.b.desc.content);
                     },
-                    .rigid_var => |_| {
-                        try self.unifyRigid(&vars, vars.b.desc.content);
+                    .rigid_var => |a_ident| {
+                        try self.unifyRigid(&vars, a_ident, vars.b.desc.content);
                     },
                     .alias => |a_alias| {
                         try self.unifyAlias(&vars, a_alias, vars.b.desc.content);
@@ -238,10 +260,14 @@ const Unifier = struct {
     // Unify rigid //
 
     /// Unify when `a` was a rigid
-    fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, b_content: Content) error{TypeMismatch}!void {
+    fn unifyRigid(self: *Self, vars: *const ResolvedVarDescs, a_ident: Ident.Idx, b_content: Content) error{TypeMismatch}!void {
         switch (b_content) {
             .flex_var => self.merge(vars, vars.a.desc.content),
-            .rigid_var => return error.TypeMismatch,
+            .rigid_var => |b_ident| if (a_ident == b_ident) {
+                self.merge(vars, vars.a.desc.content);
+            } else {
+                return error.TypeMismatch;
+            },
             .alias => return error.TypeMismatch,
             .effectful => return error.TypeMismatch,
             .pure => return error.TypeMismatch,
@@ -523,44 +549,85 @@ const Unifier = struct {
                 // if a is flex, update to b's desc
                 self.merge(vars, vars.b.desc.content);
             },
+            .rigid_var => |a_ident| switch (b_num) {
+                .flex_var => {
+                    self.merge(vars, vars.a.desc.content);
+                },
+                .rigid_var => |b_ident| if (a_ident == b_ident) {
+                    self.merge(vars, vars.a.desc.content);
+                } else {
+                    return error.TypeMismatch;
+                },
+                .frac => return error.TypeMismatch,
+                .int => return error.TypeMismatch,
+            },
             .int => |a_int| switch (b_num) {
                 .flex_var => {
                     // if b is flex, update to a's desc
                     self.merge(vars, vars.a.desc.content);
                 },
+                .rigid_var => return error.TypeMismatch,
                 .frac => return error.TypeMismatch,
                 .int => |b_int| {
-                    if (a_int == .flex_var) {
-                        // if a is flex, update to b's desc
-                        self.merge(vars, vars.b.desc.content);
-                    } else if (b_int == .flex_var) {
-                        // if b is flex, update to a's desc
-                        self.merge(vars, vars.a.desc.content);
-                    } else if (a_int.exact == b_int.exact) {
-                        self.merge(vars, vars.b.desc.content);
-                    } else {
-                        return error.TypeMismatch;
+                    switch (a_int) {
+                        .flex_var => return self.merge(vars, vars.b.desc.content),
+                        .rigid_var => |a_ident| switch (b_int) {
+                            .flex_var => return self.merge(vars, vars.a.desc.content),
+                            .rigid_var => |b_ident| {
+                                if (a_ident == b_ident) {
+                                    return self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => return error.TypeMismatch,
+                        },
+                        .exact => |a_exact| switch (b_int) {
+                            .flex_var => return self.merge(vars, vars.a.desc.content),
+                            .rigid_var => return error.TypeMismatch,
+                            .exact => |b_exact| {
+                                if (a_exact == b_exact) {
+                                    return self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                        },
                     }
                 },
             },
-
             .frac => |a_frac| switch (b_num) {
                 .flex_var => {
                     // if b is flex, update to a's desc
                     self.merge(vars, vars.a.desc.content);
                 },
+                .rigid_var => return error.TypeMismatch,
                 .int => return error.TypeMismatch,
                 .frac => |b_frac| {
-                    if (a_frac == .flex_var) {
-                        // if a is flex, update to b's desc
-                        self.merge(vars, vars.b.desc.content);
-                    } else if (b_frac == .flex_var) {
-                        // if b is flex, update to a's desc
-                        self.merge(vars, vars.a.desc.content);
-                    } else if (a_frac.exact == b_frac.exact) {
-                        self.merge(vars, vars.b.desc.content);
-                    } else {
-                        return error.TypeMismatch;
+                    switch (a_frac) {
+                        .flex_var => return self.merge(vars, vars.b.desc.content),
+                        .rigid_var => |a_ident| switch (b_frac) {
+                            .flex_var => return self.merge(vars, vars.a.desc.content),
+                            .rigid_var => |b_ident| {
+                                if (a_ident == b_ident) {
+                                    return self.merge(vars, vars.a.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                            else => return error.TypeMismatch,
+                        },
+                        .exact => |a_exact| switch (b_frac) {
+                            .flex_var => return self.merge(vars, vars.a.desc.content),
+                            .rigid_var => return error.TypeMismatch,
+                            .exact => |b_exact| {
+                                if (a_exact == b_exact) {
+                                    return self.merge(vars, vars.b.desc.content);
+                                } else {
+                                    return error.TypeMismatch;
+                                }
+                            },
+                        },
                     }
                 },
             },
@@ -1634,6 +1701,10 @@ const TestEnv = struct {
 
     fn mkRigidVar(self: *Self, name: []const u8) Content {
         const ident_idx = self.env.idents.insert(self.env.gpa, Ident.for_text(name), Region.zero());
+        return Self.mkRigidVarFromIdent(ident_idx);
+    }
+
+    fn mkRigidVarFromIdent(ident_idx: Ident.Idx) Content {
         return .{ .rigid_var = ident_idx };
     }
 
@@ -1826,6 +1897,21 @@ test "rigid_var - unifies with flex_var (other way)" {
     try std.testing.expectEqual(rigid, (try env.getDescForRootVar(b)).content);
 }
 
+test "rigid_var - unifies with identical ident idx" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const a = env.types_store.freshFromContent(TestEnv.mkRigidVarFromIdent(ident_idx));
+    const b = env.types_store.freshFromContent(TestEnv.mkRigidVarFromIdent(ident_idx));
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+    try std.testing.expectEqual(true, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(Content{ .rigid_var = ident_idx }, (try env.getDescForRootVar(b)).content);
+}
+
 test "rigid_var - cannot unify with alias (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
@@ -1838,19 +1924,7 @@ test "rigid_var - cannot unify with alias (fail)" {
     try std.testing.expectEqual(false, result.isOk());
 }
 
-test "rigid_var - cannot unify with itself if different names (fail)" {
-    const gpa = std.testing.allocator;
-    var env = TestEnv.init(gpa);
-    defer env.deinit();
-
-    const rigid1 = env.types_store.freshFromContent(env.mkRigidVar("a"));
-    const rigid2 = env.types_store.freshFromContent(env.mkRigidVar("a"));
-
-    const result = unify(&env.types_store, &env.scratch, rigid1, rigid2);
-    try std.testing.expectEqual(false, result.isOk());
-}
-
-test "rigid_var - cannot unify with identical rigid_var (fail)" {
+test "rigid_var - cannot unify with identical ident str (fail)" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
     defer env.deinit();
@@ -2472,6 +2546,128 @@ test "unify - num frac(flex_var) with frac(flex_var)" {
     try std.testing.expectEqual(.ok, result);
     try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
     try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num(rigid_var) with(rigid_var)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .rigid_var = ident_idx } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .rigid_var = ident_idx } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num frac(rigid_var) with frac(rigid_var)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .frac = Num.Frac{ .rigid_var = ident_idx } } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .frac = Num.Frac{ .rigid_var = ident_idx } } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int(rigid_var) with int(rigid_var)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .int = Num.Int{ .rigid_var = ident_idx } } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .int = Num.Int{ .rigid_var = ident_idx } } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(b_content, (try env.getDescForRootVar(b)).content);
+}
+test "unify - num(rigid_var) with diff num(rigid_var) (fails)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_a_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const ident_b_idx = env.env.idents.insert(gpa, Ident.for_text("b"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .rigid_var = ident_a_idx } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .rigid_var = ident_b_idx } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num frac(rigid_var) with diff frac(rigid_var) (fails)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_a_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const ident_b_idx = env.env.idents.insert(gpa, Ident.for_text("b"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .frac = Num.Frac{ .rigid_var = ident_a_idx } } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .frac = Num.Frac{ .rigid_var = ident_b_idx } } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
+}
+
+test "unify - num int(rigid_var) with diff int(rigid_var) (fails)" {
+    const gpa = std.testing.allocator;
+
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const ident_a_idx = env.env.idents.insert(gpa, Ident.for_text("a"), Region.zero());
+    const ident_b_idx = env.env.idents.insert(gpa, Ident.for_text("b"), Region.zero());
+    const a_content = Content{ .structure = .{ .num = Num{ .int = Num.Int{ .rigid_var = ident_a_idx } } } };
+    const b_content = Content{ .structure = .{ .num = Num{ .int = Num.Int{ .rigid_var = ident_b_idx } } } };
+
+    const a = env.types_store.freshFromContent(a_content);
+    const b = env.types_store.freshFromContent(b_content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(false, result.isOk());
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+    try std.testing.expectEqual(.err, (try env.getDescForRootVar(b)).content);
 }
 
 // unification - structure/structure - func

@@ -177,13 +177,15 @@ pub const Tuple = struct {
 pub const Num = union(enum) {
     const Self = @This();
 
-    flex_var,
+    flex_var: ?Ident.Idx,
+    rigid_var: Ident.Idx,
     int: Int,
     frac: Frac,
 
     /// the Frac data type
     pub const Frac = union(enum) {
-        flex_var,
+        flex_var: ?Ident.Idx,
+        rigid_var: Ident.Idx,
         exact: Precision,
 
         /// the precision of a frac
@@ -192,7 +194,8 @@ pub const Num = union(enum) {
 
     /// the Int data type
     pub const Int = union(enum) {
-        flex_var,
+        flex_var: ?Ident.Idx,
+        rigid_var: Ident.Idx,
         exact: Precision,
 
         /// the precision of an int
@@ -201,10 +204,10 @@ pub const Num = union(enum) {
 };
 
 /// a num flex_var
-pub const num_flex_var: FlatType = .{ .num = Num.flex_var };
+pub const num_flex_var: FlatType = .{ .num = Num{ .flex_var = null } };
 
 /// a frac flex_var
-pub const frac_flex_var: FlatType = .{ .num = Num{ .frac = .flex_var } };
+pub const frac_flex_var: FlatType = .{ .num = Num{ .frac = Num.Frac{ .flex_var = null } } };
 
 /// a frac f32
 pub const frac_f32: FlatType = .{ .num = Num{ .frac = .{ .exact = .f32 } } };
@@ -216,7 +219,7 @@ pub const frac_f64: FlatType = .{ .num = Num{ .frac = .{ .exact = .f64 } } };
 pub const frac_dec: FlatType = .{ .num = Num{ .frac = .{ .exact = .dec } } };
 
 /// a int flex_var
-pub const int_flex_var: FlatType = .{ .num = Num{ .int = .flex_var } };
+pub const int_flex_var: FlatType = .{ .num = Num{ .int = Num.Int{ .flex_var = null } } };
 
 /// an int u8
 pub const int_u8: FlatType = .{ .num = Num{ .int = .{ .exact = .u8 } } };
