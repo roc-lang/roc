@@ -5,7 +5,8 @@ const DEBUG_INCDEC = false;
 const DEBUG_TESTING_ALLOC = false;
 const DEBUG_ALLOC = false;
 
-/// TODO: Document WithOverflow.
+/// Returns a struct type that holds a value of type T and a boolean indicating whether overflow occurred
+/// Used for arithmetic operations that can detect overflow
 pub fn WithOverflow(comptime T: type) type {
     return extern struct { value: T, has_overflowed: bool };
 }
@@ -22,8 +23,8 @@ extern fn roc_dealloc(c_ptr: *anyopaque, alignment: u32) callconv(.C) void;
 
 extern fn roc_dbg(loc: *anyopaque, message: *anyopaque, src: *anyopaque) callconv(.C) void;
 
-/// TODO: Document test_dbg.
 /// Since roc_dbg is never used by the builtins, we need at export a function that uses it to stop DCE.
+/// Debug function for testing that forwards to roc_dbg
 pub fn test_dbg(loc: *anyopaque, src: *anyopaque, message: *anyopaque) callconv(.C) void {
     roc_dbg(loc, message, src);
 }
@@ -147,12 +148,13 @@ fn testing_roc_panic(c_ptr: *anyopaque, tag_id: u32) callconv(.C) void {
     @panic("Roc panicked");
 }
 
-/// TODO: Document alloc.
+/// Allocates memory with specified size and alignment, wrapping roc_alloc
+/// Returns a pointer to the allocated memory
 pub fn alloc(size: usize, alignment: u32) ?[*]u8 {
     return @as(?[*]u8, @ptrCast(roc_alloc(size, alignment)));
 }
 
-/// TODO: Document realloc.
+/// Reallocates memory to new size, preserving contents up to the minimum of old and new sizes
 pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [*]u8 {
     if (DEBUG_INCDEC and builtin.target.cpu.arch != .wasm32) {
         std.debug.print("- realloc {*}\n", .{c_ptr});
@@ -160,14 +162,14 @@ pub fn realloc(c_ptr: [*]u8, new_size: usize, old_size: usize, alignment: u32) [
     return @as([*]u8, @ptrCast(roc_realloc(c_ptr, new_size, old_size, alignment)));
 }
 
-/// TODO: Document dealloc.
+/// Deallocates memory previously allocated with alloc or realloc
 pub fn dealloc(c_ptr: [*]u8, alignment: u32) void {
     return roc_dealloc(c_ptr, alignment);
 }
 
 // indirection because otherwise zig creates an alias to the panic function which our LLVM code
 // does not know how to deal with
-/// TODO: Document test_panic.
+/// Test function for panic handling (currently stubbed)
 pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     _ = c_ptr;
     _ = crash_tag;
@@ -180,16 +182,16 @@ pub fn test_panic(c_ptr: *anyopaque, crash_tag: u32) callconv(.C) void {
     //    std.c.exit(1);
 }
 
-/// TODO: Document Inc.
+/// Function type for incrementing reference count
 pub const Inc = fn (?[*]u8) callconv(.C) void;
-/// TODO: Document IncN.
+/// Function type for incrementing reference count by a specific amount
 pub const IncN = fn (?[*]u8, u64) callconv(.C) void;
-/// TODO: Document Dec.
+/// Function type for decrementing reference count
 pub const Dec = fn (?[*]u8) callconv(.C) void;
 
 const REFCOUNT_MAX_ISIZE: isize = 0;
 
-/// TODO: Document IntWidth.
+/// Enum representing different integer widths and signedness for runtime type information
 pub const IntWidth = enum(u8) {
     U8 = 0,
     U16 = 1,
@@ -211,6 +213,7 @@ const Refcount = enum {
 
 const RC_TYPE: Refcount = .atomic;
 
+/// Increments reference count of an RC pointer by specified amount
 pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     if (RC_TYPE == .none) return;
 
@@ -242,6 +245,7 @@ pub fn increfRcPtrC(ptr_to_refcount: *isize, amount: isize) callconv(.C) void {
     }
 }
 
+/// TODO
 pub fn decrefRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
@@ -256,6 +260,7 @@ pub fn decrefRcPtrC(
     return @call(.always_inline, decref_ptr_to_refcount, .{ bytes, alignment, elements_refcounted });
 }
 
+/// Safely decrements reference count for a potentially null pointer
 pub fn decrefCheckNullC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -267,8 +272,9 @@ pub fn decrefCheckNullC(
     }
 }
 
-/// Decrements the reference count for a data pointer, freeing memory if needed.
-/// Used for reference-counted data structures.
+/// Decrements reference count for a data pointer and frees memory if count reaches zero
+/// Handles tag bits in the pointer and extracts the reference count pointer
+/// Used for reference-counted data structures
 pub fn decrefDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -286,8 +292,9 @@ pub fn decrefDataPtrC(
     return decrefRcPtrC(rc_ptr, alignment, elements_refcounted);
 }
 
-/// Increments the reference count for a data pointer by the specified amount.
-/// Used for reference-counted data structures.
+/// Increments reference count for a data pointer by specified amount
+/// Handles tag bits in the pointer and extracts the reference count pointer
+/// Used for reference-counted data structures
 pub fn increfDataPtrC(
     bytes_or_null: ?[*]u8,
     inc_amount: isize,
@@ -303,8 +310,9 @@ pub fn increfDataPtrC(
     return increfRcPtrC(isizes, inc_amount);
 }
 
-/// Frees the memory associated with a data pointer, considering alignment and refcounted elements.
-/// Used for reference-counted data structures.
+/// Frees memory for a data pointer regardless of reference count
+/// Handles tag bits in the pointer and extracts the reference count pointer
+/// Used for reference-counted data structures
 pub fn freeDataPtrC(
     bytes_or_null: ?[*]u8,
     alignment: u32,
@@ -322,8 +330,9 @@ pub fn freeDataPtrC(
     return freeRcPtrC(isizes - 1, alignment, elements_refcounted);
 }
 
-/// Frees the memory associated with a reference count pointer.
-/// Used internally for reference-counted allocations.
+/// Frees memory for a reference count pointer regardless of current count
+/// This bypasses reference counting and immediately frees the memory
+/// Used internally for reference-counted allocations
 pub fn freeRcPtrC(
     bytes_or_null: ?[*]isize,
     alignment: u32,
@@ -333,6 +342,7 @@ pub fn freeRcPtrC(
     return free_ptr_to_refcount(bytes, alignment, elements_refcounted);
 }
 
+/// Decrements reference count and potentially frees memory
 pub fn decref(
     bytes_or_null: ?[*]u8,
     data_bytes: usize,
@@ -412,7 +422,9 @@ inline fn decref_ptr_to_refcount(
     }
 }
 
-/// Returns true if the reference count for the given pointer is unique.
+/// Determines if a data pointer has a unique reference (refcount = 1)
+/// Returns true for null pointers (they're conceptually uniquely owned)
+/// Handles tag bits in the pointer and extracts the reference count
 pub fn isUnique(
     bytes_or_null: ?[*]u8,
 ) callconv(.C) bool {
@@ -433,7 +445,8 @@ pub fn isUnique(
     return rcUnique(refcount);
 }
 
-/// Returns true if the given refcount value indicates uniqueness (i.e., equals 1).
+/// Checks if a reference count value indicates a unique reference (equals 1)
+/// Used to determine if in-place mutation is safe for reference-counted data
 pub inline fn rcUnique(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
@@ -448,7 +461,8 @@ pub inline fn rcUnique(refcount: isize) bool {
     }
 }
 
-/// Returns true if the given refcount value is considered constant (i.e., not reference-counted).
+/// Checks if a reference count value indicates a constant (non-decrementable) reference
+/// Constant references (REFCOUNT_MAX_ISIZE) are never freed when decremented
 pub inline fn rcConstant(refcount: isize) bool {
     switch (RC_TYPE) {
         .normal => {
@@ -481,7 +495,7 @@ pub inline fn rcConstant(refcount: isize) bool {
 
 /// Calculates the new capacity for a growing list, based on the old capacity, requested length, and element width.
 ///
-/// Should only be called in cases the list will be growing.
+/// Should only be called when growing a collection.
 ///
 /// `requested_length` should always be greater than old_capacity.
 pub inline fn calculateCapacity(
@@ -515,8 +529,8 @@ pub inline fn calculateCapacity(
     return @max(new_capacity, requested_length);
 }
 
-/// Allocates memory with space for a reference count, for use with C calling convention.
-/// Returns a pointer to the allocated memory.
+/// Allocates memory with space for a reference count, for C compatibility
+/// Thin wrapper around allocateWithRefcount that preserves the C calling convention
 pub fn allocateWithRefcountC(
     data_bytes: usize,
     element_alignment: u32,
@@ -525,8 +539,9 @@ pub fn allocateWithRefcountC(
     return allocateWithRefcount(data_bytes, element_alignment, elements_refcounted);
 }
 
-/// Allocates memory with space for a reference count.
-/// Returns a pointer to the allocated memory.
+/// Allocates memory with space for a reference count
+/// Creates memory layout with refcount stored before the data pointer
+/// Returns a pointer to the data portion, not the allocation start
 pub fn allocateWithRefcount(
     data_bytes: usize,
     element_alignment: u32,
@@ -553,13 +568,15 @@ pub fn allocateWithRefcount(
     return data_ptr;
 }
 
+/// A C-compatible slice structure containing a pointer and length
 pub const CSlice = extern struct {
     pointer: *anyopaque,
     len: usize,
 };
 
-/// Reallocates memory for a list.
-/// Returns a pointer to the reallocated memory.
+/// Reallocates memory for a list to accommodate growth
+/// Preserves existing data and handles refcount placement
+/// Returns a pointer to the data portion, not the allocation start
 pub fn unsafeReallocate(
     source_ptr: [*]u8,
     alignment: u32,
@@ -588,12 +605,14 @@ pub fn unsafeReallocate(
     return new_source;
 }
 
+/// Represents comparison results: equal, greater than, or less than
 pub const Ordering = enum(u8) {
     EQ = 0,
     GT = 1,
     LT = 2,
 };
 
+/// Specifies whether updates should create new data or modify existing data
 pub const UpdateMode = enum(u8) {
     Immutable = 0,
     InPlace = 1,
@@ -613,23 +632,15 @@ test "increfC, static data" {
     try std.testing.expectEqual(mock_rc, REFCOUNT_MAX_ISIZE);
 }
 
-/// Returns a pseudo-random seed for dictionary hashing, based on the address of this function.
-/// Used to avoid predictable hash seeds across runs.
+/// Generates a pseudo-random seed for dictionary hashing
+/// Uses the memory address of this function as the seed value, which:
+/// - Changes between program runs on most OSes due to ASLR
+/// - Prevents all dictionaries from using a predictable seed (avoiding DoS attacks)
+/// - Provides more security than a fixed seed but less than true randomness
+/// - Remains constant within a single program run
 ///
-/// This returns a compilation dependent pseudo random seed for dictionaries.
-/// The seed is the address of this function.
-///
-/// This avoids all roc Dicts using a known seed and being trivial to DOS.
-///
-/// Still not as secure as true random, but a lot better.
-///
-/// This value must not change between calls unless Dict is changed to store the seed on creation.
-///
-/// Note: On esstentially all OSes, this will be affected by ASLR and different each run.
-///
-/// In wasm, the value will be constant to the build as a whole.
-///
-/// Either way, it can not be know by an attacker unless they get access to the executable.
+/// Note: On most operating systems, this will be affected by ASLR and different each run.
+/// In WebAssembly, the value will be constant for the entire build.
 pub fn dictPseudoSeed() callconv(.C) u64 {
     return @as(u64, @intCast(@intFromPtr(&dictPseudoSeed)));
 }
