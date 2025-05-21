@@ -10,7 +10,7 @@ main! = \{} ->
         Err(err) ->
             crash "Error: ${Inspect.to_str(err)}"
 
-#run! : {} => Result {} _
+run! : {} => Result {} [StrErr(Str), NotZeroOrOne]
 run! = \{} ->
     sanity_check_bool = is_zero!(0)?
     err_on_false(sanity_check_bool, "sanity check")?
@@ -38,7 +38,7 @@ run! = \{} ->
 
     Ok({})
 
-is_zero! : U64 => Result Bool _
+is_zero! : U64 => Result Bool [NotZeroOrOne]
 is_zero! = \num ->
     _hey = Effect.id_effectful!(num)
     if num == 0 then
@@ -48,7 +48,7 @@ is_zero! = \num ->
     else
         Err(NotZeroOrOne)
 
-err_on_false : Bool, Str -> Result {} _
+err_on_false : Bool, Str -> Result {} [StrErr(Str)]
 err_on_false = |bool, test_name|
     if bool then
         Ok({})
