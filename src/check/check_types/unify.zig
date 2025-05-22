@@ -727,7 +727,7 @@ const Unifier = struct {
         // Unify fields
         switch (fields_ext) {
             .exactly_the_same => {
-                // Unify exts (these will both be the empty record)
+                // Unify exts
                 try self.unifyGuarded(a_gathered_fields.ext, b_gathered_fields.ext);
 
                 // Unify shared fields
@@ -913,11 +913,10 @@ const Unifier = struct {
         b_fields_range: RecordFieldSafeList.Range,
     ) PartitionedRecordFields {
         // First sort the fields
-        const sort_ctx = RecordField.SortCtx{ .store = ident_store };
         const a_fields = scratch.gathered_fields.rangeToSlice(a_fields_range);
-        std.mem.sort(RecordField, a_fields, sort_ctx, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, a_fields, ident_store, comptime RecordField.sortByNameAsc);
         const b_fields = scratch.gathered_fields.rangeToSlice(b_fields_range);
-        std.mem.sort(RecordField, b_fields, sort_ctx, comptime RecordField.sortByNameAsc);
+        std.mem.sort(RecordField, b_fields, ident_store, comptime RecordField.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_fields_start: RecordFieldSafeList.Idx = @enumFromInt(scratch.only_in_a_fields.len());
@@ -1130,7 +1129,7 @@ const Unifier = struct {
         // Unify tags
         switch (tags_ext) {
             .exactly_the_same => {
-                // Unify exts (these will both be the empty tag_union)
+                // Unify exts
                 try self.unifyGuarded(a_gathered_tags.ext, b_gathered_tags.ext);
 
                 // Unify shared tags
@@ -1316,11 +1315,10 @@ const Unifier = struct {
         b_tags_range: TagSafeList.Range,
     ) PartitionedTags {
         // First sort the tags
-        const sort_ctx = Tag.SortCtx{ .store = ident_store };
         const a_tags = scratch.gathered_tags.rangeToSlice(a_tags_range);
-        std.mem.sort(Tag, a_tags, sort_ctx, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, a_tags, ident_store, comptime Tag.sortByNameAsc);
         const b_tags = scratch.gathered_tags.rangeToSlice(b_tags_range);
-        std.mem.sort(Tag, b_tags, sort_ctx, comptime Tag.sortByNameAsc);
+        std.mem.sort(Tag, b_tags, ident_store, comptime Tag.sortByNameAsc);
 
         // Get the start of index of the new range
         const a_tags_start: TagSafeList.Idx = @enumFromInt(scratch.only_in_a_tags.len());
@@ -2849,6 +2847,41 @@ test "unify - closed record mismatch on diff fields (fail)" {
 
 // unification - structure/structure - records open
 
+test "unify - identical open records" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+
+    const field_shared = env.mkRecordField("x", str);
+
+    const a_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
+    const a = env.types_store.freshFromContent(a_rec_data.content);
+    const b_rec_data = env.mkRecordOpen(&[_]RecordField{field_shared});
+    const b = env.types_store.freshFromContent(b_rec_data.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_record = try TestEnv.getRecordOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_record.fields.len());
+    const b_record_fields = env.types_store.getRecordFieldsSlice(b_record.fields);
+    try std.testing.expectEqual(field_shared.name, b_record_fields.items(.name)[0]);
+    try std.testing.expectEqual(field_shared.var_, b_record_fields.items(.var_)[0]);
+
+    const b_ext = env.types_store.resolveVar(b_record.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(0, env.scratch.fresh_vars.len());
+}
+
 test "unify - open record a extends b" {
     const gpa = std.testing.allocator;
     var env = TestEnv.init(gpa);
@@ -3280,6 +3313,46 @@ test "unify - closed tag_unions with diff args (fail)" {
 }
 
 // unification - structure/structure - tag unions open
+
+test "unify - identical open tag unions" {
+    const gpa = std.testing.allocator;
+    var env = TestEnv.init(gpa);
+    defer env.deinit();
+
+    const str = env.types_store.freshFromContent(Content{ .structure = .str });
+
+    const tag_shared = env.mkTag("Shared", &[_]Var{ str, str });
+
+    const tag_union_a = env.mkTagUnionOpen(&[_]Tag{tag_shared});
+    const a = env.types_store.freshFromContent(tag_union_a.content);
+
+    const tag_union_b = env.mkTagUnionOpen(&[_]Tag{tag_shared});
+    const b = env.types_store.freshFromContent(tag_union_b.content);
+
+    const result = unify(&env.types_store, &env.scratch, a, b);
+
+    try std.testing.expectEqual(.ok, result);
+    try std.testing.expectEqual(Slot{ .redirect = b }, env.types_store.getSlot(a));
+
+    // check that the update var at b is correct
+
+    const b_tag_union = try TestEnv.getTagUnionOrErr(try env.getDescForRootVar(b));
+    try std.testing.expectEqual(1, b_tag_union.tags.len());
+
+    const b_tags = env.types_store.tags.rangeToSlice(b_tag_union.tags);
+    const b_tags_names = b_tags.items(.name);
+    const b_tags_args = b_tags.items(.args);
+    try std.testing.expectEqual(1, b_tags.len);
+    try std.testing.expectEqual(tag_shared.name, b_tags_names[0]);
+    try std.testing.expectEqual(tag_shared.args, b_tags_args[0]);
+
+    const b_ext = env.types_store.resolveVar(b_tag_union.ext).desc.content;
+    try std.testing.expectEqual(Content{ .flex_var = null }, b_ext);
+
+    // check that fresh vars are correct
+
+    try std.testing.expectEqual(0, env.scratch.fresh_vars.len());
+}
 
 test "unify - open tag union a extends b" {
     const gpa = std.testing.allocator;
