@@ -154,21 +154,22 @@ pub const Store = struct {
         self: *Store,
         module_idx: Idx,
         ident_idx: Ident.Idx,
-        problems: *std.ArrayList(problem.Problem),
+        gpa: std.mem.Allocator,
+        problems: *collections.SafeList(problem.Problem),
     ) void {
         const module_index = @intFromEnum(module_idx);
         var module = self.imports.items.items[module_index];
 
         for (module.exposed_idents.items.items) |exposed_ident| {
             if (std.meta.eql(exposed_ident, ident_idx)) {
-                problems.append(Problem.Canonicalize.make(.{ .DuplicateExposes = .{
+                _ = problems.append(gpa, Problem.Canonicalize.make(.{ .DuplicateExposes = .{
                     .first_exposes = exposed_ident,
                     .duplicate_exposes = ident_idx,
-                } })) catch exitOnOom();
+                } }));
                 return;
             }
         }
 
-        _ = module.exposed_idents.append(ident_idx);
+        _ = module.exposed_idents.append(gpa, ident_idx);
     }
 };

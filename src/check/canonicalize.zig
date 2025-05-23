@@ -37,12 +37,14 @@ pub fn canonicalize(
     can_ir: *IR,
     parse_ir: *parse.IR,
 ) void {
-    var env = can_ir.env;
+    const env = can_ir.env;
     const builtin_aliases = &.{};
     const imported_idents = &.{};
-    var scope = Scope.init(&env, builtin_aliases, imported_idents);
+    var scope = Scope.init(env, builtin_aliases, imported_idents);
 
     const file = parse_ir.store.getFile();
+
+    // canonicalize_header_packages();
 
     for (parse_ir.store.statementSlice(file.statements)) |stmt_id| {
         const stmt = parse_ir.store.getStatement(stmt_id);
@@ -51,25 +53,45 @@ pub fn canonicalize(
                 bringImportIntoScope(&import, parse_ir, can_ir, &scope);
             },
             .decl => |decl| {
-                _ = decl;
+                canonicalize_decl(decl, parse_ir, can_ir, &scope);
             },
             .@"var" => |v| {
-                _ = v;
+                // Not valid at top-level
+                _ = can_ir.env.problems.append(can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
+                    .region = v.region.toBase(),
+                    .ty = .@"var",
+                } }));
             },
             .expr => |expr| {
-                _ = expr;
+                // Not valid at top-level
+                _ = can_ir.env.problems.append(can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
+                    .region = expr.region.toBase(),
+                    .ty = .expr,
+                } }));
             },
             .crash => |crash| {
-                _ = crash;
+                // Not valid at top-level
+                _ = can_ir.env.problems.append(can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
+                    .region = crash.region.toBase(),
+                    .ty = .crash,
+                } }));
             },
             .expect => |expect| {
                 _ = expect;
             },
             .@"for" => |f| {
-                _ = f;
+                // Not valid at top-level
+                _ = can_ir.env.problems.append(can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
+                    .region = f.region.toBase(),
+                    .ty = .@"for",
+                } }));
             },
             .@"return" => |return_stmt| {
-                _ = return_stmt;
+                // Not valid at top-level
+                _ = can_ir.env.problems.append(can_ir.env.gpa, Problem.Canonicalize.make(.{ .InvalidTopLevelStatement = .{
+                    .region = return_stmt.region.toBase(),
+                    .ty = .@"return",
+                } }));
             },
             .type_decl => |type_decl| {
                 _ = type_decl;
@@ -78,12 +100,15 @@ pub fn canonicalize(
                 _ = type_anno;
             },
             .malformed => |malformed| {
+                // We won't touch this since it's already a parse error.
                 _ = malformed;
             },
         }
     }
 
     // TODO: implement
+
+    // canonicalize_header_exposes();
 }
 
 fn bringImportIntoScope(
@@ -92,10 +117,6 @@ fn bringImportIntoScope(
     ir: *IR,
     scope: *Scope,
 ) void {
-    _ = import;
-    _ = parse_ir;
-    _ = scope;
-
     const import_name: []u8 = &.{}; // import.module_name_tok;
     const shorthand: []u8 = &.{}; // import.qualifier_tok;
     const region = Region{
@@ -111,43 +132,62 @@ fn bringImportIntoScope(
         } }));
     }
 
-    // for (import.exposing.items.items) |exposed| {
-    //     switch (exposed) {
-    //         .Value => |ident| {
-    //             ir.env.addExposedIdentForModule(ident, res.module_idx);
-    //             _ = scope.levels.introduce(.ident, .{ .scope_name = ident, .ident = ident });
-    //         },
-    //         .Type => |imported_type| {
-    //             const alias = Alias{
-    //                 .name = imported_type.name,
-    //                 .region = ir.env.tag_names.getRegion(imported_type.name),
-    //                 .is_builtin = false,
-    //                 .kind = .ImportedUnknown,
-    //             };
-    //             const alias_idx = ir.aliases.append(alias);
-
-    //             _ = scope.levels.introduce(.alias, .{
-    //                 .scope_name = imported_type.name,
-    //                 .alias = alias_idx,
-    //             });
-    //         },
-    //         .CustomTagUnion => |custom| {
-    //             const alias = Alias{
-    //                 .name = custom.name,
-    //                 .region = ir.env.tag_names.getRegion(custom.name),
-    //                 .is_builtin = false,
-    //                 .kind = .ImportedCustomUnion,
-    //             };
-    //             const alias_idx = ir.aliases.append(alias);
-
-    //             _ = scope.levels.introduce(.alias, .{
-    //                 .scope_name = custom.name,
-    //                 .alias = alias_idx,
-    //             });
-    //             // TODO: add to scope.custom_tags
-    //         },
-    //     }
-    // }
+    const exposesSlice = parse_ir.store.exposedItemSlice(import.exposes);
+    for (exposesSlice) |exposed_idx| {
+        const exposed = parse_ir.store.getExposedItem(exposed_idx);
+        switch (exposed) {
+            .lower_ident => |ident| {
+                if (parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
+                    if (ident.as) |as_| {
+                        const alias = Alias{
+                            .is_builtin = false,
+                            .kind = .imported_unknown,
+                            .name = ident_idx,
+                            .region = parse_ir.tokens.resolve(as_),
+                        };
+                        const alias_idx = ir.aliases.append(ir.env.gpa, alias);
+                        _ = scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
+                    } else {
+                        _ = scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
+                    }
+                }
+            },
+            .upper_ident => |imported_type| {
+                _ = imported_type;
+                // const alias = Alias{
+                //     .name = imported_type.name,
+                //     .region = ir.env.tag_names.getRegion(imported_type.name),
+                //     .is_builtin = false,
+                //     .kind = .ImportedUnknown,
+                // };
+                // const alias_idx = ir.aliases.append(alias);
+                //
+                // _ = scope.levels.introduce(.alias, .{
+                //     .scope_name = imported_type.name,
+                //     .alias = alias_idx,
+                // });
+            },
+            .upper_ident_star => |ident| {
+                _ = ident;
+            },
+            // .CustomTagUnion => |custom| {
+            //     const alias = Alias{
+            //         .name = custom.name,
+            //         .region = ir.env.tag_names.getRegion(custom.name),
+            //         .is_builtin = false,
+            //         .kind = .ImportedCustomUnion,
+            //     };
+            //     const alias_idx = ir.aliases.append(alias);
+            //
+            //     _ = scope.levels.introduce(.alias, .{
+            //         .scope_name = custom.name,
+            //         .alias = alias_idx,
+            //     });
+            //     _ = scope.custom_tags.fetchPutAssumeCapacity(custom.name, alias_idx);
+            //     // TODO: add to scope.custom_tags
+            // },
+        }
+    }
 }
 
 fn bringIngestedFileIntoScope(
@@ -203,6 +243,66 @@ const PendingValueDef = union(enum) {
     pub const List = collections.SafeList(@This());
 };
 
+fn canonicalize_decl(
+    decl: parse.IR.NodeStore.Statement.Decl,
+    parse_ir: *parse.IR,
+    ir: *IR,
+    scope: *Scope,
+) void {
+    _ = canonicalize_expr(decl.body, parse_ir, ir, scope);
+    canonicalize_pattern(decl.pattern, parse_ir, ir, scope);
+}
+
+fn canonicalize_expr(
+    expr_idx: parse.IR.NodeStore.ExprIdx,
+    parse_ir: *parse.IR,
+    ir: *IR,
+    scope: *Scope,
+) ?IR.Expr.Idx {
+    const expr = parse_ir.store.getExpr(expr_idx);
+    switch (expr) {
+        .apply => |e| {
+            _ = canonicalize_expr(e.@"fn", parse_ir, ir, scope);
+            const args_slice = parse_ir.store.exprSlice(e.args);
+            for (args_slice) |arg| {
+                _ = canonicalize_expr(arg, parse_ir, ir, scope);
+            }
+        },
+        .ident => |e| {
+            if (parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
+                switch (scope.levels.lookup(.ident, ident)) {
+                    .InScope => {
+                        return ir.exprs.append(ir.env.gpa, .{ .@"var" = .{
+                            .ident = ident,
+                        } });
+                    },
+                    .NotInScope => {},
+                    .NotPresent => {},
+                }
+            }
+        },
+        .string => |e| {
+            _ = e;
+        },
+        .string_part => |e| {
+            _ = e;
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn canonicalize_pattern(
+    pattern_idx: parse.IR.NodeStore.PatternIdx,
+    parse_ir: *parse.IR,
+    ir: *IR,
+    scope: *Scope,
+) void {
+    _ = pattern_idx;
+    _ = parse_ir;
+    _ = ir;
+    _ = scope;
+}
 // pub(crate) fn canonicalize_defs<'a>(
 //     env: &mut Env<'a>,
 //     mut output: Output,
@@ -473,3 +573,36 @@ const PendingValueDef = union(enum) {
 
 //     (can_defs, output, symbols_introduced, imports_introduced)
 // }
+
+test {
+    try test_can_expr("foo", &.{"foo"}, &.{});
+    try test_can_expr("bar", &.{"foo"}, &.{"Ident not in scope"});
+}
+
+fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages: []const []const u8) !void {
+    var module_env = base.ModuleEnv.init(std.testing.allocator);
+    defer module_env.deinit();
+    var parse_ir = parse.parseExpr(&module_env, source);
+    defer parse_ir.deinit();
+    try std.testing.expectEqualSlices(parse.IR.Diagnostic, &.{}, parse_ir.errors);
+    var can_ir = IR.init(&module_env);
+    defer can_ir.deinit();
+    var ident_idxs = std.ArrayListUnmanaged(Ident.Idx){};
+    defer ident_idxs.deinit(std.testing.allocator);
+    for (idents) |ident| {
+        const id = module_env.idents.insert(std.testing.allocator, Ident.for_text(ident), .{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } });
+        try ident_idxs.append(std.testing.allocator, id);
+    }
+    var scope = Scope.init(&module_env, &.{}, ident_idxs.items);
+    defer scope.deinit();
+
+    _ = canonicalize_expr(.{ .id = parse_ir.root_node_idx }, &parse_ir, &can_ir, &scope);
+    try std.testing.expectEqual(error_messages.len, can_ir.env.problems.items.items.len);
+    for (0..error_messages.len) |i| {
+        var buf = std.ArrayListUnmanaged(u8){};
+        var writer = buf.writer(std.testing.allocator);
+        defer buf.deinit(std.testing.allocator);
+        try can_ir.env.problems.items.items[i].toStr(std.testing.allocator, source, &writer);
+        try std.testing.expectEqualStrings(error_messages[i], buf.items);
+    }
+}

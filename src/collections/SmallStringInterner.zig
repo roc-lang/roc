@@ -89,7 +89,6 @@ pub fn indicesHaveSameText(
 ) bool {
     const first_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(first_idx))];
     const second_string_offset = self.outer_indices.items[@as(usize, @intFromEnum(second_idx))];
-
     return first_string_offset == second_string_offset;
 }
 

@@ -14,7 +14,7 @@ const TypeVar = types.Var;
 const Problem = problem.Problem;
 const Self = @This();
 
-env: base.ModuleEnv,
+env: *base.ModuleEnv,
 aliases: Alias.List,
 imports: ModuleImport.Store,
 defs: Def.List,
@@ -40,13 +40,11 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(gpa: std.mem.Allocator) Self {
-    var env = base.ModuleEnv.init(gpa);
-
+pub fn init(env: *base.ModuleEnv) Self {
     return Self{
         .env = env,
         .aliases = .{},
-        .imports = ModuleImport.Store.init(&.{}, &env.idents, gpa),
+        .imports = ModuleImport.Store.init(&.{}, &env.idents, env.gpa),
         .defs = .{},
         .exprs = .{},
         .exprs_at_regions = .{},
@@ -64,7 +62,6 @@ pub fn init(gpa: std.mem.Allocator) Self {
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *Self) void {
-    self.env.deinit();
     self.aliases.deinit(self.env.gpa);
     self.imports.deinit(self.env.gpa);
     self.defs.deinit(self.env.gpa);
@@ -151,7 +148,6 @@ pub const Expr = union(enum) {
 
     @"var": struct {
         ident: Ident.Idx,
-        type_var: TypeVar,
     },
 
     when: When.Idx,
@@ -295,7 +291,6 @@ pub const Expr = union(enum) {
             .@"var" => |v| {
                 var node = sexpr.Expr.init(gpa, "var");
                 appendIdentChild(&node, gpa, env, "ident", v.ident);
-                appendTypeVarChild(&node, gpa, "type_var", v.type_var);
                 return node;
             },
             .when => |when_idx| {
@@ -1038,7 +1033,7 @@ pub fn toSExprStr(ir: *const Self, module_env: *base.ModuleEnv, writer: std.io.A
     var iter = ir.defs.iterIndices();
     while (iter.next()) |i| {
         const def = ir.defs.get(i);
-        var def_sexpr = def.toSExpr(&ir.env, ir);
+        var def_sexpr = def.toSExpr(ir.env, ir);
         defs_node.appendNodeChild(gpa, &def_sexpr);
     }
     root_node.appendNodeChild(gpa, &defs_node);

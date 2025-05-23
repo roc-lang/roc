@@ -46,10 +46,60 @@ pub const Problem = union(enum) {
             original_ident: Ident.Idx,
             shadow: Ident.Idx,
         },
+        InvalidTopLevelStatement: struct {
+            ty: StatementType,
+            region: Region,
+
+            const StatementType = enum(u8) { @"var", expr, @"for", crash, @"return" };
+        },
 
         /// Make a `Problem` based on a canonicalization problem.
         pub fn make(can_problem: @This()) Problem {
             return Problem{ .canonicalize = can_problem };
+        }
+
+        pub fn toStr(self: @This(), gpa: Allocator, writer: anytype) !void {
+            _ = gpa;
+            // use a stack allocation for printing our tag errors
+            var buf: [1000]u8 = undefined;
+
+            switch (self) {
+                .DuplicateImport => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Duplicate Import", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .DuplicateExposes => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Duplicate Exposes", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .AliasNotInScope => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Alias not in scope", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .IdentNotInScope => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Ident not in scope", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .AliasAlreadyInScope => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Alias already in scope", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .IdentAlreadyInScope => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Ident already in scope", .{});
+                    try writer.writeAll(err_msg);
+                },
+                .InvalidTopLevelStatement => |e| {
+                    _ = e; // TODO: Use this capture in a meaningful way (make sure to update Canonicalize tests)
+                    const err_msg = try std.fmt.bufPrint(&buf, "Invalid top level statement", .{});
+                    try writer.writeAll(err_msg);
+                },
+            }
         }
     };
 
@@ -91,8 +141,7 @@ pub const Problem = union(enum) {
                 try writer.writeAll(err_msg);
             },
             .canonicalize => |err| {
-                const err_msg = try std.fmt.bufPrint(&buf, "CAN: {?}", .{err});
-                try writer.writeAll(err_msg);
+                try err.toStr(gpa, writer);
             },
             .compiler => |err| {
                 const err_msg = try std.fmt.bufPrint(&buf, "COMPILER: {?}", .{err});
