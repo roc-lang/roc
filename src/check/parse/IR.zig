@@ -181,6 +181,10 @@ pub const Region = struct {
     pub fn spanAcross(self: Region, other: Region) Region {
         return .{ .start = self.start, .end = other.end };
     }
+
+    pub fn toBase(self: Region) base.Region {
+        return .{ .start = base.Region.Position{ .offset = self.start }, .end = base.Region.Position{ .offset = self.end } };
+    }
 };
 
 /// Unstructured information about a Node.  These
@@ -2478,61 +2482,71 @@ pub const NodeStore = struct {
 
     /// Represents a statement.  Not all statements are valid in all positions.
     pub const Statement = union(enum) {
-        decl: struct {
+        decl: Decl,
+        @"var": Var,
+        expr: Statement.Expr,
+        crash: Crash,
+        expect: Expect,
+        @"for": For,
+        @"return": Return,
+        import: Import,
+        type_decl: TypeDecl,
+        type_anno: Statement.TypeAnno,
+        malformed: Malformed,
+
+        pub const Decl = struct {
             pattern: PatternIdx,
             body: ExprIdx,
             region: Region,
-        },
-        @"var": struct {
+        };
+        pub const Var = struct {
             name: TokenIdx,
             body: ExprIdx,
             region: Region,
-        },
-        expr: struct {
+        };
+        pub const Expr = struct {
             expr: ExprIdx,
             region: Region,
-        },
-        crash: struct {
+        };
+        pub const Crash = struct {
             expr: ExprIdx,
             region: Region,
-        },
-        expect: struct {
+        };
+        pub const Expect = struct {
             body: ExprIdx,
             region: Region,
-        },
-        @"for": struct {
+        };
+        pub const For = struct {
             patt: PatternIdx,
             expr: ExprIdx,
             body: ExprIdx,
             region: Region,
-        },
-        @"return": struct {
+        };
+        pub const Return = struct {
             expr: ExprIdx,
             region: Region,
-        },
-        import: Import,
-        type_decl: struct {
-            header: TypeHeaderIdx,
-            anno: TypeAnnoIdx,
-            where: ?CollectionIdx,
-            region: Region,
-        },
-        type_anno: struct {
-            name: TokenIdx,
-            anno: TypeAnnoIdx,
-            where: ?CollectionIdx,
-            region: Region,
-        },
-        malformed: struct {
-            reason: Diagnostic.Tag,
-            region: Region,
-        },
-
+        };
         pub const Import = struct {
             module_name_tok: TokenIdx,
             qualifier_tok: ?TokenIdx,
             alias_tok: ?TokenIdx,
             exposes: ExposedItemSpan,
+            region: Region,
+        };
+        const TypeDecl = struct {
+            header: TypeHeaderIdx,
+            anno: TypeAnnoIdx,
+            where: ?CollectionIdx,
+            region: Region,
+        };
+        const TypeAnno = struct {
+            name: TokenIdx,
+            anno: TypeAnnoIdx,
+            where: ?CollectionIdx,
+            region: Region,
+        };
+        const Malformed = struct {
+            reason: Diagnostic.Tag,
             region: Region,
         };
 

@@ -32,12 +32,14 @@ pub fn checkTypes(
 test "checkTypes - basic type unification" {
     const gpa = testing.allocator;
 
+    var module_env = ModuleEnv.init(gpa);
+    defer module_env.deinit();
     var can_irs = ModuleWork(can.IR).Store.fromCanIrs(
         gpa,
         &.{ModuleWork(can.IR){
             .package_idx = @enumFromInt(1),
             .module_idx = @enumFromInt(0),
-            .work = can.IR.init(gpa),
+            .work = can.IR.init(&module_env),
         }},
     );
     defer can_irs.deinit(gpa);
@@ -51,7 +53,7 @@ test "checkTypes - basic type unification" {
     var scratch = unify.Scratch.init(gpa);
     defer scratch.deinit();
 
-    var env = &can_irs.getWork(@enumFromInt(0)).env;
+    var env = can_irs.getWork(@enumFromInt(0)).env;
     const resolve_ir = resolve_irs.getWork(@enumFromInt(0));
     const type_store = type_stores.getWork(@enumFromInt(0));
 

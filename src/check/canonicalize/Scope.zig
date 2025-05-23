@@ -51,7 +51,7 @@ pub fn init(
 /// Deinitialize a scope's memory
 pub fn deinit(self: *Self) void {
     self.custom_tags.deinit(self.env.gpa);
-    self.levels.deinit(self.env.gpa);
+    self.levels.deinit();
 }
 
 /// Generates a unique ident like "1" or "5" in the home module.
@@ -72,17 +72,9 @@ pub fn genUnique(self: *Self) Ident.Idx {
 /// todo
 pub fn Contains(item_kind: Level.ItemKind) type {
     return union(enum) {
-        InScope: Level.Name(item_kind),
-        NotInScope: Level.Name(item_kind),
+        InScope: Level.ItemName(item_kind),
+        NotInScope: Level.ItemName(item_kind),
         NotPresent,
-    };
-}
-
-/// todo
-pub fn LookupResult(item_kind: Level.ItemKind) type {
-    return union(enum) {
-        InScope: Level.Name(item_kind),
-        Problem: Problem,
     };
 }
 
@@ -90,6 +82,7 @@ pub fn LookupResult(item_kind: Level.ItemKind) type {
 pub const Level = struct {
     idents: std.ArrayListUnmanaged(IdentInScope) = .{},
     aliases: std.ArrayListUnmanaged(AliasInScope) = .{},
+
     /// todo
     pub const ItemKind = enum { ident, alias };
     /// todo
@@ -115,6 +108,17 @@ pub const Level = struct {
             .alias => &level.aliases,
         };
     }
+
+    pub fn append(level: *Level, gpa: std.mem.Allocator, comptime item_kind: ItemKind, item: Item(item_kind)) void {
+        switch (item_kind) {
+            .ident => {
+                level.idents.append(gpa, item) catch |e| exitOnOom(e);
+            },
+            .alias => {
+                level.aliases.append(gpa, item) catch |e| exitOnOom(e);
+            },
+        }
+    }
     /// todo
     pub const IdentInScope = struct {
         scope_name: Ident.Idx,
@@ -138,6 +142,10 @@ pub const Levels = struct {
     levels: std.ArrayListUnmanaged(Level) = .{},
     /// todo
     pub fn deinit(self: *Levels) void {
+        for (0..self.levels.items.len) |i| {
+            var level = &self.levels.items[i];
+            level.deinit(self.env.gpa);
+        }
         self.levels.deinit(self.env.gpa);
     }
     /// todo
@@ -178,34 +186,33 @@ pub const Levels = struct {
         comptime item_kind: Level.ItemKind,
         name: Level.ItemName(item_kind),
     ) Contains(item_kind) {
-        if (self.contains(name)) |item_in_scope| {
-            return Contains{ .InScope = item_in_scope };
+        if (self.contains(item_kind, name)) |_| {
+            return Contains(item_kind){ .InScope = name };
         }
 
-        const problem = undefined;
-        switch (item_kind) {
-            .ident => {
-                const all_idents_in_scope = self.levels.iter(.ident);
-                const options = self.env.ident_ids_for_slicing.extendFromIter(all_idents_in_scope);
+        const problem = switch (item_kind) {
+            .ident => blk: {
+                var all_idents_in_scope = self.iter(.ident);
+                const options = self.env.ident_ids_for_slicing.extendFromIter(self.env.gpa, &all_idents_in_scope);
 
-                problem = Problem.Canonicalize.make(.{ .IdentNotInScope = .{
+                break :blk Problem.Canonicalize.make(.{ .IdentNotInScope = .{
                     .ident = name,
                     .suggestions = options,
                 } });
             },
-            .alias => {
-                const all_aliases_in_scope = self.levels.iter(.alias);
-                const options = self.env.ident_ids_for_slicing.extendFromIter(all_aliases_in_scope);
+            .alias => blk: {
+                var all_aliases_in_scope = self.levels.iter(.alias);
+                const options = self.env.ident_ids_for_slicing.extendFromIter(self.env.gpa, &all_aliases_in_scope);
 
-                problem = Problem.Canonicalize.make(.{ .AliasNotInScope = .{
+                break :blk Problem.Canonicalize.make(.{ .AliasNotInScope = .{
                     .name = name,
                     .suggestions = options,
                 } });
             },
-        }
+        };
 
-        self.env.problems.append(problem) catch |err| exitOnOom(err);
-        return LookupResult{ .Problem = problem };
+        _ = self.env.problems.append(self.env.gpa, problem);
+        return Contains(item_kind).NotPresent;
     }
     /// todo
     pub fn introduce(
@@ -230,8 +237,7 @@ pub const Levels = struct {
             return scope_item;
         }
 
-        var last_level = self.levels.getLast();
-        last_level.items(item_kind).append(self.env.gpa, scope_item) catch |err| exitOnOom(err);
+        self.levels.items[self.levels.items.len -| 1].append(self.env.gpa, item_kind, scope_item);
 
         return scope_item;
     }
@@ -257,7 +263,7 @@ pub const Levels = struct {
 
                 const levels = scope_levels.levels.items;
 
-                var level_index = levels.len -| 1;
+                var level_index = levels.len - 1;
                 while (level_index > 0 and levels[level_index].items(item_kind).items.len == 0) {
                     level_index -= 1;
                 }
@@ -282,13 +288,13 @@ pub const Levels = struct {
                 var level = levels[self.level_index];
                 const next_item = level.items(item_kind).items[self.prior_item_index - 1];
 
-                self.prior_item_index -= 1;
+                self.prior_item_index -|= 1;
 
                 if (self.prior_item_index == 0) {
                     self.level_index -|= 1;
 
                     while (self.level_index > 0 and levels[self.level_index].items(item_kind).items.len == 0) {
-                        self.level_index -= 1;
+                        self.level_index -|= 1;
                     }
                 }
 

@@ -105,9 +105,10 @@ fn loadOrCompileCanIr(
     const cache_lookup = cache.getCanIrForHashAndRocVersion(&hash_of_contents, current_roc_version, fs, gpa);
 
     return if (cache_lookup) |ir| ir else blk: {
-        var can_ir = can.IR.init(gpa);
-        var parse_ir = parse.parse(&can_ir.env, contents);
+        var module_env = base.ModuleEnv.init(gpa);
+        var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
+        var can_ir = can.IR.init(&module_env);
         can.canonicalize(&can_ir, &parse_ir);
 
         break :blk can_ir;
