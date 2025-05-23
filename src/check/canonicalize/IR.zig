@@ -14,20 +14,7 @@ const TypeVar = types.Var;
 const Problem = problem.Problem;
 const Self = @This();
 
-env: *base.ModuleEnv,
-aliases: Alias.List,
-imports: ModuleImport.Store,
-defs: Def.List,
-exprs: Expr.List,
-exprs_at_regions: ExprAtRegion.List,
-typed_exprs_at_regions: TypedExprAtRegion.List,
-if_branches: IfBranch.List,
-when_branches: WhenBranch.List,
-patterns: Pattern.List,
-patterns_at_regions: PatternAtRegion.List,
-typed_patterns_at_regions: TypedPatternAtRegion.List,
-type_indices: collections.SafeList(TypeVar),
-// type_var_names: Ident.Store,
+store: NodeStore,
 ingested_files: IngestedFile.List,
 
 /// Initialize the IR for a module's canonicalization info.
@@ -40,40 +27,17 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(env: *base.ModuleEnv) Self {
+pub fn init(gpa: std.mem.Allocator) Self {
     return Self{
-        .env = env,
-        .aliases = .{},
-        .imports = ModuleImport.Store.init(&.{}, &env.idents, env.gpa),
-        .defs = .{},
-        .exprs = .{},
-        .exprs_at_regions = .{},
-        .typed_exprs_at_regions = .{},
-        .if_branches = .{},
-        .when_branches = .{},
-        .patterns = .{},
-        .patterns_at_regions = .{},
-        .typed_patterns_at_regions = .{},
-        .type_indices = .{},
+        .store = NodeStore.init(gpa),
         // .type_var_names = Ident.Store.init(gpa),
         .ingested_files = .{},
     };
 }
 
 /// Deinit the IR's memory.
-pub fn deinit(self: *Self) void {
-    self.aliases.deinit(self.env.gpa);
-    self.imports.deinit(self.env.gpa);
-    self.defs.deinit(self.env.gpa);
-    self.exprs.deinit(self.env.gpa);
-    self.exprs_at_regions.deinit(self.env.gpa);
-    self.typed_exprs_at_regions.deinit(self.env.gpa);
-    self.if_branches.deinit(self.env.gpa);
-    self.when_branches.deinit(self.env.gpa);
-    self.patterns.deinit(self.env.gpa);
-    self.patterns_at_regions.deinit(self.env.gpa);
-    self.typed_patterns_at_regions.deinit(self.env.gpa);
-    self.type_indices.deinit(self.env.gpa);
+pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+    self.store.deinit(gpa);
     // self.type_var_names.deinit(self.env.gpa);
     self.ingested_files.deinit(self.env.gpa);
 }
@@ -92,6 +56,226 @@ fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, env: *const base.
     ident_node.appendStringChild(gpa, ident_text);
     node.appendNodeChild(gpa, &ident_node);
 }
+
+test {
+    const testing = std.testing;
+    try testing.expectEqual(24, @sizeOf(Node));
+}
+
+/// A single meaningful node in the Abstract Syntax Tree.
+/// Should always be inserted and fetched from a Node Store.
+///
+/// The Tag represents what type of Node it is, and
+/// therefore how it's data and main_token fields should
+/// be interpreted.
+pub const Node = struct {
+    data_1: u32,
+    data_2: u32,
+    data_3: u32,
+    region: Region,
+    tag: Tag,
+
+    pub const List = collections.SafeMultiList(Node);
+
+    /// Internal representation for where a node is stored
+    /// in the tree.
+    pub const Idx = List.Idx;
+
+    /// This is the tag associated with a raw Node in the list
+    pub const Tag = enum {
+        // Statements
+        statement_expr,
+        statement_decl,
+        statement_var,
+        statement_for,
+        statement_expect,
+        statement_return,
+        statement_import,
+        statement_type_decl,
+        statement_type_anno,
+        statement_crash,
+        // Expressions
+        expr_var,
+        expr_tuple,
+        expr_list,
+        expr_record,
+        expr_field_access,
+        expr_static_dispatch,
+        expr_apply,
+        expr_string,
+        expr_string_part,
+        expr_int,
+        expr_float,
+        expr_tag,
+        expr_lambda,
+        expr_record_update,
+        expr_bin_op,
+        expr_unary,
+        expr_suffix_single_question,
+        expr_if_then_else,
+        expr_match,
+        expr_dbg,
+        expr_block,
+        expr_ellipsis,
+        expr_record_builder,
+        // Type Header
+        type_decl_header,
+        // Type Annotation
+        type_anno_apply,
+        type_anno_var,
+        type_anno_ty,
+        type_anno_underscore,
+        type_anno_mod_ty,
+        type_anno_union,
+        type_anno_tuple,
+        type_anno_record,
+        type_anno_fn,
+        type_anno_parens,
+    };
+};
+
+pub const NodeStore = struct {
+    gpa: std.mem.Allocator,
+    nodes: Node.List,
+    extra_data: std.ArrayListUnmanaged(u32),
+    scratch_statements: Scratch(Statement.Idx),
+    scratch_exprs: Scratch(Expr.Idx),
+    scratch_record_fields: Scratch(RecordField.Idx),
+    scratch_when_branches: Scratch(WhenBranch.Idx),
+    scratch_where_clauses: Scratch(WhereClause.Idx),
+    scratch_patterns: Scratch(Pattern.Idx),
+    scratch_pattern_record_fields: Scratch(PatternRecordField.Idx),
+    scratch_type_annos: Scratch(TypeAnno.Idx),
+    scratch_anno_record_fields: Scratch(AnnoRecordField.Idx),
+    scratch_exposed_items: Scratch(ExposedItem.Idx),
+
+    pub fn initCapacity(gpa: std.mem.Allocator) NodeStore {
+        return .{
+            .gpa = gpa,
+            .nodes = Node.List.initCapacity(gpa, capacity),
+            .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
+            .scratch_statements = Scratch(StatementIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_exprs = Scratch(ExprIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_patterns = Scratch(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_record_fields = Scratch(RecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_pattern_record_fields = Scratch(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_when_branches = Scratch(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_type_annos = Scratch(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_anno_record_fields = Scratch(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_exposed_items = Scratch(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_where_clauses = Scratch(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+        };
+    }
+
+    pub fn deinit(store: *NodeStore) void {
+        self.nodes.deinit(store.gpa);
+        self.extra_data.deinit(store.gpa);
+        self.scratch_statements.deinit(store.gpa);
+        self.scratch_exprs.deinit(store.gpa);
+        self.scratch_patterns.deinit(store.gpa);
+        self.scratch_record_fields.deinit(store.gpa);
+        self.scratch_pattern_record_fields.deinit(store.gpa);
+        self.scratch_when_branches.deinit(store.gpa);
+        self.scratch_type_annos.deinit(store.gpa);
+        self.scratch_anno_record_fields.deinit(store.gpa);
+        self.scratch_exposed_items.deinit(store.gpa);
+        self.scratch_where_clauses.deinit(store.gpa);
+    }
+
+    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {}
+    pub fn addExpr(store: *NodeStore, expr: Expr) Expr.Idx {}
+    pub fn addRecordField(store: *NodeStore, recordField: RecordField) RecordField.Idx {}
+    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {}
+    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {}
+    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {}
+    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {}
+    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {}
+    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordFiled.Idx {}
+    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {}
+
+    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {}
+    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {}
+    pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {}
+    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {}
+    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {}
+    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {}
+    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {}
+    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {}
+    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordFiled {}
+    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {}
+
+    pub const DataSpan = struct {
+        start: u32,
+        len: u32,
+    };
+
+    pub const ExprSpan = struct { span: DataSpan };
+    pub const StatementSpan = struct { span: DataSpan };
+    pub const PatternSpan = struct { span: DataSpan };
+    pub const PatternRecordFieldSpan = struct { span: DataSpan };
+    pub const RecordFieldSpan = struct { span: DataSpan };
+    pub const WhenBranchSpan = struct { span: DataSpan };
+    pub const TypeAnnoSpan = struct { span: DataSpan };
+    pub const AnnoRecordFieldSpan = struct { span: DataSpan };
+    pub const ExposedItemSpan = struct { span: DataSpan };
+    pub const WhereClauseSpan = struct { span: DataSpan };
+
+    pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
+        return @as([]T, @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]));
+    }
+
+    pub fn Scratch(comptime T: type) type {
+        return struct {
+            items: std.ArrayListUnmanaged(T),
+
+            fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+                return .{
+                    .items = std.ArrayListUnmanaged(T).initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64)),
+                };
+            }
+
+            const Self = @This();
+
+            /// Returns the start position for a new Span of whereClauseIdxs in scratch
+            pub fn top(self: *Self) u32 {
+                return @as(u32, @intCast(store.scratch_where_clauses.items.len));
+            }
+
+            /// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
+            pub fn append(self: *Self, idx: WhereClauseIdx) void {
+                store.scratch_where_clauses.append(store.gpa, idx) catch |err| exitOnOom(err);
+            }
+
+            /// Creates a new span starting at start.  Moves the items from scratch
+            /// to extra_data as appropriate.
+            pub fn spanFromStart(self: *Self, start: u32, gpa: Allocator, data: *std.ArrayListUnmanaged(u32)) WhereClauseSpan {
+                const end = self.items.len;
+                defer self.items.shrinkRetainingCapacity(start);
+                var i = @as(usize, @intCast(start));
+                const data_start = @as(u32, @intCast(data.items.len));
+                while (i < end) {
+                    data.append(gpa, self.items[i].id) catch |err| exitOnOom(err);
+                    i += 1;
+                }
+                return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
+            }
+
+            /// Clears any WhereClauseIds added to scratch from start until the end.
+            /// Should be used wherever the scratch items will not be used,
+            /// as in when parsing fails.
+            pub fn clearFrom(self: *Self, start: u32) void {
+                store.scratch_where_clauses.shrinkRetainingCapacity(start);
+            }
+        };
+    }
+};
+
+pub const Statement = union(enum) {
+    decl: Decl,
+
+    pub const Decl = struct {};
+    pub const Idx = enum(u32) { _ };
+};
 
 /// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
