@@ -5,6 +5,9 @@ const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 const Alias = @import("./Alias.zig");
 const sexpr = @import("../../base/sexpr.zig"); // Added import
+const Scratch = @import("../../base/Scratch.zig").Scratch;
+const DataSpan = @import("../../base/DataSpan.zig");
+const exitOnOom = collections.utils.exitOnOom;
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -149,133 +152,267 @@ pub const NodeStore = struct {
     scratch_anno_record_fields: Scratch(AnnoRecordField.Idx),
     scratch_exposed_items: Scratch(ExposedItem.Idx),
 
-    pub fn initCapacity(gpa: std.mem.Allocator) NodeStore {
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
         return .{
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
             .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-            .scratch_statements = Scratch(StatementIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_exprs = Scratch(ExprIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_patterns = Scratch(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_record_fields = Scratch(RecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_pattern_record_fields = Scratch(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_when_branches = Scratch(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_type_annos = Scratch(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_anno_record_fields = Scratch(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_exposed_items = Scratch(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_where_clauses = Scratch(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_statements = Scratch(Statement.Idx).init(gpa),
+            .scratch_exprs = Scratch(Expr.Idx).init(gpa),
+            .scratch_patterns = Scratch(Pattern.Idx).init(gpa),
+            .scratch_record_fields = Scratch(RecordField.Idx).init(gpa),
+            .scratch_pattern_record_fields = Scratch(PatternRecordField.Idx).init(gpa),
+            .scratch_when_branches = Scratch(WhenBranch.Idx).init(gpa),
+            .scratch_type_annos = Scratch(TypeAnno.Idx).init(gpa),
+            .scratch_anno_record_fields = Scratch(AnnoRecordField.Idx).init(gpa),
+            .scratch_exposed_items = Scratch(ExposedItem.Idx).init(gpa),
+            .scratch_where_clauses = Scratch(WhereClause.Idx).init(gpa),
         };
     }
 
     pub fn deinit(store: *NodeStore) void {
-        self.nodes.deinit(store.gpa);
-        self.extra_data.deinit(store.gpa);
-        self.scratch_statements.deinit(store.gpa);
-        self.scratch_exprs.deinit(store.gpa);
-        self.scratch_patterns.deinit(store.gpa);
-        self.scratch_record_fields.deinit(store.gpa);
-        self.scratch_pattern_record_fields.deinit(store.gpa);
-        self.scratch_when_branches.deinit(store.gpa);
-        self.scratch_type_annos.deinit(store.gpa);
-        self.scratch_anno_record_fields.deinit(store.gpa);
-        self.scratch_exposed_items.deinit(store.gpa);
-        self.scratch_where_clauses.deinit(store.gpa);
+        store.nodes.deinit(store.gpa);
+        store.extra_data.deinit(store.gpa);
+        store.scratch_statements.deinit(store.gpa);
+        store.scratch_exprs.deinit(store.gpa);
+        store.scratch_patterns.deinit(store.gpa);
+        store.scratch_record_fields.deinit(store.gpa);
+        store.scratch_pattern_record_fields.deinit(store.gpa);
+        store.scratch_when_branches.deinit(store.gpa);
+        store.scratch_type_annos.deinit(store.gpa);
+        store.scratch_anno_record_fields.deinit(store.gpa);
+        store.scratch_exposed_items.deinit(store.gpa);
+        store.scratch_where_clauses.deinit(store.gpa);
     }
 
-    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {}
-    pub fn addExpr(store: *NodeStore, expr: Expr) Expr.Idx {}
-    pub fn addRecordField(store: *NodeStore, recordField: RecordField) RecordField.Idx {}
-    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {}
-    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {}
-    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {}
-    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {}
-    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {}
-    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordFiled.Idx {}
-    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {}
+    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {
+        _ = store;
+        _ = statement;
 
-    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {}
-    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {}
-    pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {}
-    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {}
-    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {}
-    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {}
-    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {}
-    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {}
-    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordFiled {}
-    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {}
+        return @enumFromInt(0);
+    }
+    pub fn addExpr(store: *NodeStore, expr: Expr) Expr.Idx {
+        _ = store;
+        _ = expr;
 
-    pub const DataSpan = struct {
-        start: u32,
-        len: u32,
-    };
+        return @enumFromInt(0);
+    }
+    pub fn addRecordField(store: *NodeStore, recordField: RecordField) RecordField.Idx {
+        _ = store;
+        _ = recordField;
 
-    pub const ExprSpan = struct { span: DataSpan };
-    pub const StatementSpan = struct { span: DataSpan };
-    pub const PatternSpan = struct { span: DataSpan };
-    pub const PatternRecordFieldSpan = struct { span: DataSpan };
-    pub const RecordFieldSpan = struct { span: DataSpan };
-    pub const WhenBranchSpan = struct { span: DataSpan };
-    pub const TypeAnnoSpan = struct { span: DataSpan };
-    pub const AnnoRecordFieldSpan = struct { span: DataSpan };
-    pub const ExposedItemSpan = struct { span: DataSpan };
-    pub const WhereClauseSpan = struct { span: DataSpan };
+        return @enumFromInt(0);
+    }
+    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {
+        _ = store;
+        _ = whenBranch;
+
+        return @enumFromInt(0);
+    }
+    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {
+        _ = store;
+        _ = whereClause;
+
+        return @enumFromInt(0);
+    }
+    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {
+        _ = store;
+        _ = pattern;
+
+        return @enumFromInt(0);
+    }
+    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {
+        _ = store;
+        _ = patternRecordField;
+
+        return @enumFromInt(0);
+    }
+    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {
+        _ = store;
+        _ = typeAnno;
+
+        return @enumFromInt(0);
+    }
+    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordField.Idx {
+        _ = store;
+        _ = annoRecordField;
+
+        return @enumFromInt(0);
+    }
+    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {
+        _ = store;
+        _ = exposedItem;
+
+        return @enumFromInt(0);
+    }
+
+    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {
+        _ = store;
+        _ = statement;
+
+        return Statement{};
+    }
+    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {
+        _ = store;
+        _ = expr;
+
+        return Expr{};
+    }
+    pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {
+        _ = store;
+        _ = recordField;
+
+        return RecordField{};
+    }
+    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {
+        _ = store;
+        _ = whenBranch;
+
+        return WhenBranch{};
+    }
+    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {
+        _ = store;
+        _ = whereClause;
+
+        return WhereClause{};
+    }
+    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {
+        _ = store;
+        _ = pattern;
+
+        return Pattern{};
+    }
+    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {
+        _ = store;
+        _ = patternRecordField;
+
+        return PatternRecordField{};
+    }
+    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {
+        _ = store;
+        _ = typeAnno;
+
+        return TypeAnno{};
+    }
+    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordField {
+        _ = store;
+        _ = annoRecordField;
+
+        return AnnoRecordField{};
+    }
+    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {
+        _ = store;
+        _ = exposedItem;
+
+        return ExposedItem{};
+    }
 
     pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
         return @as([]T, @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]));
     }
-
-    pub fn Scratch(comptime T: type) type {
-        return struct {
-            items: std.ArrayListUnmanaged(T),
-
-            fn init(gpa: std.mem.Allocator, capacity: usize) Self {
-                return .{
-                    .items = std.ArrayListUnmanaged(T).initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64)),
-                };
-            }
-
-            const Self = @This();
-
-            /// Returns the start position for a new Span of whereClauseIdxs in scratch
-            pub fn top(self: *Self) u32 {
-                return @as(u32, @intCast(store.scratch_where_clauses.items.len));
-            }
-
-            /// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
-            pub fn append(self: *Self, idx: WhereClauseIdx) void {
-                store.scratch_where_clauses.append(store.gpa, idx) catch |err| exitOnOom(err);
-            }
-
-            /// Creates a new span starting at start.  Moves the items from scratch
-            /// to extra_data as appropriate.
-            pub fn spanFromStart(self: *Self, start: u32, gpa: Allocator, data: *std.ArrayListUnmanaged(u32)) WhereClauseSpan {
-                const end = self.items.len;
-                defer self.items.shrinkRetainingCapacity(start);
-                var i = @as(usize, @intCast(start));
-                const data_start = @as(u32, @intCast(data.items.len));
-                while (i < end) {
-                    data.append(gpa, self.items[i].id) catch |err| exitOnOom(err);
-                    i += 1;
-                }
-                return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
-            }
-
-            /// Clears any WhereClauseIds added to scratch from start until the end.
-            /// Should be used wherever the scratch items will not be used,
-            /// as in when parsing fails.
-            pub fn clearFrom(self: *Self, start: u32) void {
-                store.scratch_where_clauses.shrinkRetainingCapacity(start);
-            }
-        };
-    }
 };
 
+pub const ExprSpan = struct { span: DataSpan };
+pub const PatternSpan = struct { span: DataSpan };
+pub const PatternRecordFieldSpan = struct { span: DataSpan };
+pub const RecordFieldSpan = struct { span: DataSpan };
+pub const WhenBranchSpan = struct { span: DataSpan };
+pub const TypeAnnoSpan = struct { span: DataSpan };
+pub const AnnoRecordFieldSpan = struct { span: DataSpan };
+pub const ExposedItemSpan = struct { span: DataSpan };
+pub const WhereClauseSpan = struct { span: DataSpan };
+
+/// A single statement - either at the top-level or within a block.
 pub const Statement = union(enum) {
+    /// A simple immutable declaration
     decl: Decl,
+    /// A rebindable declaration using the "var" keyword
+    /// Not valid at the top level of a module
+    @"var": Var,
+    /// The "crash" keyword
+    /// Not valid at the top level of a module
+    crash: Crash,
+    /// Just an expression - usually the return value for a block
+    /// Not valid at the top level of a module
+    expr: ExprStmt,
+    /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
+    expect: Expect,
+    /// A block of code that will be ran multiple times for each item in a list.
+    /// Not valid at the top level of a module
+    @"for": For,
+    /// A early return of the enclosing function.
+    /// Not valid at the top level of a module
+    @"return": Return,
+    /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
+    /// Only valid at the top level of a module
+    import: Import,
+    /// A declaration of a new type - whether an alias or a new nominal custom type
+    /// Only valid at the top level of a module
+    type_decl: TypeDecl,
+    /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
+    type_anno: Statement.TypeAnno,
 
-    pub const Decl = struct {};
+    pub const Decl = struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+    };
+    pub const Var = struct {
+        ident: Ident.Idx,
+        expr: Expr.Idx,
+    };
+    pub const Crash = struct {
+        msg: Expr.Idx,
+    };
+    pub const ExprStmt = struct {
+        expr: Expr.Idx,
+        region: Region,
+    };
+    pub const Expect = struct {
+        body: Expr.Idx,
+        region: Region,
+    };
+    pub const For = struct {
+        patt: Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+        region: Region,
+    };
+    pub const Return = struct {
+        expr: Expr.Idx,
+        region: Region,
+    };
+    pub const Import = struct {
+        module_name_tok: Ident.Idx,
+        qualifier_tok: ?Ident.Idx,
+        alias_tok: ?Ident.Idx,
+        exposes: ExposedItemSpan,
+        region: Region,
+    };
+    const TypeDecl = struct {
+        header: TypeHeader.Idx,
+        anno: Self.TypeAnno.Idx,
+        where: ?WhereClauseSpan,
+        region: Region,
+    };
+    const TypeAnno = struct {
+        name: Ident.Idx,
+        anno: Self.TypeAnno.Idx,
+        where: ?WhereClauseSpan,
+        region: Region,
+    };
+
     pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
 };
+
+pub const RecordField = struct {};
+
+const WhereClause = struct {};
+const PatternRecordField = struct {};
+const TypeAnno = struct {};
+const TypeHeader = struct {};
+const AnnoRecordField = struct {};
+const ExposedItem = struct {};
 
 /// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
@@ -330,22 +467,12 @@ pub const Expr = union(enum) {
         elems: ExprAtRegion.Range,
     },
 
-    @"var": struct {
-        ident: Ident.Idx,
-    },
-
     when: When.Idx,
     @"if": struct {
         cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Range,
         final_else: ExprAtRegion.Idx,
-    },
-
-    let: struct {
-        defs: Def.Range,
-        cont: ExprAtRegion.Idx,
-        // cycle_mark: IllegalCycleMark,
     },
 
     /// This is *only* for calling functions, not for tag application.
@@ -368,12 +495,6 @@ pub const Expr = union(enum) {
 
     /// Empty record constant
     empty_record,
-
-    /// The "crash" keyword
-    crash: struct {
-        msg: ExprAtRegion.Idx,
-        ret_var: TypeVar,
-    },
 
     /// Look up exactly one field on a record, e.g. (expr).foo.
     record_access: struct {
@@ -1281,7 +1402,7 @@ pub const FlatType = union(enum) {
     EffectfulFunc,
     Record: struct {
         whole_var: TypeVar,
-        fields: RecordField.Range,
+        fields: FlatType.RecordField.Range,
     },
     // TagUnion: struct {
     //     union_tags: UnionTags,
