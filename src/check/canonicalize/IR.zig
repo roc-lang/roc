@@ -32,7 +32,15 @@ ingested_files: IngestedFile.List,
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
 pub fn init(gpa: std.mem.Allocator) Self {
     return Self{
-        .store = NodeStore.init(gpa),
+        .store = NodeStore.initCapacity(gpa, 1000), // TODO: Figure out what this should be
+        // .type_var_names = Ident.Store.init(gpa),
+        .ingested_files = .{},
+    };
+}
+
+pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) Self {
+    return Self{
+        .store = NodeStore.initCapacity(gpa, capacity), // TODO: Figure out what this should be
         // .type_var_names = Ident.Store.init(gpa),
         .ingested_files = .{},
     };
@@ -40,9 +48,9 @@ pub fn init(gpa: std.mem.Allocator) Self {
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
-    self.store.deinit(gpa);
+    self.store.deinit();
     // self.type_var_names.deinit(self.env.gpa);
-    self.ingested_files.deinit(self.env.gpa);
+    self.ingested_files.deinit(gpa);
 }
 
 // Helper to add type index info
@@ -312,92 +320,82 @@ pub const NodeStore = struct {
     }
 };
 
-pub const ExprSpan = struct { span: DataSpan };
-pub const PatternSpan = struct { span: DataSpan };
-pub const PatternRecordFieldSpan = struct { span: DataSpan };
-pub const RecordFieldSpan = struct { span: DataSpan };
-pub const WhenBranchSpan = struct { span: DataSpan };
-pub const TypeAnnoSpan = struct { span: DataSpan };
-pub const AnnoRecordFieldSpan = struct { span: DataSpan };
-pub const ExposedItemSpan = struct { span: DataSpan };
-pub const WhereClauseSpan = struct { span: DataSpan };
-
 /// A single statement - either at the top-level or within a block.
 pub const Statement = union(enum) {
-    /// A simple immutable declaration
     decl: Decl,
-    /// A rebindable declaration using the "var" keyword
-    /// Not valid at the top level of a module
     @"var": Var,
-    /// The "crash" keyword
-    /// Not valid at the top level of a module
     crash: Crash,
-    /// Just an expression - usually the return value for a block
-    /// Not valid at the top level of a module
     expr: ExprStmt,
-    /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
     expect: Expect,
-    /// A block of code that will be ran multiple times for each item in a list.
-    /// Not valid at the top level of a module
     @"for": For,
-    /// A early return of the enclosing function.
-    /// Not valid at the top level of a module
     @"return": Return,
-    /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
-    /// Only valid at the top level of a module
     import: Import,
-    /// A declaration of a new type - whether an alias or a new nominal custom type
-    /// Only valid at the top level of a module
     type_decl: TypeDecl,
-    /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
     type_anno: Statement.TypeAnno,
 
+    /// A simple immutable declaration
     pub const Decl = struct {
         pattern: Pattern.Idx,
         expr: Expr.Idx,
     };
+    /// A rebindable declaration using the "var" keyword
+    /// Not valid at the top level of a module
     pub const Var = struct {
         ident: Ident.Idx,
         expr: Expr.Idx,
     };
+    /// The "crash" keyword
+    /// Not valid at the top level of a module
     pub const Crash = struct {
         msg: Expr.Idx,
     };
+    /// Just an expression - usually the return value for a block
+    /// Not valid at the top level of a module
     pub const ExprStmt = struct {
         expr: Expr.Idx,
         region: Region,
     };
+    /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
     pub const Expect = struct {
         body: Expr.Idx,
         region: Region,
     };
+    /// A block of code that will be ran multiple times for each item in a list.
+    /// Not valid at the top level of a module
     pub const For = struct {
         patt: Pattern.Idx,
         expr: Expr.Idx,
         body: Expr.Idx,
         region: Region,
     };
+    /// A early return of the enclosing function.
+    /// Not valid at the top level of a module
     pub const Return = struct {
         expr: Expr.Idx,
         region: Region,
     };
+    /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
+    /// Only valid at the top level of a module
     pub const Import = struct {
         module_name_tok: Ident.Idx,
         qualifier_tok: ?Ident.Idx,
         alias_tok: ?Ident.Idx,
-        exposes: ExposedItemSpan,
+        exposes: ExposedItem.Span,
         region: Region,
     };
-    const TypeDecl = struct {
+    /// A declaration of a new type - whether an alias or a new nominal custom type
+    /// Only valid at the top level of a module
+    pub const TypeDecl = struct {
         header: TypeHeader.Idx,
         anno: Self.TypeAnno.Idx,
-        where: ?WhereClauseSpan,
+        where: ?WhereClause.Span,
         region: Region,
     };
-    const TypeAnno = struct {
+    /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
+    pub const TypeAnno = struct {
         name: Ident.Idx,
         anno: Self.TypeAnno.Idx,
-        where: ?WhereClauseSpan,
+        where: ?WhereClause.Span,
         region: Region,
     };
 
@@ -405,14 +403,63 @@ pub const Statement = union(enum) {
     pub const Span = struct { span: DataSpan };
 };
 
-pub const RecordField = struct {};
+pub const RecordField = struct {
+    name: Ident.Idx,
+    value: Expr.Idx,
 
-const WhereClause = struct {};
-const PatternRecordField = struct {};
-const TypeAnno = struct {};
-const TypeHeader = struct {};
-const AnnoRecordField = struct {};
-const ExposedItem = struct {};
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+const WhereClause = union(enum) {
+    alias: WhereClause.Alias,
+    method: Method,
+    mod_method: ModuleMethod,
+
+    pub const Alias = struct {
+        var_tok: Ident.Idx,
+        alias_tok: Ident.Idx,
+        region: Region,
+    };
+    pub const Method = struct {
+        var_tok: Ident.Idx,
+        name_tok: Ident.Idx,
+        args: TypeAnno.Span,
+        ret_anno: TypeAnno.Idx,
+        region: Region,
+    };
+    pub const ModuleMethod = struct {
+        var_tok: Ident.Idx,
+        name_tok: Ident.Idx,
+        args: TypeAnno.Span,
+        ret_anno: TypeAnno.Span,
+        region: Region,
+    };
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+const PatternRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+const TypeAnno = union(enum) {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+const TypeHeader = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+const AnnoRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+const ExposedItem = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
 
 /// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
@@ -1048,6 +1095,9 @@ pub const WhenBranch = struct {
 
         return node;
     }
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
 };
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -1326,22 +1376,21 @@ pub const ExhaustiveMark = TypeVar;
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
 pub fn toSExprStr(ir: *const Self, module_env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
-    _ = module_env; // module_env not needed currently, but keep for signature consistency
-
-    const gpa = ir.env.gpa;
+    _ = ir;
+    const gpa = module_env.gpa;
     var root_node = sexpr.Expr.init(gpa, "canonical_ir");
     defer root_node.deinit(gpa);
 
-    // Represent top-level definitions
-    var defs_node = sexpr.Expr.init(gpa, "defs");
-    // Need a way to iterate all defs, assuming indices 0..ir.defs.len
-    var iter = ir.defs.iterIndices();
-    while (iter.next()) |i| {
-        const def = ir.defs.get(i);
-        var def_sexpr = def.toSExpr(ir.env, ir);
-        defs_node.appendNodeChild(gpa, &def_sexpr);
-    }
-    root_node.appendNodeChild(gpa, &defs_node);
+    // // Represent top-level definitions
+    // var defs_node = sexpr.Expr.init(gpa, "defs");
+    // // Need a way to iterate all defs, assuming indices 0..ir.defs.len
+    // var iter = ir.defs.iterIndices();
+    // while (iter.next()) |i| {
+    //     const def = ir.defs.get(i);
+    //     var def_sexpr = def.toSExpr(ir.env, ir);
+    //     defs_node.appendNodeChild(gpa, &def_sexpr);
+    // }
+    // root_node.appendNodeChild(gpa, &defs_node);
 
     // TODO: Optionally add other top-level elements like imports, aliases, ingested files
     // var imports_node = sexpr.Expr.init(gpa, "imports");

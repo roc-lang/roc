@@ -1,16 +1,23 @@
 const std = @import("std");
-const exitOnOom = @import("../collections/utils.zig");
+const exitOnOom = @import("../collections/utils.zig").exitOnOom;
+const DataSpan = @import("./DataSpan.zig");
 
 pub fn Scratch(comptime T: type) type {
     return struct {
         items: std.ArrayListUnmanaged(T),
 
         const Self = @This();
+        const ArrayList = std.ArrayListUnmanaged(T);
 
-        fn init(gpa: std.mem.Allocator) Self {
+        pub fn init(gpa: std.mem.Allocator) Self {
+            const items = ArrayList.initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64)) catch |e| exitOnOom(e);
             return .{
-                .items = std.ArrayListUnmanaged(T).initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64)),
+                .items = items,
             };
+        }
+
+        pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
+            self.items.deinit(gpa);
         }
 
         /// Returns the start position for a new Span of whereClauseIdxs in scratch

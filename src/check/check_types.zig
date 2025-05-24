@@ -39,7 +39,7 @@ test "checkTypes - basic type unification" {
         &.{ModuleWork(can.IR){
             .package_idx = @enumFromInt(1),
             .module_idx = @enumFromInt(0),
-            .work = can.IR.init(&module_env),
+            .work = can.IR.init(gpa),
         }},
     );
     defer can_irs.deinit(gpa);

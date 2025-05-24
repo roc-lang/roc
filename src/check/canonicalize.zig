@@ -585,8 +585,8 @@ fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages:
     var parse_ir = parse.parseExpr(&module_env, source);
     defer parse_ir.deinit();
     try std.testing.expectEqualSlices(parse.IR.Diagnostic, &.{}, parse_ir.errors);
-    var can_ir = IR.init(&module_env);
-    defer can_ir.deinit();
+    var can_ir = IR.init(module_env.gpa);
+    defer can_ir.deinit(module_env.gpa);
     var ident_idxs = std.ArrayListUnmanaged(Ident.Idx){};
     defer ident_idxs.deinit(std.testing.allocator);
     for (idents) |ident| {
@@ -597,7 +597,7 @@ fn test_can_expr(source: []const u8, idents: []const []const u8, error_messages:
     defer scope.deinit();
 
     _ = canonicalize_expr(.{ .id = parse_ir.root_node_idx }, &parse_ir, &can_ir, &scope);
-    try std.testing.expectEqual(error_messages.len, can_ir.env.problems.items.items.len);
+    try std.testing.expectEqual(error_messages.len, module_env.problems.items.items.len);
     for (0..error_messages.len) |i| {
         var buf = std.ArrayListUnmanaged(u8){};
         var writer = buf.writer(std.testing.allocator);

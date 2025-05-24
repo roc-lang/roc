@@ -577,8 +577,8 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Write CANONICALIZE SECTION
     if (content.has_canonicalize) {
-        var can_ir = can.IR.init(&module_env);
-        defer can_ir.deinit();
+        var can_ir = can.IR.init(module_env.gpa);
+        defer can_ir.deinit(module_env.gpa);
         parse_ast.store.emptyScratch();
         can.canonicalize(&can_ir, &parse_ast);
 
