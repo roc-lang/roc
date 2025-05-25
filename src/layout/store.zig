@@ -214,10 +214,58 @@ pub const Store = struct {
                     }
                 },
                 .flex_var => |_| {
-                    // TODO: isn't there some scenario where we can send a flex var to the host as void*?
+                    // Debug assertion: flex_var should only appear inside a Box
+                    if (std.debug.runtime_safety) {
+                        std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
+                    }
+
+                    // Always compile to host_opaque
+                    const opaque_idx = self.insertLayout(.host_opaque);
+
+                    // Cache it
+                    self.var_to_layout.put(self.env.gpa, work_item.var_to_process, opaque_idx) catch |err| exitOnOutOfMemory(err);
+
+                    // Update parent if needed
+                    if (work_item.parent_idx) |parent_idx| {
+                        const parent_layout = self.getLayout(parent_idx);
+                        if (work_item.parent_needs_box_elem) {
+                            parent_layout.* = Layout{ .box = opaque_idx };
+                        } else if (work_item.parent_needs_list_elem) {
+                            parent_layout.* = Layout{ .list = opaque_idx };
+                        }
+                    }
+
+                    // If this was the root item, save the result
+                    if (work_item.parent_idx == null) {
+                        result = opaque_idx;
+                    }
                 },
                 .rigid_var => |_| {
-                    // TODO: isn't there some scenario where we can send a rigid var to the host as void*?
+                    // Debug assertion: rigid_var should only appear inside a Box
+                    if (std.debug.runtime_safety) {
+                        std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
+                    }
+
+                    // Always compile to host_opaque
+                    const opaque_idx = self.insertLayout(.host_opaque);
+
+                    // Cache it
+                    self.var_to_layout.put(self.env.gpa, work_item.var_to_process, opaque_idx) catch |err| exitOnOutOfMemory(err);
+
+                    // Update parent if needed
+                    if (work_item.parent_idx) |parent_idx| {
+                        const parent_layout = self.getLayout(parent_idx);
+                        if (work_item.parent_needs_box_elem) {
+                            parent_layout.* = Layout{ .box = opaque_idx };
+                        } else if (work_item.parent_needs_list_elem) {
+                            parent_layout.* = Layout{ .list = opaque_idx };
+                        }
+                    }
+
+                    // If this was the root item, save the result
+                    if (work_item.parent_idx == null) {
+                        result = opaque_idx;
+                    }
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
@@ -363,4 +411,73 @@ test "addTypeVar - list of box of strings" {
     // Verify the str layout
     const str_layout = layout_store.getLayout(box_layout.box);
     try testing.expect(str_layout.* == .str);
+}
+
+test "addTypeVar - box of flex_var compiles to box of host_opaque" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex_var type variable
+    const flex_var = type_store.freshFromContent(.{ .flex_var = null });
+
+    // Create a box of flex_var type variable
+    const box_flex_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
+
+    // Convert to layout
+    const box_layout_idx = layout_store.addTypeVar(&type_store, box_flex_var);
+
+    // Verify the box layout
+    const box_layout = layout_store.getLayout(box_layout_idx);
+    try testing.expect(box_layout.* == .box);
+
+    // Verify the element is host_opaque
+    const elem_layout = layout_store.getLayout(box_layout.box);
+    try testing.expect(elem_layout.* == .host_opaque);
+}
+
+test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an ident for the rigid var
+    const ident_idx = type_store.env.ident_store.insert("a");
+
+    // Create a rigid_var type variable
+    const rigid_var = type_store.freshFromContent(.{ .rigid_var = ident_idx });
+
+    // Create a box of rigid_var type variable
+    const box_rigid_var = type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
+
+    // Convert to layout
+    const box_layout_idx = layout_store.addTypeVar(&type_store, box_rigid_var);
+
+    // Verify the box layout
+    const box_layout = layout_store.getLayout(box_layout_idx);
+    try testing.expect(box_layout.* == .box);
+
+    // Verify the element is host_opaque
+    const elem_layout = layout_store.getLayout(box_layout.box);
+    try testing.expect(elem_layout.* == .host_opaque);
 }

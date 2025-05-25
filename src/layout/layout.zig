@@ -25,6 +25,7 @@ pub const Layout = union(enum) {
     num: Num,
     func: Func, // TODO how does the closure fit into here?
     tagged_union: TagUnion,
+    host_opaque,
 };
 
 // Placeholder types - to be defined
