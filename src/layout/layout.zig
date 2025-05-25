@@ -1,4 +1,12 @@
-// There are
+const std = @import("std");
+
+// Attributes for layout indices
+pub const Attributes = packed struct(u3) {
+    // Reserved for future use
+    _padding: u3 = 0,
+};
+
+// Layout index with attributes
 pub const Idx = packed struct(u32) {
     attributes: Attributes,
     idx: u29,
@@ -17,4 +25,21 @@ pub const Layout = union(enum) {
     num: Num,
     func: Func, // TODO how does the closure fit into here?
     tagged_union: TagUnion,
+};
+
+// Placeholder types - to be defined
+pub const Tuple = struct {
+    // TODO: implement
+};
+
+pub const Num = struct {
+    // TODO: implement
+};
+
+pub const Func = struct {
+    // TODO: implement
+};
+
+pub const TagUnion = struct {
+    // TODO: implement
 };
