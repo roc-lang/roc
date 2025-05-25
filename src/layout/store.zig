@@ -88,199 +88,127 @@ pub const Store = struct {
         };
 
         while (true) {
-            switch (var_store.resolveVar(work_item.var_to_process).desc.content) {
-                .structure => |flat_type| {
-                    switch (flat_type) {
-                        .str => {
-                            // String layout - no parameters
-                            const layout_idx = self.insertLayout(.str);
+            const resolved_content = var_store.resolveVar(work_item.var_to_process).desc.content;
 
-                            // Cache it
-                            self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx) catch |err| exitOnOutOfMemory(err);
+            // Handle the type and get the layout index
+            const layout_idx = switch (resolved_content) {
+                .structure => |flat_type| switch (flat_type) {
+                    .str => self.insertLayout(.str),
+                    .box => |elem_var| blk: {
+                        // Create placeholder box layout
+                        const placeholder_idx = Idx{
+                            .attributes = .{ ._padding = 0 },
+                            .idx = 0,
+                        };
+                        const box_idx = self.insertLayout(Layout{ .box = placeholder_idx });
 
-                            // Update parent if needed
-                            if (work_item.parent_idx) |parent_idx| {
-                                const parent_layout = self.getLayout(parent_idx);
-                                if (work_item.parent_needs_box_elem) {
-                                    parent_layout.* = Layout{ .box = layout_idx };
-                                } else if (work_item.parent_needs_list_elem) {
-                                    parent_layout.* = Layout{ .list = layout_idx };
-                                }
-                            }
+                        // Process element
+                        work_stack.append(.{
+                            .var_to_process = elem_var,
+                            .parent_idx = box_idx,
+                            .parent_needs_box_elem = true,
+                            .parent_needs_list_elem = false,
+                        }) catch |err| exitOnOutOfMemory(err);
 
-                            // If this was the root item, save the result
-                            if (work_item.parent_idx == null) {
-                                result = layout_idx;
-                            }
-                        },
-                        .box => |elem_var| {
-                            // Create placeholder box layout
-                            const placeholder_idx = Idx{
-                                .attributes = .{ ._padding = 0 },
-                                .idx = 0,
-                            };
-                            const box_idx = self.insertLayout(Layout{ .box = placeholder_idx });
+                        break :blk box_idx;
+                    },
+                    .list => |elem_var| blk: {
+                        // Create placeholder list layout
+                        const placeholder_idx = Idx{
+                            .attributes = .{ ._padding = 0 },
+                            .idx = 0,
+                        };
+                        const list_idx = self.insertLayout(Layout{ .list = placeholder_idx });
 
-                            // Cache it immediately to handle recursive types
-                            self.var_to_layout.put(self.env.gpa, work_item.var_to_process, box_idx) catch |err| exitOnOutOfMemory(err);
+                        // Process element
+                        work_stack.append(.{
+                            .var_to_process = elem_var,
+                            .parent_idx = list_idx,
+                            .parent_needs_box_elem = false,
+                            .parent_needs_list_elem = true,
+                        }) catch |err| exitOnOutOfMemory(err);
 
-                            // Update parent if needed
-                            if (work_item.parent_idx) |parent_idx| {
-                                const parent_layout = self.getLayout(parent_idx);
-                                if (work_item.parent_needs_box_elem) {
-                                    parent_layout.* = Layout{ .box = box_idx };
-                                } else if (work_item.parent_needs_list_elem) {
-                                    parent_layout.* = Layout{ .list = box_idx };
-                                }
-                            }
-
-                            // If this was the root item, save the result
-                            if (work_item.parent_idx == null) {
-                                result = box_idx;
-                            }
-
-                            // Process element
-                            work_stack.append(.{
-                                .var_to_process = elem_var,
-                                .parent_idx = box_idx,
-                                .parent_needs_box_elem = true,
-                                .parent_needs_list_elem = false,
-                            }) catch |err| exitOnOutOfMemory(err);
-                        },
-                        .list => |elem_var| {
-                            // Create placeholder list layout
-                            const placeholder_idx = Idx{
-                                .attributes = .{ ._padding = 0 },
-                                .idx = 0,
-                            };
-                            const list_idx = self.insertLayout(Layout{ .list = placeholder_idx });
-
-                            // Cache it immediately to handle recursive types
-                            self.var_to_layout.put(self.env.gpa, work_item.var_to_process, list_idx) catch |err| exitOnOutOfMemory(err);
-
-                            // Update parent if needed
-                            if (work_item.parent_idx) |parent_idx| {
-                                const parent_layout = self.getLayout(parent_idx);
-                                if (work_item.parent_needs_box_elem) {
-                                    parent_layout.* = Layout{ .box = list_idx };
-                                } else if (work_item.parent_needs_list_elem) {
-                                    parent_layout.* = Layout{ .list = list_idx };
-                                }
-                            }
-
-                            // If this was the root item, save the result
-                            if (work_item.parent_idx == null) {
-                                result = list_idx;
-                            }
-
-                            // Process element
-                            work_stack.append(.{
-                                .var_to_process = elem_var,
-                                .parent_idx = list_idx,
-                                .parent_needs_box_elem = false,
-                                .parent_needs_list_elem = true,
-                            }) catch |err| exitOnOutOfMemory(err);
-                        },
-                        .tuple => |tuple| {
-                            // TODO
-                            _ = tuple;
-                        },
-                        .num => |num| {
-                            // TODO
-                            _ = num;
-                        },
-                        .custom_type => |custom_type| {
-                            // TODO
-                            _ = custom_type;
-                        },
-                        .func => |func| {
-                            // TODO
-                            _ = func;
-                        },
-                        .record => |record| {
-                            // TODO
-                            _ = record;
-                        },
-                        .empty_record => {
-                            // TODO
-                        },
-                        .tag_union => |tag_union| {
-                            // TODO
-                            _ = tag_union;
-                        },
-                        .empty_tag_union => {
-                            // TODO
-                        },
-                    }
+                        break :blk list_idx;
+                    },
+                    .tuple => |tuple| blk: {
+                        // TODO
+                        _ = tuple;
+                        @panic("TODO: tuple layout");
+                    },
+                    .num => |num| blk: {
+                        // TODO
+                        _ = num;
+                        @panic("TODO: num layout");
+                    },
+                    .custom_type => |custom_type| blk: {
+                        // TODO
+                        _ = custom_type;
+                        @panic("TODO: custom_type layout");
+                    },
+                    .func => |func| blk: {
+                        // TODO
+                        _ = func;
+                        @panic("TODO: func layout");
+                    },
+                    .record => |record| blk: {
+                        // TODO
+                        _ = record;
+                        @panic("TODO: record layout");
+                    },
+                    .empty_record => blk: {
+                        // TODO
+                        @panic("TODO: empty_record layout");
+                    },
+                    .tag_union => |tag_union| blk: {
+                        // TODO
+                        _ = tag_union;
+                        @panic("TODO: tag_union layout");
+                    },
+                    .empty_tag_union => blk: {
+                        // TODO
+                        @panic("TODO: empty_tag_union layout");
+                    },
                 },
-                .flex_var => |_| {
+                .flex_var => |_| blk: {
                     // Debug assertion: flex_var should only appear inside a Box
                     if (std.debug.runtime_safety) {
                         std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
                     }
-
-                    // Always compile to host_opaque
-                    const opaque_idx = self.insertLayout(.host_opaque);
-
-                    // Cache it
-                    self.var_to_layout.put(self.env.gpa, work_item.var_to_process, opaque_idx) catch |err| exitOnOutOfMemory(err);
-
-                    // Update parent if needed
-                    if (work_item.parent_idx) |parent_idx| {
-                        const parent_layout = self.getLayout(parent_idx);
-                        if (work_item.parent_needs_box_elem) {
-                            parent_layout.* = Layout{ .box = opaque_idx };
-                        } else if (work_item.parent_needs_list_elem) {
-                            parent_layout.* = Layout{ .list = opaque_idx };
-                        }
-                    }
-
-                    // If this was the root item, save the result
-                    if (work_item.parent_idx == null) {
-                        result = opaque_idx;
-                    }
+                    break :blk self.insertLayout(.host_opaque);
                 },
-                .rigid_var => |_| {
+                .rigid_var => |_| blk: {
                     // Debug assertion: rigid_var should only appear inside a Box
                     if (std.debug.runtime_safety) {
                         std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
                     }
-
-                    // Always compile to host_opaque
-                    const opaque_idx = self.insertLayout(.host_opaque);
-
-                    // Cache it
-                    self.var_to_layout.put(self.env.gpa, work_item.var_to_process, opaque_idx) catch |err| exitOnOutOfMemory(err);
-
-                    // Update parent if needed
-                    if (work_item.parent_idx) |parent_idx| {
-                        const parent_layout = self.getLayout(parent_idx);
-                        if (work_item.parent_needs_box_elem) {
-                            parent_layout.* = Layout{ .box = opaque_idx };
-                        } else if (work_item.parent_needs_list_elem) {
-                            parent_layout.* = Layout{ .list = opaque_idx };
-                        }
-                    }
-
-                    // If this was the root item, save the result
-                    if (work_item.parent_idx == null) {
-                        result = opaque_idx;
-                    }
+                    break :blk self.insertLayout(.host_opaque);
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
                     work_item.var_to_process = alias.backing_var;
                     continue;
                 },
-                .effectful => {
-                    // doesn't make sense; ideally we'd move this out of Content to make impossible states impossible
-                },
-                .pure => {
-                    // doesn't make sense; ideally we'd move this out of Content to make impossible states impossible
-                },
-                .err => {
-                    // generate a crash prob
-                },
+                .effectful => @panic("effectful doesn't make sense as a layout"),
+                .pure => @panic("pure doesn't make sense as a layout"),
+                .err => @panic("error in type should generate a crash"),
+            };
+
+            // Cache the layout
+            self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx) catch |err| exitOnOutOfMemory(err);
+
+            // Update parent if needed
+            if (work_item.parent_idx) |parent_idx| {
+                const parent_layout = self.getLayout(parent_idx);
+                if (work_item.parent_needs_box_elem) {
+                    parent_layout.* = Layout{ .box = layout_idx };
+                } else if (work_item.parent_needs_list_elem) {
+                    parent_layout.* = Layout{ .list = layout_idx };
+                }
+            }
+
+            // If this was the root item, save the result
+            if (work_item.parent_idx == null) {
+                result = layout_idx;
             }
 
             // Check if there's more work to do
