@@ -61,7 +61,7 @@ pub const Store = struct {
 
     /// Init the unification table
     pub fn init(env: *base.ModuleEnv) Self {
-        // TODO: eventually use herusitics here to determine sensible defaults
+        // TODO: eventually use heuristics here to determine sensible defaults
         return .{
             .env = env,
 

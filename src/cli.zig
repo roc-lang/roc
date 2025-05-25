@@ -2,6 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const mem = std.mem;
 
+const _ = @import("./layout/store.zig");
+
 /// A sub-command for the roc cli tool
 pub const RocCmd = enum {
     roc_run,
