@@ -5,29 +5,20 @@ const layout = @import("./layout.zig");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
+const work = @import("./work.zig");
 
 const Var = types.Var;
 const Layout = layout.Layout;
 const Idx = layout.Idx;
 const RecordField = layout.RecordField;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-
-pub const Parent = union(enum) {
-    none,
-    box_elem: struct { idx: Idx },
-    list_elem: struct { idx: Idx },
-    record_field: struct { idx: Idx, field_name: Ident.Idx },
-};
+const Parent = work.Parent;
+const FieldWorkItem = work.FieldWorkItem;
 
 pub const RecordProcessingResult = struct {
     record_idx: Idx, // Note: this will be undefined until the record is actually created
     field_count: u32,
     fields_start: usize,
-};
-
-pub const FieldWorkItem = struct {
-    var_: Var,
-    field_name: Ident.Idx,
 };
 
 /// Context for processing records, to avoid passing function pointers

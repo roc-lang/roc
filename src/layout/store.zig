@@ -9,6 +9,7 @@ const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 const record = @import("./record.zig");
+const work = @import("./work.zig");
 
 const Var = types.Var;
 const Layout = layout.Layout;
@@ -91,30 +92,13 @@ pub const Store = struct {
         }
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
-        const WorkItem = struct {
-            var_to_process: Var,
-            parent: record.Parent,
-            // For deferred layout creation (box/list elements)
-            deferred_action: ?DeferredAction = null,
-
-            const DeferredAction = union(enum) {
-                create_box: struct { parent: record.Parent },
-                create_list: struct { parent: record.Parent },
-                finalize_record: struct {
-                    record_idx: Idx,
-                    parent: record.Parent,
-                    fields_start: u32,
-                },
-            };
-        };
-
-        var work_stack = std.ArrayList(WorkItem).init(self.env.gpa);
+        var work_stack = std.ArrayList(work.WorkItem).init(self.env.gpa);
         defer work_stack.deinit();
 
         var result: ?Idx = null;
 
         // Initialize with the initial variable
-        var work_item = WorkItem{
+        var work_item = work.WorkItem{
             .var_to_process = initial_resolved.var_,
             .parent = .none,
         };
@@ -191,7 +175,7 @@ pub const Store = struct {
                     },
                     .record => |record_type| blk: {
                         // Collect all fields (including from extensions) first
-                        var all_fields = std.ArrayList(record.FieldWorkItem).init(self.env.gpa);
+                        var all_fields = std.ArrayList(work.FieldWorkItem).init(self.env.gpa);
                         defer all_fields.deinit();
 
                         // Get fields from main record
