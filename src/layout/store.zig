@@ -7,6 +7,7 @@ const types_store = @import("../types/store.zig");
 const layout = @import("./layout.zig");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
+const Ident = @import("../base/Ident.zig");
 
 const Var = types.Var;
 const Layout = layout.Layout;
@@ -89,11 +90,14 @@ pub const Store = struct {
         // To make this function stack-safe, we use a manual stack instead of recursing.
         const WorkItem = struct {
             var_to_process: Var,
-            parent_idx: ?Idx,
-            parent_needs_box_elem: bool,
-            parent_needs_list_elem: bool,
-            parent_needs_record_field: bool,
-            record_field_name: ?@import("../base/Ident.zig").Idx,
+            parent: Parent,
+
+            const Parent = union(enum) {
+                none,
+                box_elem: struct { idx: Idx },
+                list_elem: struct { idx: Idx },
+                record_field: struct { idx: Idx, field_name: Ident.Idx },
+            };
         };
 
         var work_stack = std.ArrayList(WorkItem).init(self.env.gpa);
@@ -104,11 +108,7 @@ pub const Store = struct {
         // Initialize with the initial variable
         var work_item = WorkItem{
             .var_to_process = initial_resolved.var_,
-            .parent_idx = null,
-            .parent_needs_box_elem = false,
-            .parent_needs_list_elem = false,
-            .parent_needs_record_field = false,
-            .record_field_name = null,
+            .parent = .none,
         };
 
         while (true) {
@@ -133,11 +133,7 @@ pub const Store = struct {
                         // Process element
                         try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent_idx = box_idx,
-                            .parent_needs_box_elem = true,
-                            .parent_needs_list_elem = false,
-                            .parent_needs_record_field = false,
-                            .record_field_name = null,
+                            .parent = .{ .box_elem = .{ .idx = box_idx } },
                         });
 
                         break :blk box_idx;
@@ -153,11 +149,7 @@ pub const Store = struct {
                         // Process element
                         try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent_idx = list_idx,
-                            .parent_needs_box_elem = false,
-                            .parent_needs_list_elem = true,
-                            .parent_needs_record_field = false,
-                            .record_field_name = null,
+                            .parent = .{ .list_elem = .{ .idx = list_idx } },
                         });
 
                         break :blk list_idx;
@@ -219,11 +211,7 @@ pub const Store = struct {
                             // Push work item for this field
                             try work_stack.append(.{
                                 .var_to_process = var_store.resolveVar(field.var_).var_,
-                                .parent_idx = record_idx,
-                                .parent_needs_box_elem = false,
-                                .parent_needs_list_elem = false,
-                                .parent_needs_record_field = true,
-                                .record_field_name = field.name,
+                                .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field.name } },
                             });
                             field_count += 1;
                         }
@@ -244,11 +232,7 @@ pub const Store = struct {
                                         // Push work item for this extension field
                                         try work_stack.append(.{
                                             .var_to_process = var_store.resolveVar(field.var_).var_,
-                                            .parent_idx = record_idx,
-                                            .parent_needs_box_elem = false,
-                                            .parent_needs_list_elem = false,
-                                            .parent_needs_record_field = true,
-                                            .record_field_name = field.name,
+                                            .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field.name } },
                                         });
                                         field_count += 1;
                                     }
@@ -288,37 +272,42 @@ pub const Store = struct {
                     },
                     .empty_record => blk: {
                         // If this zero-sized type is inside a box or list, we can handle it
-                        if (work_item.parent_needs_box_elem) {
-                            // Signal to parent to use box_zero_sized
-                            break :blk try self.insertLayout(.box_zero_sized);
-                        } else if (work_item.parent_needs_list_elem) {
-                            // Signal to parent to use list_zero_sized
-                            break :blk try self.insertLayout(.list_zero_sized);
-                        } else {
-                            return LayoutError.ZeroSizedType;
+                        switch (work_item.parent) {
+                            .box_elem => {
+                                // Signal to parent to use box_zero_sized
+                                break :blk try self.insertLayout(.box_zero_sized);
+                            },
+                            .list_elem => {
+                                // Signal to parent to use list_zero_sized
+                                break :blk try self.insertLayout(.list_zero_sized);
+                            },
+                            else => return LayoutError.ZeroSizedType,
                         }
                     },
                     .empty_tag_union => blk: {
                         // If this zero-sized type is inside a box or list, we can handle it
-                        if (work_item.parent_needs_box_elem) {
-                            // Signal to parent to use box_zero_sized
-                            break :blk try self.insertLayout(.box_zero_sized);
-                        } else if (work_item.parent_needs_list_elem) {
-                            // Signal to parent to use list_zero_sized
-                            break :blk try self.insertLayout(.list_zero_sized);
-                        } else {
-                            return LayoutError.ZeroSizedType;
+                        switch (work_item.parent) {
+                            .box_elem => {
+                                // Signal to parent to use box_zero_sized
+                                break :blk try self.insertLayout(.box_zero_sized);
+                            },
+                            .list_elem => {
+                                // Signal to parent to use list_zero_sized
+                                break :blk try self.insertLayout(.list_zero_sized);
+                            },
+                            else => return LayoutError.ZeroSizedType,
                         }
                     },
                 },
                 .flex_var => |_| blk: {
                     // Flex vars can only be sent to the host if boxed.
                     // The caller should have verified this invariant already.
-                    std.debug.assert(work_item.parent_needs_box_elem);
-                    std.debug.assert(work_item.parent_idx != null);
-
-                    if (!work_item.parent_needs_box_elem) {
-                        return LayoutError.BugUnboxedFlexVar;
+                    switch (work_item.parent) {
+                        .box_elem => {},
+                        else => {
+                            std.debug.assert(false);
+                            return LayoutError.BugUnboxedFlexVar;
+                        },
                     }
 
                     break :blk try self.insertLayout(.host_opaque);
@@ -326,11 +315,12 @@ pub const Store = struct {
                 .rigid_var => |_| blk: {
                     // Rigid vars can only be sent to the host if boxed.
                     // The caller should have verified this invariant already.
-                    std.debug.assert(work_item.parent_needs_box_elem);
-                    std.debug.assert(work_item.parent_idx != null);
-
-                    if (!work_item.parent_needs_box_elem) {
-                        return LayoutError.BugUnboxedRigidVar;
+                    switch (work_item.parent) {
+                        .box_elem => {},
+                        else => {
+                            std.debug.assert(false);
+                            return LayoutError.BugUnboxedRigidVar;
+                        },
                     }
 
                     break :blk try self.insertLayout(.host_opaque);
@@ -349,28 +339,34 @@ pub const Store = struct {
             try self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx);
 
             // Update parent if needed
-            if (work_item.parent_idx) |parent_idx| {
-                const parent_layout = self.getLayout(parent_idx);
-                const child_layout = self.getLayout(layout_idx);
+            switch (work_item.parent) {
+                .none => {},
+                .box_elem => |box_parent| {
+                    const parent_layout = self.getLayout(box_parent.idx);
+                    const child_layout = self.getLayout(layout_idx);
 
-                if (work_item.parent_needs_box_elem) {
                     // Check if child is a zero-sized placeholder
                     if (child_layout.* == .box_zero_sized) {
                         parent_layout.* = .box_zero_sized;
                     } else {
                         parent_layout.* = Layout{ .box = layout_idx };
                     }
-                } else if (work_item.parent_needs_list_elem) {
+                },
+                .list_elem => |list_parent| {
+                    const parent_layout = self.getLayout(list_parent.idx);
+                    const child_layout = self.getLayout(layout_idx);
+
                     // Check if child is a zero-sized placeholder
                     if (child_layout.* == .list_zero_sized) {
                         parent_layout.* = .list_zero_sized;
                     } else {
                         parent_layout.* = Layout{ .list = layout_idx };
                     }
-                } else if (work_item.parent_needs_record_field) {
+                },
+                .record_field => |record_parent| {
                     // Add this field to the record_fields list, checking for duplicates
-                    const parent_record = self.getLayout(parent_idx);
-                    const field_name = work_item.record_field_name.?;
+                    const parent_record = self.getLayout(record_parent.idx);
+                    const field_name = record_parent.field_name;
 
                     // Check if this field already exists
                     const existing_fields = self.record_fields.slice(parent_record.record.fields);
@@ -391,11 +387,11 @@ pub const Store = struct {
                         };
                         try self.record_fields.append(self.env.gpa, field);
                     }
-                }
+                },
             }
 
             // If this was the root item, save the result
-            if (work_item.parent_idx == null) {
+            if (work_item.parent == .none) {
                 result = layout_idx;
             }
 
@@ -406,28 +402,37 @@ pub const Store = struct {
                 // Check cache for the next item
                 if (self.var_to_layout.get(work_item.var_to_process)) |cached_idx| {
                     // Update parent if needed
-                    if (work_item.parent_idx) |parent_idx| {
-                        const parent_layout = self.getLayout(parent_idx);
-                        const child_layout = self.getLayout(cached_idx);
+                    switch (work_item.parent) {
+                        .none => {
+                            // This was the root item, save the result
+                            result = cached_idx;
+                        },
+                        .box_elem => |box_parent| {
+                            const parent_layout = self.getLayout(box_parent.idx);
+                            const child_layout = self.getLayout(cached_idx);
 
-                        if (work_item.parent_needs_box_elem) {
                             // Check if child is a zero-sized placeholder
                             if (child_layout.* == .box_zero_sized) {
                                 parent_layout.* = .box_zero_sized;
                             } else {
                                 parent_layout.* = Layout{ .box = cached_idx };
                             }
-                        } else if (work_item.parent_needs_list_elem) {
+                        },
+                        .list_elem => |list_parent| {
+                            const parent_layout = self.getLayout(list_parent.idx);
+                            const child_layout = self.getLayout(cached_idx);
+
                             // Check if child is a zero-sized placeholder
                             if (child_layout.* == .list_zero_sized) {
                                 parent_layout.* = .list_zero_sized;
                             } else {
                                 parent_layout.* = Layout{ .list = cached_idx };
                             }
-                        } else if (work_item.parent_needs_record_field) {
+                        },
+                        .record_field => |record_parent| {
                             // Add this field to the record_fields list, checking for duplicates
-                            const parent_record = self.getLayout(parent_idx);
-                            const field_name = work_item.record_field_name.?;
+                            const parent_record = self.getLayout(record_parent.idx);
+                            const field_name = record_parent.field_name;
 
                             // Check if this field already exists
                             const existing_fields = self.record_fields.slice(parent_record.record.fields);
@@ -448,12 +453,7 @@ pub const Store = struct {
                                 };
                                 try self.record_fields.append(self.env.gpa, field);
                             }
-                        }
-                    }
-
-                    // If this was the root item, save the result
-                    if (work_item.parent_idx == null) {
-                        result = cached_idx;
+                        },
                     }
                     continue;
                 }
