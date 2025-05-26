@@ -44,6 +44,9 @@ pub const Store = struct {
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
+    // Reusable work stack for addTypeVar
+    work_stack: std.ArrayListUnmanaged(work.WorkItem),
+
     pub fn init(env: *base.ModuleEnv) std.mem.Allocator.Error!Self {
         return .{
             .env = env,
@@ -52,6 +55,7 @@ pub const Store = struct {
             .record_fields = try RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
 
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
+            .work_stack = std.ArrayListUnmanaged(work.WorkItem){},
         };
     }
 
@@ -61,6 +65,7 @@ pub const Store = struct {
         self.record_fields.deinit(self.env.gpa);
 
         self.var_to_layout.deinit(self.env.gpa);
+        self.work_stack.deinit(self.env.gpa);
     }
 
     fn insertLayout(self: *Self, layout_: Layout) std.mem.Allocator.Error!Idx {
@@ -92,8 +97,8 @@ pub const Store = struct {
         }
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
-        var work_stack = std.ArrayList(work.WorkItem).init(self.env.gpa);
-        defer work_stack.deinit();
+        // Reset the work stack to reuse allocated memory
+        self.work_stack.clearRetainingCapacity();
 
         var result: ?Idx = null;
 
@@ -116,7 +121,7 @@ pub const Store = struct {
                     .str => try self.insertLayout(.str),
                     .box => |elem_var| {
                         // Defer box creation until we know the element type
-                        try work_stack.append(.{
+                        try self.work_stack.append(self.env.gpa, .{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
                             .parent = work_item.parent,
                             .deferred_action = .{ .create_box = .{ .parent = work_item.parent } },
@@ -127,7 +132,7 @@ pub const Store = struct {
                     },
                     .list => |elem_var| {
                         // Defer list creation until we know the element type
-                        try work_stack.append(.{
+                        try self.work_stack.append(self.env.gpa, .{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
                             .parent = work_item.parent,
                             .deferred_action = .{ .create_list = .{ .parent = work_item.parent } },
@@ -241,7 +246,7 @@ pub const Store = struct {
                         const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = temp_range } });
 
                         // Push a finalize action that will run after all fields are processed
-                        try work_stack.append(.{
+                        try self.work_stack.append(self.env.gpa, .{
                             .var_to_process = work_item.var_to_process,
                             .parent = work_item.parent,
                             .deferred_action = .{ .finalize_record = .{
@@ -264,7 +269,7 @@ pub const Store = struct {
                             };
 
                             if (!is_zero_sized) {
-                                try work_stack.append(.{
+                                try self.work_stack.append(self.env.gpa, .{
                                     .var_to_process = field_item.var_,
                                     .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field_item.field_name } },
                                 });
@@ -553,7 +558,7 @@ pub const Store = struct {
             }
 
             // Check if there's more work to do
-            if (work_stack.popOrNull()) |next_item| {
+            if (self.work_stack.popOrNull()) |next_item| {
                 work_item = next_item;
 
                 // Check cache for the next item
