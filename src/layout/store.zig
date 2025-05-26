@@ -194,11 +194,29 @@ pub const Store = struct {
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
                     },
-                    .empty_record => {
-                        return LayoutError.ZeroSizedType;
+                    .empty_record => blk: {
+                        // If this zero-sized type is inside a box or list, we can handle it
+                        if (work_item.parent_needs_box_elem) {
+                            // Signal to parent to use box_zero_sized
+                            break :blk try self.insertLayout(.box_zero_sized);
+                        } else if (work_item.parent_needs_list_elem) {
+                            // Signal to parent to use list_zero_sized
+                            break :blk try self.insertLayout(.list_zero_sized);
+                        } else {
+                            return LayoutError.ZeroSizedType;
+                        }
                     },
-                    .empty_tag_union => {
-                        return LayoutError.ZeroSizedType;
+                    .empty_tag_union => blk: {
+                        // If this zero-sized type is inside a box or list, we can handle it
+                        if (work_item.parent_needs_box_elem) {
+                            // Signal to parent to use box_zero_sized
+                            break :blk try self.insertLayout(.box_zero_sized);
+                        } else if (work_item.parent_needs_list_elem) {
+                            // Signal to parent to use list_zero_sized
+                            break :blk try self.insertLayout(.list_zero_sized);
+                        } else {
+                            return LayoutError.ZeroSizedType;
+                        }
                     },
                 },
                 .flex_var => |_| blk: {
@@ -241,10 +259,22 @@ pub const Store = struct {
             // Update parent if needed
             if (work_item.parent_idx) |parent_idx| {
                 const parent_layout = self.getLayout(parent_idx);
+                const child_layout = self.getLayout(layout_idx);
+
                 if (work_item.parent_needs_box_elem) {
-                    parent_layout.* = Layout{ .box = layout_idx };
+                    // Check if child is a zero-sized placeholder
+                    if (child_layout.* == .box_zero_sized) {
+                        parent_layout.* = .box_zero_sized;
+                    } else {
+                        parent_layout.* = Layout{ .box = layout_idx };
+                    }
                 } else if (work_item.parent_needs_list_elem) {
-                    parent_layout.* = Layout{ .list = layout_idx };
+                    // Check if child is a zero-sized placeholder
+                    if (child_layout.* == .list_zero_sized) {
+                        parent_layout.* = .list_zero_sized;
+                    } else {
+                        parent_layout.* = Layout{ .list = layout_idx };
+                    }
                 }
             }
 
@@ -262,10 +292,22 @@ pub const Store = struct {
                     // Update parent if needed
                     if (work_item.parent_idx) |parent_idx| {
                         const parent_layout = self.getLayout(parent_idx);
+                        const child_layout = self.getLayout(cached_idx);
+
                         if (work_item.parent_needs_box_elem) {
-                            parent_layout.* = Layout{ .box = cached_idx };
+                            // Check if child is a zero-sized placeholder
+                            if (child_layout.* == .box_zero_sized) {
+                                parent_layout.* = .box_zero_sized;
+                            } else {
+                                parent_layout.* = Layout{ .box = cached_idx };
+                            }
                         } else if (work_item.parent_needs_list_elem) {
-                            parent_layout.* = Layout{ .list = cached_idx };
+                            // Check if child is a zero-sized placeholder
+                            if (child_layout.* == .list_zero_sized) {
+                                parent_layout.* = .list_zero_sized;
+                            } else {
+                                parent_layout.* = Layout{ .list = cached_idx };
+                            }
                         }
                     }
 
@@ -531,7 +573,7 @@ test "addTypeVar - num dec" {
     try testing.expect(dec_layout.frac == .dec);
 }
 
-test "addTypeVar - flex num var returns error" {
+test "addTypeVar - flex num var defaults to i128" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -546,12 +588,138 @@ test "addTypeVar - flex num var returns error" {
     var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
-    // Create a flex number type variable
+    // Create a flex number type variable (Num(a))
     const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .flex_var } });
 
-    // Try to convert to layout - should fail
-    const result = layout_store.addTypeVar(&type_store, flex_num_var);
-    try testing.expectError(LayoutError.TypeContainedMismatch, result);
+    // Convert to layout - should default to i128
+    const layout_idx = try layout_store.addTypeVar(&type_store, flex_num_var);
+
+    // Verify the layout
+    const num_layout = layout_store.getLayout(layout_idx);
+    try testing.expect(num_layout.* == .int);
+    try testing.expect(num_layout.int == .i128);
+}
+
+test "addTypeVar - flex int var defaults to i128" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex int type variable (Int(a))
+    const flex_int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .flex_var } } });
+
+    // Convert to layout - should default to i128
+    const layout_idx = try layout_store.addTypeVar(&type_store, flex_int_var);
+
+    // Verify the layout
+    const int_layout = layout_store.getLayout(layout_idx);
+    try testing.expect(int_layout.* == .int);
+    try testing.expect(int_layout.int == .i128);
+}
+
+test "addTypeVar - flex frac var defaults to dec" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex frac type variable (Frac(a))
+    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .flex_var } } });
+
+    // Convert to layout - should default to dec
+    const layout_idx = try layout_store.addTypeVar(&type_store, flex_frac_var);
+
+    // Verify the layout
+    const frac_layout = layout_store.getLayout(layout_idx);
+    try testing.expect(frac_layout.* == .frac);
+    try testing.expect(frac_layout.frac == .dec);
+}
+
+test "addTypeVar - list of flex num var defaults to list of i128" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex num type variable (Num(a))
+    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .flex_var } });
+
+    // Create a list of flex num type variable
+    const list_flex_num_var = type_store.freshFromContent(.{ .structure = .{ .list = flex_num_var } });
+
+    // Convert to layout - should default to list of i128
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_flex_num_var);
+
+    // Verify the list layout
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list);
+
+    // Verify the element layout defaults to i128
+    const elem_layout = layout_store.getLayout(list_layout.list);
+    try testing.expect(elem_layout.* == .int);
+    try testing.expect(elem_layout.int == .i128);
+}
+
+test "addTypeVar - box of flex frac var defaults to box of dec" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex frac type variable (Frac(a))
+    const flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .flex_var } } });
+
+    // Create a box of flex frac type variable
+    const box_flex_frac_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_frac_var } });
+
+    // Convert to layout - should default to box of dec
+    const box_layout_idx = try layout_store.addTypeVar(&type_store, box_flex_frac_var);
+
+    // Verify the box layout
+    const box_layout = layout_store.getLayout(box_layout_idx);
+    try testing.expect(box_layout.* == .box);
+
+    // Verify the element defaults to dec
+    const elem_layout = layout_store.getLayout(box_layout.box);
+    try testing.expect(elem_layout.* == .frac);
+    try testing.expect(elem_layout.frac == .dec);
 }
 
 test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
@@ -588,4 +756,140 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     // Verify the element is host_opaque
     const elem_layout = layout_store.getLayout(box_layout.box);
     try testing.expect(elem_layout.* == .host_opaque);
+}
+
+test "addTypeVar - box of empty record compiles to box_zero_sized" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an empty record type variable
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // Create a box of empty record type variable
+    const box_empty_record_var = type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
+
+    // Convert to layout
+    const box_layout_idx = try layout_store.addTypeVar(&type_store, box_empty_record_var);
+
+    // Verify the layout is box_zero_sized
+    const box_layout = layout_store.getLayout(box_layout_idx);
+    try testing.expect(box_layout.* == .box_zero_sized);
+}
+
+test "addTypeVar - list of empty tag union compiles to list_zero_sized" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an empty tag union type variable
+    const empty_tag_union_var = type_store.freshFromContent(.{ .structure = .empty_tag_union });
+
+    // Create a list of empty tag union type variable
+    const list_empty_tag_union_var = type_store.freshFromContent(.{ .structure = .{ .list = empty_tag_union_var } });
+
+    // Convert to layout
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_empty_tag_union_var);
+
+    // Verify the layout is list_zero_sized
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list_zero_sized);
+}
+
+test "addTypeVar - bare empty record returns error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an empty record type variable
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // Try to convert to layout - should fail
+    const result = layout_store.addTypeVar(&type_store, empty_record_var);
+    try testing.expectError(LayoutError.ZeroSizedType, result);
+}
+
+test "addTypeVar - bare empty tag union returns error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an empty tag union type variable
+    const empty_tag_union_var = type_store.freshFromContent(.{ .structure = .empty_tag_union });
+
+    // Try to convert to layout - should fail
+    const result = layout_store.addTypeVar(&type_store, empty_tag_union_var);
+    try testing.expectError(LayoutError.ZeroSizedType, result);
+}
+
+test "addTypeVar - list of box of empty record compiles to list_zero_sized" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an empty record type variable
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    // Create a box of empty record type variable
+    const box_empty_record_var = type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
+
+    // Create a list of box of empty record type variable
+    const list_box_empty_record_var = type_store.freshFromContent(.{ .structure = .{ .list = box_empty_record_var } });
+
+    // Convert to layout
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_box_empty_record_var);
+
+    // Verify the layout is list_zero_sized
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list_zero_sized);
 }

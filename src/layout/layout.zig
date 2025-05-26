@@ -21,7 +21,9 @@ pub const Idx = packed struct(u32) {
 pub const Layout = union(enum) {
     str,
     box: Idx,
+    box_zero_sized, // e.g. a Box({}) - this can come up, so we need a special implementation for it.
     list: Idx,
+    list_zero_sized, // e.g. a List({}) - this can come up, so we need to make a special implementation for it.
     tuple: Tuple,
     int: types.Num.Int.Precision,
     frac: types.Num.Frac.Precision,
