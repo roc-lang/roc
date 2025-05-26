@@ -72,6 +72,14 @@ pub const Store = struct {
         return &self.layouts.items[idx.idx];
     }
 
+    fn isZeroSized(self: *const Self, idx: Idx) bool {
+        const layout_ptr = &self.layouts.items[idx.idx];
+        return switch (layout_ptr.*) {
+            .record => |record| record.fields.count == 0,
+            else => false,
+        };
+    }
+
     /// Note: the caller MUST verify ahead of time that the given variable does not
     /// resolve to a flex var or rigid var, unless that flex var or rigid var is
     /// wrapped in a Box.
@@ -257,11 +265,11 @@ pub const Store = struct {
                             },
                         }
 
-                        // Store the field count in the placeholder so we know when all fields are processed
-                        // We'll update this with the actual range once all fields are done
+                        // Store the fields range in the placeholder
+                        // The count will be updated as fields are actually added (non-zero-sized only)
                         const record_layout = self.getLayout(record_idx);
-                        record_layout.record.fields.count = field_count;
                         record_layout.record.fields.start = @intCast(fields_start);
+                        record_layout.record.fields.count = 0; // Will be incremented as fields are added
 
                         break :blk record_idx;
                     },
@@ -364,28 +372,34 @@ pub const Store = struct {
                     }
                 },
                 .record_field => |record_parent| {
-                    // Add this field to the record_fields list, checking for duplicates
-                    const parent_record = self.getLayout(record_parent.idx);
-                    const field_name = record_parent.field_name;
+                    // Only add non-zero-sized fields to the record
+                    if (!self.isZeroSized(layout_idx)) {
+                        // Add this field to the record_fields list, checking for duplicates
+                        const parent_record = self.getLayout(record_parent.idx);
+                        const field_name = record_parent.field_name;
 
-                    // Check if this field already exists
-                    const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                    for (existing_fields) |existing_field| {
-                        if (existing_field.name == field_name) {
-                            // Field already exists, check if types match
-                            if (existing_field.layout != layout_idx) {
-                                return LayoutError.RecordFieldTypeMismatch;
+                        // Check if this field already exists
+                        const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                        for (existing_fields) |existing_field| {
+                            if (existing_field.name == field_name) {
+                                // Field already exists, check if types match
+                                if (existing_field.layout != layout_idx) {
+                                    return LayoutError.RecordFieldTypeMismatch;
+                                }
+                                // Types match, skip adding duplicate
+                                break;
                             }
-                            // Types match, skip adding duplicate
-                            break;
+                        } else {
+                            // Field doesn't exist yet, add it
+                            const field = RecordField{
+                                .name = field_name,
+                                .layout = layout_idx,
+                            };
+                            try self.record_fields.append(self.env.gpa, field);
+
+                            // Update the parent's field count
+                            parent_record.record.fields.count += 1;
                         }
-                    } else {
-                        // Field doesn't exist yet, add it
-                        const field = RecordField{
-                            .name = field_name,
-                            .layout = layout_idx,
-                        };
-                        try self.record_fields.append(self.env.gpa, field);
                     }
                 },
             }
@@ -393,6 +407,31 @@ pub const Store = struct {
             // If this was the root item, save the result
             if (work_item.parent == .none) {
                 result = layout_idx;
+            }
+
+            // Check if we just finished processing a record that ended up empty
+            const finished_layout = self.getLayout(layout_idx);
+            if (finished_layout.* == .record and finished_layout.record.fields.count == 0) {
+                // This record has no non-zero-sized fields, handle based on parent
+                switch (work_item.parent) {
+                    .none => {
+                        // Root level empty record is an error
+                        return LayoutError.ZeroSizedType;
+                    },
+                    .box_elem => |box_parent| {
+                        // Replace parent with box_zero_sized
+                        const parent_layout = self.getLayout(box_parent.idx);
+                        parent_layout.* = .box_zero_sized;
+                    },
+                    .list_elem => |list_parent| {
+                        // Replace parent with list_zero_sized
+                        const parent_layout = self.getLayout(list_parent.idx);
+                        parent_layout.* = .list_zero_sized;
+                    },
+                    .record_field => {
+                        // The parent record will drop this field when checking isZeroSized
+                    },
+                }
             }
 
             // Check if there's more work to do
@@ -430,28 +469,34 @@ pub const Store = struct {
                             }
                         },
                         .record_field => |record_parent| {
-                            // Add this field to the record_fields list, checking for duplicates
-                            const parent_record = self.getLayout(record_parent.idx);
-                            const field_name = record_parent.field_name;
+                            // Only add non-zero-sized fields to the record
+                            if (!self.isZeroSized(cached_idx)) {
+                                // Add this field to the record_fields list, checking for duplicates
+                                const parent_record = self.getLayout(record_parent.idx);
+                                const field_name = record_parent.field_name;
 
-                            // Check if this field already exists
-                            const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                            for (existing_fields) |existing_field| {
-                                if (existing_field.name == field_name) {
-                                    // Field already exists, check if types match
-                                    if (existing_field.layout != cached_idx) {
-                                        return LayoutError.RecordFieldTypeMismatch;
+                                // Check if this field already exists
+                                const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                                for (existing_fields) |existing_field| {
+                                    if (existing_field.name == field_name) {
+                                        // Field already exists, check if types match
+                                        if (existing_field.layout != cached_idx) {
+                                            return LayoutError.RecordFieldTypeMismatch;
+                                        }
+                                        // Types match, skip adding duplicate
+                                        break;
                                     }
-                                    // Types match, skip adding duplicate
-                                    break;
+                                } else {
+                                    // Field doesn't exist yet, add it
+                                    const field = RecordField{
+                                        .name = field_name,
+                                        .layout = cached_idx,
+                                    };
+                                    try self.record_fields.append(self.env.gpa, field);
+
+                                    // Update the parent's field count
+                                    parent_record.record.fields.count += 1;
                                 }
-                            } else {
-                                // Field doesn't exist yet, add it
-                                const field = RecordField{
-                                    .name = field_name,
-                                    .layout = cached_idx,
-                                };
-                                try self.record_fields.append(self.env.gpa, field);
                             }
                         },
                     }
@@ -1541,4 +1586,249 @@ test "addTypeVar - record with chained extensions" {
 
     // No more fields
     try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - record with zero-sized fields dropped" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+
+    const name_ident = type_store.env.ident_store.insert("name");
+    const empty_ident = type_store.env.ident_store.insert("empty");
+    const age_ident = type_store.env.ident_store.insert("age");
+
+    // Create record { name: str, empty: {}, age: i32 }
+    const fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = name_ident, .var_ = str_var },
+        .{ .name = empty_ident, .var_ = empty_record_var },
+        .{ .name = age_ident, .var_ = i32_var },
+    });
+
+    const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+
+    // Convert to layout
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify we only have 2 fields (empty field should be dropped)
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // Debug: Check the actual field count
+    var field_count: u32 = 0;
+    var temp_iter = layout_store.record_fields.iter(record_layout.record.fields);
+    while (temp_iter.next()) |_| {
+        field_count += 1;
+    }
+    try testing.expect(field_count == 2);
+
+    // Field name (str)
+    const name_field = field_iter.next().?;
+    try testing.expect(name_field.name == name_ident);
+    const name_layout = layout_store.getLayout(name_field.layout);
+    try testing.expect(name_layout.* == .str);
+
+    // Field age (i32) - empty field should be skipped
+    const age_field = field_iter.next().?;
+    try testing.expect(age_field.name == age_ident);
+    const age_layout = layout_store.getLayout(age_field.layout);
+    try testing.expect(age_layout.* == .int);
+    try testing.expect(age_layout.int == .i32);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - record with all zero-sized fields becomes empty" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+    const empty_tag_union_var = type_store.freshFromContent(.{ .structure = .empty_tag_union });
+
+    const field1_ident = type_store.env.ident_store.insert("field1");
+    const field2_ident = type_store.env.ident_store.insert("field2");
+
+    // Create record { field1: {}, field2: [] }
+    const fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = field1_ident, .var_ = empty_record_var },
+        .{ .name = field2_ident, .var_ = empty_tag_union_var },
+    });
+
+    const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+
+    // Convert to layout - should fail because all fields are zero-sized
+    const result = layout_store.addTypeVar(&type_store, record_var);
+    try testing.expectError(LayoutError.ZeroSizedType, result);
+}
+
+test "addTypeVar - box of record with all zero-sized fields" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    const field1_ident = type_store.env.ident_store.insert("field1");
+    const field2_ident = type_store.env.ident_store.insert("field2");
+
+    // Create record { field1: {}, field2: {} }
+    const fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = field1_ident, .var_ = empty_record_var },
+        .{ .name = field2_ident, .var_ = empty_record_var },
+    });
+
+    const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+
+    // Create box of this record
+    const box_record_var = type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
+
+    // Convert to layout - should become box_zero_sized
+    const box_layout_idx = try layout_store.addTypeVar(&type_store, box_record_var);
+
+    // Verify the layout is box_zero_sized
+    const box_layout = layout_store.getLayout(box_layout_idx);
+    try testing.expect(box_layout.* == .box_zero_sized);
+}
+
+test "addTypeVar - nested record with inner record having all zero-sized fields" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create inner record with only zero-sized fields
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+    const a_ident = type_store.env.ident_store.insert("a");
+    const b_ident = type_store.env.ident_store.insert("b");
+
+    const inner_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = a_ident, .var_ = empty_record_var },
+        .{ .name = b_ident, .var_ = empty_record_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const inner_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = empty_ext } } });
+
+    // Create outer record { name: str, data: inner_record }
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const name_ident = type_store.env.ident_store.insert("name");
+    const data_ident = type_store.env.ident_store.insert("data");
+
+    const outer_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = name_ident, .var_ = str_var },
+        .{ .name = data_ident, .var_ = inner_record_var },
+    });
+
+    const outer_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = empty_ext } } });
+
+    // Convert to layout
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, outer_record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify we only have 1 field (data field should be dropped because inner record is empty)
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // Field name (str)
+    const name_field = field_iter.next().?;
+    try testing.expect(name_field.name == name_ident);
+    const name_layout = layout_store.getLayout(name_field.layout);
+    try testing.expect(name_layout.* == .str);
+
+    // No more fields (data field should be dropped)
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - list of record with all zero-sized fields" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    const field_ident = type_store.env.ident_store.insert("field");
+
+    // Create record { field: {} }
+    const fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = field_ident, .var_ = empty_record_var },
+    });
+
+    const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+
+    // Create list of this record
+    const list_record_var = type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+
+    // Convert to layout - should become list_zero_sized
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_record_var);
+
+    // Verify the layout is list_zero_sized
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list_zero_sized);
 }
