@@ -199,6 +199,11 @@ main! = |_| { # Yeah I can leave a comment here
 	)
 } # Comment after top-level decl
 
+empty : {}
+empty = {}
+
+tuple : Value((a, b, c))
+
 expect {
 	foo = 1 # This should work too
 	blah = 1
@@ -404,13 +409,18 @@ CloseStringInterpolation(194:3-194:4),StringPart(194:4-194:17),StringEnd(194:17-
 CloseRound(195:2-195:3),Newline(1:1-1:1),
 CloseCurly(196:1-196:2),Newline(196:4-196:33),
 Newline(1:1-1:1),
-KwExpect(198:1-198:7),OpenCurly(198:8-198:9),Newline(1:1-1:1),
-LowerIdent(199:2-199:5),OpAssign(199:6-199:7),Int(199:8-199:9),Newline(199:11-199:32),
-LowerIdent(200:2-200:6),OpAssign(200:7-200:8),Int(200:9-200:10),Newline(1:1-1:1),
-LowerIdent(201:2-201:6),OpEquals(201:7-201:9),LowerIdent(201:10-201:13),Newline(1:1-1:1),
-CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
+LowerIdent(198:1-198:6),OpColon(198:7-198:8),OpenCurly(198:9-198:10),CloseCurly(198:10-198:11),Newline(1:1-1:1),
+LowerIdent(199:1-199:6),OpAssign(199:7-199:8),OpenCurly(199:9-199:10),CloseCurly(199:10-199:11),Newline(1:1-1:1),
+Newline(1:1-1:1),
+LowerIdent(201:1-201:6),OpColon(201:7-201:8),UpperIdent(201:9-201:14),NoSpaceOpenRound(201:14-201:15),NoSpaceOpenRound(201:15-201:16),LowerIdent(201:16-201:17),Comma(201:17-201:18),LowerIdent(201:19-201:20),Comma(201:20-201:21),LowerIdent(201:22-201:23),CloseRound(201:23-201:24),CloseRound(201:24-201:25),Newline(1:1-1:1),
+Newline(1:1-1:1),
+KwExpect(203:1-203:7),OpenCurly(203:8-203:9),Newline(1:1-1:1),
+LowerIdent(204:2-204:5),OpAssign(204:6-204:7),Int(204:8-204:9),Newline(204:11-204:32),
+LowerIdent(205:2-205:6),OpAssign(205:7-205:8),Int(205:9-205:10),Newline(1:1-1:1),
+LowerIdent(206:2-206:6),OpEquals(206:7-206:9),LowerIdent(206:10-206:13),Newline(1:1-1:1),
+CloseCurly(207:1-207:2),EndOfFile(207:2-207:2),
 ~~~PARSE
-(file (1:2-202:2)
+(file (1:2-207:2)
 	(app (2:1-2:57)
 		(provides (2:6-2:12) (exposed_item (lower_ident "main!")))
 		(record_field (2:15-2:57)
@@ -946,19 +956,31 @@ CloseCurly(202:1-202:2),EndOfFile(202:2-202:2),
 									(ident (193:4-193:13) "Num" ".toStr")
 									(ident (193:14-193:20) "" "number"))
 								(string_part (194:4-194:17) " as a string?")))))))
-		(expect (198:1-202:2)
-			(block (198:8-202:2)
+		(type_anno (198:1-199:6) "empty" (record (198:9-198:11)))
+		(decl (199:1-199:11)
+			(ident (199:1-199:6) "empty")
+			(record (199:9-199:11)))
+		(type_anno (201:1-203:7)
+			"tuple"
+			(apply (201:9-201:25)
+				(ty "Value")
+				(tuple (201:15-201:24)
+					(ty_var (201:16-201:17) "a")
+					(ty_var (201:19-201:20) "b")
+					(ty_var (201:22-201:23) "c"))))
+		(expect (203:1-207:2)
+			(block (203:8-207:2)
 				(statements
-					(decl (199:2-199:9)
-						(ident (199:2-199:5) "foo")
-						(int (199:8-199:9) "1"))
-					(decl (200:2-200:10)
-						(ident (200:2-200:6) "blah")
-						(int (200:9-200:10) "1"))
-					(binop (201:2-202:2)
+					(decl (204:2-204:9)
+						(ident (204:2-204:5) "foo")
+						(int (204:8-204:9) "1"))
+					(decl (205:2-205:10)
+						(ident (205:2-205:6) "blah")
+						(int (205:9-205:10) "1"))
+					(binop (206:2-207:2)
 						"=="
-						(ident (201:2-201:6) "" "blah")
-						(ident (201:10-201:13) "" "foo")))))))
+						(ident (206:2-206:6) "" "blah")
+						(ident (206:10-206:13) "" "foo")))))))
 ~~~FORMATTED
 NO CHANGE
 ~~~END
