@@ -13,9 +13,13 @@ const Layout = layout.Layout;
 const Idx = layout.Idx;
 
 const MkSafeList = collections.SafeList;
-const exitOnOutOfMemory = collections.utils.exitOnOom;
 
-pub const TypeContainedMismatch = error{TypeContainedMismatch};
+pub const LayoutError = error{
+    TypeContainedMismatch,
+    // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
+    BugUnboxedFlexVar,
+    BugUnboxedRigidVar,
+};
 
 pub const Store = struct {
     const Self = @This();
@@ -31,11 +35,11 @@ pub const Store = struct {
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
-    pub fn init(env: *base.ModuleEnv) Self {
+    pub fn init(env: *base.ModuleEnv) std.mem.Allocator.Error!Self {
         return .{
             .env = env,
             .layouts = std.ArrayListUnmanaged(Layout){},
-            .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512) catch |err| exitOnOutOfMemory(err),
+            .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
         };
     }
@@ -46,9 +50,9 @@ pub const Store = struct {
         self.var_to_layout.deinit(self.env.gpa);
     }
 
-    fn insertLayout(self: *Self, layout_: Layout) Idx {
+    fn insertLayout(self: *Self, layout_: Layout) std.mem.Allocator.Error!Idx {
         const idx = self.layouts.items.len;
-        self.layouts.append(self.env.gpa, layout_) catch |err| exitOnOutOfMemory(err);
+        try self.layouts.append(self.env.gpa, layout_);
         return Idx{
             .attributes = .{ ._padding = 0 },
             .idx = @intCast(idx),
@@ -59,12 +63,14 @@ pub const Store = struct {
         return &self.layouts.items[idx.idx];
     }
 
-    /// Note: the caller MUST
+    /// Note: the caller MUST verify ahead of time that the given variable does not
+    /// resolve to a flex var or rigid var, unless that flex var or rigid var is
+    /// wrapped in a Box.
     pub fn addTypeVar(
         self: *Store,
         var_store: *const types_store.Store,
         var_: Var,
-    ) TypeContainedMismatch!Idx {
+    ) (LayoutError || std.mem.Allocator.Error)!Idx {
         const initial_resolved = var_store.resolveVar(var_);
 
         // If we've already done
@@ -103,22 +109,22 @@ pub const Store = struct {
             const resolved = var_store.resolveVar(work_item.var_to_process);
             const layout_idx = switch (resolved.desc.content) {
                 .structure => |flat_type| switch (flat_type) {
-                    .str => self.insertLayout(.str),
+                    .str => try self.insertLayout(.str),
                     .box => |elem_var| blk: {
                         // Create placeholder box layout
                         const placeholder_idx = Idx{
                             .attributes = .{ ._padding = 0 },
                             .idx = 0,
                         };
-                        const box_idx = self.insertLayout(Layout{ .box = placeholder_idx });
+                        const box_idx = try self.insertLayout(Layout{ .box = placeholder_idx });
 
                         // Process element
-                        work_stack.append(.{
+                        try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
                             .parent_idx = box_idx,
                             .parent_needs_box_elem = true,
                             .parent_needs_list_elem = false,
-                        }) catch |err| exitOnOutOfMemory(err);
+                        });
 
                         break :blk box_idx;
                     },
@@ -128,15 +134,15 @@ pub const Store = struct {
                             .attributes = .{ ._padding = 0 },
                             .idx = 0,
                         };
-                        const list_idx = self.insertLayout(Layout{ .list = placeholder_idx });
+                        const list_idx = try self.insertLayout(Layout{ .list = placeholder_idx });
 
                         // Process element
-                        work_stack.append(.{
+                        try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
                             .parent_idx = list_idx,
                             .parent_needs_box_elem = false,
                             .parent_needs_list_elem = true,
-                        }) catch |err| exitOnOutOfMemory(err);
+                        });
 
                         break :blk list_idx;
                     },
@@ -180,18 +186,28 @@ pub const Store = struct {
                     },
                 },
                 .flex_var => |_| blk: {
-                    // Debug assertion: flex_var should only appear inside a Box
-                    if (std.debug.runtime_safety) {
-                        std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
+                    // Flex vars can only be sent to the host if boxed.
+                    // The caller should have verified this invariant already.
+                    std.debug.assert(work_item.parent_needs_box_elem);
+                    std.debug.assert(work_item.parent_idx != null);
+
+                    if (!work_item.parent_needs_box_elem) {
+                        return LayoutError.BugUnboxedFlexVar;
                     }
-                    break :blk self.insertLayout(.host_opaque);
+
+                    break :blk try self.insertLayout(.host_opaque);
                 },
                 .rigid_var => |_| blk: {
-                    // Debug assertion: rigid_var should only appear inside a Box
-                    if (std.debug.runtime_safety) {
-                        std.debug.assert(work_item.parent_idx != null and work_item.parent_needs_box_elem);
+                    // Rigid vars can only be sent to the host if boxed.
+                    // The caller should have verified this invariant already.
+                    std.debug.assert(work_item.parent_needs_box_elem);
+                    std.debug.assert(work_item.parent_idx != null);
+
+                    if (!work_item.parent_needs_box_elem) {
+                        return LayoutError.BugUnboxedRigidVar;
                     }
-                    break :blk self.insertLayout(.host_opaque);
+
+                    break :blk try self.insertLayout(.host_opaque);
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
@@ -200,11 +216,11 @@ pub const Store = struct {
                 },
                 .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
                 .pure => @panic("pure doesn't make sense as a layout; should be moved out of Content"),
-                .err => return TypeContainedMismatch.TypeContainedMismatch,
+                .err => return LayoutError.TypeContainedMismatch,
             };
 
             // Cache the layout
-            self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx) catch |err| exitOnOutOfMemory(err);
+            try self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx);
 
             // Update parent if needed
             if (work_item.parent_idx) |parent_idx| {
@@ -264,14 +280,14 @@ test "addTypeVar - str" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = Store.init(&module_env);
+    var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
     const str_var = type_store.freshFromContent(.{ .structure = .str });
 
     // Convert to layout
-    const str_layout_idx = layout_store.addTypeVar(&type_store, str_var) catch unreachable;
+    const str_layout_idx = try layout_store.addTypeVar(&type_store, str_var);
 
     // Verify the layout
     const str_layout = layout_store.getLayout(str_layout_idx);
@@ -290,7 +306,7 @@ test "addTypeVar - list of strings" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = Store.init(&module_env);
+    var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -300,7 +316,7 @@ test "addTypeVar - list of strings" {
     const list_str_var = type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
 
     // Convert to layout
-    const list_layout_idx = layout_store.addTypeVar(&type_store, list_str_var) catch unreachable;
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_str_var);
 
     // Verify the layout
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -323,7 +339,7 @@ test "addTypeVar - list of box of strings" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = Store.init(&module_env);
+    var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -336,7 +352,7 @@ test "addTypeVar - list of box of strings" {
     const list_box_str_var = type_store.freshFromContent(.{ .structure = .{ .list = box_str_var } });
 
     // Convert to layout
-    const list_layout_idx = layout_store.addTypeVar(&type_store, list_box_str_var) catch unreachable;
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_box_str_var);
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
@@ -363,7 +379,7 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = Store.init(&module_env);
+    var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex_var type variable
@@ -373,7 +389,7 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
     const box_flex_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
 
     // Convert to layout
-    const box_layout_idx = layout_store.addTypeVar(&type_store, box_flex_var) catch unreachable;
+    const box_layout_idx = try layout_store.addTypeVar(&type_store, box_flex_var);
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
@@ -396,7 +412,7 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = Store.init(&module_env);
+    var layout_store = try Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an ident for the rigid var
@@ -409,7 +425,7 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     const box_rigid_var = type_store.freshFromContent(.{ .structure = .{ .box = rigid_var } });
 
     // Convert to layout
-    const box_layout_idx = layout_store.addTypeVar(&type_store, box_rigid_var) catch unreachable;
+    const box_layout_idx = try layout_store.addTypeVar(&type_store, box_rigid_var);
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
