@@ -8,6 +8,7 @@ const layout = @import("./layout.zig");
 const base = @import("../base.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
+const record = @import("./record.zig");
 
 const Var = types.Var;
 const Layout = layout.Layout;
@@ -75,7 +76,7 @@ pub const Store = struct {
     fn isZeroSized(self: *const Self, idx: Idx) bool {
         const layout_ptr = &self.layouts.items[idx.idx];
         return switch (layout_ptr.*) {
-            .record => |record| record.fields.count == 0,
+            .record => |rec| rec.fields.count == 0,
             else => false,
         };
     }
@@ -98,14 +99,7 @@ pub const Store = struct {
         // To make this function stack-safe, we use a manual stack instead of recursing.
         const WorkItem = struct {
             var_to_process: Var,
-            parent: Parent,
-
-            const Parent = union(enum) {
-                none,
-                box_elem: struct { idx: Idx },
-                list_elem: struct { idx: Idx },
-                record_field: struct { idx: Idx, field_name: Ident.Idx },
-            };
+            parent: record.Parent,
         };
 
         var work_stack = std.ArrayList(WorkItem).init(self.env.gpa);
@@ -199,79 +193,70 @@ pub const Store = struct {
                         _ = func;
                         @panic("TODO: func layout");
                     },
-                    .record => |record| blk: {
+                    .record => |record_type| blk: {
                         // Process record fields
                         const fields_start = self.record_fields.len();
 
-                        // First, we need to get all the fields from the type store
-                        const field_iter = var_store.iterMulti(record.fields);
-
-                        // Create a placeholder record layout
-                        const placeholder_range = RecordFieldSafeMultiList.Range{
-                            .start = 0,
-                            .count = 0,
+                        // Create context for record processing
+                        var ctx = record.ProcessContext{
+                            .allocator = self.env.gpa,
+                            .layouts = &self.layouts,
                         };
-                        const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = placeholder_range } });
 
-                        // Process each field
-                        var field_count: u32 = 0;
-                        while (field_iter.next()) |field| {
-                            // Push work item for this field
+                        // Process the record and get its layout index
+                        const process_result = try record.processRecord(
+                            &ctx,
+                            var_store,
+                            record_type,
+                            fields_start,
+                        );
+
+                        // Get field work items
+                        var field_work_items = try record.getFieldWorkItems(
+                            self.env.gpa,
+                            var_store,
+                            record_type,
+                        );
+                        defer field_work_items.deinit();
+
+                        // Push work items for all fields
+                        for (field_work_items.items) |field_item| {
                             try work_stack.append(.{
-                                .var_to_process = var_store.resolveVar(field.var_).var_,
-                                .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field.name } },
+                                .var_to_process = field_item.var_,
+                                .parent = .{ .record_field = .{ .idx = process_result.record_idx, .field_name = field_item.field_name } },
                             });
-                            field_count += 1;
                         }
 
-                        // Process the extension variable
-                        const ext_resolved = var_store.resolveVar(record.ext);
-                        const ext_content = ext_resolved.desc.content;
+                        // Process extensions
+                        var ext_work_items = std.ArrayList(record.FieldWorkItem).init(self.env.gpa);
+                        defer ext_work_items.deinit();
 
-                        switch (ext_content) {
-                            .structure => |ext_flat_type| switch (ext_flat_type) {
-                                .empty_record => {
-                                    // Empty extension, nothing to do
-                                },
-                                .record => |ext_record| {
-                                    // Extension is another record, we need to merge its fields
-                                    const ext_field_iter = var_store.iterMulti(ext_record.fields);
-                                    while (ext_field_iter.next()) |field| {
-                                        // Push work item for this extension field
-                                        try work_stack.append(.{
-                                            .var_to_process = var_store.resolveVar(field.var_).var_,
-                                            .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field.name } },
-                                        });
-                                        field_count += 1;
-                                    }
+                        var current_ext = record_type.ext;
+                        while (true) {
+                            const ext_result = try record.processExtension(
+                                var_store,
+                                current_ext,
+                                &ext_work_items,
+                            );
 
-                                    // Recursively process the extension's extension
-                                    work_item.var_to_process = var_store.resolveVar(ext_record.ext).var_;
-                                    continue;
+                            switch (ext_result) {
+                                .done => break,
+                                .continue_with => |next_ext| {
+                                    current_ext = next_ext;
                                 },
-                                else => {
-                                    // Invalid extension type
-                                    return LayoutError.InvalidRecordExtension;
-                                },
-                            },
-                            .alias => |alias| {
-                                // Follow the alias
-                                work_item.var_to_process = var_store.resolveVar(alias.backing_var).var_;
-                                continue;
-                            },
-                            else => {
-                                // Invalid extension type
-                                return LayoutError.InvalidRecordExtension;
-                            },
+                                .invalid => return LayoutError.InvalidRecordExtension,
+                            }
                         }
 
-                        // Store the fields range in the placeholder
-                        // The count will be updated as fields are actually added (non-zero-sized only)
-                        const record_layout = self.getLayout(record_idx);
-                        record_layout.record.fields.start = @intCast(fields_start);
-                        record_layout.record.fields.count = 0; // Will be incremented as fields are added
+                        // Push work items for extension fields
+                        for (ext_work_items.items) |field_item| {
+                            try work_stack.append(.{
+                                .var_to_process = field_item.var_,
+                                .parent = .{ .record_field = .{ .idx = process_result.record_idx, .field_name = field_item.field_name } },
+                            });
+                        }
 
-                        break :blk record_idx;
+                        break :blk process_result.record_idx;
                     },
                     .tag_union => |tag_union| {
                         // TODO
@@ -374,31 +359,18 @@ pub const Store = struct {
                 .record_field => |record_parent| {
                     // Only add non-zero-sized fields to the record
                     if (!self.isZeroSized(layout_idx)) {
-                        // Add this field to the record_fields list, checking for duplicates
                         const parent_record = self.getLayout(record_parent.idx);
-                        const field_name = record_parent.field_name;
+                        const add_result = try record.addRecordField(
+                            self.env.gpa,
+                            &self.record_fields,
+                            parent_record,
+                            record_parent.field_name,
+                            layout_idx,
+                        );
 
-                        // Check if this field already exists
-                        const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                        for (existing_fields) |existing_field| {
-                            if (existing_field.name == field_name) {
-                                // Field already exists, check if types match
-                                if (existing_field.layout != layout_idx) {
-                                    return LayoutError.RecordFieldTypeMismatch;
-                                }
-                                // Types match, skip adding duplicate
-                                break;
-                            }
-                        } else {
-                            // Field doesn't exist yet, add it
-                            const field = RecordField{
-                                .name = field_name,
-                                .layout = layout_idx,
-                            };
-                            try self.record_fields.append(self.env.gpa, field);
-
-                            // Update the parent's field count
-                            parent_record.record.fields.count += 1;
+                        switch (add_result) {
+                            .added, .duplicate_match => {},
+                            .duplicate_mismatch => return LayoutError.RecordFieldTypeMismatch,
                         }
                     }
                 },
@@ -412,25 +384,10 @@ pub const Store = struct {
             // Check if we just finished processing a record that ended up empty
             const finished_layout = self.getLayout(layout_idx);
             if (finished_layout.* == .record and finished_layout.record.fields.count == 0) {
-                // This record has no non-zero-sized fields, handle based on parent
-                switch (work_item.parent) {
-                    .none => {
-                        // Root level empty record is an error
-                        return LayoutError.ZeroSizedType;
-                    },
-                    .box_elem => |box_parent| {
-                        // Replace parent with box_zero_sized
-                        const parent_layout = self.getLayout(box_parent.idx);
-                        parent_layout.* = .box_zero_sized;
-                    },
-                    .list_elem => |list_parent| {
-                        // Replace parent with list_zero_sized
-                        const parent_layout = self.getLayout(list_parent.idx);
-                        parent_layout.* = .list_zero_sized;
-                    },
-                    .record_field => {
-                        // The parent record will drop this field when checking isZeroSized
-                    },
+                const empty_result = record.handleEmptyRecord(work_item.parent, &self.layouts);
+                switch (empty_result) {
+                    .error_zero_sized => return LayoutError.ZeroSizedType,
+                    .box_zero_sized, .list_zero_sized, .record_field_dropped => {},
                 }
             }
 
@@ -471,31 +428,18 @@ pub const Store = struct {
                         .record_field => |record_parent| {
                             // Only add non-zero-sized fields to the record
                             if (!self.isZeroSized(cached_idx)) {
-                                // Add this field to the record_fields list, checking for duplicates
                                 const parent_record = self.getLayout(record_parent.idx);
-                                const field_name = record_parent.field_name;
+                                const add_result = try record.addRecordField(
+                                    self.env.gpa,
+                                    &self.record_fields,
+                                    parent_record,
+                                    record_parent.field_name,
+                                    cached_idx,
+                                );
 
-                                // Check if this field already exists
-                                const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                                for (existing_fields) |existing_field| {
-                                    if (existing_field.name == field_name) {
-                                        // Field already exists, check if types match
-                                        if (existing_field.layout != cached_idx) {
-                                            return LayoutError.RecordFieldTypeMismatch;
-                                        }
-                                        // Types match, skip adding duplicate
-                                        break;
-                                    }
-                                } else {
-                                    // Field doesn't exist yet, add it
-                                    const field = RecordField{
-                                        .name = field_name,
-                                        .layout = cached_idx,
-                                    };
-                                    try self.record_fields.append(self.env.gpa, field);
-
-                                    // Update the parent's field count
-                                    parent_record.record.fields.count += 1;
+                                switch (add_result) {
+                                    .added, .duplicate_match => {},
+                                    .duplicate_mismatch => return LayoutError.RecordFieldTypeMismatch,
                                 }
                             }
                         },
