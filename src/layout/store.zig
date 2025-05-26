@@ -15,6 +15,7 @@ const Idx = layout.Idx;
 const MkSafeList = collections.SafeList;
 
 pub const LayoutError = error{
+    ZeroSizedType,
     TypeContainedMismatch,
     // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
     BugUnboxedFlexVar,
@@ -146,20 +147,37 @@ pub const Store = struct {
 
                         break :blk list_idx;
                     },
+                    .custom_type => |custom_type| {
+                        // TODO special-case the builtin Num type here.
+                        // If we have one of those, then convert it to a num layout,
+                        // or to a runtime error if it's an invalid elem type.
+
+                        // From a layout perspective, custom types are identical to type aliases:
+                        // all we care about is what's inside.
+                        work_item.var_to_process = var_store.resolveVar(custom_type.backing_var).var_;
+                        continue;
+                    },
+                    .num => |num| blk: {
+                        const layout_to_insert = switch (num) {
+                            .int => |int| switch (int) {
+                                .exact => |precision| Layout{ .int = precision },
+                                // For Int(a), use the default precision for an Int.
+                                .flex_var => Layout{ .int = types.Num.Int.Precision.default },
+                            },
+                            .frac => |frac| switch (frac) {
+                                .exact => |precision| Layout{ .frac = precision },
+                                // For Frac(a), use the default precision for a Frac.
+                                .flex_var => Layout{ .frac = types.Num.Frac.Precision.default },
+                            },
+                            // Num(a) defaults to Int(a), so use the default precision for an Int.
+                            .flex_var => Layout{ .int = types.Num.Int.Precision.default },
+                        };
+                        break :blk try self.insertLayout(layout_to_insert);
+                    },
                     .tuple => |tuple| {
                         // TODO
                         _ = tuple;
                         @panic("TODO: tuple layout");
-                    },
-                    .num => |num| {
-                        // TODO
-                        _ = num;
-                        @panic("TODO: num layout");
-                    },
-                    .custom_type => |custom_type| {
-                        // TODO
-                        _ = custom_type;
-                        @panic("TODO: custom_type layout");
                     },
                     .func => |func| {
                         // TODO
@@ -171,18 +189,16 @@ pub const Store = struct {
                         _ = record;
                         @panic("TODO: record layout");
                     },
-                    .empty_record => {
-                        // TODO
-                        @panic("TODO: empty_record layout");
-                    },
                     .tag_union => |tag_union| {
                         // TODO
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
                     },
+                    .empty_record => {
+                        return LayoutError.ZeroSizedType;
+                    },
                     .empty_tag_union => {
-                        // TODO
-                        @panic("TODO: empty_tag_union layout");
+                        return LayoutError.ZeroSizedType;
                     },
                 },
                 .flex_var => |_| blk: {
@@ -398,6 +414,144 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
     // Verify the element is host_opaque
     const elem_layout = layout_store.getLayout(box_layout.box);
     try testing.expect(elem_layout.* == .host_opaque);
+}
+
+test "addTypeVar - num u32" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a u32 type variable
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+
+    // Convert to layout
+    const u32_layout_idx = try layout_store.addTypeVar(&type_store, u32_var);
+
+    // Verify the layout
+    const u32_layout = layout_store.getLayout(u32_layout_idx);
+    try testing.expect(u32_layout.* == .int);
+    try testing.expect(u32_layout.int == .u32);
+}
+
+test "addTypeVar - num f64" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a f64 type variable
+    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
+
+    // Convert to layout
+    const f64_layout_idx = try layout_store.addTypeVar(&type_store, f64_var);
+
+    // Verify the layout
+    const f64_layout = layout_store.getLayout(f64_layout_idx);
+    try testing.expect(f64_layout.* == .frac);
+    try testing.expect(f64_layout.frac == .f64);
+}
+
+test "addTypeVar - list of num i128" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create an i128 type variable
+    const i128_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i128 } } } });
+
+    // Create a list of i128 type variable
+    const list_i128_var = type_store.freshFromContent(.{ .structure = .{ .list = i128_var } });
+
+    // Convert to layout
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_i128_var);
+
+    // Verify the list layout
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list);
+
+    // Verify the element layout
+    const elem_layout = layout_store.getLayout(list_layout.list);
+    try testing.expect(elem_layout.* == .int);
+    try testing.expect(elem_layout.int == .i128);
+}
+
+test "addTypeVar - num dec" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a dec type variable
+    const dec_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .dec } } } });
+
+    // Convert to layout
+    const dec_layout_idx = try layout_store.addTypeVar(&type_store, dec_var);
+
+    // Verify the layout
+    const dec_layout = layout_store.getLayout(dec_layout_idx);
+    try testing.expect(dec_layout.* == .frac);
+    try testing.expect(dec_layout.frac == .dec);
+}
+
+test "addTypeVar - flex num var returns error" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a flex number type variable
+    const flex_num_var = type_store.freshFromContent(.{ .structure = .{ .num = .flex_var } });
+
+    // Try to convert to layout - should fail
+    const result = layout_store.addTypeVar(&type_store, flex_num_var);
+    try testing.expectError(LayoutError.TypeContainedMismatch, result);
 }
 
 test "addTypeVar - box of rigid_var compiles to box of host_opaque" {

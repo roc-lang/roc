@@ -1,4 +1,5 @@
 const std = @import("std");
+const types = @import("../types/types.zig");
 
 // Attributes for layout indices
 pub const Attributes = packed struct(u3) {
@@ -22,7 +23,8 @@ pub const Layout = union(enum) {
     box: Idx,
     list: Idx,
     tuple: Tuple,
-    num: Num,
+    int: types.Num.Int.Precision,
+    frac: types.Num.Frac.Precision,
     func: Func, // TODO how does the closure fit into here?
     tagged_union: TagUnion,
     host_opaque,
@@ -30,10 +32,6 @@ pub const Layout = union(enum) {
 
 // Placeholder types - to be defined
 pub const Tuple = struct {
-    // TODO: implement
-};
-
-pub const Num = struct {
     // TODO: implement
 };
 

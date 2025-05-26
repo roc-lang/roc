@@ -187,7 +187,14 @@ pub const Num = union(enum) {
         exact: Precision,
 
         /// the precision of a frac
-        pub const Precision = enum { f32, f64, dec };
+        pub const Precision = enum {
+            f32,
+            f64,
+            dec,
+
+            /// Default precision for Frac(a), e.g. if you put `1.1` into `roc repl`.
+            pub const default = Num.Frac.Precision.dec;
+        };
     };
 
     /// the Int data type
@@ -196,7 +203,24 @@ pub const Num = union(enum) {
         exact: Precision,
 
         /// the precision of an int
-        pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
+        pub const Precision = enum {
+            u8,
+            i8,
+            u16,
+            i16,
+            u32,
+            i32,
+            u64,
+            i64,
+            u128,
+            i128,
+
+            /// Default precision for Int(a), e.g. if you put `0x1` into `roc repl`.
+            ///
+            /// Note that numbers default to integers, so this is also what you'll
+            /// get if you put `1` into `roc repl`.
+            pub const default = Num.Int.Precision.i128;
+        };
     };
 };
 
