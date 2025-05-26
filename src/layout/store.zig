@@ -19,6 +19,8 @@ const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 pub const LayoutError = error{
     ZeroSizedType,
     TypeContainedMismatch,
+    RecordFieldTypeMismatch,
+    InvalidRecordExtension,
     // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
     BugUnboxedFlexVar,
     BugUnboxedRigidVar,
@@ -226,6 +228,51 @@ pub const Store = struct {
                             field_count += 1;
                         }
 
+                        // Process the extension variable
+                        const ext_resolved = var_store.resolveVar(record.ext);
+                        const ext_content = ext_resolved.desc.content;
+
+                        switch (ext_content) {
+                            .structure => |ext_flat_type| switch (ext_flat_type) {
+                                .empty_record => {
+                                    // Empty extension, nothing to do
+                                },
+                                .record => |ext_record| {
+                                    // Extension is another record, we need to merge its fields
+                                    const ext_field_iter = var_store.iterMulti(ext_record.fields);
+                                    while (ext_field_iter.next()) |field| {
+                                        // Push work item for this extension field
+                                        try work_stack.append(.{
+                                            .var_to_process = var_store.resolveVar(field.var_).var_,
+                                            .parent_idx = record_idx,
+                                            .parent_needs_box_elem = false,
+                                            .parent_needs_list_elem = false,
+                                            .parent_needs_record_field = true,
+                                            .record_field_name = field.name,
+                                        });
+                                        field_count += 1;
+                                    }
+
+                                    // Recursively process the extension's extension
+                                    work_item.var_to_process = var_store.resolveVar(ext_record.ext).var_;
+                                    continue;
+                                },
+                                else => {
+                                    // Invalid extension type
+                                    return LayoutError.InvalidRecordExtension;
+                                },
+                            },
+                            .alias => |alias| {
+                                // Follow the alias
+                                work_item.var_to_process = var_store.resolveVar(alias.backing_var).var_;
+                                continue;
+                            },
+                            else => {
+                                // Invalid extension type
+                                return LayoutError.InvalidRecordExtension;
+                            },
+                        }
+
                         // Store the field count in the placeholder so we know when all fields are processed
                         // We'll update this with the actual range once all fields are done
                         const record_layout = self.getLayout(record_idx);
@@ -321,12 +368,29 @@ pub const Store = struct {
                         parent_layout.* = Layout{ .list = layout_idx };
                     }
                 } else if (work_item.parent_needs_record_field) {
-                    // Add this field to the record_fields list
-                    const field = RecordField{
-                        .name = work_item.record_field_name.?,
-                        .layout = layout_idx,
-                    };
-                    try self.record_fields.append(self.env.gpa, field);
+                    // Add this field to the record_fields list, checking for duplicates
+                    const parent_record = self.getLayout(parent_idx);
+                    const field_name = work_item.record_field_name.?;
+
+                    // Check if this field already exists
+                    const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                    for (existing_fields) |existing_field| {
+                        if (existing_field.name == field_name) {
+                            // Field already exists, check if types match
+                            if (existing_field.layout != layout_idx) {
+                                return LayoutError.RecordFieldTypeMismatch;
+                            }
+                            // Types match, skip adding duplicate
+                            break;
+                        }
+                    } else {
+                        // Field doesn't exist yet, add it
+                        const field = RecordField{
+                            .name = field_name,
+                            .layout = layout_idx,
+                        };
+                        try self.record_fields.append(self.env.gpa, field);
+                    }
                 }
             }
 
@@ -361,12 +425,29 @@ pub const Store = struct {
                                 parent_layout.* = Layout{ .list = cached_idx };
                             }
                         } else if (work_item.parent_needs_record_field) {
-                            // Add this field to the record_fields list
-                            const field = RecordField{
-                                .name = work_item.record_field_name.?,
-                                .layout = cached_idx,
-                            };
-                            try self.record_fields.append(self.env.gpa, field);
+                            // Add this field to the record_fields list, checking for duplicates
+                            const parent_record = self.getLayout(parent_idx);
+                            const field_name = work_item.record_field_name.?;
+
+                            // Check if this field already exists
+                            const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                            for (existing_fields) |existing_field| {
+                                if (existing_field.name == field_name) {
+                                    // Field already exists, check if types match
+                                    if (existing_field.layout != cached_idx) {
+                                        return LayoutError.RecordFieldTypeMismatch;
+                                    }
+                                    // Types match, skip adding duplicate
+                                    break;
+                                }
+                            } else {
+                                // Field doesn't exist yet, add it
+                                const field = RecordField{
+                                    .name = field_name,
+                                    .layout = cached_idx,
+                                };
+                                try self.record_fields.append(self.env.gpa, field);
+                            }
                         }
                     }
 
@@ -1159,6 +1240,304 @@ test "addTypeVar - list of records" {
     const active_layout = layout_store.getLayout(active_field.layout);
     try testing.expect(active_layout.* == .int);
     try testing.expect(active_layout.int == .u8);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - record with extension" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create extension record { y: i32, z: f64 }
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
+    const y_ident = type_store.env.ident_store.insert("y");
+    const z_ident = type_store.env.ident_store.insert("z");
+
+    const ext_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = y_ident, .var_ = i32_var },
+        .{ .name = z_ident, .var_ = f64_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const ext_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
+
+    // Create main record { x: str } extending the above
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const x_ident = type_store.env.ident_store.insert("x");
+
+    const main_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = str_var },
+    });
+
+    const main_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = ext_record_var } } });
+
+    // Convert to layout
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, main_record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify we have all 3 fields (x from main, y and z from extension)
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // Field x (str)
+    const x_field = field_iter.next().?;
+    try testing.expect(x_field.name == x_ident);
+    const x_layout = layout_store.getLayout(x_field.layout);
+    try testing.expect(x_layout.* == .str);
+
+    // Field y (i32)
+    const y_field = field_iter.next().?;
+    try testing.expect(y_field.name == y_ident);
+    const y_layout = layout_store.getLayout(y_field.layout);
+    try testing.expect(y_layout.* == .int);
+    try testing.expect(y_layout.int == .i32);
+
+    // Field z (f64)
+    const z_field = field_iter.next().?;
+    try testing.expect(z_field.name == z_ident);
+    const z_layout = layout_store.getLayout(z_field.layout);
+    try testing.expect(z_layout.* == .frac);
+    try testing.expect(z_layout.frac == .f64);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - record with duplicate field in extension (matching types)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const x_ident = type_store.env.ident_store.insert("x");
+    const y_ident = type_store.env.ident_store.insert("y");
+
+    // Create extension record { x: str, y: i32 }
+    const ext_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = str_var },
+        .{ .name = y_ident, .var_ = i32_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const ext_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
+
+    // Create main record { x: str } extending the above (x appears in both with same type)
+    const main_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = str_var },
+    });
+
+    const main_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = ext_record_var } } });
+
+    // Convert to layout - should succeed since types match
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, main_record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify we have 2 fields (x appears only once, y from extension)
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // Field x (str)
+    const x_field = field_iter.next().?;
+    try testing.expect(x_field.name == x_ident);
+    const x_layout = layout_store.getLayout(x_field.layout);
+    try testing.expect(x_layout.* == .str);
+
+    // Field y (i32)
+    const y_field = field_iter.next().?;
+    try testing.expect(y_field.name == y_ident);
+    const y_layout = layout_store.getLayout(y_field.layout);
+    try testing.expect(y_layout.* == .int);
+    try testing.expect(y_layout.int == .i32);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - record with duplicate field in extension (mismatched types)" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const x_ident = type_store.env.ident_store.insert("x");
+
+    // Create extension record { x: i32 }
+    const ext_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = i32_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const ext_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = ext_fields, .ext = empty_ext } } });
+
+    // Create main record { x: str } extending the above (x appears in both with different types)
+    const main_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = str_var },
+    });
+
+    const main_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = ext_record_var } } });
+
+    // Convert to layout - should fail due to type mismatch
+    const result = layout_store.addTypeVar(&type_store, main_record_var);
+    try testing.expectError(LayoutError.RecordFieldTypeMismatch, result);
+}
+
+test "addTypeVar - record with invalid extension type" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a str type to use as invalid extension
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const x_ident = type_store.env.ident_store.insert("x");
+
+    // Create main record { x: str } with str as extension (invalid)
+    const main_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = str_var },
+    });
+
+    const main_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = main_fields, .ext = str_var } } });
+
+    // Convert to layout - should fail due to invalid extension
+    const result = layout_store.addTypeVar(&type_store, main_record_var);
+    try testing.expectError(LayoutError.InvalidRecordExtension, result);
+}
+
+test "addTypeVar - record with chained extensions" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create types
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
+    const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+
+    const w_ident = type_store.env.ident_store.insert("w");
+    const x_ident = type_store.env.ident_store.insert("x");
+    const y_ident = type_store.env.ident_store.insert("y");
+    const z_ident = type_store.env.ident_store.insert("z");
+
+    // Create innermost extension record { z: u8 }
+    const inner_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = z_ident, .var_ = u8_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const inner_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields, .ext = empty_ext } } });
+
+    // Create middle extension record { y: f64 } extending inner
+    const middle_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = y_ident, .var_ = f64_var },
+    });
+
+    const middle_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = middle_fields, .ext = inner_record_var } } });
+
+    // Create outermost record { w: str, x: i32 } extending middle
+    const outer_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = w_ident, .var_ = str_var },
+        .{ .name = x_ident, .var_ = i32_var },
+    });
+
+    const outer_record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields, .ext = middle_record_var } } });
+
+    // Convert to layout
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, outer_record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify we have all 4 fields from all levels
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // Field w (str)
+    const w_field = field_iter.next().?;
+    try testing.expect(w_field.name == w_ident);
+    const w_layout = layout_store.getLayout(w_field.layout);
+    try testing.expect(w_layout.* == .str);
+
+    // Field x (i32)
+    const x_field = field_iter.next().?;
+    try testing.expect(x_field.name == x_ident);
+    const x_layout = layout_store.getLayout(x_field.layout);
+    try testing.expect(x_layout.* == .int);
+    try testing.expect(x_layout.int == .i32);
+
+    // Field y (f64)
+    const y_field = field_iter.next().?;
+    try testing.expect(y_field.name == y_ident);
+    const y_layout = layout_store.getLayout(y_field.layout);
+    try testing.expect(y_layout.* == .frac);
+    try testing.expect(y_layout.frac == .f64);
+
+    // Field z (u8)
+    const z_field = field_iter.next().?;
+    try testing.expect(z_field.name == z_ident);
+    const z_layout = layout_store.getLayout(z_field.layout);
+    try testing.expect(z_layout.* == .int);
+    try testing.expect(z_layout.int == .u8);
 
     // No more fields
     try testing.expect(field_iter.next() == null);
