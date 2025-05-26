@@ -40,9 +40,6 @@ pub const Store = struct {
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordFieldSafeMultiList,
 
-    // Track record field counts during processing
-    pending_records: std.AutoHashMapUnmanaged(Idx, struct { start: u32, count: u32 }),
-
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
@@ -52,7 +49,7 @@ pub const Store = struct {
             .layouts = std.ArrayListUnmanaged(Layout){},
             .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
-            .pending_records = std.AutoHashMapUnmanaged(Idx, struct { start: u32, count: u32 }){},
+
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
         };
     }
@@ -61,7 +58,7 @@ pub const Store = struct {
         self.layouts.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
-        self.pending_records.deinit(self.env.gpa);
+
         self.var_to_layout.deinit(self.env.gpa);
     }
 
@@ -103,6 +100,11 @@ pub const Store = struct {
             const DeferredAction = union(enum) {
                 create_box: struct { parent: record.Parent },
                 create_list: struct { parent: record.Parent },
+                finalize_record: struct {
+                    record_idx: Idx,
+                    parent: record.Parent,
+                    fields_start: u32,
+                },
             };
         };
 
@@ -249,15 +251,20 @@ pub const Store = struct {
                         // We have at least one field, so create the record
                         const fields_start = self.record_fields.len();
 
-                        // Create a temporary placeholder record - we'll finalize it after processing fields
-                        // For now, use a dummy NonEmptyRange that we'll update later
+                        // Create a temporary placeholder record - we'll check if it's empty after processing
+                        // Use a placeholder range that will be updated if fields are added
                         const temp_range = collections.NonEmptyRange.init(@intCast(fields_start), 1) catch unreachable;
                         const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = temp_range } });
 
-                        // Track this record for finalization
-                        try self.pending_records.put(self.env.gpa, record_idx, .{
-                            .start = @intCast(fields_start),
-                            .count = 0,
+                        // Push a finalize action that will run after all fields are processed
+                        try work_stack.append(.{
+                            .var_to_process = work_item.var_to_process,
+                            .parent = work_item.parent,
+                            .deferred_action = .{ .finalize_record = .{
+                                .record_idx = record_idx,
+                                .parent = work_item.parent,
+                                .fields_start = @intCast(fields_start),
+                            } },
                         });
 
                         // Push work items for all fields
@@ -402,10 +409,6 @@ pub const Store = struct {
                             .layout = layout_idx,
                         };
                         try self.record_fields.append(self.env.gpa, field);
-                        // Update pending record count
-                        if (self.pending_records.getPtr(record_parent.idx)) |pending| {
-                            pending.count += 1;
-                        }
                     }
                 },
             }
@@ -462,12 +465,50 @@ pub const Store = struct {
                                         .layout = box_idx,
                                     };
                                     try self.record_fields.append(self.env.gpa, field);
-                                    // Update pending record count
-                                    if (self.pending_records.getPtr(parent_record.idx)) |pending| {
-                                        pending.count += 1;
+                                    // Update field count for the record
+                                    if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
+                                        tracking.field_count += 1;
                                     }
                                 }
                             },
+                        }
+                    },
+                    .finalize_record => |record_info| {
+                        const record_layout = self.getLayout(record_info.record_idx);
+                        const current_fields_len = self.record_fields.len();
+                        const field_count = current_fields_len - record_info.fields_start;
+
+                        if (field_count == 0) {
+                            // Handle empty record based on parent context
+                            switch (record_info.parent) {
+                                .none => return LayoutError.ZeroSizedType,
+                                .box_elem => |box_parent| {
+                                    // Replace parent box with box_zero_sized
+                                    const parent_layout = self.getLayout(box_parent.idx);
+                                    parent_layout.* = .box_zero_sized;
+                                },
+                                .list_elem => |list_parent| {
+                                    // Replace parent list with list_zero_sized
+                                    const parent_layout = self.getLayout(list_parent.idx);
+                                    parent_layout.* = .list_zero_sized;
+                                },
+                                .record_field => {
+                                    // The parent record should drop this field
+                                    // Mark this record as empty so parent can skip it
+                                    record_layout.* = .empty_record;
+                                },
+                            }
+                        } else {
+                            // Update to the correct NonEmptyRange with actual field count
+                            record_layout.record.fields = collections.NonEmptyRange.init(
+                                record_info.fields_start,
+                                @intCast(field_count),
+                            ) catch unreachable;
+                        }
+
+                        // Update result if this was the root
+                        if (record_info.parent == .none) {
+                            result = record_info.record_idx;
                         }
                     },
                     .create_list => |list_info| {
@@ -511,9 +552,9 @@ pub const Store = struct {
                                         .layout = list_idx,
                                     };
                                     try self.record_fields.append(self.env.gpa, field);
-                                    // Update pending record count
-                                    if (self.pending_records.getPtr(parent_record.idx)) |pending| {
-                                        pending.count += 1;
+                                    // Update field count for the record
+                                    if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
+                                        tracking.field_count += 1;
                                     }
                                 }
                             },
@@ -583,10 +624,6 @@ pub const Store = struct {
                                     .layout = cached_idx,
                                 };
                                 try self.record_fields.append(self.env.gpa, field);
-                                // Update pending record count
-                                if (self.pending_records.getPtr(record_parent.idx)) |pending| {
-                                    pending.count += 1;
-                                }
                             }
                         },
                     }
@@ -595,25 +632,6 @@ pub const Store = struct {
             } else {
                 break;
             }
-        }
-
-        // Finalize all pending records
-        var pending_iter = self.pending_records.iterator();
-        while (pending_iter.next()) |entry| {
-            const record_idx = entry.key_ptr.*;
-            const pending = entry.value_ptr.*;
-
-            const record_layout = self.getLayout(record_idx);
-            if (pending.count == 0) {
-                // This should never happen given our pre-check, but handle it anyway
-                return LayoutError.ZeroSizedType;
-            }
-
-            // Update to the correct NonEmptyRange
-            record_layout.record.fields = collections.NonEmptyRange.init(
-                pending.start,
-                pending.count,
-            ) catch unreachable;
         }
 
         return result.?;
