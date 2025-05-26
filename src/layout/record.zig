@@ -20,8 +20,9 @@ pub const Parent = union(enum) {
 };
 
 pub const RecordProcessingResult = struct {
-    record_idx: Idx,
+    record_idx: Idx, // Note: this will be undefined until the record is actually created
     field_count: u32,
+    fields_start: usize,
 };
 
 pub const FieldWorkItem = struct {
@@ -33,6 +34,7 @@ pub const FieldWorkItem = struct {
 pub const ProcessContext = struct {
     allocator: std.mem.Allocator,
     layouts: *std.ArrayListUnmanaged(Layout),
+    record_fields: *RecordFieldSafeMultiList,
 
     pub fn insertLayout(self: *ProcessContext, layout_: Layout) std.mem.Allocator.Error!Idx {
         const idx = self.layouts.items.len;
@@ -42,21 +44,26 @@ pub const ProcessContext = struct {
             .idx = @intCast(idx),
         };
     }
+
+    /// Create a record layout after verifying it has at least one field
+    pub fn createRecordLayout(self: *ProcessContext, fields_start: usize, field_count: u32) !Idx {
+        if (field_count == 0) {
+            return error.EmptyRecord;
+        }
+
+        const non_empty_range = try collections.NonEmptyRange.init(@intCast(fields_start), field_count);
+        return self.insertLayout(Layout{ .record = .{ .fields = non_empty_range } });
+    }
 };
 
 /// Process a record type and return the record layout index and field count
 pub fn processRecord(
-    ctx: *ProcessContext,
     var_store: *const types_store.Store,
     record: types.Record,
     fields_start: usize,
 ) std.mem.Allocator.Error!RecordProcessingResult {
-    // Create a placeholder record layout
-    const placeholder_range = RecordFieldSafeMultiList.Range{
-        .start = @intCast(fields_start),
-        .count = 0,
-    };
-    const record_idx = try ctx.insertLayout(Layout{ .record = .{ .fields = placeholder_range } });
+    // Don't create the record layout yet - we'll create it after processing fields
+    // to ensure we never create an empty record
 
     // Count fields from main record
     var field_count: u32 = 0;
@@ -66,8 +73,9 @@ pub fn processRecord(
     }
 
     return RecordProcessingResult{
-        .record_idx = record_idx,
+        .record_idx = undefined, // Will be set later when we actually create the record
         .field_count = field_count,
+        .fields_start = fields_start,
     };
 }
 
@@ -135,18 +143,20 @@ pub fn processExtension(
     }
 }
 
-/// Add a field to a record, checking for duplicates
+/// Add a field to a record's field list, checking for duplicates
+/// Note: This doesn't update the record layout itself, as that may not exist yet
 pub fn addRecordField(
     allocator: std.mem.Allocator,
     record_fields: *RecordFieldSafeMultiList,
-    record_layout: *Layout,
+    fields_start: usize,
+    field_count: u32,
     field_name: Ident.Idx,
     field_layout_idx: Idx,
 ) !enum { added, duplicate_match, duplicate_mismatch } {
 
-    // Check if this field already exists
-    const existing_fields = record_fields.slice(record_layout.record.fields);
-    for (existing_fields) |existing_field| {
+    // Check if this field already exists in the range
+    const end = fields_start + field_count;
+    for (record_fields.items[fields_start..end]) |existing_field| {
         if (existing_field.name == field_name) {
             // Field already exists, check if types match
             if (existing_field.layout != field_layout_idx) {
@@ -163,9 +173,6 @@ pub fn addRecordField(
         .layout = field_layout_idx,
     };
     try record_fields.append(allocator, field);
-
-    // Update the record's field count
-    record_layout.record.fields.count += 1;
 
     return .added;
 }

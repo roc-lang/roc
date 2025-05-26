@@ -48,8 +48,15 @@ pub const RecordField = struct {
 
 // Record layout
 pub const Record = struct {
-    fields: RecordField.SafeMultiList.Range,
+    fields: collections.NonEmptyRange,
     // Note: no extension variable here - layouts are concrete
+
+    pub fn getFields(self: Record) RecordField.SafeMultiList.Range {
+        return RecordField.SafeMultiList.Range{
+            .start = self.fields.start,
+            .count = self.fields.count,
+        };
+    }
 };
 
 // Placeholder types - to be defined

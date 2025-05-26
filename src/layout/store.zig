@@ -40,6 +40,9 @@ pub const Store = struct {
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordFieldSafeMultiList,
 
+    // Track record field counts during processing
+    pending_records: std.AutoHashMapUnmanaged(Idx, struct { start: u32, count: u32 }),
+
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
@@ -49,6 +52,7 @@ pub const Store = struct {
             .layouts = std.ArrayListUnmanaged(Layout){},
             .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
+            .pending_records = std.AutoHashMapUnmanaged(Idx, struct { start: u32, count: u32 }){},
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
         };
     }
@@ -57,6 +61,7 @@ pub const Store = struct {
         self.layouts.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
+        self.pending_records.deinit(self.env.gpa);
         self.var_to_layout.deinit(self.env.gpa);
     }
 
@@ -71,14 +76,6 @@ pub const Store = struct {
 
     fn getLayout(self: *Self, idx: Idx) *Layout {
         return &self.layouts.items[idx.idx];
-    }
-
-    fn isZeroSized(self: *const Self, idx: Idx) bool {
-        const layout_ptr = &self.layouts.items[idx.idx];
-        return switch (layout_ptr.*) {
-            .record => |rec| rec.fields.count == 0,
-            else => false,
-        };
     }
 
     /// Note: the caller MUST verify ahead of time that the given variable does not
@@ -100,6 +97,13 @@ pub const Store = struct {
         const WorkItem = struct {
             var_to_process: Var,
             parent: record.Parent,
+            // For deferred layout creation (box/list elements)
+            deferred_action: ?DeferredAction = null,
+
+            const DeferredAction = union(enum) {
+                create_box: struct { parent: record.Parent },
+                create_list: struct { parent: record.Parent },
+            };
         };
 
         var work_stack = std.ArrayList(WorkItem).init(self.env.gpa);
@@ -124,37 +128,27 @@ pub const Store = struct {
             const layout_idx = switch (resolved.desc.content) {
                 .structure => |flat_type| switch (flat_type) {
                     .str => try self.insertLayout(.str),
-                    .box => |elem_var| blk: {
-                        // Create placeholder box layout
-                        const placeholder_idx = Idx{
-                            .attributes = .{ ._padding = 0 },
-                            .idx = 0,
-                        };
-                        const box_idx = try self.insertLayout(Layout{ .box = placeholder_idx });
-
-                        // Process element
+                    .box => |elem_var| {
+                        // Defer box creation until we know the element type
                         try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent = .{ .box_elem = .{ .idx = box_idx } },
+                            .parent = work_item.parent,
+                            .deferred_action = .{ .create_box = .{ .parent = work_item.parent } },
                         });
 
-                        break :blk box_idx;
+                        // Continue processing without creating a layout yet
+                        continue;
                     },
-                    .list => |elem_var| blk: {
-                        // Create placeholder list layout
-                        const placeholder_idx = Idx{
-                            .attributes = .{ ._padding = 0 },
-                            .idx = 0,
-                        };
-                        const list_idx = try self.insertLayout(Layout{ .list = placeholder_idx });
-
-                        // Process element
+                    .list => |elem_var| {
+                        // Defer list creation until we know the element type
                         try work_stack.append(.{
                             .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent = .{ .list_elem = .{ .idx = list_idx } },
+                            .parent = work_item.parent,
+                            .deferred_action = .{ .create_list = .{ .parent = work_item.parent } },
                         });
 
-                        break :blk list_idx;
+                        // Continue processing without creating a layout yet
+                        continue;
                     },
                     .custom_type => |custom_type| {
                         // TODO special-case the builtin Num type here.
@@ -194,126 +188,154 @@ pub const Store = struct {
                         @panic("TODO: func layout");
                     },
                     .record => |record_type| blk: {
-                        // Process record fields
-                        const fields_start = self.record_fields.len();
+                        // Collect all fields (including from extensions) first
+                        var all_fields = std.ArrayList(record.FieldWorkItem).init(self.env.gpa);
+                        defer all_fields.deinit();
 
-                        // Create context for record processing
-                        var ctx = record.ProcessContext{
-                            .allocator = self.env.gpa,
-                            .layouts = &self.layouts,
-                        };
-
-                        // Process the record and get its layout index
-                        const process_result = try record.processRecord(
-                            &ctx,
-                            var_store,
-                            record_type,
-                            fields_start,
-                        );
-
-                        // Get field work items
-                        var field_work_items = try record.getFieldWorkItems(
-                            self.env.gpa,
-                            var_store,
-                            record_type,
-                        );
-                        defer field_work_items.deinit();
-
-                        // Push work items for all fields
-                        for (field_work_items.items) |field_item| {
-                            try work_stack.append(.{
-                                .var_to_process = field_item.var_,
-                                .parent = .{ .record_field = .{ .idx = process_result.record_idx, .field_name = field_item.field_name } },
+                        // Get fields from main record
+                        const field_iter = var_store.iterMulti(record_type.fields);
+                        while (field_iter.next()) |field| {
+                            try all_fields.append(.{
+                                .var_ = var_store.resolveVar(field.var_).var_,
+                                .field_name = field.name,
                             });
                         }
 
                         // Process extensions
-                        var ext_work_items = std.ArrayList(record.FieldWorkItem).init(self.env.gpa);
-                        defer ext_work_items.deinit();
-
                         var current_ext = record_type.ext;
                         while (true) {
-                            const ext_result = try record.processExtension(
-                                var_store,
-                                current_ext,
-                                &ext_work_items,
-                            );
-
-                            switch (ext_result) {
-                                .done => break,
-                                .continue_with => |next_ext| {
-                                    current_ext = next_ext;
+                            const ext_resolved = var_store.resolveVar(current_ext);
+                            switch (ext_resolved.desc.content) {
+                                .structure => |ext_flat_type| switch (ext_flat_type) {
+                                    .empty_record => break,
+                                    .record => |ext_record| {
+                                        const ext_field_iter = var_store.iterMulti(ext_record.fields);
+                                        while (ext_field_iter.next()) |field| {
+                                            try all_fields.append(.{
+                                                .var_ = var_store.resolveVar(field.var_).var_,
+                                                .field_name = field.name,
+                                            });
+                                        }
+                                        current_ext = var_store.resolveVar(ext_record.ext).var_;
+                                    },
+                                    else => return LayoutError.InvalidRecordExtension,
                                 },
-                                .invalid => return LayoutError.InvalidRecordExtension,
+                                .alias => |alias| {
+                                    current_ext = var_store.resolveVar(alias.backing_var).var_;
+                                },
+                                else => return LayoutError.InvalidRecordExtension,
                             }
                         }
 
-                        // Push work items for extension fields
-                        for (ext_work_items.items) |field_item| {
-                            try work_stack.append(.{
-                                .var_to_process = field_item.var_,
-                                .parent = .{ .record_field = .{ .idx = process_result.record_idx, .field_name = field_item.field_name } },
-                            });
+                        // If there are no fields at all, handle based on parent
+                        if (all_fields.items.len == 0) {
+                            switch (work_item.parent) {
+                                .none => return LayoutError.ZeroSizedType,
+                                .box_elem => {
+                                    // Will be handled by deferred action
+                                    continue;
+                                },
+                                .list_elem => {
+                                    // Will be handled by deferred action
+                                    continue;
+                                },
+                                .record_field => {
+                                    // Empty record field - skip it
+                                    continue;
+                                },
+                            }
                         }
 
-                        break :blk process_result.record_idx;
+                        // We have at least one field, so create the record
+                        const fields_start = self.record_fields.len();
+
+                        // Create a temporary placeholder record - we'll finalize it after processing fields
+                        // For now, use a dummy NonEmptyRange that we'll update later
+                        const temp_range = collections.NonEmptyRange.init(@intCast(fields_start), 1) catch unreachable;
+                        const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = temp_range } });
+
+                        // Track this record for finalization
+                        try self.pending_records.put(self.env.gpa, record_idx, .{
+                            .start = @intCast(fields_start),
+                            .count = 0,
+                        });
+
+                        // Push work items for all fields
+                        for (all_fields.items) |field_item| {
+                            // Check if this field is zero-sized before processing
+                            const field_resolved = var_store.resolveVar(field_item.var_);
+                            const is_zero_sized = switch (field_resolved.desc.content) {
+                                .structure => |field_flat_type| switch (field_flat_type) {
+                                    .empty_record, .empty_tag_union => true,
+                                    else => false,
+                                },
+                                else => false,
+                            };
+
+                            if (!is_zero_sized) {
+                                try work_stack.append(.{
+                                    .var_to_process = field_item.var_,
+                                    .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field_item.field_name } },
+                                });
+                            }
+                        }
+
+                        break :blk record_idx;
                     },
                     .tag_union => |tag_union| {
                         // TODO
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
                     },
-                    .empty_record => blk: {
-                        // If this zero-sized type is inside a box or list, we can handle it
-                        switch (work_item.parent) {
-                            .box_elem => {
-                                // Signal to parent to use box_zero_sized
-                                break :blk try self.insertLayout(.box_zero_sized);
-                            },
-                            .list_elem => {
-                                // Signal to parent to use list_zero_sized
-                                break :blk try self.insertLayout(.list_zero_sized);
-                            },
-                            else => return LayoutError.ZeroSizedType,
+                    .empty_record => {
+                        // Empty records are zero-sized
+                        // If we have a deferred action, we'll handle it below
+                        // If we're a record field, we should have been skipped already
+                        // Otherwise, it's an error
+                        if (work_item.deferred_action == null) {
+                            switch (work_item.parent) {
+                                .record_field => unreachable, // Should have been filtered out
+                                else => return LayoutError.ZeroSizedType,
+                            }
                         }
+                        // Continue to handle deferred action
+                        continue;
                     },
-                    .empty_tag_union => blk: {
-                        // If this zero-sized type is inside a box or list, we can handle it
-                        switch (work_item.parent) {
-                            .box_elem => {
-                                // Signal to parent to use box_zero_sized
-                                break :blk try self.insertLayout(.box_zero_sized);
-                            },
-                            .list_elem => {
-                                // Signal to parent to use list_zero_sized
-                                break :blk try self.insertLayout(.list_zero_sized);
-                            },
-                            else => return LayoutError.ZeroSizedType,
+                    .empty_tag_union => {
+                        // Empty tag unions are zero-sized
+                        // If we have a deferred action, we'll handle it below
+                        // If we're a record field, we should have been skipped already
+                        // Otherwise, it's an error
+                        if (work_item.deferred_action == null) {
+                            switch (work_item.parent) {
+                                .record_field => unreachable, // Should have been filtered out
+                                else => return LayoutError.ZeroSizedType,
+                            }
                         }
+                        // Continue to handle deferred action
+                        continue;
                     },
                 },
                 .flex_var => |_| blk: {
                     // Flex vars can only be sent to the host if boxed.
-                    // The caller should have verified this invariant already.
-                    switch (work_item.parent) {
-                        .box_elem => {},
-                        else => {
-                            std.debug.assert(false);
-                            return LayoutError.BugUnboxedFlexVar;
-                        },
+                    // With deferred actions, we should only see flex vars in deferred box contexts
+                    if (work_item.deferred_action == null or
+                        (work_item.deferred_action.? != .create_box))
+                    {
+                        std.debug.assert(false);
+                        return LayoutError.BugUnboxedFlexVar;
                     }
 
                     break :blk try self.insertLayout(.host_opaque);
                 },
                 .rigid_var => |_| blk: {
                     // Rigid vars can only be sent to the host if boxed.
-                    // The caller should have verified this invariant already.
-                    switch (work_item.parent) {
-                        .box_elem => {},
-                        else => {
-                            std.debug.assert(false);
-                            return LayoutError.BugUnboxedRigidVar;
-                        },
+                    // With deferred actions, we should only see rigid vars in deferred box contexts
+                    if (work_item.deferred_action == null or
+                        (work_item.deferred_action.? != .create_box))
+                    {
+                        std.debug.assert(false);
+                        return LayoutError.BugUnboxedRigidVar;
                     }
 
                     break :blk try self.insertLayout(.host_opaque);
@@ -357,37 +379,151 @@ pub const Store = struct {
                     }
                 },
                 .record_field => |record_parent| {
-                    // Only add non-zero-sized fields to the record
-                    if (!self.isZeroSized(layout_idx)) {
-                        const parent_record = self.getLayout(record_parent.idx);
-                        const add_result = try record.addRecordField(
-                            self.env.gpa,
-                            &self.record_fields,
-                            parent_record,
-                            record_parent.field_name,
-                            layout_idx,
-                        );
+                    const parent_record = self.getLayout(record_parent.idx);
 
-                        switch (add_result) {
-                            .added, .duplicate_match => {},
-                            .duplicate_mismatch => return LayoutError.RecordFieldTypeMismatch,
+                    // Check if this field already exists
+                    const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                    var duplicate_found = false;
+                    for (existing_fields) |existing_field| {
+                        if (existing_field.name == record_parent.field_name) {
+                            // Field already exists, check if types match
+                            if (existing_field.layout != layout_idx) {
+                                return LayoutError.RecordFieldTypeMismatch;
+                            }
+                            duplicate_found = true;
+                            break;
+                        }
+                    }
+
+                    if (!duplicate_found) {
+                        // Add the field
+                        const field = RecordField{
+                            .name = record_parent.field_name,
+                            .layout = layout_idx,
+                        };
+                        try self.record_fields.append(self.env.gpa, field);
+                        // Update pending record count
+                        if (self.pending_records.getPtr(record_parent.idx)) |pending| {
+                            pending.count += 1;
                         }
                     }
                 },
             }
 
-            // If this was the root item, save the result
-            if (work_item.parent == .none) {
-                result = layout_idx;
-            }
+            // Handle deferred actions now that we have the element layout
+            if (work_item.deferred_action) |deferred| {
+                // Check if we're handling a zero-sized type from empty_record/empty_tag_union
+                const elem_idx = if (resolved.desc.content == .structure and
+                    (resolved.desc.content.structure == .empty_record or
+                        resolved.desc.content.structure == .empty_tag_union))
+                    null
+                else
+                    layout_idx;
 
-            // Check if we just finished processing a record that ended up empty
-            const finished_layout = self.getLayout(layout_idx);
-            if (finished_layout.* == .record and finished_layout.record.fields.count == 0) {
-                const empty_result = record.handleEmptyRecord(work_item.parent, &self.layouts);
-                switch (empty_result) {
-                    .error_zero_sized => return LayoutError.ZeroSizedType,
-                    .box_zero_sized, .list_zero_sized, .record_field_dropped => {},
+                switch (deferred) {
+                    .create_box => |box_info| {
+                        const box_layout = if (elem_idx == null)
+                            Layout{ .box_zero_sized = {} }
+                        else
+                            Layout{ .box = elem_idx.? };
+
+                        const box_idx = try self.insertLayout(box_layout);
+
+                        // Update parent with the box layout
+                        switch (box_info.parent) {
+                            .none => result = box_idx,
+                            .box_elem => |parent_box| {
+                                const parent_layout = self.getLayout(parent_box.idx);
+                                parent_layout.* = Layout{ .box = box_idx };
+                            },
+                            .list_elem => |parent_list| {
+                                const parent_layout = self.getLayout(parent_list.idx);
+                                parent_layout.* = Layout{ .list = box_idx };
+                            },
+                            .record_field => |parent_record| {
+                                const parent_rec_layout = self.getLayout(parent_record.idx);
+
+                                // Check if this field already exists
+                                const existing_fields = self.record_fields.slice(parent_rec_layout.record.fields);
+                                var duplicate_found = false;
+                                for (existing_fields) |existing_field| {
+                                    if (existing_field.name == parent_record.field_name) {
+                                        if (existing_field.layout != box_idx) {
+                                            return LayoutError.RecordFieldTypeMismatch;
+                                        }
+                                        duplicate_found = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!duplicate_found) {
+                                    const field = RecordField{
+                                        .name = parent_record.field_name,
+                                        .layout = box_idx,
+                                    };
+                                    try self.record_fields.append(self.env.gpa, field);
+                                    // Update pending record count
+                                    if (self.pending_records.getPtr(parent_record.idx)) |pending| {
+                                        pending.count += 1;
+                                    }
+                                }
+                            },
+                        }
+                    },
+                    .create_list => |list_info| {
+                        const list_layout = if (elem_idx == null)
+                            Layout{ .list_zero_sized = {} }
+                        else
+                            Layout{ .list = elem_idx.? };
+
+                        const list_idx = try self.insertLayout(list_layout);
+
+                        // Update parent with the list layout
+                        switch (list_info.parent) {
+                            .none => result = list_idx,
+                            .box_elem => |parent_box| {
+                                const parent_layout = self.getLayout(parent_box.idx);
+                                parent_layout.* = Layout{ .box = list_idx };
+                            },
+                            .list_elem => |parent_list| {
+                                const parent_layout = self.getLayout(parent_list.idx);
+                                parent_layout.* = Layout{ .list = list_idx };
+                            },
+                            .record_field => |parent_record| {
+                                const parent_rec_layout = self.getLayout(parent_record.idx);
+
+                                // Check if this field already exists
+                                const existing_fields = self.record_fields.slice(parent_rec_layout.record.fields);
+                                var duplicate_found = false;
+                                for (existing_fields) |existing_field| {
+                                    if (existing_field.name == parent_record.field_name) {
+                                        if (existing_field.layout != list_idx) {
+                                            return LayoutError.RecordFieldTypeMismatch;
+                                        }
+                                        duplicate_found = true;
+                                        break;
+                                    }
+                                }
+
+                                if (!duplicate_found) {
+                                    const field = RecordField{
+                                        .name = parent_record.field_name,
+                                        .layout = list_idx,
+                                    };
+                                    try self.record_fields.append(self.env.gpa, field);
+                                    // Update pending record count
+                                    if (self.pending_records.getPtr(parent_record.idx)) |pending| {
+                                        pending.count += 1;
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            } else {
+                // If this was the root item, save the result
+                if (work_item.parent == .none) {
+                    result = layout_idx;
                 }
             }
 
@@ -426,20 +562,30 @@ pub const Store = struct {
                             }
                         },
                         .record_field => |record_parent| {
-                            // Only add non-zero-sized fields to the record
-                            if (!self.isZeroSized(cached_idx)) {
-                                const parent_record = self.getLayout(record_parent.idx);
-                                const add_result = try record.addRecordField(
-                                    self.env.gpa,
-                                    &self.record_fields,
-                                    parent_record,
-                                    record_parent.field_name,
-                                    cached_idx,
-                                );
+                            const parent_record = self.getLayout(record_parent.idx);
 
-                                switch (add_result) {
-                                    .added, .duplicate_match => {},
-                                    .duplicate_mismatch => return LayoutError.RecordFieldTypeMismatch,
+                            // Check if this field already exists
+                            const existing_fields = self.record_fields.slice(parent_record.record.fields);
+                            var duplicate_found = false;
+                            for (existing_fields) |existing_field| {
+                                if (existing_field.name == record_parent.field_name) {
+                                    if (existing_field.layout != cached_idx) {
+                                        return LayoutError.RecordFieldTypeMismatch;
+                                    }
+                                    duplicate_found = true;
+                                    break;
+                                }
+                            }
+
+                            if (!duplicate_found) {
+                                const field = RecordField{
+                                    .name = record_parent.field_name,
+                                    .layout = cached_idx,
+                                };
+                                try self.record_fields.append(self.env.gpa, field);
+                                // Update pending record count
+                                if (self.pending_records.getPtr(record_parent.idx)) |pending| {
+                                    pending.count += 1;
                                 }
                             }
                         },
@@ -449,6 +595,25 @@ pub const Store = struct {
             } else {
                 break;
             }
+        }
+
+        // Finalize all pending records
+        var pending_iter = self.pending_records.iterator();
+        while (pending_iter.next()) |entry| {
+            const record_idx = entry.key_ptr.*;
+            const pending = entry.value_ptr.*;
+
+            const record_layout = self.getLayout(record_idx);
+            if (pending.count == 0) {
+                // This should never happen given our pre-check, but handle it anyway
+                return LayoutError.ZeroSizedType;
+            }
+
+            // Update to the correct NonEmptyRange
+            record_layout.record.fields = collections.NonEmptyRange.init(
+                pending.start,
+                pending.count,
+            ) catch unreachable;
         }
 
         return result.?;
