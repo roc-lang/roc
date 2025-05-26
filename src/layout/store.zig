@@ -13,6 +13,8 @@ const Layout = layout.Layout;
 const Idx = layout.Idx;
 
 const MkSafeList = collections.SafeList;
+const RecordField = layout.RecordField;
+const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 
 pub const LayoutError = error{
     ZeroSizedType,
@@ -32,6 +34,7 @@ pub const Store = struct {
 
     // Lists for parameterized layouts
     tuple_elems: collections.SafeList(Idx),
+    record_fields: RecordFieldSafeMultiList,
 
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
@@ -41,6 +44,7 @@ pub const Store = struct {
             .env = env,
             .layouts = std.ArrayListUnmanaged(Layout){},
             .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
+            .record_fields = try RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
         };
     }
@@ -48,6 +52,7 @@ pub const Store = struct {
     pub fn deinit(self: *Self) void {
         self.layouts.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
+        self.record_fields.deinit(self.env.gpa);
         self.var_to_layout.deinit(self.env.gpa);
     }
 
@@ -85,6 +90,8 @@ pub const Store = struct {
             parent_idx: ?Idx,
             parent_needs_box_elem: bool,
             parent_needs_list_elem: bool,
+            parent_needs_record_field: bool,
+            record_field_name: ?@import("../base/Ident.zig").Idx,
         };
 
         var work_stack = std.ArrayList(WorkItem).init(self.env.gpa);
@@ -98,6 +105,8 @@ pub const Store = struct {
             .parent_idx = null,
             .parent_needs_box_elem = false,
             .parent_needs_list_elem = false,
+            .parent_needs_record_field = false,
+            .record_field_name = null,
         };
 
         while (true) {
@@ -125,6 +134,8 @@ pub const Store = struct {
                             .parent_idx = box_idx,
                             .parent_needs_box_elem = true,
                             .parent_needs_list_elem = false,
+                            .parent_needs_record_field = false,
+                            .record_field_name = null,
                         });
 
                         break :blk box_idx;
@@ -143,6 +154,8 @@ pub const Store = struct {
                             .parent_idx = list_idx,
                             .parent_needs_box_elem = false,
                             .parent_needs_list_elem = true,
+                            .parent_needs_record_field = false,
+                            .record_field_name = null,
                         });
 
                         break :blk list_idx;
@@ -184,10 +197,42 @@ pub const Store = struct {
                         _ = func;
                         @panic("TODO: func layout");
                     },
-                    .record => |record| {
-                        // TODO
-                        _ = record;
-                        @panic("TODO: record layout");
+                    .record => |record| blk: {
+                        // Process record fields
+                        const fields_start = self.record_fields.len();
+
+                        // First, we need to get all the fields from the type store
+                        const field_iter = var_store.iterMulti(record.fields);
+
+                        // Create a placeholder record layout
+                        const placeholder_range = RecordFieldSafeMultiList.Range{
+                            .start = 0,
+                            .count = 0,
+                        };
+                        const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = placeholder_range } });
+
+                        // Process each field
+                        var field_count: u32 = 0;
+                        while (field_iter.next()) |field| {
+                            // Push work item for this field
+                            try work_stack.append(.{
+                                .var_to_process = var_store.resolveVar(field.var_).var_,
+                                .parent_idx = record_idx,
+                                .parent_needs_box_elem = false,
+                                .parent_needs_list_elem = false,
+                                .parent_needs_record_field = true,
+                                .record_field_name = field.name,
+                            });
+                            field_count += 1;
+                        }
+
+                        // Store the field count in the placeholder so we know when all fields are processed
+                        // We'll update this with the actual range once all fields are done
+                        const record_layout = self.getLayout(record_idx);
+                        record_layout.record.fields.count = field_count;
+                        record_layout.record.fields.start = @intCast(fields_start);
+
+                        break :blk record_idx;
                     },
                     .tag_union => |tag_union| {
                         // TODO
@@ -275,6 +320,13 @@ pub const Store = struct {
                     } else {
                         parent_layout.* = Layout{ .list = layout_idx };
                     }
+                } else if (work_item.parent_needs_record_field) {
+                    // Add this field to the record_fields list
+                    const field = RecordField{
+                        .name = work_item.record_field_name.?,
+                        .layout = layout_idx,
+                    };
+                    try self.record_fields.append(self.env.gpa, field);
                 }
             }
 
@@ -308,6 +360,13 @@ pub const Store = struct {
                             } else {
                                 parent_layout.* = Layout{ .list = cached_idx };
                             }
+                        } else if (work_item.parent_needs_record_field) {
+                            // Add this field to the record_fields list
+                            const field = RecordField{
+                                .name = work_item.record_field_name.?,
+                                .layout = cached_idx,
+                            };
+                            try self.record_fields.append(self.env.gpa, field);
                         }
                     }
 
@@ -892,4 +951,215 @@ test "addTypeVar - list of box of empty record compiles to list_zero_sized" {
     // Verify the layout is list_zero_sized
     const list_layout = layout_store.getLayout(list_layout_idx);
     try testing.expect(list_layout.* == .list_zero_sized);
+}
+
+test "addTypeVar - simple record" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create field types
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const u32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+
+    // Create field names
+    const name_ident = type_store.env.ident_store.insert("name");
+    const age_ident = type_store.env.ident_store.insert("age");
+
+    // Create record fields
+    const fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = name_ident, .var_ = str_var },
+        .{ .name = age_ident, .var_ = u32_var },
+    });
+
+    // Create record type
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = empty_ext } } });
+
+    // Convert to layout
+    const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
+
+    // Verify the layout
+    const record_layout = layout_store.getLayout(record_layout_idx);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify the fields
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // First field: name (str)
+    const name_field = field_iter.next().?;
+    try testing.expect(name_field.name == name_ident);
+    const name_layout = layout_store.getLayout(name_field.layout);
+    try testing.expect(name_layout.* == .str);
+
+    // Second field: age (u32)
+    const age_field = field_iter.next().?;
+    try testing.expect(age_field.name == age_ident);
+    const age_layout = layout_store.getLayout(age_field.layout);
+    try testing.expect(age_layout.* == .int);
+    try testing.expect(age_layout.int == .u32);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
+}
+
+test "addTypeVar - nested record" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create inner record type { x: i32, y: i32 }
+    const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+    const x_ident = type_store.env.ident_store.insert("x");
+    const y_ident = type_store.env.ident_store.insert("y");
+
+    const point_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = x_ident, .var_ = i32_var },
+        .{ .name = y_ident, .var_ = i32_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const point_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = point_fields, .ext = empty_ext } } });
+
+    // Create outer record type { name: Str, position: { x: i32, y: i32 } }
+    const str_var = type_store.freshFromContent(.{ .structure = .str });
+    const name_ident = type_store.env.ident_store.insert("name");
+    const position_ident = type_store.env.ident_store.insert("position");
+
+    const player_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = name_ident, .var_ = str_var },
+        .{ .name = position_ident, .var_ = point_var },
+    });
+
+    const player_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = player_fields, .ext = empty_ext } } });
+
+    // Convert to layout
+    const player_layout_idx = try layout_store.addTypeVar(&type_store, player_var);
+
+    // Verify the outer layout
+    const player_layout = layout_store.getLayout(player_layout_idx);
+    try testing.expect(player_layout.* == .record);
+
+    // Verify the outer fields
+    const outer_field_iter = layout_store.record_fields.iter(player_layout.record.fields);
+
+    // First field: name (str)
+    const name_field = outer_field_iter.next().?;
+    try testing.expect(name_field.name == name_ident);
+    const name_layout = layout_store.getLayout(name_field.layout);
+    try testing.expect(name_layout.* == .str);
+
+    // Second field: position (record)
+    const position_field = outer_field_iter.next().?;
+    try testing.expect(position_field.name == position_ident);
+    const position_layout = layout_store.getLayout(position_field.layout);
+    try testing.expect(position_layout.* == .record);
+
+    // No more outer fields
+    try testing.expect(outer_field_iter.next() == null);
+
+    // Verify the inner record fields
+    const inner_field_iter = layout_store.record_fields.iter(position_layout.record.fields);
+
+    // Inner field: x (i32)
+    const x_field = inner_field_iter.next().?;
+    try testing.expect(x_field.name == x_ident);
+    const x_layout = layout_store.getLayout(x_field.layout);
+    try testing.expect(x_layout.* == .int);
+    try testing.expect(x_layout.int == .i32);
+
+    // Inner field: y (i32)
+    const y_field = inner_field_iter.next().?;
+    try testing.expect(y_field.name == y_ident);
+    const y_layout = layout_store.getLayout(y_field.layout);
+    try testing.expect(y_layout.* == .int);
+    try testing.expect(y_layout.int == .i32);
+
+    // No more inner fields
+    try testing.expect(inner_field_iter.next() == null);
+}
+
+test "addTypeVar - list of records" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create record type { id: u64, active: bool }
+    const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    // For bool, we'll use u8 as a placeholder
+    const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+    const id_ident = type_store.env.ident_store.insert("id");
+    const active_ident = type_store.env.ident_store.insert("active");
+
+    const record_fields = try type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+        .{ .name = id_ident, .var_ = u64_var },
+        .{ .name = active_ident, .var_ = bool_var },
+    });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = record_fields, .ext = empty_ext } } });
+
+    // Create list of records
+    const list_record_var = type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+
+    // Convert to layout
+    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_record_var);
+
+    // Verify the list layout
+    const list_layout = layout_store.getLayout(list_layout_idx);
+    try testing.expect(list_layout.* == .list);
+
+    // Verify the record element
+    const record_layout = layout_store.getLayout(list_layout.list);
+    try testing.expect(record_layout.* == .record);
+
+    // Verify the record fields
+    const field_iter = layout_store.record_fields.iter(record_layout.record.fields);
+
+    // First field: id (u64)
+    const id_field = field_iter.next().?;
+    try testing.expect(id_field.name == id_ident);
+    const id_layout = layout_store.getLayout(id_field.layout);
+    try testing.expect(id_layout.* == .int);
+    try testing.expect(id_layout.int == .u64);
+
+    // Second field: active (u8)
+    const active_field = field_iter.next().?;
+    try testing.expect(active_field.name == active_ident);
+    const active_layout = layout_store.getLayout(active_field.layout);
+    try testing.expect(active_layout.* == .int);
+    try testing.expect(active_layout.int == .u8);
+
+    // No more fields
+    try testing.expect(field_iter.next() == null);
 }
