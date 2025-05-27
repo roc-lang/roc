@@ -89,7 +89,7 @@ pub fn ModuleWork(comptime Work: type) type {
                     items.appendAssumeCapacity(.{
                         .package_idx = can_irs.getPackageIdx(work_idx),
                         .module_idx = can_irs.getModuleIdx(work_idx),
-                        .work = Work.init(can_irs.getWork(work_idx).env),
+                        .work = Work.init(&can_irs.getWork(work_idx).env),
                     });
                 }
 

@@ -7,7 +7,8 @@ const base = @import("../base.zig");
 const utils = @import("utils.zig");
 const cache = @import("../cache.zig");
 const collections = @import("../collections.zig");
-const can = @import("../check/canonicalize.zig");
+const Can = @import("../check/canonicalize.zig");
+const Scope = @import("../check/canonicalize/Scope.zig");
 const parse = @import("../check/parse.zig");
 const Filesystem = @import("../coordinate/Filesystem.zig");
 
@@ -19,7 +20,7 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
-modules: std.ArrayList(ModuleWork(can.IR)),
+modules: std.ArrayList(ModuleWork(Can.IR)),
 adjacencies: std.ArrayList(std.ArrayList(usize)),
 gpa: std.mem.Allocator,
 
@@ -49,7 +50,7 @@ pub fn fromPackages(
     package_store: *const Package.Store,
 ) ConstructResult {
     var graph = Self{
-        .modules = std.ArrayList(ModuleWork(can.IR)).init(gpa),
+        .modules = std.ArrayList(ModuleWork(Can.IR)).init(gpa),
         .adjacencies = std.ArrayList(std.ArrayList(usize)).init(gpa),
         .gpa = gpa,
     };
@@ -74,7 +75,7 @@ pub fn fromPackages(
                 } };
             };
 
-            graph.modules.append(ModuleWork(can.IR){
+            graph.modules.append(ModuleWork(Can.IR){
                 .package_idx = @enumFromInt(package_idx),
                 .module_idx = @enumFromInt(module_idx),
                 .work = can_ir,
@@ -93,7 +94,7 @@ fn loadOrCompileCanIr(
     relpath: []const u8,
     fs: Filesystem,
     gpa: std.mem.Allocator,
-) Filesystem.ReadError!can.IR {
+) Filesystem.ReadError!Can.IR {
     // TODO: find a way to provide the current Roc compiler version
     const current_roc_version = "";
     const abs_file_path = std.fs.path.join(gpa, &.{ absdir, relpath }) catch |err| exitOnOom(err);
@@ -108,8 +109,11 @@ fn loadOrCompileCanIr(
         var module_env = base.ModuleEnv.init(gpa);
         var parse_ir = parse.parse(&module_env, contents);
         parse_ir.store.emptyScratch();
-        var can_ir = can.IR.init(&module_env);
-        can.canonicalize(&can_ir, &parse_ir);
+        var can_ir = Can.IR.init(module_env);
+        var scope = Scope.init(&can_ir.env, &.{}, &.{});
+        defer scope.deinit();
+        var can = Can.init(&can_ir, &parse_ir, &scope);
+        can.canonicalize_file();
 
         break :blk can_ir;
     };
@@ -173,7 +177,7 @@ pub const Sccs = struct {
 
 /// The result of an attempt to put modules in compilation order.
 pub const OrderingResult = union(enum) {
-    ordered: ModuleWork(can.IR).Store,
+    ordered: ModuleWork(Can.IR).Store,
     found_cycle: std.ArrayList(ModuleWork(void)),
 };
 
@@ -187,7 +191,7 @@ pub fn putModulesInCompilationOrder(
     sccs: *const Sccs,
     gpa: std.mem.Allocator,
 ) OrderingResult {
-    var modules = std.ArrayList(ModuleWork(can.IR)).init(gpa);
+    var modules = std.ArrayList(ModuleWork(Can.IR)).init(gpa);
     errdefer modules.deinit();
 
     var group_index = sccs.groups.items.len;
@@ -215,7 +219,7 @@ pub fn putModulesInCompilationOrder(
         }
     }
 
-    return .{ .ordered = ModuleWork(can.IR).Store.fromCanIrs(gpa, modules.items) };
+    return .{ .ordered = ModuleWork(Can.IR).Store.fromCanIrs(gpa, modules.items) };
 }
 
 /// Find the SCCs for a [ModuleGraph] to facilitate ordering modules in a dependency-first
