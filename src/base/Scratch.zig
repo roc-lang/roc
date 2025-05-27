@@ -1,7 +1,11 @@
+//! A module that define a stack utility - Scratch - that is helpful
+//! when working with recursive operations
+
 const std = @import("std");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
 const DataSpan = @import("./DataSpan.zig");
 
+/// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
     return struct {
         items: std.ArrayListUnmanaged(T),

@@ -44,6 +44,8 @@ pub fn init(env: ModuleEnv) Self {
     };
 }
 
+/// Initialize the IR for a module's canonicalization info with a specified capacity.
+/// For more information refer to documentation on [init] as well
 pub fn initCapacity(env: ModuleEnv, capacity: usize) Self {
     var ident_store = env.idents;
     return Self{
@@ -149,6 +151,7 @@ pub const Node = struct {
     };
 };
 
+/// Stores AST nodes and provides scratch arrays for working with nodes.
 pub const NodeStore = struct {
     gpa: std.mem.Allocator,
     nodes: Node.List,
@@ -458,6 +461,7 @@ pub const Statement = union(enum) {
     pub const Span = struct { span: DataSpan };
 };
 
+/// A working representation of a record field
 pub const RecordField = struct {
     name: Ident.Idx,
     value: Expr.Idx,
