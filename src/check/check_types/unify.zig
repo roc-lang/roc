@@ -1585,8 +1585,8 @@ const Unifier = struct {
         const range_start: TagSafeMultiList.Idx = @enumFromInt(self.types_store.tags.len());
 
         for (shared_tags) |tags| {
-            const tag_a_args = self.types_store.tag_args.rangeToSlice(tags.a.args);
-            const tag_b_args = self.types_store.tag_args.rangeToSlice(tags.b.args);
+            const tag_a_args = self.types_store.getTagArgsSlice(tags.a.args);
+            const tag_b_args = self.types_store.getTagArgsSlice(tags.b.args);
 
             if (tag_a_args.len != tag_b_args.len) return error.TypeMismatch;
 
