@@ -52,12 +52,16 @@ pub const Rank = enum(u4) {
 };
 
 /// A type variable mark
+///
+/// Marks are temporary annotations used during various phases of type inference
+/// and type checking to track state and avoid redundant work.
+///
+/// Some places `Mark` is used:
+/// * Marking variables for generalizing during solving
 pub const Mark = enum(u32) {
     const Self = @This();
 
-    getVarNames = 0,
-    occurs = 1,
-    none = 2,
+    none = 0,
     _,
 
     /// Get the next mark
