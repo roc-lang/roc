@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
-const DataSpan = @import("./DataSpan.zig");
+const DataSpan = @import("../base.zig");
 
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {

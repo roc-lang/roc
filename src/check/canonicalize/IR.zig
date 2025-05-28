@@ -4,18 +4,19 @@ const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 const Alias = @import("./Alias.zig");
-const sexpr = @import("../../base/sexpr.zig"); // Added import
-const Scratch = @import("../../base/Scratch.zig").Scratch;
-const DataSpan = @import("../../base/DataSpan.zig");
-const exitOnOom = collections.utils.exitOnOom;
 
+const sexpr = base.sexpr; // Added import
+const Scratch = base.Scratch;
+const DataSpan = base.DataSpan;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleImport = base.ModuleImport;
 const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
+const exitOnOom = collections.utils.exitOnOom;
 const TypeVar = types.Var;
 const Problem = problem.Problem;
+
 const Self = @This();
 
 env: ModuleEnv,
