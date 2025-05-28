@@ -182,7 +182,16 @@ Parsing of type vars:
 
 ## Builtin
 
-TODO
+A function or type that is natively provided by Roc, for example `Dict.empty`, `List.map`, `Result`, ... .
+You don't need to import any of these to use them.
+
+[Builtin Docs](https://www.roc-lang.org/builtins)
+
+Implementation of builtins:
+- new compiler: [src/builtins](src/builtins) (work in progress)
+- old compiler: [crates/compiler/builtins](crates/compiler/builtins). Note: some builtin functions are implemented in zig, like `Num.f64_to_bits`, see [num.zig](crates/compiler/builtins/bitcode/src/num.zig).
+
+Interesting fact: our builtins are integrated into the compiler, there is no typical separate standard library.
 
 ## Compiler Phase
 
