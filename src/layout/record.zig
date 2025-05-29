@@ -12,7 +12,7 @@ const Layout = layout.Layout;
 const Idx = layout.Idx;
 const RecordField = layout.RecordField;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
-const Parent = work.Parent;
+const Parent = work.PendingContainer;
 const FieldWorkItem = work.FieldWorkItem;
 
 pub const RecordProcessingResult = struct {

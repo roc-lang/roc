@@ -14,6 +14,7 @@ const work = @import("./work.zig");
 const Var = types.Var;
 const Layout = layout.Layout;
 const Idx = layout.Idx;
+const Work = work.Work;
 
 const MkSafeList = collections.SafeList;
 const RecordField = layout.RecordField;
@@ -33,6 +34,7 @@ pub const Store = struct {
     const Self = @This();
 
     env: *base.ModuleEnv,
+    ident_store: *const Ident.Store,
 
     // Layout storage
     layouts: std.ArrayListUnmanaged(Layout),
@@ -45,17 +47,18 @@ pub const Store = struct {
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
     // Reusable work stack for addTypeVar
-    work_stack: std.ArrayListUnmanaged(work.WorkItem),
+    work: work.Work,
 
-    pub fn init(env: *base.ModuleEnv) std.mem.Allocator.Error!Self {
+    pub fn init(env: *base.ModuleEnv, ident_store: *const Ident.Store) std.mem.Allocator.Error!Self {
         return .{
             .env = env,
+            .ident_store = ident_store,
             .layouts = std.ArrayListUnmanaged(Layout){},
             .tuple_elems = try collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = try RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
 
-            .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
-            .work_stack = std.ArrayListUnmanaged(work.WorkItem){},
+            .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx),
+            .work = Work.initCapacity(env.gpa, 32),
         };
     }
 
@@ -65,7 +68,7 @@ pub const Store = struct {
         self.record_fields.deinit(self.env.gpa);
 
         self.var_to_layout.deinit(self.env.gpa);
-        self.work_stack.deinit(self.env.gpa);
+        self.work.deinit(self.env.gpa);
     }
 
     fn insertLayout(self: *Self, layout_: Layout) std.mem.Allocator.Error!Idx {
@@ -81,64 +84,53 @@ pub const Store = struct {
         return &self.layouts.items[idx.idx];
     }
 
-    /// Note: the caller MUST verify ahead of time that the given variable does not
+    /// Note: the caller must verify ahead of time that the given variable does not
     /// resolve to a flex var or rigid var, unless that flex var or rigid var is
-    /// wrapped in a Box.
+    /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
+    ///
+    /// For example, when checking types that are exposed to the host, they should
+    /// all have been verified to be either monomorphic or boxed. Same with repl
+    /// code like this:
+    ///
+    /// ```
+    /// val : a
+    ///
+    /// val
+    /// ```
+    ///
+    /// This flex var should be replaced by an Error type before calling this function.
     pub fn addTypeVar(
         self: *Store,
         var_store: *const types_store.Store,
-        var_: Var,
+        unresolved_var: Var,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
-        const initial_resolved = var_store.resolveVar(var_);
+        var current = var_store.resolveVar(unresolved_var);
 
-        // If we've already done
-        if (self.var_to_layout.get(initial_resolved.var_)) |cached_idx| {
+        // If we've already seen this var, return the layout we resolved it to.
+        if (self.var_to_layout.get(current.var_)) |cached_idx| {
             return cached_idx;
         }
 
         // To make this function stack-safe, we use a manual stack instead of recursing.
-        // Reset the work stack to reuse allocated memory
-        self.work_stack.clearRetainingCapacity();
+        // We reuse that stack from call to call to avoid reallocating it.
+        self.work.clearRetainingCapacity();
 
         var result: ?Idx = null;
 
-        // Initialize with the initial variable
-        var work_item = work.WorkItem{
-            .var_to_process = initial_resolved.var_,
-            .parent = .none,
-        };
-
         while (true) {
-            // The var we're aabout to work on should already have been resolved.
-            if (std.debug.runtime_safety) {
-                const resolved_check = var_store.resolveVar(work_item.var_to_process);
-                std.debug.assert(work_item.var_to_process == resolved_check.var_);
-            }
-
-            const resolved = var_store.resolveVar(work_item.var_to_process);
-            const layout_idx = switch (resolved.desc.content) {
+            const layout_idx = switch (current.desc.content) {
                 .structure => |flat_type| switch (flat_type) {
                     .str => try self.insertLayout(.str),
                     .box => |elem_var| {
-                        // Defer box creation until we know the element type
-                        try self.work_stack.append(self.env.gpa, .{
-                            .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent = work_item.parent,
-                            .deferred_action = .{ .create_box = .{ .parent = work_item.parent } },
-                        });
-
-                        // Continue processing without creating a layout yet
+                        try self.work.pending_containers.append(self.env.gpa, .box);
+                        // Push a pending Box container and "recurse" on the elem type
+                        current = var_store.resolveVar(elem_var).var_;
                         continue;
                     },
                     .list => |elem_var| {
-                        // Defer list creation until we know the element type
-                        try self.work_stack.append(self.env.gpa, .{
-                            .var_to_process = var_store.resolveVar(elem_var).var_,
-                            .parent = work_item.parent,
-                            .deferred_action = .{ .create_list = .{ .parent = work_item.parent } },
-                        });
-
-                        // Continue processing without creating a layout yet
+                        try self.work.pending_containers.append(self.env.gpa, .list);
+                        // Push a pending Box container and "recurse" on the elem type
+                        current = var_store.resolveVar(elem_var).var_;
                         continue;
                     },
                     .custom_type => |custom_type| {
@@ -147,8 +139,8 @@ pub const Store = struct {
                         // or to a runtime error if it's an invalid elem type.
 
                         // From a layout perspective, custom types are identical to type aliases:
-                        // all we care about is what's inside.
-                        work_item.var_to_process = var_store.resolveVar(custom_type.backing_var).var_;
+                        // all we care about is what's inside, so just unroll it.
+                        current = var_store.resolveVar(custom_type.backing_var);
                         continue;
                     },
                     .num => |num| blk: {
@@ -179,35 +171,37 @@ pub const Store = struct {
                         @panic("TODO: func layout");
                     },
                     .record => |record_type| blk: {
-                        // Collect all fields (including from extensions) first
-                        var all_fields = std.ArrayList(work.FieldWorkItem).init(self.env.gpa);
-                        defer all_fields.deinit();
+                        var num_fields = record_type.fields.len();
 
-                        // Get fields from main record
+                        // Collect the record's fields, then add its extension fields.
                         const field_iter = var_store.iterMulti(record_type.fields);
                         while (field_iter.next()) |field| {
-                            try all_fields.append(.{
-                                .var_ = var_store.resolveVar(field.var_).var_,
-                                .field_name = field.name,
-                            });
+                            // TODO is it possible that here we're encountering record fields with names
+                            // already in the list? Would type-checking have already deduped them?
+                            // We would certainly rather not spend time doing hashmap things if we can avoid it here.
+                            try self.work.pending_record_fields.append(field);
                         }
 
-                        // Process extensions
                         var current_ext = record_type.ext;
                         while (true) {
-                            const ext_resolved = var_store.resolveVar(current_ext);
-                            switch (ext_resolved.desc.content) {
+                            switch (var_store.resolveVar(current_ext).desc.content) {
                                 .structure => |ext_flat_type| switch (ext_flat_type) {
                                     .empty_record => break,
                                     .record => |ext_record| {
-                                        const ext_field_iter = var_store.iterMulti(ext_record.fields);
-                                        while (ext_field_iter.next()) |field| {
-                                            try all_fields.append(.{
-                                                .var_ = var_store.resolveVar(field.var_).var_,
-                                                .field_name = field.name,
-                                            });
+                                        if (ext_record.fields.len() > 0) {
+                                            num_fields += ext_record.fields.len();
+                                            const ext_field_iter = var_store.iterMulti(ext_record.fields);
+                                            while (ext_field_iter.next()) |field| {
+                                                // TODO is it possible that here we're adding fields with names
+                                                // already in the list? Would type-checking have already collapsed these?
+                                                // We would certainly rather not spend time doing hashmap things
+                                                // if we can avoid it here.
+                                                try self.work.pending_record_fields.append(field);
+                                            }
+                                            current_ext = ext_record.ext;
+                                        } else {
+                                            break;
                                         }
-                                        current_ext = var_store.resolveVar(ext_record.ext).var_;
                                     },
                                     else => return LayoutError.InvalidRecordExtension,
                                 },
@@ -218,127 +212,151 @@ pub const Store = struct {
                             }
                         }
 
-                        // If there are no fields at all, handle based on parent
-                        if (all_fields.items.len == 0) {
-                            switch (work_item.parent) {
-                                .none => return LayoutError.ZeroSizedType,
-                                .box_elem => {
-                                    // Will be handled by deferred action
-                                    continue;
-                                },
-                                .list_elem => {
-                                    // Will be handled by deferred action
-                                    continue;
-                                },
-                                .record_field => {
-                                    // Empty record field - skip it
-                                    continue;
-                                },
-                            }
-                        }
+                        switch (num_fields) {
+                            0 => {
+                                // This is an empty record!
+                            },
+                            1 => {
+                                // This is a single-field record; unwrap it and move on.
+                                const field = self.work.pending_record_fields.pop() orelse unreachable;
+                                current = var_store.resolveVar(field.var_);
+                                continue;
+                            },
+                            _ => {
+                                // Sort these fields *descending* by field name. (Descending because we will pop
+                                // these off one at a time to build up the layout, resulting in the layout being
+                                // sorted *ascending* by field name. Later, it will be further sorted by alignment.)
+                                const sort_ctx = struct {
+                                    ident_store: self.ident_store,
+                                    fn lessThan(ctx: @TypeOf(sort_ctx), a: types.RecordField, b: types.RecordField) bool {
+                                        const a_str: []u8 = ctx.ident_store.getText(a.name);
+                                        const b_str: []u8 = ctx.ident_store.getText(b.name);
+                                        // Sort descending (b before a)
+                                        return std.mem.order(u8, b_str, a_str) == .lt;
+                                    }
+                                };
 
-                        // We have at least one field, so create the record
-                        const fields_start = self.record_fields.len();
+                                self.work.pending_record_fields.sortSpan(
+                                    self.work.pending_record_fields.len - num_fields,
+                                    self.work.pending_record_fields.len,
+                                    sort_ctx,
+                                );
 
-                        // Create a temporary placeholder record - we'll check if it's empty after processing
-                        // Use a placeholder range that will be updated if fields are added
-                        const temp_range = collections.NonEmptyRange.init(@intCast(fields_start), 1) catch unreachable;
-                        const record_idx = try self.insertLayout(Layout{ .record = .{ .fields = temp_range } });
-
-                        // Push a finalize action that will run after all fields are processed
-                        try self.work_stack.append(self.env.gpa, .{
-                            .var_to_process = work_item.var_to_process,
-                            .parent = work_item.parent,
-                            .deferred_action = .{ .finalize_record = .{
-                                .record_idx = record_idx,
-                                .parent = work_item.parent,
-                                .fields_start = @intCast(fields_start),
-                            } },
-                        });
-
-                        // Push work items for all fields
-                        for (all_fields.items) |field_item| {
-                            // Check if this field is zero-sized before processing
-                            const field_resolved = var_store.resolveVar(field_item.var_);
-                            const is_zero_sized = switch (field_resolved.desc.content) {
-                                .structure => |field_flat_type| switch (field_flat_type) {
-                                    .empty_record, .empty_tag_union => true,
-                                    else => false,
-                                },
-                                else => false,
-                            };
-
-                            if (!is_zero_sized) {
-                                try self.work_stack.append(self.env.gpa, .{
-                                    .var_to_process = field_item.var_,
-                                    .parent = .{ .record_field = .{ .idx = record_idx, .field_name = field_item.field_name } },
+                                self.work.pending_containers.append(self.env.gpa, .{
+                                    .record = .{
+                                        .num_fields = num_fields,
+                                        .pending_fields = num_fields,
+                                    },
                                 });
-                            }
-                        }
 
-                        break :blk record_idx;
+                                // Start working on the last pending field (we want to pop them).
+                                const field = self.work.pending_record_fields.get(num_fields - 1);
+                                current = var_store.resolveVar(field.var_);
+                                continue;
+                            },
+                        }
                     },
                     .tag_union => |tag_union| {
                         // TODO
                         _ = tag_union;
                         @panic("TODO: tag_union layout");
                     },
-                    .empty_record => {
+                    .empty_record => blk: {
                         // Empty records are zero-sized
-                        // If we have a deferred action, we'll handle it below
-                        // If we're a record field, we should have been skipped already
-                        // Otherwise, it's an error
-                        if (work_item.deferred_action == null) {
-                            switch (work_item.parent) {
-                                .record_field => unreachable, // Should have been filtered out
-                                else => return LayoutError.ZeroSizedType,
+                        if (self.work.pending_containers.pop()) |pending_container| {
+                            switch (pending_container) {
+                                .list => {
+                                    // It turned out we were getting the layout for a List({})
+                                    break :blk try self.insertLayout(.list_zero_sized);
+                                },
+                                .box => {
+                                    // It turned out we were getting the layout for a Box({})
+                                    break :blk try self.insertLayout(.box_zero_sized);
+                                },
+                                .record => |pending_record| {
+                                    // It turned out we were getting the layout for a record field
+                                    // whose type was {}, which means that field should be dropped.
+
+                                    std.debug.assert(pending_record.pending_fields > 0);
+                                    pending_record.pending_fields -= 1;
+
+                                    // The current field we're working on has turned out to be zero-sized, so drop it.
+                                    const field = self.work.pending_record_fields.pop() orelse unreachable;
+
+                                    std.debug.assert(current.var_ == field.var_);
+
+                                    if (pending_record.pending_fields == 0) {
+                                        // We finished the record we were working on.
+                                        // TODO use self.work.pending_record_fields (or maybe just resolved_record_fields?),
+                                        // make sure we copy things into a contiguous chunk in layout.Record.fields,
+                                        // and then make a record_layout which does that.
+                                        const record_layout = .record();
+                                        break :blk try self.insertLayout(record_layout);
+                                    }
+
+                                    // Continue working on the other fields in the record.
+                                    continue;
+                                },
                             }
                         }
-                        // Continue to handle deferred action
-                        continue;
+
+                        // Unboxed zero-sized types cannot have a layout
+                        return LayoutError.ZeroSizedType;
                     },
-                    .empty_tag_union => {
+                    .empty_tag_union => blk: {
                         // Empty tag unions are zero-sized
-                        // If we have a deferred action, we'll handle it below
-                        // If we're a record field, we should have been skipped already
-                        // Otherwise, it's an error
-                        if (work_item.deferred_action == null) {
-                            switch (work_item.parent) {
-                                .record_field => unreachable, // Should have been filtered out
-                                else => return LayoutError.ZeroSizedType,
+                        if (self.work.pending_containers.pop()) |pending_container| {
+                            switch (pending_container) {
+                                .list => {
+                                    break :blk try self.insertLayout(.list_zero_sized);
+                                },
+                                .box => {
+                                    break :blk try self.insertLayout(.box_zero_sized);
+                                },
+                                .record => |pending_record| {
+                                    // There should be at least one remaining pending field!
+                                    std.debug.assert(pending_record.pending_fields > 0);
+
+                                    // The current field we're working on has turned out to be zero-sized, so drop it.
+                                    const field = self.work.pending_record_fields.pop() orelse unreachable;
+
+                                    std.debug.assert(current.var_ == field.var_);
+
+                                    @panic("TODO - ok we need to get the next pending record field or something? possibly finalize the record? what do we do here?!");
+                                    continue;
+                                },
                             }
                         }
-                        // Continue to handle deferred action
-                        continue;
+
+                        // Unboxed zero-sized types cannot have a layout
+                        return LayoutError.ZeroSizedType;
                     },
                 },
                 .flex_var => |_| blk: {
                     // Flex vars can only be sent to the host if boxed.
-                    // With deferred actions, we should only see flex vars in deferred box contexts
-                    if (work_item.deferred_action == null or
-                        (work_item.deferred_action.? != .create_box))
-                    {
-                        std.debug.assert(false);
-                        return LayoutError.BugUnboxedFlexVar;
+                    if (self.work.pending_containers.getLastOrNull()) |pending_container| {
+                        if (pending_container == .box or pending_container == .list) {
+                            break :blk try self.insertLayout(.host_opaque);
+                        }
                     }
 
-                    break :blk try self.insertLayout(.host_opaque);
+                    std.debug.assert(false);
+                    return LayoutError.BugUnboxedFlexVar;
                 },
                 .rigid_var => |_| blk: {
                     // Rigid vars can only be sent to the host if boxed.
-                    // With deferred actions, we should only see rigid vars in deferred box contexts
-                    if (work_item.deferred_action == null or
-                        (work_item.deferred_action.? != .create_box))
-                    {
-                        std.debug.assert(false);
-                        return LayoutError.BugUnboxedRigidVar;
+                    if (self.work.pending_containers.getLastOrNull()) |pending_container| {
+                        if (pending_container == .box or pending_container == .list) {
+                            break :blk try self.insertLayout(.host_opaque);
+                        }
                     }
 
-                    break :blk try self.insertLayout(.host_opaque);
+                    std.debug.assert(false);
+                    return LayoutError.BugUnboxedRigidVar;
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
-                    work_item.var_to_process = var_store.resolveVar(alias.backing_var).var_;
+                    current = var_store.resolveVar(alias.backing_var);
                     continue;
                 },
                 .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
@@ -346,8 +364,40 @@ pub const Store = struct {
                 .err => return LayoutError.TypeContainedMismatch,
             };
 
-            // Cache the layout
-            try self.var_to_layout.put(self.env.gpa, work_item.var_to_process, layout_idx);
+            // We actually resolved a layout and didn't `continue`!
+            // First things first: add it to the cache.
+            try self.var_to_layout.put(self.env.gpa, resolved.var_, layout_idx);
+
+            // Next, see if this was part of some pending work.
+            if (self.work.pending_containers.pop()) |pending_container| {
+                switch (pending_container) {
+                    .box => {
+                        // TODO
+                    },
+                    .list => {
+                        // TODO
+                    },
+                    .record => |record| {
+                        if (record.num_fields < record.fields_remaining) {
+                            // If there are fields remaining, there should be a pending record field.
+                            const pending_record = self.work.pending_record_fields.pop() orelse unreachable;
+
+                            std.debug.assert(pending_record.var_ == current.var_);
+
+                            // We still have more fields remaining to process.
+                            try self.work.resolved_record_fields.append(self.env.gpa, .{
+                                .field_name = pending_record.name, // TODO
+                                .field_idx = layout_idx,
+                            });
+                        }
+                    },
+                }
+            }
+
+            // TODO see if we have any pending record fields; if so, pop one and process the next one.
+            // our var should be equal to the last one's var I guess? can verify that in debug.
+            const todo = 0;
+            const field = self.work.pending_record_fields.get(num_fields - 1);
 
             // Update parent if needed
             switch (work_item.parent) {
@@ -405,9 +455,9 @@ pub const Store = struct {
             // Handle deferred actions now that we have the element layout
             if (work_item.deferred_action) |deferred| {
                 // Check if we're handling a zero-sized type from empty_record/empty_tag_union
-                const elem_idx = if (resolved.desc.content == .structure and
-                    (resolved.desc.content.structure == .empty_record or
-                        resolved.desc.content.structure == .empty_tag_union))
+                const elem_idx = if (current.desc.content == .structure and
+                    (current.desc.content.structure == .empty_record or
+                        current.desc.content.structure == .empty_tag_union))
                     null
                 else
                     layout_idx;
