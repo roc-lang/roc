@@ -286,11 +286,27 @@ pub const Store = struct {
                                     std.debug.assert(current.var_ == field.var_);
 
                                     if (pending_record.pending_fields == 0) {
-                                        // We finished the record we were working on.
-                                        // TODO use self.work.pending_record_fields (or maybe just resolved_record_fields?),
-                                        // make sure we copy things into a contiguous chunk in layout.Record.fields,
-                                        // and then make a record_layout which does that.
-                                        const record_layout = .record();
+                                        // We finished the record we were working on!
+
+                                        // Copy resolved fields into a contiguous chunk in record_fields
+                                        const num_resolved_fields = self.work.resolved_record_fields.len;
+                                        const fields_start = self.record_fields.items.len;
+
+                                        // Copy resolved fields to the record_fields store
+                                        for (self.work.resolved_record_fields.items(.field_name), self.work.resolved_record_fields.items(.field_idx)) |field_name, field_idx| {
+                                            try self.record_fields.append(self.env.gpa, .{
+                                                .name = field_name,
+                                                .layout = field_idx,
+                                            });
+                                        }
+
+                                        // Create the record layout with the fields range
+                                        const fields_range = try collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields));
+                                        const record_layout = Layout{ .record = .{ .fields = fields_range } };
+
+                                        // Clear resolved fields for next record
+                                        self.work.resolved_record_fields.clearRetainingCapacity();
+
                                         break :blk try self.insertLayout(record_layout);
                                     }
 
