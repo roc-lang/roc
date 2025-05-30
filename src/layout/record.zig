@@ -1,3 +1,6 @@
+//! Record layout computation and processing.
+//! Handles the conversion of record types into their memory layout representation.
+
 const std = @import("std");
 const types = @import("../types/types.zig");
 const types_store = @import("../types/store.zig");
@@ -15,6 +18,7 @@ const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 const Parent = work.PendingContainer;
 const FieldWorkItem = work.FieldWorkItem;
 
+/// Result of processing a record during layout computation
 pub const RecordProcessingResult = struct {
     record_idx: Idx, // Note: this will be undefined until the record is actually created
     field_count: u32,

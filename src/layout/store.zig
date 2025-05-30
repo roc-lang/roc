@@ -20,6 +20,7 @@ const MkSafeList = collections.SafeList;
 const RecordField = layout.RecordField;
 const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 
+/// Errors that can occur during layout computation
 pub const LayoutError = error{
     ZeroSizedType,
     TypeContainedMismatch,
@@ -30,6 +31,7 @@ pub const LayoutError = error{
     BugUnboxedRigidVar,
 };
 
+/// Storage for layout information, managing the allocation and retrieval of layouts
 pub const Store = struct {
     const Self = @This();
 

@@ -1,8 +1,12 @@
+//! Work queue management for layout computation.
+//! Tracks pending and resolved components during the layout generation process.
+
 const std = @import("std");
 const types = @import("../types/types.zig");
 const layout = @import("./layout.zig");
 const Ident = @import("../base/Ident.zig");
 
+/// Work queue for layout computation, tracking pending and resolved components
 pub const Work = struct {
     pending_containers: std.ArrayListUnmanaged(PendingContainer),
     pending_record_fields: std.MultiArrayList(types.RecordField),
