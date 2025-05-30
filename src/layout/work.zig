@@ -23,11 +23,20 @@ pub const Work = struct {
         record: struct { num_fields: u32, pending_fields: u32, resolved_fields_start: u32 },
     };
 
-    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) Work {
+    pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Work {
+        var pending_containers = std.ArrayListUnmanaged(PendingContainer){};
+        try pending_containers.ensureTotalCapacity(allocator, capacity);
+        
+        var pending_record_fields = std.MultiArrayList(types.RecordField){};
+        try pending_record_fields.ensureTotalCapacity(allocator, capacity);
+        
+        var resolved_record_fields = std.MultiArrayList(ResolvedRecordField){};
+        try resolved_record_fields.ensureTotalCapacity(allocator, capacity);
+        
         return .{
-            .pending_containers = std.ArrayListUnmanaged(PendingContainer).init(allocator, capacity),
-            .pending_record_fields = std.MultiArrayList(types.RecordField).init(allocator, capacity),
-            .resolved_record_fields = std.MultiArrayList(ResolvedRecordField).init(allocator, capacity),
+            .pending_containers = pending_containers,
+            .pending_record_fields = pending_record_fields,
+            .resolved_record_fields = resolved_record_fields,
         };
     }
 

@@ -181,45 +181,75 @@ pub const Num = union(enum) {
     int: Int,
     frac: Frac,
 
-    /// the Frac data type
+    /// The Frac data type
     pub const Frac = union(enum) {
         flex_var,
         exact: Precision,
 
-        /// the precision of a frac
-        pub const Precision = enum {
-            f32,
-            f64,
-            dec,
+        /// The precision of a Frac
+        pub const Precision = enum(u3) {
+            f32 = 2,
+            f64 = 3,
+            dec = 4,
 
             /// Default precision for Frac(a), e.g. if you put `1.1` into `roc repl`.
             pub const default = Num.Frac.Precision.dec;
+
+            /// Size in bytes
+            pub fn size(self: @This()) u32 {
+                return self.alignment(); // All Frac values have the same size and alignment
+            }
+
+            /// Alignment in bytes
+            pub fn alignment(self: @This()) u32 {
+                return @as(u32, 1) << @intCast(self.alignmentLog2());
+            }
+
+            /// Alignment in log2 bytes (e.g. an alignment of 8 bytes would return 3)
+            pub fn alignmentLog2(self: @This()) u3 {
+                return @intFromEnum(self);
+            }
         };
     };
 
-    /// the Int data type
+    /// The Int data type
     pub const Int = union(enum) {
         flex_var,
         exact: Precision,
 
-        /// the precision of an int
-        pub const Precision = enum {
-            u8,
-            i8,
-            u16,
-            i16,
-            u32,
-            i32,
-            u64,
-            i64,
-            u128,
-            i128,
+        /// The precision of an Int
+        pub const Precision = enum(u4) {
+            u8 = 0,
+            i8 = 1,
+            u16 = 2,
+            i16 = 3,
+            u32 = 4,
+            i32 = 5,
+            u64 = 6,
+            i64 = 7,
+            u128 = 8,
+            i128 = 9,
 
             /// Default precision for Int(a), e.g. if you put `0x1` into `roc repl`.
             ///
             /// Note that numbers default to integers, so this is also what you'll
             /// get if you put `1` into `roc repl`.
             pub const default = Num.Int.Precision.i128;
+
+            /// Size, in bytes
+            pub fn size(self: @This()) u32 {
+                return self.alignment(); // All Int values have the same size and alignment
+            }
+
+            /// Alignment, in bytes
+            pub fn alignment(self: @This()) u32 {
+                return @as(u32, 1) << @intCast(self.alignmentLog2());
+            }
+
+            /// Alignment, in log2 bytes (e.g. an alignment of 8 bytes would return 3)
+            pub fn alignmentLog2(self: @This()) u4 {
+                return @intFromEnum(self) / 2;
+            }
         };
     };
 };
@@ -388,3 +418,63 @@ pub const TwoTags = struct {
     /// A safe multi list of tag union fields
     pub const SafeMultiList = MkSafeMultiList(@This());
 };
+
+test "Int.Precision size() and alignmentLog2()" {
+    const testing = @import("std").testing;
+
+    // Test u8 - enum value 0, alignmentLog2 = 0/2 = 0
+    try testing.expectEqual(@as(u32, 1), Num.Int.Precision.u8.size());
+    try testing.expectEqual(@as(u4, 0), Num.Int.Precision.u8.alignmentLog2());
+
+    // Test i8 - enum value 1, alignmentLog2 = 1/2 = 0
+    try testing.expectEqual(@as(u32, 1), Num.Int.Precision.i8.size());
+    try testing.expectEqual(@as(u4, 0), Num.Int.Precision.i8.alignmentLog2());
+
+    // Test u16 - enum value 2, alignmentLog2 = 2/2 = 1
+    try testing.expectEqual(@as(u32, 2), Num.Int.Precision.u16.size());
+    try testing.expectEqual(@as(u4, 1), Num.Int.Precision.u16.alignmentLog2());
+
+    // Test i16 - enum value 3, alignmentLog2 = 3/2 = 1
+    try testing.expectEqual(@as(u32, 2), Num.Int.Precision.i16.size());
+    try testing.expectEqual(@as(u4, 1), Num.Int.Precision.i16.alignmentLog2());
+
+    // Test u32 - enum value 4, alignmentLog2 = 4/2 = 2
+    try testing.expectEqual(@as(u32, 4), Num.Int.Precision.u32.size());
+    try testing.expectEqual(@as(u4, 2), Num.Int.Precision.u32.alignmentLog2());
+
+    // Test i32 - enum value 5, alignmentLog2 = 5/2 = 2
+    try testing.expectEqual(@as(u32, 4), Num.Int.Precision.i32.size());
+    try testing.expectEqual(@as(u4, 2), Num.Int.Precision.i32.alignmentLog2());
+
+    // Test u64 - enum value 6, alignmentLog2 = 6/2 = 3
+    try testing.expectEqual(@as(u32, 8), Num.Int.Precision.u64.size());
+    try testing.expectEqual(@as(u4, 3), Num.Int.Precision.u64.alignmentLog2());
+
+    // Test i64 - enum value 7, alignmentLog2 = 7/2 = 3
+    try testing.expectEqual(@as(u32, 8), Num.Int.Precision.i64.size());
+    try testing.expectEqual(@as(u4, 3), Num.Int.Precision.i64.alignmentLog2());
+
+    // Test u128 - enum value 8, alignmentLog2 = 8/2 = 4
+    try testing.expectEqual(@as(u32, 16), Num.Int.Precision.u128.size());
+    try testing.expectEqual(@as(u4, 4), Num.Int.Precision.u128.alignmentLog2());
+
+    // Test i128 - enum value 9, alignmentLog2 = 9/2 = 4
+    try testing.expectEqual(@as(u32, 16), Num.Int.Precision.i128.size());
+    try testing.expectEqual(@as(u4, 4), Num.Int.Precision.i128.alignmentLog2());
+}
+
+test "Frac.Precision size() and alignmentLog2()" {
+    const testing = @import("std").testing;
+
+    // Test f32 - enum value 2, alignmentLog2 = 2
+    try testing.expectEqual(@as(u32, 4), Num.Frac.Precision.f32.size());
+    try testing.expectEqual(@as(u3, 2), Num.Frac.Precision.f32.alignmentLog2()); // 2^2 = 4
+
+    // Test f64 - enum value 3, alignmentLog2 = 3
+    try testing.expectEqual(@as(u32, 8), Num.Frac.Precision.f64.size());
+    try testing.expectEqual(@as(u3, 3), Num.Frac.Precision.f64.alignmentLog2()); // 2^3 = 8
+
+    // Test dec - enum value 4, alignmentLog2 = 4
+    try testing.expectEqual(@as(u32, 16), Num.Frac.Precision.dec.size());
+    try testing.expectEqual(@as(u3, 4), Num.Frac.Precision.dec.alignmentLog2()); // 2^4 = 16
+}
