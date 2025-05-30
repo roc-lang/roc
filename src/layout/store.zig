@@ -170,7 +170,7 @@ pub const Store = struct {
                         _ = func;
                         @panic("TODO: func layout");
                     },
-                    .record => |record_type| blk: {
+                    .record => |record_type| {
                         var num_fields = record_type.fields.len();
 
                         // Collect the record's fields, then add its extension fields.
@@ -226,11 +226,11 @@ pub const Store = struct {
                                 // Sort these fields *descending* by field name. (Descending because we will pop
                                 // these off one at a time to build up the layout, resulting in the layout being
                                 // sorted *ascending* by field name. Later, it will be further sorted by alignment.)
-                                const sort_ctx = struct {
-                                    ident_store: self.ident_store,
-                                    fn lessThan(ctx: @TypeOf(sort_ctx), a: types.RecordField, b: types.RecordField) bool {
-                                        const a_str: []u8 = ctx.ident_store.getText(a.name);
-                                        const b_str: []u8 = ctx.ident_store.getText(b.name);
+                                const SortCtx = struct {
+                                    ident_store: *Ident.Store,
+                                    fn lessThan(ctx: @This(), a: types.RecordField, b: types.RecordField) bool {
+                                        const a_str = ctx.ident_store.getText(a.name);
+                                        const b_str = ctx.ident_store.getText(b.name);
                                         // Sort descending (b before a)
                                         return std.mem.order(u8, b_str, a_str) == .lt;
                                     }
@@ -239,7 +239,7 @@ pub const Store = struct {
                                 self.work.pending_record_fields.sortSpan(
                                     self.work.pending_record_fields.len - num_fields,
                                     self.work.pending_record_fields.len,
-                                    sort_ctx,
+                                    SortCtx{ .ident_store = self.ident_store },
                                 );
 
                                 try self.work.pending_containers.append(self.env.gpa, .{
@@ -353,8 +353,15 @@ pub const Store = struct {
 
                                     std.debug.assert(current.var_ == field.var_);
 
-                                    @panic("TODO - ok we need to get the next pending record field or something? possibly finalize the record? what do we do here?!");
-                                    continue;
+                                    // We dropped a zero-sized field, check if there are more fields to process
+                                    if (self.work.pending_record_fields.items.len > 0) {
+                                        // Get the next field to process
+                                        const next_field = self.work.pending_record_fields.items[self.work.pending_record_fields.items.len - 1];
+                                        current = var_store.resolveVar(next_field.var_);
+                                        continue;
+                                    }
+                                    // All fields processed but all were zero-sized
+                                    break;
                                 },
                             }
                         }
@@ -397,7 +404,7 @@ pub const Store = struct {
 
             // We actually resolved a layout and didn't `continue`!
             // First things first: add it to the cache.
-            try self.var_to_layout.put(self.env.gpa, resolved.var_, layout_idx);
+            try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
 
             // Next, see if this was part of some pending work.
             if (self.work.pending_containers.pop()) |pending_container| {
@@ -408,9 +415,9 @@ pub const Store = struct {
                     .list => {
                         // TODO
                     },
-                    .record => |record| {
-                        std.debug.assert(record.pending_fields > 0);
-                        var updated_record = record;
+                    .record => |pending_record| {
+                        std.debug.assert(pending_record.pending_fields > 0);
+                        var updated_record = pending_record;
                         updated_record.pending_fields -= 1;
 
                         // Pop the field we just processed
@@ -456,283 +463,296 @@ pub const Store = struct {
                 }
             }
 
-            // TODO see if we have any pending record fields; if so, pop one and process the next one.
-            // our var should be equal to the last one's var I guess? can verify that in debug.
-            const todo = 0;
-            const field = self.work.pending_record_fields.get(num_fields - 1);
-
-            // Update parent if needed
-            switch (work_item.parent) {
-                .none => {},
-                .box_elem => |box_parent| {
-                    const parent_layout = self.getLayout(box_parent.idx);
-                    const child_layout = self.getLayout(layout_idx);
-
-                    // Check if child is a zero-sized placeholder
-                    if (child_layout.* == .box_zero_sized) {
-                        parent_layout.* = .box_zero_sized;
-                    } else {
-                        parent_layout.* = Layout{ .box = layout_idx };
-                    }
-                },
-                .list_elem => |list_parent| {
-                    const parent_layout = self.getLayout(list_parent.idx);
-                    const child_layout = self.getLayout(layout_idx);
-
-                    // Check if child is a zero-sized placeholder
-                    if (child_layout.* == .list_zero_sized) {
-                        parent_layout.* = .list_zero_sized;
-                    } else {
-                        parent_layout.* = Layout{ .list = layout_idx };
-                    }
-                },
-                .record_field => |record_parent| {
-                    const parent_record = self.getLayout(record_parent.idx);
-
-                    // Check if this field already exists
-                    const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                    var duplicate_found = false;
-                    for (existing_fields) |existing_field| {
-                        if (existing_field.name == record_parent.field_name) {
-                            // Field already exists, check if types match
-                            if (existing_field.layout != layout_idx) {
-                                return LayoutError.RecordFieldTypeMismatch;
-                            }
-                            duplicate_found = true;
-                            break;
-                        }
-                    }
-
-                    if (!duplicate_found) {
-                        // Add the field
-                        const field = RecordField{
-                            .name = record_parent.field_name,
-                            .layout = layout_idx,
-                        };
-                        try self.record_fields.append(self.env.gpa, field);
-                    }
-                },
+            // Check if we have more record fields to process
+            if (self.work.pending_record_fields.items.len > 0) {
+                // Get the next field to process
+                const next_field = self.work.pending_record_fields.items[self.work.pending_record_fields.items.len - 1];
+                current = var_store.resolveVar(next_field.var_);
+                continue;
             }
-
-            // Handle deferred actions now that we have the element layout
-            if (work_item.deferred_action) |deferred| {
-                // Check if we're handling a zero-sized type from empty_record/empty_tag_union
-                const elem_idx = if (current.desc.content == .structure and
-                    (current.desc.content.structure == .empty_record or
-                        current.desc.content.structure == .empty_tag_union))
-                    null
-                else
-                    layout_idx;
-
-                switch (deferred) {
-                    .create_box => |box_info| {
-                        const box_layout = if (elem_idx == null)
-                            Layout{ .box_zero_sized = {} }
-                        else
-                            Layout{ .box = elem_idx.? };
-
-                        const box_idx = try self.insertLayout(box_layout);
-
-                        // Update parent with the box layout
-                        switch (box_info.parent) {
-                            .none => result = box_idx,
-                            .box_elem => |parent_box| {
-                                const parent_layout = self.getLayout(parent_box.idx);
-                                parent_layout.* = Layout{ .box = box_idx };
-                            },
-                            .list_elem => |parent_list| {
-                                const parent_layout = self.getLayout(parent_list.idx);
-                                parent_layout.* = Layout{ .list = box_idx };
-                            },
-                            .record_field => |parent_record| {
-                                const parent_rec_layout = self.getLayout(parent_record.idx);
-
-                                // Check if this field already exists
-                                const existing_fields = self.record_fields.slice(parent_rec_layout.record.fields);
-                                var duplicate_found = false;
-                                for (existing_fields) |existing_field| {
-                                    if (existing_field.name == parent_record.field_name) {
-                                        if (existing_field.layout != box_idx) {
-                                            return LayoutError.RecordFieldTypeMismatch;
-                                        }
-                                        duplicate_found = true;
-                                        break;
-                                    }
-                                }
-
-                                if (!duplicate_found) {
-                                    const field = RecordField{
-                                        .name = parent_record.field_name,
-                                        .layout = box_idx,
-                                    };
-                                    try self.record_fields.append(self.env.gpa, field);
-                                    // Update field count for the record
-                                    if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
-                                        tracking.field_count += 1;
-                                    }
-                                }
-                            },
-                        }
-                    },
-                    .finalize_record => |record_info| {
-                        const record_layout = self.getLayout(record_info.record_idx);
-                        const current_fields_len = self.record_fields.len();
-                        const field_count = current_fields_len - record_info.fields_start;
-
-                        if (field_count == 0) {
-                            // Handle empty record based on parent context
-                            switch (record_info.parent) {
-                                .none => return LayoutError.ZeroSizedType,
-                                .box_elem => |box_parent| {
-                                    // Replace parent box with box_zero_sized
-                                    const parent_layout = self.getLayout(box_parent.idx);
-                                    parent_layout.* = .box_zero_sized;
-                                },
-                                .list_elem => |list_parent| {
-                                    // Replace parent list with list_zero_sized
-                                    const parent_layout = self.getLayout(list_parent.idx);
-                                    parent_layout.* = .list_zero_sized;
-                                },
-                                .record_field => {
-                                    // The parent record should drop this field
-                                    // Mark this record as empty so parent can skip it
-                                    record_layout.* = .empty_record;
-                                },
-                            }
-                        } else {
-                            // Update to the correct NonEmptyRange with actual field count
-                            record_layout.record.fields = collections.NonEmptyRange.init(
-                                record_info.fields_start,
-                                @intCast(field_count),
-                            ) catch unreachable;
-                        }
-
-                        // Update result if this was the root
-                        if (record_info.parent == .none) {
-                            result = record_info.record_idx;
-                        }
-                    },
-                    .create_list => |list_info| {
-                        const list_layout = if (elem_idx == null)
-                            Layout{ .list_zero_sized = {} }
-                        else
-                            Layout{ .list = elem_idx.? };
-
-                        const list_idx = try self.insertLayout(list_layout);
-
-                        // Update parent with the list layout
-                        switch (list_info.parent) {
-                            .none => result = list_idx,
-                            .box_elem => |parent_box| {
-                                const parent_layout = self.getLayout(parent_box.idx);
-                                parent_layout.* = Layout{ .box = list_idx };
-                            },
-                            .list_elem => |parent_list| {
-                                const parent_layout = self.getLayout(parent_list.idx);
-                                parent_layout.* = Layout{ .list = list_idx };
-                            },
-                            .record_field => |parent_record| {
-                                const parent_rec_layout = self.getLayout(parent_record.idx);
-
-                                // Check if this field already exists
-                                const existing_fields = self.record_fields.slice(parent_rec_layout.record.fields);
-                                var duplicate_found = false;
-                                for (existing_fields) |existing_field| {
-                                    if (existing_field.name == parent_record.field_name) {
-                                        if (existing_field.layout != list_idx) {
-                                            return LayoutError.RecordFieldTypeMismatch;
-                                        }
-                                        duplicate_found = true;
-                                        break;
-                                    }
-                                }
-
-                                if (!duplicate_found) {
-                                    const field = RecordField{
-                                        .name = parent_record.field_name,
-                                        .layout = list_idx,
-                                    };
-                                    try self.record_fields.append(self.env.gpa, field);
-                                    // Update field count for the record
-                                    if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
-                                        tracking.field_count += 1;
-                                    }
-                                }
-                            },
-                        }
-                    },
-                }
-            } else {
-                // If this was the root item, save the result
-                if (work_item.parent == .none) {
-                    result = layout_idx;
-                }
+            
+            // For now, just return the layout we created
+            if (result == null) {
+                result = layout_idx;
             }
+            break;
 
-            // Check if there's more work to do
-            if (self.work_stack.popOrNull()) |next_item| {
-                work_item = next_item;
+            // // TODO see if we have any pending record fields; if so, pop one and process the next one.
+            // // our var should be equal to the last one's var I guess? can verify that in debug.
+            // // const todo = 0;
+            // // const field = self.work.pending_record_fields.get(num_fields - 1);
 
-                // Check cache for the next item
-                if (self.var_to_layout.get(work_item.var_to_process)) |cached_idx| {
-                    // Update parent if needed
-                    switch (work_item.parent) {
-                        .none => {
-                            // This was the root item, save the result
-                            result = cached_idx;
-                        },
-                        .box_elem => |box_parent| {
-                            const parent_layout = self.getLayout(box_parent.idx);
-                            const child_layout = self.getLayout(cached_idx);
+            // // Update parent if needed
+            // // switch (work_item.parent) {
+            // //     .none => {},
+            // //     .box_elem => |box_parent| {
+            // //         const parent_layout = self.getLayout(box_parent.idx);
+            // //         const child_layout = self.getLayout(layout_idx);
 
-                            // Check if child is a zero-sized placeholder
-                            if (child_layout.* == .box_zero_sized) {
-                                parent_layout.* = .box_zero_sized;
-                            } else {
-                                parent_layout.* = Layout{ .box = cached_idx };
-                            }
-                        },
-                        .list_elem => |list_parent| {
-                            const parent_layout = self.getLayout(list_parent.idx);
-                            const child_layout = self.getLayout(cached_idx);
+            // //         // Check if child is a zero-sized placeholder
+            // //         if (child_layout.* == .box_zero_sized) {
+            // //             parent_layout.* = .box_zero_sized;
+            // //         } else {
+            // //             parent_layout.* = Layout{ .box = layout_idx };
+            // //         }
+            // //     },
+            // //     .list_elem => |list_parent| {
+            // //         const parent_layout = self.getLayout(list_parent.idx);
+            // //         const child_layout = self.getLayout(layout_idx);
 
-                            // Check if child is a zero-sized placeholder
-                            if (child_layout.* == .list_zero_sized) {
-                                parent_layout.* = .list_zero_sized;
-                            } else {
-                                parent_layout.* = Layout{ .list = cached_idx };
-                            }
-                        },
-                        .record_field => |record_parent| {
-                            const parent_record = self.getLayout(record_parent.idx);
+            // //         // Check if child is a zero-sized placeholder
+            // //         if (child_layout.* == .list_zero_sized) {
+            // //             parent_layout.* = .list_zero_sized;
+            // //         } else {
+            // //             parent_layout.* = Layout{ .list = layout_idx };
+            // //         }
+            // //     },
+            // //     .record_field => |record_parent| {
+            // //         const parent_record = self.getLayout(record_parent.idx);
 
-                            // Check if this field already exists
-                            const existing_fields = self.record_fields.slice(parent_record.record.fields);
-                            var duplicate_found = false;
-                            for (existing_fields) |existing_field| {
-                                if (existing_field.name == record_parent.field_name) {
-                                    if (existing_field.layout != cached_idx) {
-                                        return LayoutError.RecordFieldTypeMismatch;
-                                    }
-                                    duplicate_found = true;
-                                    break;
-                                }
-                            }
+            // //         // Check if this field already exists
+            // //         const existing_fields = self.record_fields.slice(parent_record.record.fields);
+            // //         var duplicate_found = false;
+            // //         for (existing_fields) |existing_field| {
+            // //             if (existing_field.name == record_parent.field_name) {
+            // //                 // Field already exists, check if types match
+            // //                 if (existing_field.layout != layout_idx) {
+            // //                     return LayoutError.RecordFieldTypeMismatch;
+            // //                 }
+            // //                 duplicate_found = true;
+            // //                 break;
+            // //             }
+            // //         }
 
-                            if (!duplicate_found) {
-                                const field = RecordField{
-                                    .name = record_parent.field_name,
-                                    .layout = cached_idx,
-                                };
-                                try self.record_fields.append(self.env.gpa, field);
-                            }
-                        },
-                    }
-                    continue;
-                }
-            } else {
-                break;
-            }
+            // //         if (!duplicate_found) {
+            // //             // Add the field
+            // //             const field = RecordField{
+            // //                 .name = record_parent.field_name,
+            // //                 .layout = layout_idx,
+            // //             };
+            // //             try self.record_fields.append(self.env.gpa, field);
+            // //         }
+            // //     },
+            // // }
+
+            // // Handle deferred actions now that we have the element layout
+            // // if (work_item.deferred_action) |deferred| {
+            // //     // Check if we're handling a zero-sized type from empty_record/empty_tag_union
+            // //     const elem_idx = if (current.desc.content == .structure and
+            // //         (current.desc.content.structure == .empty_record or
+            // //             current.desc.content.structure == .empty_tag_union))
+            // //         null
+            // //     else
+            // //         layout_idx;
+
+            // //     switch (deferred) {
+            // //         .create_box => |box_info| {
+            // //             const box_layout = if (elem_idx == null)
+            // //                 Layout{ .box_zero_sized = {} }
+            // //             else
+            // //                 Layout{ .box = elem_idx.? };
+
+            // //             const box_idx = try self.insertLayout(box_layout);
+
+            // //             // Update parent with the box layout
+            // //             switch (box_info.parent) {
+            // //                 .none => result = box_idx,
+            // //                 .box_elem => |parent_box| {
+            // //                     const parent_layout = self.getLayout(parent_box.idx);
+            // //                     parent_layout.* = Layout{ .box = box_idx };
+            // //                 },
+            // //                 .list_elem => |parent_list| {
+            // //                     const parent_layout = self.getLayout(parent_list.idx);
+            // //                     parent_layout.* = Layout{ .list = box_idx };
+            // //                 },
+            // //                 .record_field => |parent_record| {
+            // //                     const parent_field = RecordField{
+            // //                         .name = parent_record.field_name,
+            // //                         .layout = box_idx,
+            // //                     };
+
+            // //                     const existing_fields = self.record_fields.slice(parent_record.record_fields);
+            // //                     var duplicate_found = false;
+            // //                     for (existing_fields) |existing_field| {
+            // //                         if (existing_field.name == parent_record.field_name) {
+            // //                             if (existing_field.layout != box_idx) {
+            // //                                 return LayoutError.RecordFieldTypeMismatch;
+            // //                             }
+            // //                             duplicate_found = true;
+            // //                             break;
+            // //                         }
+            // //                     }
+
+            // //                     if (!duplicate_found) {
+            // //                         try self.record_fields.append(self.env.gpa, parent_field);
+
+            // //                         // Update the field count tracking if this is a new field
+            // //                         if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
+            // //                             tracking.field_count += 1;
+            // //                         }
+            // //                     }
+            // //                 },
+            // //             }
+            // //         },
+            // //         .finalize_record => |record_info| {
+            // //             const record_layout = self.getLayout(record_info.record_idx);
+
+            // //             // Get the actual field count that was resolved
+            // //             const field_count = if (self.record_tracking.get(record_info.record_idx)) |tracking|
+            // //                 tracking.field_count
+            // //             else
+            // //                 0;
+
+            // //             if (field_count == 0) {
+            // //                 // All fields were zero-sized and dropped, convert to empty_record
+            // //                 switch (record_info.parent) {
+            // //                     .none => {
+            // //                         // Root level empty record is an error
+            // //                         return LayoutError.ZeroSizedType;
+            // //                     },
+            // //                     .box_elem => |box_parent| {
+            // //                         const parent_layout = self.getLayout(box_parent.idx);
+            // //                         parent_layout.* = .box_zero_sized;
+            // //                     },
+            // //                     .list_elem => |list_parent| {
+            // //                         const parent_layout = self.getLayout(list_parent.idx);
+            // //                         parent_layout.* = .list_zero_sized;
+            // //                     },
+            // //                     .record_field => {
+            // //                         // The parent record will handle this when it checks isZeroSized
+            // //                         record_layout.* = .empty_record;
+            // //                     },
+            // //                 }
+            // //             } else {
+            // //                 // Update to the correct NonEmptyRange with actual field count
+            // //                 record_layout.record.fields = collections.NonEmptyRange.init(
+            // //                     record_info.fields_start,
+            // //                     @intCast(field_count),
+            // //                 ) catch unreachable;
+            // //             }
+
+            // //             // Save the result if this was the root item
+            // //             if (record_info.parent == .none) {
+            // //                 result = record_info.record_idx;
+            // //             }
+            // //         },
+            // //         .create_list => |list_info| {
+            // //             const list_layout = if (elem_idx == null)
+            // //                 Layout{ .list_zero_sized = {} }
+            // //             else
+            // //                 Layout{ .list = elem_idx.? };
+
+            // //             const list_idx = try self.insertLayout(list_layout);
+
+            // //             // Update parent with the list layout
+            // //             switch (list_info.parent) {
+            // //                 .none => result = list_idx,
+            // //                 .box_elem => |parent_box| {
+            // //                     const parent_layout = self.getLayout(parent_box.idx);
+            // //                     parent_layout.* = Layout{ .box = list_idx };
+            // //                 },
+            // //                 .list_elem => |parent_list| {
+            // //                     const parent_layout = self.getLayout(parent_list.idx);
+            // //                     parent_layout.* = Layout{ .list = list_idx };
+            // //                 },
+            // //                 .record_field => |parent_record| {
+            // //                     const parent_field = RecordField{
+            // //                         .name = parent_record.field_name,
+            // //                         .layout = list_idx,
+            // //                     };
+
+            // //                     const existing_fields = self.record_fields.slice(parent_record.record_fields);
+            // //                     var duplicate_found = false;
+            // //                     for (existing_fields) |existing_field| {
+            // //                         if (existing_field.name == parent_record.field_name) {
+            // //                             if (existing_field.layout != list_idx) {
+            // //                                 return LayoutError.RecordFieldTypeMismatch;
+            // //                             }
+            // //                             duplicate_found = true;
+            // //                             break;
+            // //                         }
+            // //                     }
+
+            // //                     if (!duplicate_found) {
+            // //                         try self.record_fields.append(self.env.gpa, parent_field);
+
+            // //                         // Update the field count tracking if this is a new field
+            // //                         if (self.record_tracking.getPtr(parent_record.idx)) |tracking| {
+            // //                             tracking.field_count += 1;
+            // //                         }
+            // //                     }
+            // //                 },
+            // //             }
+            // //         },
+            // //     }
+            // // } else {
+            // //     // If this was the root item, save the result
+            // //     if (work_item.parent == .none) {
+            // //         result = layout_idx;
+            // //     }
+            // // }
+
+            // // Check if there's more work to do
+            // // if (self.work_stack.popOrNull()) |next_item| {
+            // //     work_item = next_item;
+
+            // //     // Check cache for the next item
+            // //     if (self.var_to_layout.get(work_item.var_to_process)) |cached_idx| {
+            // //         // Update parent if needed
+            // //         switch (work_item.parent) {
+            // //             .none => {
+            // //                 // This was the root item, save the result
+            // //                 result = cached_idx;
+            // //             },
+            // //             .box_elem => |box_parent| {
+            // //                 const parent_layout = self.getLayout(box_parent.idx);
+            // //                 const child_layout = self.getLayout(cached_idx);
+
+            // //                 // Check if child is a zero-sized placeholder
+            // //                 if (child_layout.* == .box_zero_sized) {
+            // //                     parent_layout.* = .box_zero_sized;
+            // //                 } else {
+            // //                     parent_layout.* = Layout{ .box = cached_idx };
+            // //                 }
+            // //             },
+            // //             .list_elem => |list_parent| {
+            // //                 const parent_layout = self.getLayout(list_parent.idx);
+            // //                 const child_layout = self.getLayout(cached_idx);
+
+            // //                 // Check if child is a zero-sized placeholder
+            // //                 if (child_layout.* == .list_zero_sized) {
+            // //                     parent_layout.* = .list_zero_sized;
+            // //                 } else {
+            // //                     parent_layout.* = Layout{ .list = cached_idx };
+            // //                 }
+            // //             },
+            // //             .record_field => |record_parent| {
+            // //                 const existing_fields = self.record_fields.slice(record_parent.record_fields);
+            // //                 var duplicate_found = false;
+            // //                 for (existing_fields) |existing_field| {
+            // //                     if (existing_field.name == record_parent.field_name) {
+            // //                         if (existing_field.layout != cached_idx) {
+            // //                             return LayoutError.RecordFieldTypeMismatch;
+            // //                         }
+            // //                         duplicate_found = true;
+            // //                         break;
+            // //                     }
+            // //                 }
+
+            // //                 if (!duplicate_found) {
+            // //                     const field = RecordField{
+            // //                         .name = record_parent.field_name,
+            // //                         .layout = cached_idx,
+            // //                     };
+            // //                     try self.record_fields.append(self.env.gpa, field);
+            // //                 }
+            // //             },
+            // //         }
+            // //         continue;
+            // //     }
+            // // } else {
+            // //     break;
+            // // }
         }
 
         return result.?;
