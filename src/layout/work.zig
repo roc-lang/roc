@@ -16,7 +16,7 @@ pub const Work = struct {
     pub const PendingContainer = union(enum) {
         box,
         list,
-        record: struct { num_fields: u32, pending_fields: u32 },
+        record: struct { num_fields: u32, pending_fields: u32, resolved_fields_start: u32 },
     };
 
     pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) Work {

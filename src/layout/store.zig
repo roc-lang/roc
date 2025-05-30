@@ -242,10 +242,11 @@ pub const Store = struct {
                                     sort_ctx,
                                 );
 
-                                self.work.pending_containers.append(self.env.gpa, .{
+                                try self.work.pending_containers.append(self.env.gpa, .{
                                     .record = .{
                                         .num_fields = num_fields,
                                         .pending_fields = num_fields,
+                                        .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
                                     },
                                 });
 
@@ -278,25 +279,36 @@ pub const Store = struct {
                                     // whose type was {}, which means that field should be dropped.
 
                                     std.debug.assert(pending_record.pending_fields > 0);
-                                    pending_record.pending_fields -= 1;
+                                    var updated_record = pending_record;
+                                    updated_record.pending_fields -= 1;
 
                                     // The current field we're working on has turned out to be zero-sized, so drop it.
                                     const field = self.work.pending_record_fields.pop() orelse unreachable;
 
                                     std.debug.assert(current.var_ == field.var_);
 
-                                    if (pending_record.pending_fields == 0) {
-                                        // We finished the record we were working on!
+                                    if (updated_record.pending_fields == 0) {
+                                        // We finished the record we were working on.
+                                        // Copy only this record's resolved fields into a contiguous chunk in record_fields
+                                        const resolved_fields_end = self.work.resolved_record_fields.len;
+                                        const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
 
-                                        // Copy resolved fields into a contiguous chunk in record_fields
-                                        const num_resolved_fields = self.work.resolved_record_fields.len;
+                                        if (num_resolved_fields == 0) {
+                                            // All fields were zero-sized, this is an empty record
+                                            break :blk try self.insertLayout(.empty_record);
+                                        }
+
                                         const fields_start = self.record_fields.items.len;
 
-                                        // Copy resolved fields to the record_fields store
-                                        for (self.work.resolved_record_fields.items(.field_name), self.work.resolved_record_fields.items(.field_idx)) |field_name, field_idx| {
+                                        // Copy only this record's resolved fields to the record_fields store
+                                        const field_names = self.work.resolved_record_fields.items(.field_name);
+                                        const field_idxs = self.work.resolved_record_fields.items(.field_idx);
+
+                                        var i: u32 = updated_record.resolved_fields_start;
+                                        while (i < resolved_fields_end) : (i += 1) {
                                             try self.record_fields.append(self.env.gpa, .{
-                                                .name = field_name,
-                                                .layout = field_idx,
+                                                .name = field_names[i],
+                                                .layout = field_idxs[i],
                                             });
                                         }
 
@@ -304,11 +316,14 @@ pub const Store = struct {
                                         const fields_range = try collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields));
                                         const record_layout = Layout{ .record = .{ .fields = fields_range } };
 
-                                        // Clear resolved fields for next record
-                                        self.work.resolved_record_fields.clearRetainingCapacity();
+                                        // Remove only this record's resolved fields
+                                        self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
                                         break :blk try self.insertLayout(record_layout);
                                     }
+
+                                    // Still have fields to process, push the container back
+                                    try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
 
                                     // Continue working on the other fields in the record.
                                     continue;
@@ -394,17 +409,48 @@ pub const Store = struct {
                         // TODO
                     },
                     .record => |record| {
-                        if (record.num_fields < record.fields_remaining) {
-                            // If there are fields remaining, there should be a pending record field.
-                            const pending_record = self.work.pending_record_fields.pop() orelse unreachable;
+                        std.debug.assert(record.pending_fields > 0);
+                        var updated_record = record;
+                        updated_record.pending_fields -= 1;
 
-                            std.debug.assert(pending_record.var_ == current.var_);
+                        // Pop the field we just processed
+                        const pending_field = self.work.pending_record_fields.pop() orelse unreachable;
+                        std.debug.assert(pending_field.var_ == current.var_);
 
-                            // We still have more fields remaining to process.
-                            try self.work.resolved_record_fields.append(self.env.gpa, .{
-                                .field_name = pending_record.name, // TODO
-                                .field_idx = layout_idx,
-                            });
+                        // Add to resolved fields
+                        try self.work.resolved_record_fields.append(self.env.gpa, .{
+                            .field_name = pending_field.name,
+                            .field_idx = layout_idx,
+                        });
+
+                        if (updated_record.pending_fields == 0) {
+                            // We finished the record we were working on.
+                            // Copy only this record's resolved fields into a contiguous chunk in record_fields
+                            const resolved_fields_end = self.work.resolved_record_fields.len;
+                            const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
+                            const fields_start = self.record_fields.items.len;
+
+                            // Copy only this record's resolved fields to the record_fields store
+                            const field_names = self.work.resolved_record_fields.items(.field_name);
+                            const field_idxs = self.work.resolved_record_fields.items(.field_idx);
+
+                            var i: u32 = updated_record.resolved_fields_start;
+                            while (i < resolved_fields_end) : (i += 1) {
+                                try self.record_fields.append(self.env.gpa, .{
+                                    .name = field_names[i],
+                                    .layout = field_idxs[i],
+                                });
+                            }
+
+                            // Create the record layout with the fields range
+                            const fields_range = try collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields));
+                            layout_idx = try self.insertLayout(Layout{ .record = .{ .fields = fields_range } });
+
+                            // Remove only this record's resolved fields
+                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
+                        } else {
+                            // Still have fields to process, push the container back
+                            try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
                         }
                     },
                 }
