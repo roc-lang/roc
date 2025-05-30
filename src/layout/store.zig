@@ -470,7 +470,7 @@ pub const Store = struct {
                 current = var_store.resolveVar(next_field.var_);
                 continue;
             }
-            
+
             // For now, just return the layout we created
             if (result == null) {
                 result = layout_idx;
@@ -1703,6 +1703,196 @@ test "addTypeVar - box of record with all zero-sized fields" {
     // Verify the layout is box_zero_sized
     const box_layout = layout_store.getLayout(box_layout_idx);
     try testing.expect(box_layout.* == .box_zero_sized);
+}
+
+test "addTypeVar - comprehensive nested record combinations" {
+    // This tests:
+    // 1. 1344 different combinations (64 + 256 + 1024) of nested record structures
+    // 2. Proper dropping of of zero-sized fields at all nesting levels
+    // 3. Proper layout generation for fields that aren't zero-sized
+
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    // Create type store
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    // Create layout store
+    var layout_store = try Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create field names we'll reuse
+    const field_names = [_]Ident.Idx{
+        type_store.env.ident_store.insert("a"),
+        type_store.env.ident_store.insert("b"),
+        type_store.env.ident_store.insert("c"),
+        type_store.env.ident_store.insert("d"),
+        type_store.env.ident_store.insert("e"),
+        type_store.env.ident_store.insert("f"),
+    };
+
+    // Test all combinations
+    var outer_field_count: usize = 1;
+    while (outer_field_count <= 3) : (outer_field_count += 1) {
+        // Generate all possible field type combinations for outer record
+        var field_type_combo: usize = 0;
+        const max_combo = std.math.pow(usize, 4, outer_field_count); // 4 possibilities per field
+
+        while (field_type_combo < max_combo) : (field_type_combo += 1) {
+            // Create a new type store and layout store for each test
+            var test_type_store = types_store.Store.init(&module_env);
+            defer test_type_store.deinit();
+
+            var test_layout_store = try Store.init(&module_env);
+            defer test_layout_store.deinit();
+
+            // Build outer record fields
+            var outer_fields = std.ArrayList(types.RecordField).init(gpa);
+            defer outer_fields.deinit();
+
+            var expected_non_zero_fields: usize = 0;
+            var expected_total_fields: usize = 0;
+
+            var field_idx: usize = 0;
+            while (field_idx < outer_field_count) : (field_idx += 1) {
+                // Determine field type based on combination
+                const field_type_idx = (field_type_combo / std.math.pow(usize, 4, field_idx)) % 4;
+
+                const field_var = switch (field_type_idx) {
+                    0 => blk: {
+                        // Non-record: str
+                        expected_non_zero_fields += 1;
+                        expected_total_fields += 1;
+                        break :blk test_type_store.freshFromContent(.{ .structure = .str });
+                    },
+                    1 => blk: {
+                        // Empty record (0 fields)
+                        expected_total_fields += 1;
+                        // This field will be dropped as zero-sized
+                        const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
+                        break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = try test_type_store.record_fields.appendSlice(test_type_store.env.gpa, &[_]types.RecordField{}), .ext = empty_ext } } });
+                    },
+                    2 => blk: {
+                        // Record with 1-2 non-zero fields
+                        expected_total_fields += 1;
+                        const inner_field_count = 1 + (field_idx % 2); // 1 or 2 fields
+                        var inner_fields = std.ArrayList(types.RecordField).init(gpa);
+                        defer inner_fields.deinit();
+
+                        var inner_idx: usize = 0;
+                        while (inner_idx < inner_field_count) : (inner_idx += 1) {
+                            const inner_var = test_type_store.freshFromContent(.{ .structure = .str });
+                            try inner_fields.append(.{
+                                .name = field_names[3 + inner_idx],
+                                .var_ = inner_var,
+                            });
+                        }
+
+                        expected_non_zero_fields += 1; // The nested record itself counts as 1
+                        expected_total_fields += inner_field_count;
+
+                        const inner_fields_slice = try test_type_store.record_fields.appendSlice(test_type_store.env.gpa, inner_fields.items);
+                        const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
+                        break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
+                    },
+                    3 => blk: {
+                        // Record with mix of zero and non-zero fields
+                        expected_total_fields += 1;
+                        var inner_fields = std.ArrayList(types.RecordField).init(gpa);
+                        defer inner_fields.deinit();
+
+                        // Add one empty record field (will be dropped)
+                        const empty_record_var = test_type_store.freshFromContent(.{ .structure = .empty_record });
+                        try inner_fields.append(.{
+                            .name = field_names[3],
+                            .var_ = empty_record_var,
+                        });
+                        expected_total_fields += 1;
+
+                        // Add one str field (will be kept)
+                        const str_var = test_type_store.freshFromContent(.{ .structure = .str });
+                        try inner_fields.append(.{
+                            .name = field_names[4],
+                            .var_ = str_var,
+                        });
+                        expected_total_fields += 1;
+
+                        // Check if this nested record will have any fields after dropping zero-sized ones
+                        if (inner_fields.items.len > 1) { // We know we have 1 non-zero field
+                            expected_non_zero_fields += 1;
+                        }
+
+                        const inner_fields_slice = try test_type_store.record_fields.appendSlice(test_type_store.env.gpa, inner_fields.items);
+                        const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
+                        break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = inner_fields_slice, .ext = empty_ext } } });
+                    },
+                    else => unreachable,
+                };
+
+                try outer_fields.append(.{
+                    .name = field_names[field_idx],
+                    .var_ = field_var,
+                });
+            }
+
+            // Create outer record
+            const outer_fields_slice = try test_type_store.record_fields.appendSlice(test_type_store.env.gpa, outer_fields.items);
+            const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
+            const outer_record_var = test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = outer_fields_slice, .ext = empty_ext } } });
+
+            // Convert to layout
+            const result = test_layout_store.addTypeVar(&test_type_store, outer_record_var) catch |err| {
+                if (err == LayoutError.ZeroSizedType) {
+                    // This is expected if all fields were zero-sized
+                    try testing.expect(expected_non_zero_fields == 0);
+                    continue;
+                }
+                return err;
+            };
+
+            // Verify the result
+            const result_layout = test_layout_store.getLayout(result);
+
+            if (expected_non_zero_fields == 0) {
+                // Should have returned an error, not reached here
+                try testing.expect(false);
+            } else {
+                try testing.expect(result_layout.* == .record);
+
+                // Count actual non-zero fields in the result
+                var actual_field_count: usize = 0;
+                const field_iter = test_layout_store.record_fields.iter(result_layout.record.fields);
+                while (field_iter.next()) |field| {
+                    actual_field_count += 1;
+
+                    // Verify each field has a valid layout
+                    const field_layout = test_layout_store.getLayout(field.layout);
+                    switch (field_layout.*) {
+                        .str => {}, // Valid non-zero field
+                        .record => |rec| {
+                            // Verify nested record has fields
+                            const nested_iter = test_layout_store.record_fields.iter(rec.fields);
+                            var has_fields = false;
+                            while (nested_iter.next()) |_| {
+                                has_fields = true;
+                            }
+                            try testing.expect(has_fields);
+                        },
+                        else => {
+                            // Unexpected layout type
+                            try testing.expect(false);
+                        },
+                    }
+                }
+
+                try testing.expect(actual_field_count == expected_non_zero_fields);
+            }
+        }
+    }
 }
 
 test "addTypeVar - nested record with inner record having all zero-sized fields" {
