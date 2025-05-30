@@ -432,8 +432,12 @@ const DescStore = struct {
     }
 
     /// A type-safe index into the store
+    /// This type is made public below
     const Idx = enum(u32) { _ };
 };
+
+/// An index into the desc store
+pub const DescStoreIdx = DescStore.Idx;
 
 // path compression
 

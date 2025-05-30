@@ -9,9 +9,11 @@ const store = @import("../../types/store.zig");
 
 const Ident = base.Ident;
 
+const MkSafeList = collections.SafeList;
 const exitOnOutOfMemory = collections.utils.exitOnOom;
 
 const Store = store.Store;
+const DescStoreIdx = store.DescStoreIdx;
 
 const Desc = types.Descriptor;
 const Content = types.Content;
@@ -22,9 +24,18 @@ const Tag = types.Tag;
 
 /// Check if a variable is recursive
 ///
-/// This function uses `Scratch` as to hold intermediate values. It resets it
-/// before running.
-pub fn occurs(types_store: *const Store, scratch: *Scratch, var_: Var) bool {
+/// This uses `Scratch` as to hold intermediate values. `occurs` will reset it
+/// before each run.
+///
+/// This function accepts a mutable reference to `Store`, but guarantees that it
+/// _only_ modifies a variable's `Mark`. Before returning, all visited nodes'
+/// `Mark`s will be reset to `none`.
+///
+/// TODO: See if there's a way to represent this ^ in the type system? If we
+/// switch the types_store descriptors to use a multi list (which we should do
+/// anyway), maybe we can only pass in only a mutable ref to the backing `Mark`s
+/// array?
+pub fn occurs(types_store: *Store, scratch: *Scratch, var_: Var) bool {
     scratch.reset();
 
     var result = false;
@@ -36,6 +47,10 @@ pub fn occurs(types_store: *const Store, scratch: *Scratch, var_: Var) bool {
         },
     };
 
+    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+        types_store.setDescMark(visited_desc_idx, Mark.none);
+    }
+
     return result;
 }
 
@@ -43,13 +58,16 @@ pub fn occurs(types_store: *const Store, scratch: *Scratch, var_: Var) bool {
 const CheckOccurs = struct {
     const Self = @This();
 
-    types_store: *const Store,
+    types_store: *Store,
     scratch: *Scratch,
 
     /// Init CheckOccurs
     ///
     /// Note that this struct does not own any of it's fields
-    fn init(types_store: *const Store, scratch: *Scratch) Self {
+    ///
+    /// This function accepts a mutable reference to `Store`, and _must_ only
+    /// modify a var's `Mark`
+    fn init(types_store: *Store, scratch: *Scratch) Self {
         return .{ .types_store = types_store, .scratch = scratch };
     }
 
@@ -59,15 +77,14 @@ const CheckOccurs = struct {
     fn occurs(self: *Self, var_: Var) error{Occurs}!void {
         const root = self.types_store.resolveVar(var_);
 
-        if (self.scratch.hasSeenVar(root.var_)) {
-            // If we've already seen this var, then it's recursive
-            return error.Occurs;
-        } else if (self.scratch.hasVisitedVar(root.var_)) {
+        if (root.desc.mark == .visited) {
             // If we've already visited this var and not errored, then it's not recursive
             return;
+        } else if (self.scratch.hasSeenVar(root.var_)) {
+            // If we've already seen this var, then it's recursive
+            return error.Occurs;
         } else {
             self.scratch.appendSeen(var_);
-
             switch (root.desc.content) {
                 .structure => |flat_type| {
                     switch (flat_type) {
@@ -121,9 +138,10 @@ const CheckOccurs = struct {
                 .pure => {},
                 .err => {},
             }
-
             self.scratch.popSeen();
-            self.scratch.appendVisited(var_);
+
+            self.scratch.appendVisited(root.desc_idx);
+            self.types_store.setDescMark(root.desc_idx, Mark.visited);
         }
     }
 
@@ -154,8 +172,8 @@ const Scratch = struct {
     gpa: std.mem.Allocator,
 
     seen: Var.SafeList,
-    visited: Var.SafeList,
     err_chain: Var.SafeList,
+    visited: MkSafeList(DescStoreIdx),
 
     fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
@@ -164,21 +182,21 @@ const Scratch = struct {
         return .{
             .gpa = gpa,
             .seen = Var.SafeList.initCapacity(gpa, 32),
-            .visited = Var.SafeList.initCapacity(gpa, 32),
             .err_chain = Var.SafeList.initCapacity(gpa, 32),
+            .visited = MkSafeList(DescStoreIdx).initCapacity(gpa, 64),
         };
     }
 
     fn deinit(self: *Self) void {
         self.seen.deinit(self.gpa);
-        self.visited.deinit(self.gpa);
         self.err_chain.deinit(self.gpa);
+        self.visited.deinit(self.gpa);
     }
 
     fn reset(self: *Self) void {
         self.seen.items.clearRetainingCapacity();
-        self.visited.items.clearRetainingCapacity();
         self.err_chain.items.clearRetainingCapacity();
+        self.visited.items.clearRetainingCapacity();
     }
 
     fn hasSeenVar(self: *const Self, var_: Var) bool {
@@ -196,15 +214,8 @@ const Scratch = struct {
         _ = self.seen.items.pop();
     }
 
-    fn hasVisitedVar(self: *const Self, var_: Var) bool {
-        for (self.visited.items.items) |visited_var| {
-            if (visited_var == var_) return true;
-        }
-        return false;
-    }
-
-    fn appendVisited(self: *Self, var_: Var) void {
-        _ = self.visited.append(self.gpa, var_);
+    fn appendVisited(self: *Self, desc_idx: DescStoreIdx) void {
+        _ = self.visited.append(self.gpa, desc_idx);
     }
 
     fn appendErrChain(self: *Self, var_: Var) void {
@@ -447,6 +458,10 @@ test "occurs: recursive tag union (v = TagUnion { Foo(v) } with ext = v)" {
     const err_chain = scratch.errChainSlice();
     try std.testing.expectEqual(1, err_chain.len);
     try std.testing.expectEqual(linked_list, err_chain[0]);
+
+    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
+    }
 }
 
 test "occurs: nested recursive tag union (v = TagUnion { Cons(elem, Box(v)) } )" {
@@ -486,4 +501,8 @@ test "occurs: nested recursive tag union (v = TagUnion { Cons(elem, Box(v)) } )"
     try std.testing.expect(err_chain.len == 2);
     try std.testing.expectEqual(err_chain[0], boxed_linked_list);
     try std.testing.expectEqual(err_chain[1], linked_list);
+
+    for (scratch.visited.items.items[0..]) |visited_desc_idx| {
+        try std.testing.expectEqual(Mark.none, types_store.getDesc(visited_desc_idx).mark);
+    }
 }
