@@ -11,6 +11,7 @@ const coordinate = @import("coordinate.zig");
 const problem_mod = @import("problem.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
+const parse_args = @import("args.zig");
 
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
@@ -60,6 +61,7 @@ pub fn main() !void {
 
     const args = try std.process.argsAlloc(arena);
 
+    _ = parse_args.parse(args);
     const result = mainArgs(gpa, arena, args);
     if (tracy.enable) {
         try tracy.waitForShutdown();
