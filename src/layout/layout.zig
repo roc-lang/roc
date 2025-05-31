@@ -39,7 +39,8 @@ pub const Layout = union(enum) {
     /// Get the alignment of this layout in bytes.
     pub fn alignment(self: Layout, usize_alignment: Alignment) Alignment {
         return switch (self) {
-            .int, .frac => |precision| Alignment.fromLog2(precision.alignmentLog2()),
+            .int => |precision| Alignment.fromLog2(precision.alignmentLog2()),
+            .frac => |precision| Alignment.fromLog2(precision.alignmentLog2()),
             .str, .box, .box_zero_sized, .list, .list_zero_sized, .host_opaque => usize_alignment,
             .record => |rec| rec.alignment,
             .tuple => @panic("TODO: implement tuple alignment"),
@@ -53,7 +54,8 @@ pub const Layout = union(enum) {
     /// `usize` as, based on the target we're building for.
     pub fn size(self: Layout, usize_bytes: u32) u32 {
         return switch (self) {
-            .int, .frac => |precision| precision.size(),
+            .int => |precision| precision.size(),
+            .frac => |precision| precision.size(),
             .host_opaque => usize_bytes, // a void* pointer
             .box, .box_zero_sized => usize_bytes, // a Box is just a pointer to refcounted memory
             .str, .list, .list_zero_sized => usize_bytes * 3, // TODO: get this from RocStr.zig and RocList.zig
