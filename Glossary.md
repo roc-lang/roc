@@ -375,7 +375,7 @@ Related Files:
 A memory management technique where each thing in memory has an associated counter that tracks how many references are pointing to that thing.
 
 How it works:
-- Every time a new reference to something is created, their refernce counter is incremented.
+- Every time a new reference to something is created, their reference counter is incremented.
 - Every time a reference is deleted or goes out of scope, the counter is decremented.
 - When the reference count reaches zero, it means no references are pointing to the thing, so the memory occupied by it can be safely freed.
 
