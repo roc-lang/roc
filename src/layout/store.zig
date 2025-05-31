@@ -621,7 +621,7 @@ test "addTypeVar - str" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -647,7 +647,7 @@ test "addTypeVar - list of strings" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -680,7 +680,7 @@ test "addTypeVar - list of box of strings" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type variable
@@ -720,7 +720,7 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex_var type variable
@@ -753,7 +753,7 @@ test "addTypeVar - num u32" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a u32 type variable
@@ -780,7 +780,7 @@ test "addTypeVar - num f64" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a f64 type variable
@@ -807,7 +807,7 @@ test "addTypeVar - list of num i128" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an i128 type variable
@@ -841,7 +841,7 @@ test "addTypeVar - num dec" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a dec type variable
@@ -868,7 +868,7 @@ test "addTypeVar - flex num var defaults to i128" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex number type variable (Num(a))
@@ -895,7 +895,7 @@ test "addTypeVar - flex int var defaults to i128" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex int type variable (Int(a))
@@ -922,7 +922,7 @@ test "addTypeVar - flex frac var defaults to dec" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
@@ -949,7 +949,7 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex num type variable (Num(a))
@@ -983,7 +983,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a flex frac type variable (Frac(a))
@@ -1017,7 +1017,7 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an ident for the rigid var
@@ -1053,7 +1053,7 @@ test "addTypeVar - box of empty record compiles to box_zero_sized" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an empty record type variable
@@ -1082,7 +1082,7 @@ test "addTypeVar - list of empty tag union compiles to list_zero_sized" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an empty tag union type variable
@@ -1115,9 +1115,9 @@ test "alignment - record alignment is max of field alignments" {
     defer layout_store.deinit();
 
     // Create field identifiers
-    const field1_ident = module_env.ident_store.get("field1") catch unreachable;
-    const field2_ident = module_env.ident_store.get("field2") catch unreachable;
-    const field3_ident = module_env.ident_store.get("field3") catch unreachable;
+    const field1_ident = type_store.env.ident_store.get("field1") catch unreachable;
+    const field2_ident = type_store.env.ident_store.get("field2") catch unreachable;
+    const field3_ident = type_store.env.ident_store.get("field3") catch unreachable;
 
     // Create type variables for fields
     const u8_var = type_store.freshFromContent(.{ .structure = .{ .number = .{ .bounded = .{ .kind = .int, .precision = .u8 } } } });
@@ -1175,14 +1175,14 @@ test "alignment - deeply nested record alignment (non-recursive)" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create field identifiers
-    const inner_ident = module_env.ident_store.insert("inner");
-    const middle_ident = module_env.ident_store.insert("middle");
-    const outer_ident = module_env.ident_store.insert("outer");
-    const data_ident = module_env.ident_store.insert("data");
+    const inner_ident = type_store.env.ident_store.insert("inner");
+    const middle_ident = type_store.env.ident_store.insert("middle");
+    const outer_ident = type_store.env.ident_store.insert("outer");
+    const data_ident = type_store.env.ident_store.insert("data");
 
     // Create a U64 field (alignment 8)
     const u64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
@@ -1238,7 +1238,7 @@ test "addTypeVar - bare empty record returns error" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an empty record type variable
@@ -1261,7 +1261,7 @@ test "addTypeVar - bare empty tag union returns error" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an empty tag union type variable
@@ -1284,7 +1284,7 @@ test "addTypeVar - list of box of empty record compiles to list_zero_sized" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create an empty record type variable
@@ -1316,7 +1316,7 @@ test "addTypeVar - simple record" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create field types
@@ -1379,7 +1379,7 @@ test "record size calculation" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Test record with multiple fields requiring padding
@@ -1432,7 +1432,7 @@ test "addTypeVar - nested record" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create inner record type { x: i32, y: i32 }
@@ -1518,7 +1518,7 @@ test "addTypeVar - list of records" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create record type { id: u64, active: bool }
@@ -1583,7 +1583,7 @@ test "addTypeVar - record with extension" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create extension record { y: i32, z: f64 }
@@ -1656,7 +1656,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -1709,6 +1709,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 }
 
 test "addTypeVar - record with duplicate field in extension (mismatched types)" {
+    std.debug.print("\n\n=== TEST STARTING: record with duplicate field in extension (mismatched types) ===\n", .{});
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -1720,7 +1721,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -1745,7 +1746,19 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Convert to layout - should fail due to type mismatch
     const result = layout_store.addTypeVar(&type_store, main_record_var);
-    try testing.expectError(LayoutError.RecordFieldTypeMismatch, result);
+
+    // Check what actually happens
+    if (result) |idx| {
+        // The test expects an error but we got success
+        std.debug.print("\n\nDUPLICATE FIELD TEST: Got success with idx {}, but expected RecordFieldTypeMismatch\n", .{idx});
+        return error.TestUnexpectedResult;
+    } else |err| {
+        // We got an error, check if it's the expected one
+        if (err != LayoutError.RecordFieldTypeMismatch) {
+            std.debug.print("\n\nDUPLICATE FIELD TEST: Got error {} but expected RecordFieldTypeMismatch\n", .{err});
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 test "addTypeVar - record with invalid extension type" {
@@ -1760,7 +1773,7 @@ test "addTypeVar - record with invalid extension type" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create a str type to use as invalid extension
@@ -1791,7 +1804,7 @@ test "addTypeVar - record with chained extensions" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -1881,7 +1894,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -1950,7 +1963,7 @@ test "addTypeVar - record with all zero-sized fields becomes empty" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -1986,7 +1999,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types
@@ -2032,7 +2045,7 @@ test "addTypeVar - comprehensive nested record combinations" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create field names we'll reuse
@@ -2217,7 +2230,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create inner record with only zero-sized fields
@@ -2277,7 +2290,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create empty record type
@@ -2314,7 +2327,7 @@ test "alignment - record with log2 alignment representation" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Test 1: Record with U8 field (alignment 1, log2 = 0)
@@ -2414,7 +2427,7 @@ test "record fields sorted by alignment then name" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types with different alignments
@@ -2494,7 +2507,7 @@ test "record fields with same alignment sorted by name" {
     defer type_store.deinit();
 
     // Create layout store
-    var layout_store = try Store.init(&module_env);
+    var layout_store = Store.init(&module_env);
     defer layout_store.deinit();
 
     // Create types with same alignment
