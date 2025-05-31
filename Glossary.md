@@ -370,6 +370,26 @@ Related Files:
 
 ## Reference Count
 
+(refcount)
+
+A memory management technique where each thing in memory has an associated counter that tracks how many references are pointing to that thing.
+
+How it works:
+- Every time a new reference to something is created, their refernce counter is incremented.
+- Every time a reference is deleted or goes out of scope, the counter is decremented.
+- When the reference count reaches zero, it means no references are pointing to the thing, so the memory occupied by it can be safely freed.
+
+Roc uses automatic reference counting because it avoids the significant pauses that can happen with traditional [garbage collection](https://en.wikipedia.org/wiki/Garbage_collection_(computer_science)).
+These pauses can be annoying in games for example, because it can result in a noticeable drop in framerate.
+
+Another approach, manual memory management, would allow you to produce the fastest program but it is also more tedious to write code that way.
+
+Reference counting implementation:
+- New compiler: [reference_count.zig](src/build/reference_count.zig) and the [reference_count folder](src/build/reference_count/) (work in progress)
+- Old compiler: [Mono folder](crates/compiler/mono/src) (search ref)
+
+## Mutate in place
+
 ## Alias Analysis
 
 ## Code Gen
