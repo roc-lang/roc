@@ -213,46 +213,46 @@ pub const Num = union(enum) {
             pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
         };
     };
+
+    /// a frac f32
+    pub const frac_f32: Num = Num{ .num_compact = Compact{ .frac = .f32 } };
+
+    /// a frac f64
+    pub const frac_f64: Num = Num{ .num_compact = Compact{ .frac = .f64 } };
+
+    /// a frac dec
+    pub const frac_dec: Num = Num{ .num_compact = Compact{ .frac = .dec } };
+
+    /// an int u8
+    pub const int_u8: Num = Num{ .num_compact = Compact{ .int = .u8 } };
+
+    /// an int i8
+    pub const int_i8: Num = Num{ .num_compact = Compact{ .int = .i8 } };
+
+    /// an int u16
+    pub const int_u16: Num = Num{ .num_compact = Compact{ .int = .u16 } };
+
+    /// an int i16
+    pub const int_i16: Num = Num{ .num_compact = Compact{ .int = .i16 } };
+
+    /// an int u32
+    pub const int_u32: Num = Num{ .num_compact = Compact{ .int = .u32 } };
+
+    /// an int i32
+    pub const int_i32: Num = Num{ .num_compact = Compact{ .int = .i32 } };
+
+    /// an int u64
+    pub const int_u64: Num = Num{ .num_compact = Compact{ .int = .u64 } };
+
+    /// an int i64
+    pub const int_i64: Num = Num{ .num_compact = Compact{ .int = .i64 } };
+
+    /// an int u128
+    pub const int_u128: Num = Num{ .num_compact = Compact{ .int = .u128 } };
+
+    /// an int i128
+    pub const int_i128: Num = Num{ .num_compact = Compact{ .int = .i128 } };
 };
-
-/// a frac f32
-pub const frac_f32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .f32 } } };
-
-/// a frac f64
-pub const frac_f64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .f64 } } };
-
-/// a frac dec
-pub const frac_dec: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .dec } } };
-
-/// an int u8
-pub const int_u8: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u8 } } };
-
-/// an int i8
-pub const int_i8: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i8 } } };
-
-/// an int u16
-pub const int_u16: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u16 } } };
-
-/// an int i16
-pub const int_i16: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i16 } } };
-
-/// an int u32
-pub const int_u32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u32 } } };
-
-/// an int i32
-pub const int_i32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i32 } } };
-
-/// an int u64
-pub const int_u64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u64 } } };
-
-/// an int i64
-pub const int_i64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i64 } } };
-
-/// an int u128
-pub const int_u128: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u128 } } };
-
-/// an int i128
-pub const int_i128: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i128 } } };
 
 // custom types //
 
