@@ -96,7 +96,7 @@ pub const Stack = struct {
 
         // Calculate new used bytes
         const new_used = ptr_addr - start_addr;
-        std.debug.assert(new_used <= std.math.maxInt(u32));
+        std.debug.assert(new_used <= self.capacity);
 
         self.used = @intCast(new_used);
     }
