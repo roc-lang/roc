@@ -117,6 +117,21 @@ pub const Content = union(enum) {
             else => return null,
         }
     }
+
+    /// Unwrap a custom type or return null
+    pub fn unwrapCustomType(content: Self) ?CustomType {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .custom_type => |custom_type| {
+                        return custom_type;
+                    },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
 };
 
 // alias //
