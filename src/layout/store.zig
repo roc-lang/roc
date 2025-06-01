@@ -3127,24 +3127,3 @@ test "record fields with same alignment sorted by name" {
     // Exactly 3 fields
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 }
-
-test "Layout type size in memory" {
-    const testing = std.testing;
-
-    // Print the size of the Layout tagged union
-    const layout_size = @sizeOf(Layout);
-    std.debug.print("\n=== Layout Memory Size ===\n", .{});
-    std.debug.print("Layout tagged union size: {} bytes\n", .{layout_size});
-
-    // Print sizes of key components
-    std.debug.print("Individual component sizes:\n", .{});
-    std.debug.print("  - Idx: {} bytes\n", .{@sizeOf(Idx)});
-    std.debug.print("  - Record: {} bytes\n", .{@sizeOf(layout.Record)});
-    std.debug.print("  - NonEmptyRange: {} bytes\n", .{@sizeOf(collections.NonEmptyRange)});
-    std.debug.print("  - Alignment: {} bytes\n", .{@sizeOf(layout.Alignment)});
-    std.debug.print("  - Size: {} bytes\n", .{@sizeOf(layout.Size)});
-    std.debug.print("========================\n\n", .{});
-
-    // The Layout should be reasonably small since it's used frequently
-    try testing.expect(layout_size <= 24); // Reasonable upper bound for a tagged union
-}

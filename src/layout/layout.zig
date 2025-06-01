@@ -310,14 +310,6 @@ test "Layout size in bytes" {
 
     // Test the size of the Layout tagged union
     const layout_size = @sizeOf(Layout);
-    std.debug.print("\nLayout tagged union size: {} bytes\n", .{layout_size});
-
-    // Also print sizes of individual variants for comparison
-    std.debug.print("Record variant size: {} bytes\n", .{@sizeOf(Record)});
-    std.debug.print("Idx size: {} bytes\n", .{@sizeOf(Idx)});
-    std.debug.print("NonEmptyRange size: {} bytes\n", .{@sizeOf(collections.NonEmptyRange)});
-    std.debug.print("Alignment size: {} bytes\n", .{@sizeOf(Alignment)});
-    std.debug.print("Size size: {} bytes\n", .{@sizeOf(Size)});
 
     // The Layout should be reasonably small since it's used frequently
     // A typical tagged union in Zig will be the size of the largest variant plus tag overhead
