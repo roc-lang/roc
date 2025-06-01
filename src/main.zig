@@ -12,8 +12,6 @@ const problem_mod = @import("problem.zig");
 const tracy = @import("tracy.zig");
 const Filesystem = @import("coordinate/Filesystem.zig");
 
-const _ = @import("eval/stack.zig"); // TODO this is just so stack.zig gets tested; remove it once it's actually used!
-
 const RocCmd = cli.RocCmd;
 const RocOpt = cli.RocOpt;
 const Problem = problem_mod.Problem;

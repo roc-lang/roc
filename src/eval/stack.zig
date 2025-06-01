@@ -52,6 +52,8 @@ pub const Stack = struct {
         };
     }
 
+    /// IMPORTANT: Before calling this, it is critical to ensure that nothing which
+    /// was allocated on the stack is still being referenced anywhere!
     pub fn deinit(self: *Stack) void {
         self.allocator.free(self.start[0..self.capacity]);
     }
