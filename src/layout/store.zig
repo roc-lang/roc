@@ -28,23 +28,21 @@ pub const LayoutError = error{
     BugUnboxedRigidVar,
 };
 
-/// Storage for layout information, managing the allocation and retrieval of layouts
+/// Stores Layout instances by Idx.
 pub const Store = struct {
     const Self = @This();
 
     env: *base.ModuleEnv,
-
-    // Layout storage
     layouts: collections.SafeList(Layout),
-
-    // Lists for parameterized layouts
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
 
     // Cache to avoid duplicate work
+    // TODO make this be a flat array with `!0` values indicating emptiness,
+    // initialized to the same length as the Subs equivalent.
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
 
-    // Reusable work stack for addTypeVar
+    // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
     pub fn init(env: *base.ModuleEnv) Self {
