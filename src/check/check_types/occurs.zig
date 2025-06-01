@@ -266,7 +266,7 @@ const Context = struct {
 };
 
 /// Struct to hold intermediate values used during occurs check
-const Scratch = struct {
+pub const Scratch = struct {
     const Self = @This();
 
     gpa: std.mem.Allocator,
@@ -276,7 +276,7 @@ const Scratch = struct {
     err_chain_nominal_vars: Var.SafeList,
     visited: MkSafeList(DescStoreIdx),
 
-    fn init(gpa: std.mem.Allocator) Self {
+    pub fn init(gpa: std.mem.Allocator) Self {
         // TODO: eventually use herusitics here to determine sensible defaults
         // Rust compiler inits with 1024 capacity. But that feels like a lot.
         // Typical recursion cases should only be a few layers deep?
@@ -289,14 +289,14 @@ const Scratch = struct {
         };
     }
 
-    fn deinit(self: *Self) void {
+    pub fn deinit(self: *Self) void {
         self.seen.deinit(self.gpa);
         self.err_chain.deinit(self.gpa);
         self.err_chain_nominal_vars.deinit(self.gpa);
         self.visited.deinit(self.gpa);
     }
 
-    fn reset(self: *Self) void {
+    pub fn reset(self: *Self) void {
         self.seen.items.clearRetainingCapacity();
         self.err_chain.items.clearRetainingCapacity();
         self.err_chain_nominal_vars.items.clearRetainingCapacity();
