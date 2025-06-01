@@ -16,15 +16,12 @@ const Idx = layout.Idx;
 const Work = work.Work;
 const exitOnOom = collections.utils.exitOnOom;
 
-const MkSafeList = collections.SafeList;
 const RecordField = layout.RecordField;
-const RecordFieldSafeMultiList = RecordField.SafeMultiList;
 
 /// Errors that can occur during layout computation
 pub const LayoutError = error{
     ZeroSizedType,
     TypeContainedMismatch,
-    RecordFieldTypeMismatch,
     InvalidRecordExtension,
     // Compiler bugs. Hopefully these never come up, but if they do, the caller should gracefully recover.
     BugUnboxedFlexVar,
@@ -42,7 +39,7 @@ pub const Store = struct {
 
     // Lists for parameterized layouts
     tuple_elems: collections.SafeList(Idx),
-    record_fields: RecordFieldSafeMultiList,
+    record_fields: RecordField.SafeMultiList,
 
     // Cache to avoid duplicate work
     var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
@@ -55,7 +52,7 @@ pub const Store = struct {
             .env = env,
             .layouts = collections.SafeList(Layout){},
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
-            .record_fields = RecordFieldSafeMultiList.initCapacity(env.gpa, 256),
+            .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
             .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
             .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
         };
