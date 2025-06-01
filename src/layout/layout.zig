@@ -172,6 +172,11 @@ pub const Size = struct {
     /// Round up to the nearest multiple of alignment.
     pub fn alignForward(self: Size, alignment: Alignment) Size {
         const align_bytes = alignment.toBytes();
+        // Check for potential overflow
+        if (self.bytes > std.math.maxInt(u32) - align_bytes + 1) {
+            // Already at or near max, can't align forward
+            return self;
+        }
         const aligned = (self.bytes + align_bytes - 1) & ~(align_bytes - 1);
         return .{ .bytes = aligned };
     }
@@ -314,4 +319,217 @@ test "Layout size in bytes" {
     // The Layout should be reasonably small since it's used frequently
     // A typical tagged union in Zig will be the size of the largest variant plus tag overhead
     try testing.expect(layout_size <= 20); // Reasonable upper bound
+}
+
+test "Layout.alignment() - primitive types" {
+    const testing = std.testing;
+
+    // Test integer alignments
+    const u8_layout = Layout{ .int = .u8 };
+    const u16_layout = Layout{ .int = .u16 };
+    const u32_layout = Layout{ .int = .u32 };
+    const u64_layout = Layout{ .int = .u64 };
+    const u128_layout = Layout{ .int = .u128 };
+
+    const usize_alignment = Alignment.fromBytes(@alignOf(usize));
+
+    try testing.expectEqual(Alignment.fromBytes(1), u8_layout.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(2), u16_layout.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(4), u32_layout.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(8), u64_layout.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(16), u128_layout.alignment(usize_alignment));
+
+    // Test floating point alignments
+    const f32_layout = Layout{ .frac = .f32 };
+    const f64_layout = Layout{ .frac = .f64 };
+
+    try testing.expectEqual(Alignment.fromBytes(4), f32_layout.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(8), f64_layout.alignment(usize_alignment));
+}
+
+test "Layout.alignment() - container types" {
+    const testing = std.testing;
+
+    const usize_alignment = Alignment.fromBytes(@alignOf(usize));
+
+    // Test str, box, list, and host_opaque alignments
+    const str_layout = Layout{ .str = {} };
+    const box_layout = Layout{ .box = .{ .idx = 0 } };
+    const box_zero_layout = Layout{ .box_zero_sized = {} };
+    const list_layout = Layout{ .list = .{ .idx = 0 } };
+    const list_zero_layout = Layout{ .list_zero_sized = {} };
+    const host_opaque_layout = Layout{ .host_opaque = {} };
+
+    try testing.expectEqual(usize_alignment, str_layout.alignment(usize_alignment));
+    try testing.expectEqual(usize_alignment, box_layout.alignment(usize_alignment));
+    try testing.expectEqual(usize_alignment, box_zero_layout.alignment(usize_alignment));
+    try testing.expectEqual(usize_alignment, list_layout.alignment(usize_alignment));
+    try testing.expectEqual(usize_alignment, list_zero_layout.alignment(usize_alignment));
+    try testing.expectEqual(usize_alignment, host_opaque_layout.alignment(usize_alignment));
+}
+
+test "Layout.alignment() - record types" {
+    const testing = std.testing;
+
+    const usize_alignment = Alignment.fromBytes(@alignOf(usize));
+
+    // Test record with alignment 4
+    const record_align4 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 2 },
+        .alignment = Alignment.fromBytes(4),
+        .size = Size.fromBytes(8),
+    } };
+
+    // Test record with alignment 16
+    const record_align16 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 1 },
+        .alignment = Alignment.fromBytes(16),
+        .size = Size.fromBytes(16),
+    } };
+
+    try testing.expectEqual(Alignment.fromBytes(4), record_align4.alignment(usize_alignment));
+    try testing.expectEqual(Alignment.fromBytes(16), record_align16.alignment(usize_alignment));
+}
+
+test "Layout.size() - primitive types" {
+    const testing = std.testing;
+
+    // Test integer sizes
+    const u8_layout = Layout{ .int = .u8 };
+    const u16_layout = Layout{ .int = .u16 };
+    const u32_layout = Layout{ .int = .u32 };
+    const u64_layout = Layout{ .int = .u64 };
+    const u128_layout = Layout{ .int = .u128 };
+
+    const usize_bytes: u32 = @sizeOf(usize);
+
+    try testing.expectEqual(@as(u32, 1), u8_layout.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 2), u16_layout.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 4), u32_layout.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 8), u64_layout.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 16), u128_layout.size(usize_bytes));
+
+    // Test floating point sizes
+    const f32_layout = Layout{ .frac = .f32 };
+    const f64_layout = Layout{ .frac = .f64 };
+
+    try testing.expectEqual(@as(u32, 4), f32_layout.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 8), f64_layout.size(usize_bytes));
+}
+
+test "Layout.size() - container types" {
+    const testing = std.testing;
+
+    const usize_bytes: u32 = @sizeOf(usize);
+
+    // Test host_opaque size (should be usize)
+    const host_opaque_layout = Layout{ .host_opaque = {} };
+    try testing.expectEqual(usize_bytes, host_opaque_layout.size(usize_bytes));
+
+    // Test box sizes (should be usize - pointer size)
+    const box_layout = Layout{ .box = .{ .idx = 0 } };
+    const box_zero_layout = Layout{ .box_zero_sized = {} };
+    try testing.expectEqual(usize_bytes, box_layout.size(usize_bytes));
+    try testing.expectEqual(usize_bytes, box_zero_layout.size(usize_bytes));
+
+    // Test str and list sizes (should be 3 * usize)
+    const str_layout = Layout{ .str = {} };
+    const list_layout = Layout{ .list = .{ .idx = 0 } };
+    const list_zero_layout = Layout{ .list_zero_sized = {} };
+    try testing.expectEqual(usize_bytes * 3, str_layout.size(usize_bytes));
+    try testing.expectEqual(usize_bytes * 3, list_layout.size(usize_bytes));
+    try testing.expectEqual(usize_bytes * 3, list_zero_layout.size(usize_bytes));
+}
+
+test "Layout.size() - record types" {
+    const testing = std.testing;
+
+    const usize_bytes: u32 = @sizeOf(usize);
+
+    // Test record with size 8
+    const record_8 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 2 },
+        .alignment = Alignment.fromBytes(4),
+        .size = Size.fromBytes(8),
+    } };
+
+    // Test record with size 32
+    const record_32 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 4 },
+        .alignment = Alignment.fromBytes(8),
+        .size = Size.fromBytes(32),
+    } };
+
+    try testing.expectEqual(@as(u32, 8), record_8.size(usize_bytes));
+    try testing.expectEqual(@as(u32, 32), record_32.size(usize_bytes));
+}
+
+test "Alignment - edge cases" {
+    const testing = std.testing;
+
+    // Test minimum alignment
+    const align1 = Alignment.fromBytes(1);
+    try testing.expectEqual(@as(u32, 1), align1.toBytes());
+
+    // Test maximum valid alignment for u4 (2^15 = 32768)
+    const align_max = Alignment.fromBytes(32768);
+    try testing.expectEqual(@as(u32, 32768), align_max.toBytes());
+
+    // Test all valid power-of-2 alignments
+    var i: u4 = 0;
+    while (i < 15) : (i += 1) {
+        const bytes = @as(u32, 1) << @intCast(i);
+        const alignment = Alignment.fromBytes(bytes);
+        try testing.expectEqual(bytes, alignment.toBytes());
+        try testing.expectEqual(i, alignment.log2_value);
+    }
+    // Test the last value separately to avoid overflow
+    const bytes_15 = @as(u32, 1) << 15;
+    const alignment_15 = Alignment.fromBytes(bytes_15);
+    try testing.expectEqual(bytes_15, alignment_15.toBytes());
+    try testing.expectEqual(@as(u4, 15), alignment_15.log2_value);
+}
+
+test "Size - edge cases and overflow protection" {
+    const testing = std.testing;
+
+    // Test zero size
+    const size0 = Size.fromBytes(0);
+    try testing.expectEqual(@as(u32, 0), size0.toBytes());
+
+    // Test maximum size
+    const size_max = Size.fromBytes(std.math.maxInt(u32));
+    try testing.expectEqual(std.math.maxInt(u32), size_max.toBytes());
+
+    // Test alignForward with edge cases
+    const align16 = Alignment.fromBytes(16);
+
+    // Already aligned
+    const size16 = Size.fromBytes(16);
+    try testing.expectEqual(@as(u32, 16), size16.alignForward(align16).toBytes());
+
+    // One byte off
+    const size17 = Size.fromBytes(17);
+    try testing.expectEqual(@as(u32, 32), size17.alignForward(align16).toBytes());
+
+    // Test alignForward with large values (but not so large as to overflow)
+    const size_large = Size.fromBytes(0xFFFFFF00); // Large but safe value
+    const aligned_large = size_large.alignForward(align16);
+    try testing.expectEqual(@as(u32, 0xFFFFFF00), aligned_large.toBytes());
+}
+
+test "Record.getFields() method" {
+    const testing = std.testing;
+
+    // Create a Record layout
+    const record = Record{
+        .fields = .{ .start = 10, .count = 5 },
+        .alignment = Alignment.fromBytes(8),
+        .size = Size.fromBytes(40),
+    };
+
+    // Test getFields() method
+    const fields_range = record.getFields();
+    try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
+    try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.end));
 }

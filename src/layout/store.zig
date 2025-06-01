@@ -2188,6 +2188,342 @@ test "addTypeVar - record with extension" {
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 }
 
+test "addTypeVar - record extension with str type fails" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a record with str as extension (invalid)
+    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    var fields = std.ArrayList(types.RecordField).init(gpa);
+    defer fields.deinit();
+
+    try fields.append(.{
+        .name = field_name,
+        .var_ = type_store.freshFromContent(.{ .structure = .str }),
+    });
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
+    const str_ext = type_store.freshFromContent(.{ .structure = .str });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = str_ext } } });
+
+    const result = layout_store.addTypeVar(&type_store, record_var);
+    try testing.expectError(LayoutError.InvalidRecordExtension, result);
+}
+
+test "addTypeVar - record extension with num type fails" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create a record with number as extension (invalid)
+    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("field"), base.Region.zero());
+    var fields = std.ArrayList(types.RecordField).init(gpa);
+    defer fields.deinit();
+
+    try fields.append(.{
+        .name = field_name,
+        .var_ = type_store.freshFromContent(.{ .structure = .str }),
+    });
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
+    const num_ext = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u64 } } } });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = num_ext } } });
+
+    const result = layout_store.addTypeVar(&type_store, record_var);
+    try testing.expectError(LayoutError.InvalidRecordExtension, result);
+}
+
+test "addTypeVar - deeply nested containers with zero-sized inner type" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create List(Box(List(Box(empty_record))))
+    const empty_record = type_store.freshFromContent(.{ .structure = .empty_record });
+    const inner_box = type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
+    const inner_list = type_store.freshFromContent(.{ .structure = .{ .list = inner_box } });
+    const outer_box = type_store.freshFromContent(.{ .structure = .{ .box = inner_list } });
+    const outer_list_var = type_store.freshFromContent(.{ .structure = .{ .list = outer_box } });
+
+    const result = try layout_store.addTypeVar(&type_store, outer_list_var);
+    const result_layout = layout_store.getLayout(result);
+
+    // Should resolve to list_zero_sized
+    try testing.expect(result_layout.* == .list_zero_sized);
+}
+
+test "addTypeVar - record with single zero-sized field in container" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create List({ only_field: {} })
+    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("only_field"), base.Region.zero());
+    var fields = std.ArrayList(types.RecordField).init(gpa);
+    defer fields.deinit();
+
+    try fields.append(.{
+        .name = field_name,
+        .var_ = type_store.freshFromContent(.{ .structure = .empty_record }),
+    });
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
+    const list_var = type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
+
+    const result = try layout_store.addTypeVar(&type_store, list_var);
+    const result_layout = layout_store.getLayout(result);
+
+    // List of empty record should be list_zero_sized
+    try testing.expect(result_layout.* == .list_zero_sized);
+}
+
+test "addTypeVar - record field ordering stability" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create multiple records with same fields but different order
+    const field_a = type_store.env.idents.insert(gpa, base.Ident.for_text("aaa"), base.Region.zero());
+    const field_b = type_store.env.idents.insert(gpa, base.Ident.for_text("bbb"), base.Region.zero());
+    const field_c = type_store.env.idents.insert(gpa, base.Ident.for_text("ccc"), base.Region.zero());
+
+    // All fields have same type (same alignment)
+    const field_type = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u32 } } } });
+
+    // Record 1: a, b, c
+    var fields1 = std.ArrayList(types.RecordField).init(gpa);
+    defer fields1.deinit();
+    try fields1.append(.{ .name = field_a, .var_ = field_type });
+    try fields1.append(.{ .name = field_b, .var_ = field_type });
+    try fields1.append(.{ .name = field_c, .var_ = field_type });
+
+    // Record 2: c, a, b
+    var fields2 = std.ArrayList(types.RecordField).init(gpa);
+    defer fields2.deinit();
+    try fields2.append(.{ .name = field_c, .var_ = field_type });
+    try fields2.append(.{ .name = field_a, .var_ = field_type });
+    try fields2.append(.{ .name = field_b, .var_ = field_type });
+
+    // Record 3: b, c, a
+    var fields3 = std.ArrayList(types.RecordField).init(gpa);
+    defer fields3.deinit();
+    try fields3.append(.{ .name = field_b, .var_ = field_type });
+    try fields3.append(.{ .name = field_c, .var_ = field_type });
+    try fields3.append(.{ .name = field_a, .var_ = field_type });
+
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+
+    const fields1_slice = type_store.record_fields.appendSlice(gpa, fields1.items);
+    const record1_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields1_slice, .ext = empty_ext } } });
+
+    const fields2_slice = type_store.record_fields.appendSlice(gpa, fields2.items);
+    const record2_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields2_slice, .ext = empty_ext } } });
+
+    const fields3_slice = type_store.record_fields.appendSlice(gpa, fields3.items);
+    const record3_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields3_slice, .ext = empty_ext } } });
+
+    const result1 = try layout_store.addTypeVar(&type_store, record1_var);
+    const result2 = try layout_store.addTypeVar(&type_store, record2_var);
+    const result3 = try layout_store.addTypeVar(&type_store, record3_var);
+
+    const layout1 = layout_store.getLayout(result1);
+    const layout2 = layout_store.getLayout(result2);
+    const layout3 = layout_store.getLayout(result3);
+
+    // All should produce records with fields in same order (sorted by name: aaa, bbb, ccc)
+    switch (layout1.*) {
+        .record => |rec1| {
+            const fields_1 = layout_store.record_fields.rangeToSlice(rec1.getFields());
+
+            switch (layout2.*) {
+                .record => |rec2| {
+                    const fields_2 = layout_store.record_fields.rangeToSlice(rec2.getFields());
+
+                    switch (layout3.*) {
+                        .record => |rec3| {
+                            const fields_3 = layout_store.record_fields.rangeToSlice(rec3.getFields());
+
+                            // All should have 3 fields
+                            try testing.expectEqual(@as(usize, 3), fields_1.len);
+                            try testing.expectEqual(@as(usize, 3), fields_2.len);
+                            try testing.expectEqual(@as(usize, 3), fields_3.len);
+
+                            // All should have same field order
+                            var i: usize = 0;
+                            while (i < 3) : (i += 1) {
+                                const name1 = type_store.env.idents.getText(fields_1.items(.name)[i]);
+                                const name2 = type_store.env.idents.getText(fields_2.items(.name)[i]);
+                                const name3 = type_store.env.idents.getText(fields_3.items(.name)[i]);
+
+                                try testing.expectEqualStrings(name1, name2);
+                                try testing.expectEqualStrings(name2, name3);
+                            }
+
+                            // Verify correct alphabetical order
+                            try testing.expectEqualStrings("aaa", type_store.env.idents.getText(fields_1.items(.name)[0]));
+                            try testing.expectEqualStrings("bbb", type_store.env.idents.getText(fields_1.items(.name)[1]));
+                            try testing.expectEqualStrings("ccc", type_store.env.idents.getText(fields_1.items(.name)[2]));
+                        },
+                        else => try testing.expect(false),
+                    }
+                },
+                else => try testing.expect(false),
+            }
+        },
+        else => try testing.expect(false),
+    }
+}
+
+test "addTypeVar - empty record in different contexts" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Test 1: Bare empty record
+    const empty_record = type_store.freshFromContent(.{ .structure = .empty_record });
+    const result1 = layout_store.addTypeVar(&type_store, empty_record);
+    try testing.expectError(LayoutError.ZeroSizedType, result1);
+
+    // Test 2: Box of empty record
+    const box_empty = type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
+    const result2 = try layout_store.addTypeVar(&type_store, box_empty);
+    const result2_layout = layout_store.getLayout(result2);
+    try testing.expect(result2_layout.* == .box_zero_sized);
+
+    // Test 3: List of empty record
+    const list_empty = type_store.freshFromContent(.{ .structure = .{ .list = empty_record } });
+    const result3 = try layout_store.addTypeVar(&type_store, list_empty);
+    const result3_layout = layout_store.getLayout(result3);
+    try testing.expect(result3_layout.* == .list_zero_sized);
+
+    // Test 4: Record containing only empty record field
+    const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
+    var fields = std.ArrayList(types.RecordField).init(gpa);
+    defer fields.deinit();
+    try fields.append(.{
+        .name = field_name,
+        .var_ = empty_record,
+    });
+    const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_with_empty = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
+
+    const result4 = layout_store.addTypeVar(&type_store, record_with_empty);
+    try testing.expectError(LayoutError.ZeroSizedType, result4);
+}
+
+test "addTypeVar - record alignment edge cases" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env);
+    defer layout_store.deinit();
+
+    // Create record with fields of all different alignments
+    var fields = std.ArrayList(types.RecordField).init(gpa);
+    defer fields.deinit();
+
+    // Add fields with different alignments (1, 2, 4, 8, 16 bytes)
+    const alignments = [_]struct { name: []const u8, type: types.FlatType }{
+        .{ .name = "align1", .type = .{ .num = .{ .int = .{ .exact = .u8 } } } }, // 1-byte alignment
+        .{ .name = "align2", .type = .{ .num = .{ .int = .{ .exact = .u16 } } } }, // 2-byte alignment
+        .{ .name = "align4", .type = .{ .num = .{ .int = .{ .exact = .u32 } } } }, // 4-byte alignment
+        .{ .name = "align8", .type = .{ .num = .{ .int = .{ .exact = .u64 } } } }, // 8-byte alignment
+        .{ .name = "align16", .type = .{ .num = .{ .int = .{ .exact = .u128 } } } }, // 16-byte alignment
+    };
+
+    for (alignments) |field_info| {
+        const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text(field_info.name), base.Region.zero());
+        try fields.append(.{
+            .name = field_name,
+            .var_ = type_store.freshFromContent(.{ .structure = field_info.type }),
+        });
+    }
+
+    const fields_slice = type_store.record_fields.appendSlice(gpa, fields.items);
+    const empty_ext = type_store.freshFromContent(.{ .structure = .empty_record });
+    const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
+
+    const result = try layout_store.addTypeVar(&type_store, record_var);
+    const result_layout = layout_store.getLayout(result);
+
+    switch (result_layout.*) {
+        .record => |rec| {
+            // Record should have 16-byte alignment (maximum of all fields)
+            try testing.expectEqual(@as(u32, 16), rec.alignment.toBytes());
+
+            // Fields should be sorted by alignment (descending) then name
+            const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            try testing.expectEqual(@as(usize, 5), rec_fields.len);
+
+            // Verify order: align16, align8, align4, align2, align1
+            const expected_order = [_][]const u8{ "align16", "align8", "align4", "align2", "align1" };
+            for (expected_order, 0..) |expected_name, i| {
+                const actual_name = type_store.env.idents.getText(rec_fields.items(.name)[i]);
+                try testing.expectEqualStrings(expected_name, actual_name);
+            }
+        },
+        else => try testing.expect(false),
+    }
+}
+
 test "addTypeVar - record with duplicate field in extension (matching types)" {
     const testing = std.testing;
     const gpa = testing.allocator;
