@@ -422,44 +422,34 @@ pub const TwoTags = struct {
 test "Int.Precision size() and alignmentLog2()" {
     const testing = @import("std").testing;
 
-    // Test u8 - enum value 0, alignmentLog2 = 0/2 = 0
+    // u8 and i8 should have size = 1 and alignmentLog2 = 0
     try testing.expectEqual(@as(u32, 1), Num.Int.Precision.u8.size());
-    try testing.expectEqual(@as(u4, 0), Num.Int.Precision.u8.alignmentLog2());
-
-    // Test i8 - enum value 1, alignmentLog2 = 1/2 = 0
     try testing.expectEqual(@as(u32, 1), Num.Int.Precision.i8.size());
+    try testing.expectEqual(@as(u4, 0), Num.Int.Precision.u8.alignmentLog2());
     try testing.expectEqual(@as(u4, 0), Num.Int.Precision.i8.alignmentLog2());
 
-    // Test u16 - enum value 2, alignmentLog2 = 2/2 = 1
+    // u16 and i16 should have size = 2 and alignmentLog2 = 1
     try testing.expectEqual(@as(u32, 2), Num.Int.Precision.u16.size());
-    try testing.expectEqual(@as(u4, 1), Num.Int.Precision.u16.alignmentLog2());
-
-    // Test i16 - enum value 3, alignmentLog2 = 3/2 = 1
     try testing.expectEqual(@as(u32, 2), Num.Int.Precision.i16.size());
+    try testing.expectEqual(@as(u4, 1), Num.Int.Precision.u16.alignmentLog2());
     try testing.expectEqual(@as(u4, 1), Num.Int.Precision.i16.alignmentLog2());
 
-    // Test u32 - enum value 4, alignmentLog2 = 4/2 = 2
+    // u32 and i32 should have size = 4 and alignmentLog2 = 2
     try testing.expectEqual(@as(u32, 4), Num.Int.Precision.u32.size());
-    try testing.expectEqual(@as(u4, 2), Num.Int.Precision.u32.alignmentLog2());
-
-    // Test i32 - enum value 5, alignmentLog2 = 5/2 = 2
     try testing.expectEqual(@as(u32, 4), Num.Int.Precision.i32.size());
+    try testing.expectEqual(@as(u4, 2), Num.Int.Precision.u32.alignmentLog2());
     try testing.expectEqual(@as(u4, 2), Num.Int.Precision.i32.alignmentLog2());
 
-    // Test u64 - enum value 6, alignmentLog2 = 6/2 = 3
+    // u64 and i64 should have size = 8 and alignmentLog2 = 3
     try testing.expectEqual(@as(u32, 8), Num.Int.Precision.u64.size());
-    try testing.expectEqual(@as(u4, 3), Num.Int.Precision.u64.alignmentLog2());
-
-    // Test i64 - enum value 7, alignmentLog2 = 7/2 = 3
     try testing.expectEqual(@as(u32, 8), Num.Int.Precision.i64.size());
+    try testing.expectEqual(@as(u4, 3), Num.Int.Precision.u64.alignmentLog2());
     try testing.expectEqual(@as(u4, 3), Num.Int.Precision.i64.alignmentLog2());
 
-    // Test u128 - enum value 8, alignmentLog2 = 8/2 = 4
+    // u128 and i128 should have size = 16 and alignmentLog2 = 4
     try testing.expectEqual(@as(u32, 16), Num.Int.Precision.u128.size());
-    try testing.expectEqual(@as(u4, 4), Num.Int.Precision.u128.alignmentLog2());
-
-    // Test i128 - enum value 9, alignmentLog2 = 9/2 = 4
     try testing.expectEqual(@as(u32, 16), Num.Int.Precision.i128.size());
+    try testing.expectEqual(@as(u4, 4), Num.Int.Precision.u128.alignmentLog2());
     try testing.expectEqual(@as(u4, 4), Num.Int.Precision.i128.alignmentLog2());
 }
 
