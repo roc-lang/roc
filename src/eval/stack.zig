@@ -70,14 +70,14 @@ pub const Stack = struct {
         const padding = @as(u32, @intCast(aligned_addr - current_addr));
 
         // Check for overflow when adding padding
-        const bytes_with_padding = @addWithOverflow(bytes, padding);
-        if (bytes_with_padding[1] != 0) {
+        const bytes_with_padding, var overflowed = @addWithOverflow(bytes, padding);
+        if (overflowed != 0) {
             return StackOverflow.StackOverflow;
         }
 
         // Check for overflow when adding to used
-        const new_used = @addWithOverflow(self.used, bytes_with_padding[0]);
-        if (new_used[1] != 0 or new_used[0] > self.capacity) {
+        const new_used, overflowed = @addWithOverflow(self.used, bytes_with_padding);
+        if (overflowed != 0 or new_used > self.capacity) {
             return StackOverflow.StackOverflow;
         }
 
