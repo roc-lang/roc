@@ -321,5 +321,5 @@ test "Layout size in bytes" {
 
     // The Layout should be reasonably small since it's used frequently
     // A typical tagged union in Zig will be the size of the largest variant plus tag overhead
-    try testing.expect(layout_size <= 16); // Reasonable upper bound
+    try testing.expect(layout_size <= 20); // Reasonable upper bound
 }

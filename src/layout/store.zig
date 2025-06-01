@@ -2664,8 +2664,7 @@ test "addTypeVar - comprehensive nested record combinations" {
                         // Empty record (0 fields)
                         expected_total_fields += 1;
                         // This field will be dropped as zero-sized
-                        const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
-                        break :blk test_type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = test_type_store.record_fields.appendSlice(test_type_store.env.gpa, &[_]types.RecordField{}), .ext = empty_ext } } });
+                        break :blk test_type_store.freshFromContent(.{ .structure = .empty_record });
                     },
                     2 => blk: {
                         // Record with 1-2 non-zero fields
@@ -2712,10 +2711,8 @@ test "addTypeVar - comprehensive nested record combinations" {
                         });
                         expected_total_fields += 1;
 
-                        // Check if this nested record will have any fields after dropping zero-sized ones
-                        if (inner_fields.items.len > 1) { // We know we have 1 non-zero field
-                            expected_non_zero_fields += 1;
-                        }
+                        // This nested record will have 1 non-zero field (the str field) after dropping zero-sized ones
+                        expected_non_zero_fields += 1;
 
                         const inner_fields_slice = test_type_store.record_fields.appendSlice(test_type_store.env.gpa, inner_fields.items);
                         const empty_ext = test_type_store.freshFromContent(.{ .structure = .empty_record });
