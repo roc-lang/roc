@@ -67,7 +67,8 @@ const CustomType = types.CustomType;
 const FlatType = types.FlatType;
 const Builtin = types.Builtin;
 const Tuple = types.Tuple;
-const NumCompact = types.NumCompact;
+const Num = types.Num;
+const NumCompact = types.Num.Compact;
 const Func = types.Func;
 const Record = types.Record;
 const RecordField = types.RecordField;
@@ -409,70 +410,10 @@ const Unifier = struct {
                     else => return error.TypeMismatch,
                 }
             },
-            .num_poly => |a_var| {
+            .num => |a_num| {
                 switch (b_flat_type) {
-                    .num_poly => |b_var| {
-                        // TODO: Error if sub vars are not numeric
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    .num_compact => |b_num| {
-                        try self.unifyNumPolyAndCompact(vars, a_var, b_num);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .int_poly => |a_var| {
-                switch (b_flat_type) {
-                    .int_poly => |b_var| {
-                        // TODO: Error if sub vars are not numeric
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac_poly => |a_var| {
-                switch (b_flat_type) {
-                    .frac_poly => |b_var| {
-                        // TODO: Error if sub vars are not numeric
-                        try self.unifyGuarded(a_var, b_var);
-                        self.merge(vars, vars.b.desc.content);
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .int_precision => |a_prec| {
-                switch (b_flat_type) {
-                    .int_precision => |b_prec| {
-                        if (a_prec == b_prec) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .frac_precision => |a_prec| {
-                switch (b_flat_type) {
-                    .frac_precision => |b_prec| {
-                        if (a_prec == b_prec) {
-                            self.merge(vars, vars.b.desc.content);
-                        } else {
-                            return error.TypeMismatch;
-                        }
-                    },
-                    else => return error.TypeMismatch,
-                }
-            },
-            .num_compact => |a_num| {
-                switch (b_flat_type) {
-                    .num_compact => |b_num| {
-                        try self.unifyNumCompact(vars, a_num, b_num);
-                    },
-                    .num_poly => |b_var| {
-                        try self.unifyCompactAndPoly(vars, a_num, b_var);
+                    .num => |b_num| {
+                        try self.unifyNum(vars, a_num, b_num);
                     },
                     else => return error.TypeMismatch,
                 }
@@ -580,8 +521,86 @@ const Unifier = struct {
         self.merge(vars, vars.b.desc.content);
     }
 
+    fn unifyNum(
+        self: *Self,
+        vars: *const ResolvedVarDescs,
+        a_num: Num,
+        b_num: Num,
+    ) error{ TypeMismatch, InvalidNumType }!void {
+        switch (a_num) {
+            .num_poly => |a_var| {
+                switch (b_num) {
+                    .num_poly => |b_var| {
+                        // TODO: Error if sub vars are not numeric
+                        try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    .num_compact => |b_num_compact| {
+                        try self.unifyPolyAndCompactNums(vars, a_var, b_num_compact);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .int_poly => |a_var| {
+                switch (b_num) {
+                    .int_poly => |b_var| {
+                        // TODO: Error if sub vars are not numeric
+                        try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .frac_poly => |a_var| {
+                switch (b_num) {
+                    .frac_poly => |b_var| {
+                        // TODO: Error if sub vars are not numeric
+                        try self.unifyGuarded(a_var, b_var);
+                        self.merge(vars, vars.b.desc.content);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .int_precision => |a_prec| {
+                switch (b_num) {
+                    .int_precision => |b_prec| {
+                        if (a_prec == b_prec) {
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .frac_precision => |a_prec| {
+                switch (b_num) {
+                    .frac_precision => |b_prec| {
+                        if (a_prec == b_prec) {
+                            self.merge(vars, vars.b.desc.content);
+                        } else {
+                            return error.TypeMismatch;
+                        }
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+            .num_compact => |a_num_compact| {
+                switch (b_num) {
+                    .num_compact => |b_num_compact| {
+                        try self.unifyTwoCompactNums(vars, a_num_compact, b_num_compact);
+                    },
+                    .num_poly => |b_var| {
+                        try self.unifyCompactAndPolyNums(vars, a_num_compact, b_var);
+                    },
+                    else => return error.TypeMismatch,
+                }
+            },
+        }
+    }
+
     /// unify compact numbers
-    fn unifyNumCompact(
+    fn unifyTwoCompactNums(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_num: NumCompact,
@@ -613,13 +632,13 @@ const Unifier = struct {
 
     /// Unify when a is compact and b is polymorphic
     /// Since `a` is compact, we must merge with it
-    fn unifyCompactAndPoly(
+    fn unifyCompactAndPolyNums(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_num: NumCompact,
         b_num_var: Var,
     ) error{ TypeMismatch, InvalidNumType }!void {
-        const b_num_resolved = self.resolvePolyNumVar(b_num_var);
+        const b_num_resolved = self.resolvePolyNum(b_num_var);
         switch (a_num) {
             .int => |a_int| {
                 switch (b_num_resolved) {
@@ -650,13 +669,13 @@ const Unifier = struct {
 
     /// Unify when a is polymorphic and b is compact
     /// Since `b` is compact, we must merge with it
-    fn unifyNumPolyAndCompact(
+    fn unifyPolyAndCompactNums(
         self: *Self,
         vars: *const ResolvedVarDescs,
         a_num_var: Var,
         b_num: NumCompact,
     ) error{ TypeMismatch, InvalidNumType }!void {
-        const a_num_resolved = self.resolvePolyNumVar(a_num_var);
+        const a_num_resolved = self.resolvePolyNum(a_num_var);
         switch (a_num_resolved) {
             .flex_resolved => self.merge(vars, vars.b.desc.content),
             .int_resolved => |a_int| switch (b_num) {
@@ -679,6 +698,7 @@ const Unifier = struct {
         }
     }
 
+    /// The result of attempting to resolve a polymorphic number
     const ResolvedNum = union(enum) {
         flex_resolved,
         int_resolved: NumCompact.Int.Precision,
@@ -686,10 +706,27 @@ const Unifier = struct {
         err: Var,
     };
 
-    /// Given the type variable of in `Num` (ie the `a` in `Num(a)`), resolve it
-    /// to a concrete number.
-    /// If any of the vars during unwrapping are an invalid number type, error
-    fn resolvePolyNumVar(
+    /// Attempts to resolve a polymorphic number variable to a concrete precision.
+    ///
+    /// This function recursively follows the structure of a number type,
+    /// unwrapping any intermediate `.num_poly`, `.int_poly`, or `.frac_poly`
+    /// variants until it reaches a concrete representation:
+    /// either `.int_precision` or `.frac_precision`.
+    ///
+    /// For example:
+    ///   Given a type like `Num(Int(U8))`, this function returns `.int_resolved(.u8)`.
+    ///
+    /// If resolution reaches a `.flex_var`, it returns `.flex_resolved`,
+    /// indicating the number is still unspecialized.
+    ///
+    /// If the chain ends in an invalid structure (e.g. `Num(Str)`),
+    /// it returns `.err`, along with the offending variable.
+    /// TODO: Do we want the chain of offending variables on error?
+    ///
+    /// Note that this function will work on the "tail" of a polymorphic number.
+    /// That is, if you pass in `Frac(Dec)` (without the outer `Num`), this
+    /// function will still resolve successfully.
+    fn resolvePolyNum(
         self: *Self,
         initial_num_var: Var,
     ) ResolvedNum {
@@ -700,17 +737,23 @@ const Unifier = struct {
                 .flex_var => return .flex_resolved,
                 .structure => |flat_type| {
                     switch (flat_type) {
-                        .int_poly => |var_| {
-                            num_var = var_;
-                        },
-                        .frac_poly => |var_| {
-                            num_var = var_;
-                        },
-                        .int_precision => |prec| {
-                            return .{ .int_resolved = prec };
-                        },
-                        .frac_precision => |prec| {
-                            return .{ .frac_resolved = prec };
+                        .num => |num| switch (num) {
+                            .num_poly => |var_| {
+                                num_var = var_;
+                            },
+                            .int_poly => |var_| {
+                                num_var = var_;
+                            },
+                            .frac_poly => |var_| {
+                                num_var = var_;
+                            },
+                            .int_precision => |prec| {
+                                return .{ .int_resolved = prec };
+                            },
+                            .frac_precision => |prec| {
+                                return .{ .frac_resolved = prec };
+                            },
+                            .num_compact => return .{ .err = num_var },
                         },
                         else => return .{ .err = num_var },
                     }
@@ -1808,58 +1851,58 @@ const TestEnv = struct {
     // helpers - nums
 
     fn mkNum(self: *Self, var_: Var) Var {
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = var_ } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = var_ } } });
     }
 
     fn mkNumFlex(self: *Self) Var {
         const prec_var = self.types_store.fresh();
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = prec_var } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = prec_var } } });
     }
 
     fn mkFrac(self: *Self, var_: Var) Var {
-        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .frac_poly = var_ } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = frac_var } });
+        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = var_ } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
 
     fn mkFracFlex(self: *Self) Var {
         const prec_var = self.types_store.fresh();
-        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .frac_poly = prec_var } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = frac_var } });
+        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = prec_var } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
 
     fn mkFracRigid(self: *Self, name: []const u8) Var {
         const rigid = self.types_store.freshFromContent(self.mkRigidVar(name));
-        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .frac_poly = rigid } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = frac_var } });
+        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = rigid } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
 
     fn mkFracExact(self: *Self, prec: NumCompact.Frac.Precision) Var {
-        const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .frac_precision = prec } });
-        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .frac_poly = prec_var } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = frac_var } });
+        const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_precision = prec } } });
+        const frac_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = prec_var } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = frac_var } } });
     }
 
     fn mkInt(self: *Self, var_: Var) Var {
-        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .int_poly = var_ } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = int_var } });
+        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = var_ } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
 
     fn mkIntFlex(self: *Self) Var {
         const prec_var = self.types_store.fresh();
-        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .int_poly = prec_var } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = int_var } });
+        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = prec_var } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
 
     fn mkIntRigid(self: *Self, name: []const u8) Var {
         const rigid = self.types_store.freshFromContent(self.mkRigidVar(name));
-        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .int_poly = rigid } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = int_var } });
+        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = rigid } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
 
     fn mkIntExact(self: *Self, prec: NumCompact.Int.Precision) Var {
-        const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .int_precision = prec } });
-        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .int_poly = prec_var } });
-        return self.types_store.freshFromContent(Content{ .structure = .{ .num_poly = int_var } });
+        const prec_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_precision = prec } } });
+        const int_var = self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = prec_var } } });
+        return self.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = int_var } } });
     }
 
     // helpers - structure - tuple
@@ -2943,7 +2986,7 @@ test "unify - Num(rigid) and Num(rigid)" {
     defer env.deinit();
 
     const rigid = env.types_store.freshFromContent(env.mkRigidVar("b"));
-    const num = Content{ .structure = .{ .num_poly = rigid } };
+    const num = Content{ .structure = .{ .num = .{ .num_poly = rigid } } };
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
@@ -2962,8 +3005,8 @@ test "unify - Num(rigid_a) and Num(rigid_b)" {
 
     const rigid_a = env.types_store.freshFromContent(env.mkRigidVar("a"));
     const rigid_b = env.types_store.freshFromContent(env.mkRigidVar("b"));
-    const a = env.types_store.freshFromContent(Content{ .structure = .{ .num_poly = rigid_a } });
-    const b = env.types_store.freshFromContent(Content{ .structure = .{ .num_poly = rigid_b } });
+    const a = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = rigid_a } } });
+    const b = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .num_poly = rigid_b } } });
 
     const result = unify(&env.types_store, &env.scratch, a, b);
 
@@ -2979,8 +3022,8 @@ test "unify - Num(Int(rigid)) and Num(Int(rigid))" {
     defer env.deinit();
 
     const rigid = env.types_store.freshFromContent(env.mkRigidVar("b"));
-    const int_var = env.types_store.freshFromContent(Content{ .structure = .{ .int_poly = rigid } });
-    const num = Content{ .structure = .{ .num_poly = int_var } };
+    const int_var = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .int_poly = rigid } } });
+    const num = Content{ .structure = .{ .num = .{ .num_poly = int_var } } };
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
@@ -2998,8 +3041,8 @@ test "unify - Num(Frac(rigid)) and Num(Frac(rigid))" {
     defer env.deinit();
 
     const rigid = env.types_store.freshFromContent(env.mkRigidVar("b"));
-    const frac_var = env.types_store.freshFromContent(Content{ .structure = .{ .frac_poly = rigid } });
-    const num = Content{ .structure = .{ .num_poly = frac_var } };
+    const frac_var = env.types_store.freshFromContent(Content{ .structure = .{ .num = .{ .frac_poly = rigid } } });
+    const num = Content{ .structure = .{ .num = .{ .num_poly = frac_var } } };
     const a = env.types_store.freshFromContent(num);
     const b = env.types_store.freshFromContent(num);
 
@@ -3092,7 +3135,7 @@ test "unify - func are same" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num_flex = env.types_store.fresh();
-    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num_poly = num_flex } });
+    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } });
     const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncFlex(&[_]Var{ str, num }, int_i32);
 
@@ -3152,7 +3195,7 @@ test "unify - same funcs pure" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num_flex = env.types_store.fresh();
-    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num_poly = num_flex } });
+    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } });
     const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
 
@@ -3174,7 +3217,7 @@ test "unify - same funcs effectful" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num_flex = env.types_store.fresh();
-    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num_poly = num_flex } });
+    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } });
     const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
 
@@ -3196,7 +3239,7 @@ test "unify - same funcs first eff, second pure (fail)" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num_flex = env.types_store.fresh();
-    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num_poly = num_flex } });
+    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } });
     const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);
@@ -3219,7 +3262,7 @@ test "unify - same funcs first pure, second eff" {
 
     const int_i32 = env.types_store.freshFromContent(Content{ .structure = types.int_i32 });
     const num_flex = env.types_store.fresh();
-    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num_poly = num_flex } });
+    const num = env.types_store.freshFromContent(types.Content{ .structure = .{ .num = .{ .num_poly = num_flex } } });
     const str = env.types_store.freshFromContent(Content{ .structure = .str });
     const pure_func = env.mkFuncPure(&[_]Var{ str, num }, int_i32);
     const eff_func = env.mkFuncEff(&[_]Var{ str, num }, int_i32);

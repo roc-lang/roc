@@ -150,12 +150,7 @@ pub const FlatType = union(enum) {
     box: Var,
     list: Var,
     tuple: Tuple,
-    num_poly: Var,
-    int_poly: Var,
-    frac_poly: Var,
-    int_precision: NumCompact.Int.Precision,
-    frac_precision: NumCompact.Frac.Precision,
-    num_compact: NumCompact,
+    num: Num,
     custom_type: CustomType,
     func: Func,
     record: Record,
@@ -173,69 +168,91 @@ pub const Tuple = struct {
 
 // numbers //
 
-/// Represents number
+/// Represents numeric types in the type system.
 ///
-/// Numbers are special-cased here. We represent them to the Roc programmer
-/// as opaque types with phantom type variables, but since they come up so
-/// often, we unify that representation into a special (much more compact)
-/// representation which saves a lot of memory.
-pub const NumCompact = union(enum) {
-    const Self = @This();
+/// Numbers are extremely common, so we special-case their representation
+/// for both performance and memory efficiency. While Roc exposes numbers
+/// as opaque types with phantom type variables (eg, `Num(a)`), we avoid
+/// representing them using fully generic applications unless absolutely
+/// necessary.
+///
+/// In most cases—when a specific number type is known (like `U8`) — we store
+/// a compact, canonical form directly. This avoids the need for multiple
+/// indirections, such as separate type variables and layered aliases.
+///
+/// When a polymorphic number is required (eg in the type signature of
+/// a generic function over `Num(a)`), we allow full representation via
+/// `num_poly`, `int_poly`, or `frac_poly`. However, during unification,
+/// if a polymorphic number is unified with a compact one, the compact
+/// form always wins: we discard the polymorphic wrapper and store the
+/// concrete, memory-efficient version instead.
+pub const Num = union(enum) {
+    num_poly: Var,
+    int_poly: Var,
+    frac_poly: Var,
+    int_precision: Compact.Int.Precision,
+    frac_precision: Compact.Frac.Precision,
+    num_compact: Compact,
 
-    int: Int.Precision,
-    frac: Frac.Precision,
+    /// Represents a compact number
+    pub const Compact = union(enum) {
+        const Self = @This();
 
-    /// the Frac data type
-    pub const Frac = struct {
-        /// the precision of a frac
-        pub const Precision = enum { f32, f64, dec };
-    };
+        int: Int.Precision,
+        frac: Frac.Precision,
 
-    /// the Int data type
-    pub const Int = struct {
-        /// the precision of an int
-        pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
+        /// the Frac data type
+        pub const Frac = struct {
+            /// the precision of a frac
+            pub const Precision = enum { f32, f64, dec };
+        };
+
+        /// the Int data type
+        pub const Int = struct {
+            /// the precision of an int
+            pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
+        };
     };
 };
 
 /// a frac f32
-pub const frac_f32: FlatType = .{ .num_compact = NumCompact{ .frac = .f32 } };
+pub const frac_f32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .f32 } } };
 
 /// a frac f64
-pub const frac_f64: FlatType = .{ .num_compact = NumCompact{ .frac = .f64 } };
+pub const frac_f64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .f64 } } };
 
 /// a frac dec
-pub const frac_dec: FlatType = .{ .num_compact = NumCompact{ .frac = .dec } };
+pub const frac_dec: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .frac = .dec } } };
 
 /// an int u8
-pub const int_u8: FlatType = .{ .num_compact = NumCompact{ .int = .u8 } };
+pub const int_u8: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u8 } } };
 
 /// an int i8
-pub const int_i8: FlatType = .{ .num_compact = NumCompact{ .int = .i8 } };
+pub const int_i8: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i8 } } };
 
 /// an int u16
-pub const int_u16: FlatType = .{ .num_compact = NumCompact{ .int = .u16 } };
+pub const int_u16: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u16 } } };
 
 /// an int i16
-pub const int_i16: FlatType = .{ .num_compact = NumCompact{ .int = .i16 } };
+pub const int_i16: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i16 } } };
 
 /// an int u32
-pub const int_u32: FlatType = .{ .num_compact = NumCompact{ .int = .u32 } };
+pub const int_u32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u32 } } };
 
 /// an int i32
-pub const int_i32: FlatType = .{ .num_compact = NumCompact{ .int = .i32 } };
+pub const int_i32: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i32 } } };
 
 /// an int u64
-pub const int_u64: FlatType = .{ .num_compact = NumCompact{ .int = .u64 } };
+pub const int_u64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u64 } } };
 
 /// an int i64
-pub const int_i64: FlatType = .{ .num_compact = NumCompact{ .int = .i64 } };
+pub const int_i64: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i64 } } };
 
 /// an int u128
-pub const int_u128: FlatType = .{ .num_compact = NumCompact{ .int = .u128 } };
+pub const int_u128: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .u128 } } };
 
 /// an int i128
-pub const int_i128: FlatType = .{ .num_compact = NumCompact{ .int = .i128 } };
+pub const int_i128: FlatType = .{ .num = .{ .num_compact = Num.Compact{ .int = .i128 } } };
 
 // custom types //
 

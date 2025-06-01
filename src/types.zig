@@ -35,7 +35,7 @@ pub const TypeApply = types.Builtin;
 pub const Tuple = types.Tuple;
 
 /// Type Num
-pub const NumCompact = types.NumCompact;
+pub const Num = types.Num;
 
 /// Type Func
 pub const Func = types.Func;
