@@ -103,7 +103,7 @@ pub const Stack = struct {
         self.used = @intCast(new_used);
     }
 
-    pub fn next(self: *const Stack) *anyopaque {
+    fn next(self: *const Stack) *anyopaque {
         return @ptrCast(self.start + self.used);
     }
 
