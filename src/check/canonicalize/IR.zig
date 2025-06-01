@@ -118,7 +118,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num,
+        bound: types.NumCompact,
     },
 
     // Int and Float store a variable to generate better error messages
@@ -127,14 +127,14 @@ pub const Expr = union(enum) {
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int.Precision,
+        bound: types.NumCompact.Int.Precision,
     },
     float: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac.Precision,
+        bound: types.NumCompact.Frac.Precision,
     },
     str: StringLiteral.Idx,
     // Number variable, precision variable, value, bound
@@ -142,7 +142,7 @@ pub const Expr = union(enum) {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int.Precision,
+        bound: types.NumCompact.Int.Precision,
     },
     list: struct {
         elem_var: TypeVar,
@@ -779,28 +779,28 @@ pub const Pattern = union(enum) {
         num_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num,
+        bound: types.NumCompact,
     },
     int_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: IntValue,
-        bound: types.Num.Int.Precision,
+        bound: types.NumCompact.Int.Precision,
     },
     float_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         literal: StringLiteral.Idx,
         value: f64,
-        bound: types.Num.Frac.Precision,
+        bound: types.NumCompact.Frac.Precision,
     },
     str_literal: StringLiteral.Idx,
     char_literal: struct {
         num_var: TypeVar,
         precision_var: TypeVar,
         value: u32,
-        bound: types.Num.Int.Precision,
+        bound: types.NumCompact.Int.Precision,
     },
     Underscore,
 
