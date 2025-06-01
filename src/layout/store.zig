@@ -115,7 +115,7 @@ pub const Store = struct {
         var iterations: u32 = 0;
         const max_iterations = 10000; // Safety limit to prevent infinite loops
 
-        while (true) {
+        outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
                 std.debug.panic("Layout computation exceeded iteration limit - possible infinite loop\n", .{});
@@ -258,6 +258,7 @@ pub const Store = struct {
 
                                 // Start working on the last pending field (we want to pop them).
                                 const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
                                 current = var_store.resolveVar(field.var_);
                                 continue;
                             },
@@ -304,96 +305,222 @@ pub const Store = struct {
                                             // All fields were zero-sized, this is an empty record
                                             self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-                                            // Top-level zero-sized record
-                                            return LayoutError.ZeroSizedType;
-                                        }
+                                            // Check if we're inside another container
+                                            if (self.work.pending_containers.items.len > 0) {
+                                                // We're inside a container, handle it appropriately
+                                                const outer_container = self.work.pending_containers.pop().?;
+                                                switch (outer_container) {
+                                                    .box => {
+                                                        break :blk try self.insertLayout(.box_zero_sized);
+                                                    },
+                                                    .list => {
+                                                        break :blk try self.insertLayout(.list_zero_sized);
+                                                    },
+                                                    .record => |parent_record| {
+                                                        // This record with all zero-sized fields is being processed as a field
+                                                        // of another record. Since zero-sized types don't exist at runtime,
+                                                        // this field should be dropped from the parent record.
 
-                                        const fields_start = self.record_fields.items.len;
+                                                        // We need to continue processing the parent record
+                                                        // First, we need to properly handle the parent's state
+                                                        var updated_parent = parent_record;
+                                                        updated_parent.pending_fields -= 1;
 
-                                        // Copy only this record's resolved fields to the record_fields store
-                                        const field_names = self.work.resolved_record_fields.items(.field_name);
-                                        const field_idxs = self.work.resolved_record_fields.items(.field_idx);
+                                                        // Pop the field that turned out to be zero-sized
+                                                        _ = self.work.pending_record_fields.pop() orelse unreachable;
 
-                                        // First, collect the fields into a temporary array so we can sort them
-                                        var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
-                                        defer temp_fields.deinit();
+                                                        if (updated_parent.pending_fields == 0) {
+                                                            // Finished processing parent record
+                                                            const parent_resolved_end = self.work.resolved_record_fields.len;
+                                                            const parent_num_resolved = parent_resolved_end - updated_parent.resolved_fields_start;
 
-                                        var i: u32 = updated_record.resolved_fields_start;
-                                        while (i < resolved_fields_end) : (i += 1) {
-                                            try temp_fields.append(.{
-                                                .name = field_names[i],
-                                                .layout = field_idxs[i],
-                                            });
-                                        }
+                                                            if (parent_num_resolved == 0) {
+                                                                // Parent also has all zero-sized fields
+                                                                self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
 
-                                        // Sort fields by alignment (descending) first, then by name (ascending)
-                                        const AlignmentSortCtx = struct {
-                                            store: *Self,
-                                            env: *base.ModuleEnv,
-                                            fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
-                                                const a_layout = ctx.store.getLayout(a.layout);
-                                                const b_layout = ctx.store.getLayout(b.layout);
-                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                const a_alignment = a_layout.alignment(usize_alignment);
-                                                const b_alignment = b_layout.alignment(usize_alignment);
+                                                                // Check if there's another container
+                                                                if (self.work.pending_containers.items.len > 0) {
+                                                                    const grandparent = self.work.pending_containers.pop().?;
+                                                                    switch (grandparent) {
+                                                                        .box => break :blk try self.insertLayout(.box_zero_sized),
+                                                                        .list => break :blk try self.insertLayout(.list_zero_sized),
+                                                                        .record => return LayoutError.ZeroSizedType, // Too deep nesting
+                                                                    }
+                                                                } else {
+                                                                    return LayoutError.ZeroSizedType;
+                                                                }
+                                                            }
 
-                                                // First sort by alignment (descending - higher alignment first)
-                                                if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                                    return a_alignment.toBytes() > b_alignment.toBytes();
+                                                            // Parent has some non-zero fields - complete it
+                                                            const parent_fields_start = self.record_fields.items.len;
+                                                            const parent_field_names = self.work.resolved_record_fields.items(.field_name);
+                                                            const parent_field_idxs = self.work.resolved_record_fields.items(.field_idx);
+
+                                                            // Collect and sort parent's fields
+                                                            var parent_temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+                                                            defer parent_temp_fields.deinit();
+
+                                                            for (updated_parent.resolved_fields_start..parent_resolved_end) |i| {
+                                                                try parent_temp_fields.append(.{
+                                                                    .name = parent_field_names[i],
+                                                                    .layout = parent_field_idxs[i],
+                                                                });
+                                                            }
+
+                                                            // Sort by alignment then name
+                                                            const ParentSortCtx = struct {
+                                                                store: *Self,
+                                                                env: *base.ModuleEnv,
+                                                                fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
+                                                                    const a_layout = ctx.store.getLayout(a.layout);
+                                                                    const b_layout = ctx.store.getLayout(b.layout);
+                                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                                    const a_alignment = a_layout.alignment(usize_alignment);
+                                                                    const b_alignment = b_layout.alignment(usize_alignment);
+
+                                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
+                                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                                    }
+
+                                                                    const a_str = ctx.env.idents.getText(a.name);
+                                                                    const b_str = ctx.env.idents.getText(b.name);
+                                                                    return std.mem.order(u8, a_str, b_str) == .lt;
+                                                                }
+                                                            };
+
+                                                            std.mem.sort(
+                                                                RecordField,
+                                                                parent_temp_fields.items,
+                                                                ParentSortCtx{ .store = self, .env = self.env },
+                                                                ParentSortCtx.lessThan,
+                                                            );
+
+                                                            // Add sorted fields to store
+                                                            for (parent_temp_fields.items) |sorted_field| {
+                                                                _ = self.record_fields.append(self.env.gpa, sorted_field);
+                                                            }
+
+                                                            // Calculate alignment and size
+                                                            var parent_max_alignment = Alignment.fromBytes(1);
+                                                            var parent_current_offset = layout.Size.fromBytes(0);
+
+                                                            for (parent_temp_fields.items) |temp_field| {
+                                                                const field_layout = self.getLayout(temp_field.layout);
+                                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                                const field_alignment = field_layout.alignment(usize_alignment);
+                                                                const field_size = field_layout.size(@sizeOf(usize));
+
+                                                                parent_max_alignment = Alignment.max(parent_max_alignment, field_alignment);
+                                                                parent_current_offset = parent_current_offset.alignForward(field_alignment);
+                                                                parent_current_offset = layout.Size.add(parent_current_offset, layout.Size.fromBytes(field_size));
+                                                            }
+
+                                                            const parent_total_size = parent_current_offset.alignForward(parent_max_alignment);
+                                                            const parent_fields_range = collections.NonEmptyRange.init(@intCast(parent_fields_start), @intCast(parent_num_resolved)) catch unreachable;
+
+                                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
+                                                            break :blk try self.insertLayout(.{ .record = .{ .fields = parent_fields_range, .alignment = parent_max_alignment, .size = parent_total_size } });
+                                                        } else {
+                                                            // More fields to process in parent
+                                                            try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_parent });
+                                                            // Continue with next field
+                                                            const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                                                            current = var_store.resolveVar(next_field.var_);
+                                                            continue :outer;
+                                                        }
+                                                    },
                                                 }
-
-                                                // Then sort by name (ascending)
-                                                const a_str = ctx.env.idents.getText(a.name);
-                                                const b_str = ctx.env.idents.getText(b.name);
-                                                return std.mem.order(u8, a_str, b_str) == .lt;
+                                            } else {
+                                                // This is a top-level zero-sized record
+                                                return LayoutError.ZeroSizedType;
                                             }
-                                        };
+                                        } else {
+                                            const fields_start = self.record_fields.items.len;
 
-                                        std.mem.sort(
-                                            RecordField,
-                                            temp_fields.items,
-                                            AlignmentSortCtx{ .store = self, .env = self.env },
-                                            AlignmentSortCtx.lessThan,
-                                        );
+                                            // Copy only this record's resolved fields to the record_fields store
+                                            const field_names = self.work.resolved_record_fields.items(.field_name);
+                                            const field_idxs = self.work.resolved_record_fields.items(.field_idx);
 
-                                        // Now append the sorted fields
-                                        for (temp_fields.items) |sorted_field| {
-                                            _ = self.record_fields.append(self.env.gpa, sorted_field);
+                                            // First, collect the fields into a temporary array so we can sort them
+                                            var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+                                            defer temp_fields.deinit();
+
+                                            for (updated_record.resolved_fields_start..resolved_fields_end) |i| {
+                                                try temp_fields.append(.{
+                                                    .name = field_names[i],
+                                                    .layout = field_idxs[i],
+                                                });
+                                            }
+
+                                            // Sort fields by alignment (descending) first, then by name (ascending)
+                                            const AlignmentSortCtx = struct {
+                                                store: *Self,
+                                                env: *base.ModuleEnv,
+                                                fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
+                                                    const a_layout = ctx.store.getLayout(a.layout);
+                                                    const b_layout = ctx.store.getLayout(b.layout);
+                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                    const a_alignment = a_layout.alignment(usize_alignment);
+                                                    const b_alignment = b_layout.alignment(usize_alignment);
+
+                                                    // First sort by alignment (descending - higher alignment first)
+                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
+                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                    }
+
+                                                    // Then sort by name (ascending)
+                                                    const a_str = ctx.env.idents.getText(a.name);
+                                                    const b_str = ctx.env.idents.getText(b.name);
+                                                    return std.mem.order(u8, a_str, b_str) == .lt;
+                                                }
+                                            };
+
+                                            std.mem.sort(
+                                                RecordField,
+                                                temp_fields.items,
+                                                AlignmentSortCtx{ .store = self, .env = self.env },
+                                                AlignmentSortCtx.lessThan,
+                                            );
+
+                                            // Now add them to the record_fields store in the sorted order
+                                            for (temp_fields.items) |sorted_field| {
+                                                _ = self.record_fields.append(self.env.gpa, sorted_field);
+                                            }
+
+                                            // Calculate max alignment and total size of all fields
+                                            var max_alignment = Alignment.fromBytes(1);
+                                            var current_offset = layout.Size.fromBytes(0);
+
+                                            var field_idx: u32 = 0;
+                                            while (field_idx < temp_fields.items.len) : (field_idx += 1) {
+                                                const temp_field = temp_fields.items[field_idx];
+                                                const field_layout = self.getLayout(temp_field.layout);
+                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                const field_alignment = field_layout.alignment(usize_alignment);
+                                                const field_size = field_layout.size(@sizeOf(usize));
+
+                                                // Update max alignment
+                                                max_alignment = Alignment.max(max_alignment, field_alignment);
+
+                                                // Align current offset to field's alignment
+                                                current_offset = current_offset.alignForward(field_alignment);
+
+                                                // Add field size
+                                                current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                            }
+
+                                            // Final size must be aligned to the record's alignment
+                                            const total_size = current_offset.alignForward(max_alignment);
+
+                                            // Create the record layout with the fields range
+                                            const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
+                                            const record_layout = Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
+
+                                            // Remove only this record's resolved fields
+                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
+
+                                            break :blk try self.insertLayout(record_layout);
                                         }
-
-                                        // Calculate max alignment and total size of all fields
-                                        var max_alignment = Alignment.fromBytes(1);
-                                        var current_offset = layout.Size.fromBytes(0);
-
-                                        var field_idx: u32 = 0;
-                                        while (field_idx < temp_fields.items.len) : (field_idx += 1) {
-                                            const temp_field = temp_fields.items[field_idx];
-                                            const field_layout = self.getLayout(temp_field.layout);
-                                            const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                            const field_alignment = field_layout.alignment(usize_alignment);
-                                            const field_size = field_layout.size(@sizeOf(usize));
-
-                                            // Update max alignment
-                                            max_alignment = Alignment.max(max_alignment, field_alignment);
-
-                                            // Align current offset to field's alignment
-                                            current_offset = current_offset.alignForward(field_alignment);
-
-                                            // Add field size
-                                            current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
-                                        }
-
-                                        // Final size must be aligned to the record's alignment
-                                        const total_size = current_offset.alignForward(max_alignment);
-
-                                        // Create the record layout with the fields range
-                                        const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
-                                        const record_layout = Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
-
-                                        // Remove only this record's resolved fields
-                                        self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-                                        break :blk try self.insertLayout(record_layout);
                                     } else {
                                         // Still have pending fields to process
                                         try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
@@ -440,8 +567,127 @@ pub const Store = struct {
                                             // All fields were zero-sized, this is an empty record
                                             self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-                                            // Top-level zero-sized record
-                                            return LayoutError.ZeroSizedType;
+                                            // Check if we're inside another container
+                                            if (self.work.pending_containers.items.len > 0) {
+                                                // We're inside a container, handle it appropriately
+                                                const outer_container = self.work.pending_containers.pop().?;
+                                                switch (outer_container) {
+                                                    .box => {
+                                                        break :blk try self.insertLayout(.box_zero_sized);
+                                                    },
+                                                    .list => {
+                                                        break :blk try self.insertLayout(.list_zero_sized);
+                                                    },
+                                                    .record => |parent_record| {
+                                                        // Similar to the empty record case above
+                                                        // This empty tag union is a field in a record - drop it
+                                                        var updated_parent = parent_record;
+                                                        updated_parent.pending_fields -= 1;
+
+                                                        // Pop the field that turned out to be zero-sized
+                                                        _ = self.work.pending_record_fields.pop() orelse unreachable;
+
+                                                        if (updated_parent.pending_fields == 0) {
+                                                            // Finished processing parent record
+                                                            const parent_resolved_end = self.work.resolved_record_fields.len;
+                                                            const parent_num_resolved = parent_resolved_end - updated_parent.resolved_fields_start;
+
+                                                            if (parent_num_resolved == 0) {
+                                                                // Parent also has all zero-sized fields
+                                                                self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
+
+                                                                // Check if there's another container
+                                                                if (self.work.pending_containers.items.len > 0) {
+                                                                    const grandparent = self.work.pending_containers.pop().?;
+                                                                    switch (grandparent) {
+                                                                        .box => break :blk try self.insertLayout(.box_zero_sized),
+                                                                        .list => break :blk try self.insertLayout(.list_zero_sized),
+                                                                        .record => return LayoutError.ZeroSizedType, // Too deep nesting
+                                                                    }
+                                                                } else {
+                                                                    return LayoutError.ZeroSizedType;
+                                                                }
+                                                            }
+
+                                                            // Complete parent record - reuse same logic as above
+                                                            const parent_fields_start = self.record_fields.items.len;
+                                                            const parent_field_names = self.work.resolved_record_fields.items(.field_name);
+                                                            const parent_field_idxs = self.work.resolved_record_fields.items(.field_idx);
+
+                                                            var parent_temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+                                                            defer parent_temp_fields.deinit();
+
+                                                            for (updated_parent.resolved_fields_start..parent_resolved_end) |i| {
+                                                                try parent_temp_fields.append(.{
+                                                                    .name = parent_field_names[i],
+                                                                    .layout = parent_field_idxs[i],
+                                                                });
+                                                            }
+
+                                                            const ParentSortCtx2 = struct {
+                                                                store: *Self,
+                                                                env: *base.ModuleEnv,
+                                                                fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
+                                                                    const a_layout = ctx.store.getLayout(a.layout);
+                                                                    const b_layout = ctx.store.getLayout(b.layout);
+                                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                                    const a_alignment = a_layout.alignment(usize_alignment);
+                                                                    const b_alignment = b_layout.alignment(usize_alignment);
+
+                                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
+                                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                                    }
+
+                                                                    const a_str = ctx.env.idents.getText(a.name);
+                                                                    const b_str = ctx.env.idents.getText(b.name);
+                                                                    return std.mem.order(u8, a_str, b_str) == .lt;
+                                                                }
+                                                            };
+
+                                                            std.mem.sort(
+                                                                RecordField,
+                                                                parent_temp_fields.items,
+                                                                ParentSortCtx2{ .store = self, .env = self.env },
+                                                                ParentSortCtx2.lessThan,
+                                                            );
+
+                                                            for (parent_temp_fields.items) |sorted_field| {
+                                                                _ = self.record_fields.append(self.env.gpa, sorted_field);
+                                                            }
+
+                                                            var parent_max_alignment = Alignment.fromBytes(1);
+                                                            var parent_current_offset = layout.Size.fromBytes(0);
+
+                                                            for (parent_temp_fields.items) |temp_field| {
+                                                                const field_layout = self.getLayout(temp_field.layout);
+                                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                                const field_alignment = field_layout.alignment(usize_alignment);
+                                                                const field_size = field_layout.size(@sizeOf(usize));
+
+                                                                parent_max_alignment = Alignment.max(parent_max_alignment, field_alignment);
+                                                                parent_current_offset = parent_current_offset.alignForward(field_alignment);
+                                                                parent_current_offset = layout.Size.add(parent_current_offset, layout.Size.fromBytes(field_size));
+                                                            }
+
+                                                            const parent_total_size = parent_current_offset.alignForward(parent_max_alignment);
+                                                            const parent_fields_range = collections.NonEmptyRange.init(@intCast(parent_fields_start), @intCast(parent_num_resolved)) catch unreachable;
+
+                                                            self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
+                                                            break :blk try self.insertLayout(.{ .record = .{ .fields = parent_fields_range, .alignment = parent_max_alignment, .size = parent_total_size } });
+                                                        } else {
+                                                            // More fields to process in parent
+                                                            try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_parent });
+                                                            // Continue with next field
+                                                            const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                                                            current = var_store.resolveVar(next_field.var_);
+                                                            continue :outer;
+                                                        }
+                                                    },
+                                                }
+                                            } else {
+                                                // This is a top-level zero-sized record
+                                                return LayoutError.ZeroSizedType;
+                                            }
                                         }
 
                                         // We have some resolved fields - complete the record here
@@ -639,15 +885,140 @@ pub const Store = struct {
                                 // Check if we're inside another container
                                 if (self.work.pending_containers.items.len > 0) {
                                     // We're inside a container (box/list)
-                                    const outer_container = self.work.pending_containers.pop().?;
-                                    switch (outer_container) {
+                                    const inner_outer_container = self.work.pending_containers.pop().?;
+                                    switch (inner_outer_container) {
                                         .box => {
                                             layout_idx = try self.insertLayout(.box_zero_sized);
                                         },
                                         .list => {
                                             layout_idx = try self.insertLayout(.list_zero_sized);
                                         },
-                                        .record => unreachable, // Records shouldn't directly contain zero-sized records
+                                        .record => |inner_pending_record| {
+                                            // It turned out we were getting the layout for a record field
+                                            // whose type is a zero-sized type, which means that field should be dropped.
+                                            std.debug.assert(inner_pending_record.pending_fields > 0);
+                                            var inner_updated_record = inner_pending_record;
+                                            inner_updated_record.pending_fields -= 1;
+
+                                            // The current field we're working on has turned out to be zero-sized, so drop it.
+                                            const field = self.work.pending_record_fields.pop() orelse unreachable;
+
+                                            std.debug.assert(current.var_ == field.var_);
+
+                                            if (inner_updated_record.pending_fields == 0) {
+                                                // We finished the record we were working on.
+                                                const inner_resolved_fields_end = self.work.resolved_record_fields.len;
+                                                const inner_num_resolved_fields = inner_resolved_fields_end - inner_updated_record.resolved_fields_start;
+
+                                                if (inner_num_resolved_fields == 0) {
+                                                    // All fields were zero-sized, this is an empty record
+                                                    self.work.resolved_record_fields.shrinkRetainingCapacity(inner_updated_record.resolved_fields_start);
+
+                                                    // Check if we're inside another container
+                                                    if (self.work.pending_containers.items.len > 0) {
+                                                        // We're inside a container, handle it appropriately
+                                                        const outer_container = self.work.pending_containers.pop().?;
+                                                        switch (outer_container) {
+                                                            .box => {
+                                                                layout_idx = try self.insertLayout(.box_zero_sized);
+                                                            },
+                                                            .list => {
+                                                                layout_idx = try self.insertLayout(.list_zero_sized);
+                                                            },
+                                                            .record => unreachable, // Records shouldn't be directly nested in this way
+                                                        }
+                                                    } else {
+                                                        // This is a top-level zero-sized record
+                                                        return LayoutError.ZeroSizedType;
+                                                    }
+                                                } else {
+                                                    const inner_fields_start = self.record_fields.items.len;
+
+                                                    // Copy only this record's resolved fields to the record_fields store
+                                                    const inner_field_names = self.work.resolved_record_fields.items(.field_name);
+                                                    const inner_field_idxs = self.work.resolved_record_fields.items(.field_idx);
+
+                                                    // First, collect the fields into a temporary array so we can sort them
+                                                    var inner_temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
+                                                    defer inner_temp_fields.deinit();
+
+                                                    for (inner_updated_record.resolved_fields_start..inner_resolved_fields_end) |i| {
+                                                        try inner_temp_fields.append(.{
+                                                            .name = inner_field_names[i],
+                                                            .layout = inner_field_idxs[i],
+                                                        });
+                                                    }
+
+                                                    // Sort the fields by name
+                                                    const InnerFieldSorter = struct {
+                                                        store: *Self,
+                                                        env: *base.ModuleEnv,
+                                                        pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
+                                                            const lhs_layout = ctx.store.getLayout(lhs.layout);
+                                                            const rhs_layout = ctx.store.getLayout(rhs.layout);
+                                                            const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                            const lhs_alignment = lhs_layout.alignment(usize_alignment);
+                                                            const rhs_alignment = rhs_layout.alignment(usize_alignment);
+
+                                                            // First sort by alignment (descending - higher alignment first)
+                                                            if (lhs_alignment.toBytes() != rhs_alignment.toBytes()) {
+                                                                return lhs_alignment.toBytes() > rhs_alignment.toBytes();
+                                                            }
+
+                                                            // Then sort by name (ascending)
+                                                            const lhs_str = ctx.env.idents.getText(lhs.name);
+                                                            const rhs_str = ctx.env.idents.getText(rhs.name);
+                                                            return std.mem.order(u8, lhs_str, rhs_str) == .lt;
+                                                        }
+                                                    };
+                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env }, InnerFieldSorter.lessThan);
+
+                                                    // Now add them to the record_fields store
+                                                    for (inner_temp_fields.items) |inner_field| {
+                                                        _ = self.record_fields.append(self.env.gpa, inner_field);
+                                                    }
+
+                                                    // Calculate max alignment and total size of all fields
+                                                    var max_alignment = Alignment.fromBytes(1);
+                                                    var current_offset = layout.Size.fromBytes(0);
+
+                                                    var field_idx: u32 = 0;
+                                                    while (field_idx < inner_temp_fields.items.len) : (field_idx += 1) {
+                                                        const temp_field = inner_temp_fields.items[field_idx];
+                                                        const field_layout = self.getLayout(temp_field.layout);
+                                                        const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+                                                        const field_alignment = field_layout.alignment(usize_alignment);
+                                                        const field_size = field_layout.size(@sizeOf(usize));
+
+                                                        // Update max alignment
+                                                        max_alignment = Alignment.max(max_alignment, field_alignment);
+
+                                                        // Align current offset to field's alignment
+                                                        current_offset = current_offset.alignForward(field_alignment);
+
+                                                        // Add field size
+                                                        current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                                    }
+
+                                                    // Final size must be aligned to the record's alignment
+                                                    const total_size = current_offset.alignForward(max_alignment);
+
+                                                    // Clean up resolved fields for this record
+                                                    self.work.resolved_record_fields.shrinkRetainingCapacity(inner_updated_record.resolved_fields_start);
+
+                                                    // Create the record layout with the fields range
+                                                    const fields_range = collections.NonEmptyRange.init(@intCast(inner_fields_start), @intCast(inner_temp_fields.items.len)) catch unreachable;
+                                                    layout_idx = try self.insertLayout(.{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } });
+                                                }
+                                            } else {
+                                                // More fields to process, push the updated record back
+                                                try self.work.pending_containers.append(self.env.gpa, .{ .record = inner_updated_record });
+                                                continue :outer;
+                                            }
+
+                                            // Continue with the layout we just created
+                                            // The layout_idx is ready to be processed by the outer loop
+                                        },
                                     }
                                 } else {
                                     // This is a top-level zero-sized record
