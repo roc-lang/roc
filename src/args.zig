@@ -5,33 +5,14 @@ const mem = std.mem;
 
 // The core type representing a parsed command
 pub const CliArgs = union(enum) {
-    run: struct {
-        file: []const u8,
-        opt: OptLevel = .none,
-    },
-    check: struct {
-        file: []const u8,
-    },
-    build: struct {
-        file: []const u8,
-        opt: OptLevel = .none,
-        output: ?[]const u8 = null,
-    },
-    format: struct {
-        path: ?[]const u8 = null,
-        stdin: bool = false,
-        check: bool = false,
-    },
-    test_cmd: struct {
-        file: []const u8,
-        opt: OptLevel = .none,
-    },
+    run: RunArgs,
+    check: CheckArgs,
+    build: BuildArgs,
+    format: FormatArgs,
+    test_cmd: TestArgs,
     repl,
     version,
-    docs: struct {
-        package: ?[]const u8 = null,
-        output: ?[]const u8 = null,
-    },
+    docs: DocsArgs,
     help: []const u8,
     licenses,
     invalid: []const u8, // error message
@@ -43,28 +24,60 @@ pub const OptLevel = enum {
     size,
 };
 
+pub const RunArgs = struct {
+    file: []const u8,
+    opt: OptLevel = .none,
+};
+
+pub const CheckArgs = struct {
+    file: []const u8,
+};
+
+pub const BuildArgs = struct {
+    file: []const u8,
+    opt: OptLevel = .none,
+    output: ?[]const u8 = null,
+};
+
+pub const TestArgs = struct {
+    file: []const u8,
+    opt: OptLevel = .none,
+};
+
+pub const FormatArgs = struct {
+    path: ?[]const u8 = null,
+    stdin: bool = false,
+    check: bool = false,
+};
+
+pub const DocsArgs = struct {
+    package: ?[]const u8 = null,
+    output: ?[]const u8 = null,
+};
+
 /// Parse a list of arguments.
 // TODO: should we ignore extra arguments or return errors when they are included?
 pub fn parse(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .run = .{ .file = "main.roc" } };
+    if (args.len == 0) return CliArgs{ .run = RunArgs{ .file = "main.roc" } };
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
     if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
+
     return parseRun(args[1..]);
 }
 
 fn parseCheck(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .check = .{ .file = "main.roc" } };
-    return CliArgs{ .check = .{ .file = args[0] } };
+    if (args.len == 0) return CliArgs{ .check = CheckArgs{ .file = "main.roc" } };
+    return CliArgs{ .check = CheckArgs{ .file = args[0] } };
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .build = .{ .file = "main.roc" } };
-    return CliArgs{ .build = .{ .file = args[0] } };
+    if (args.len == 0) return CliArgs{ .build = BuildArgs{ .file = "main.roc" } };
+    return CliArgs{ .build = BuildArgs{ .file = args[0] } };
 }
 
 fn parseRun(args: []const []const u8) CliArgs {
     _ = args;
-    return CliArgs{ .run = .{ .file = "main.roc" } };
+    return CliArgs{ .run = RunArgs{ .file = "main.roc" } };
 }
 
 test "roc run" {
