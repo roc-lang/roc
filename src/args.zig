@@ -60,6 +60,7 @@ pub const DocsArgs = struct {
 pub fn parse(args: []const []const u8) CliArgs {
     if (args.len == 0) return CliArgs{ .run = RunArgs{ .file = "main.roc" } };
     if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
+    if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
 
     return parseRun(args[1..]);
 }
@@ -67,6 +68,11 @@ pub fn parse(args: []const []const u8) CliArgs {
 fn parseCheck(args: []const []const u8) CliArgs {
     if (args.len == 0) return CliArgs{ .check = CheckArgs{ .file = "main.roc" } };
     return CliArgs{ .check = CheckArgs{ .file = args[0] } };
+}
+
+fn parseBuild(args: []const []const u8) CliArgs {
+    if (args.len == 0) return CliArgs{ .build = BuildArgs{ .file = "main.roc" } };
+    return CliArgs{ .build = BuildArgs{ .file = args[0] } };
 }
 
 fn parseRun(args: []const []const u8) CliArgs {
@@ -87,5 +93,16 @@ test "roc check" {
     {
         const result = parse(&[_][]const u8{ "check", "some/file.roc" });
         try testing.expectEqual(result.check.file, "some/file.roc");
+    }
+}
+
+test "roc build" {
+    {
+        const result = parse(&[_][]const u8{"build"});
+        try testing.expectEqual(result.build.file, "main.roc");
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "foo.roc" });
+        try testing.expectEqual(result.build.file, "foo.roc");
     }
 }
