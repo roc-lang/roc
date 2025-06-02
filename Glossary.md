@@ -325,14 +325,14 @@ Type constraints can take several forms:
     + In the expression `a + b`, both `a` and `b` need to have the same type.
 - Try target constraint: requires the expression you use `?` on to be a `Result`:
     + `Str.from_utf8(byte_list)?`
-- Effect suffix contraint: Your function should have a `!` suffix if it calls an effectful function.
+- Effect suffix constraint: Your function should have a `!` suffix if it calls an effectful function.
 - See `pub enum Constraint` in [crates/compiler/can/src/constraint.rs](crates/compiler/can/src/constraint.rs) for an overview of all constraints.
 
-Type contraint implementation:
+Type constraint implementation:
 - new compiler: Not yet implemented
 - old compiler:
     + Definition:  [can/src/constraint.rs](crates/compiler/can/src/constraint.rs)
-    + [Type solving](#type-solving) using contraints: [crates/compiler/solve/src/solve.rs](crates/compiler/solve/src/solve.rs)
+    + [Type solving](#type-solving) using constraints: [crates/compiler/solve/src/solve.rs](crates/compiler/solve/src/solve.rs)
 
 ## Type Solving
 
