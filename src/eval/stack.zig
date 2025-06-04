@@ -18,6 +18,7 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const testing = std.testing;
+const collections = @import("../collections.zig");
 
 /// Error when an alloca is attempted that's too big for the stack
 pub const StackOverflow = error{
@@ -43,47 +44,65 @@ pub const Stack = struct {
     used: u32,
 
     pub fn initCapacity(allocator: std.mem.Allocator, capacity: u32) std.mem.Allocator.Error!Stack {
-        const memory = try allocator.alloc(u8, capacity);
-        return .{
-            .allocator = allocator,
-            .start = memory.ptr,
-            .capacity = capacity,
-            .used = 0,
-        };
+        // Allocate the backing memory aligned to max_roc_alignment,
+        // in case the first `alloca` happens to need that alignment.
+        if (allocator.rawAlloc(
+            capacity,
+            collections.max_roc_alignment,
+            @returnAddress(),
+        )) |allocation| {
+            return .{
+                .allocator = allocator,
+                .start = allocation,
+                .capacity = capacity,
+                .used = 0,
+            };
+        } else {
+            return std.mem.Allocator.Error.OutOfMemory;
+        }
     }
 
     /// IMPORTANT: Before calling this, it is critical to ensure that nothing which
     /// was allocated on the stack is still being referenced anywhere!
     pub fn deinit(self: *Stack) void {
-        self.allocator.free(self.start[0..self.capacity]);
+        self.allocator.rawFree(
+            self.start[0..self.capacity],
+            collections.max_roc_alignment,
+            @returnAddress(),
+        );
     }
 
     /// Advance the stack pointer.
     ///
     /// This is called `alloca` because that's what libc calls this operation.
-    pub fn alloca(self: *Stack, bytes: u32, alignment: u32) StackOverflow!*anyopaque {
+    pub fn alloca(self: *Stack, bytes: u32, alignment: std.mem.Alignment) StackOverflow!*anyopaque {
         if (bytes == 0) return self.next();
 
         // Calculate padding needed for alignment
         const current_addr = @intFromPtr(self.next());
-        const aligned_addr = std.mem.alignForward(usize, current_addr, alignment);
+        const alignment_bytes = alignment.toByteUnits();
+
+        // If this ever fails, either we have a bug or else max_roc_alignment must be increased!
+        std.debug.assert(alignment_bytes <= collections.max_roc_alignment.toByteUnits());
+
+        const aligned_addr = std.mem.alignForward(usize, current_addr, alignment_bytes);
         const padding = @as(u32, @intCast(aligned_addr - current_addr));
 
         // Check for overflow when adding padding
-        const bytes_with_padding, var overflowed = @addWithOverflow(bytes, padding);
-        if (overflowed != 0) {
+        const bytes_with_padding, const padding_overflowed = @addWithOverflow(bytes, padding);
+        if (padding_overflowed != 0) {
             return StackOverflow.StackOverflow;
         }
 
         // Check for overflow when adding to used
-        const new_used, overflowed = @addWithOverflow(self.used, bytes_with_padding);
-        if (overflowed != 0 or new_used > self.capacity) {
+        const new_used, const used_overflowed = @addWithOverflow(self.used, bytes_with_padding);
+        if (used_overflowed != 0 or new_used > self.capacity) {
             return StackOverflow.StackOverflow;
         }
 
         // Advance the pointer
         const result = self.start + self.used + padding;
-        self.used = new_used[0];
+        self.used = new_used;
 
         return @ptrCast(result);
     }
@@ -131,10 +150,10 @@ test "Stack.alloca basic allocation" {
     var stack = try Stack.initCapacity(testing.allocator, 1024);
     defer stack.deinit();
 
-    const ptr1 = try stack.alloca(10, 1);
+    const ptr1 = try stack.alloca(10, @enumFromInt(0));
     try testing.expectEqual(@as(u32, 10), stack.used);
 
-    const ptr2 = try stack.alloca(20, 1);
+    const ptr2 = try stack.alloca(20, @enumFromInt(0));
     try testing.expectEqual(@as(u32, 30), stack.used);
 
     // The pointers should be different
@@ -156,7 +175,7 @@ test "Stack.alloca with alignment" {
 
         // Create initial misalignment
         if (misalign > 0) {
-            _ = try stack.alloca(@intCast(misalign), 1);
+            _ = try stack.alloca(@intCast(misalign), @enumFromInt(0));
         }
 
         // Test each alignment with the current misalignment
@@ -164,7 +183,7 @@ test "Stack.alloca with alignment" {
             const start_used = stack.used;
             const allocation_size: u32 = 32; // Use a consistent size for testing
 
-            const aligned_ptr = try stack.alloca(allocation_size, alignment);
+            const aligned_ptr = try stack.alloca(allocation_size, @enumFromInt(std.math.log2_int(u32, alignment)));
 
             // Verify the pointer is properly aligned
             try testing.expectEqual(@as(usize, 0), @intFromPtr(aligned_ptr) % alignment);
@@ -184,10 +203,10 @@ test "Stack.alloca with alignment" {
     stack.used = 0;
     for (alignments) |alignment| {
         // Create some misalignment
-        _ = try stack.alloca(3, 1);
+        _ = try stack.alloca(3, @enumFromInt(0));
 
         const before_used = stack.used;
-        const ptr = try stack.alloca(alignment * 2, alignment);
+        const ptr = try stack.alloca(alignment * 2, @enumFromInt(std.math.log2_int(u32, alignment)));
 
         // Verify alignment
         try testing.expectEqual(@as(usize, 0), @intFromPtr(ptr) % alignment);
@@ -202,10 +221,10 @@ test "Stack.alloca overflow" {
     defer stack.deinit();
 
     // This should succeed
-    _ = try stack.alloca(50, 1);
+    _ = try stack.alloca(50, @enumFromInt(0));
 
     // This should fail (would total 150 bytes)
-    try testing.expectError(StackOverflow.StackOverflow, stack.alloca(100, 1));
+    try testing.expectError(StackOverflow.StackOverflow, stack.alloca(100, @enumFromInt(0)));
 
     // Stack should still be in valid state
     try testing.expectEqual(@as(u32, 50), stack.used);
@@ -216,14 +235,14 @@ test "Stack.restore" {
     defer stack.deinit();
 
     const checkpoint = stack.next();
-    _ = try stack.alloca(100, 1);
+    _ = try stack.alloca(100, @enumFromInt(0));
     try testing.expectEqual(@as(u32, 100), stack.used);
 
     stack.restore(checkpoint);
     try testing.expectEqual(@as(u32, 0), stack.used);
 
     // Allocate again after restore
-    const ptr1 = try stack.alloca(50, 1);
+    const ptr1 = try stack.alloca(50, @enumFromInt(0));
     try testing.expectEqual(@intFromPtr(checkpoint), @intFromPtr(ptr1));
 }
 
@@ -234,7 +253,7 @@ test "Stack.isEmpty" {
     try testing.expect(stack.isEmpty());
     try testing.expectEqual(@as(u32, 100), stack.available());
 
-    _ = try stack.alloca(30, 1);
+    _ = try stack.alloca(30, @enumFromInt(0));
     try testing.expect(!stack.isEmpty());
     try testing.expectEqual(@as(u32, 70), stack.available());
 }
@@ -243,10 +262,27 @@ test "Stack zero-size allocation" {
     var stack = try Stack.initCapacity(testing.allocator, 100);
     defer stack.deinit();
 
-    const ptr1 = try stack.alloca(0, 1);
-    const ptr2 = try stack.alloca(0, 1);
+    const ptr1 = try stack.alloca(0, @enumFromInt(0));
+    const ptr2 = try stack.alloca(0, @enumFromInt(0));
 
     // Zero-size allocations should return the same pointer
     try testing.expectEqual(@intFromPtr(ptr1), @intFromPtr(ptr2));
     try testing.expectEqual(@as(u32, 0), stack.used);
+}
+
+test "Stack memory is aligned to max_roc_alignment" {
+    var stack = try Stack.initCapacity(testing.allocator, 1024);
+    defer stack.deinit();
+
+    // Check that the start pointer is aligned to max_roc_alignment
+    const start_addr = @intFromPtr(stack.start);
+    const max_alignment_value = collections.max_roc_alignment.toByteUnits();
+    try testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);
+
+    // Also verify after some allocations
+    _ = try stack.alloca(100, @enumFromInt(0));
+    _ = try stack.alloca(200, @enumFromInt(0));
+
+    // The start pointer should still be aligned
+    try testing.expectEqual(@as(usize, 0), start_addr % max_alignment_value);
 }
