@@ -4,7 +4,22 @@ const collections = @import("../../collections.zig");
 const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 const base = @import("../../base.zig");
 const tracy = @import("../../tracy.zig");
+const build_options = @import("build_options");
 
+/// SIMD-Optimized Tokenizer
+/// ========================
+///
+/// This tokenizer includes SIMD optimizations for processing whitespace in the
+/// `chompTrivia` function. The build system auto-detects optimal SIMD width
+/// based on target CPU capabilities.
+///
+/// For complete SIMD documentation, build options, and configuration examples,
+/// see: src/README.simd.md
+///
+/// Quick reference:
+///   zig build                    # Auto-detect optimal SIMD
+///   zig build -Dsimd=false      # Disable SIMD
+///   zig build -Dsimd-width=32   # Force specific width
 /// representation of a token in the source code, like '+', 'foo', '=', '{'
 /// these are represented by an offset into the bytes of the source code
 /// and an extra field that stores either the length of the token or
@@ -607,6 +622,21 @@ pub const Cursor = struct {
         return null;
     }
 
+    /// Get whether SIMD is enabled at compile time
+    pub fn isSimdEnabled() bool {
+        return comptime build_options.simd_enabled;
+    }
+
+    /// Get the SIMD width configured at compile time
+    pub fn getSimdWidth() u32 {
+        return comptime build_options.simd_width;
+    }
+
+    /// Get the number of SIMD chunks processed by chompTrivia (for debugging/testing)
+    pub fn getChompTriviaSimdChunksProcessed(self: *const Cursor) u32 {
+        return self.chomp_trivia_simd_chunks_processed;
+    }
+
     pub fn isPeekedCharInRange(self: *Cursor, lookahead: u32, start: u8, end: u8) bool {
         const peeked = self.peekAt(lookahead);
 
@@ -640,44 +670,46 @@ pub const Cursor = struct {
         var sawNewline = false;
         var indent: u16 = 0;
 
-        // SIMD fast path: process chunks of spaces and tabs
-        const SIMD_WIDTH = 16;
-        const Vec16 = @Vector(SIMD_WIDTH, u8);
+        // Configurable SIMD fast path: process chunks of spaces and tabs
+        if (comptime build_options.simd_enabled) {
+            const SIMD_WIDTH = build_options.simd_width;
+            const VecType = @Vector(SIMD_WIDTH, u8);
 
-        while (self.pos + SIMD_WIDTH <= self.buf.len) {
-            const chunk: Vec16 = self.buf[self.pos .. self.pos + SIMD_WIDTH][0..SIMD_WIDTH].*;
+            while (self.pos + SIMD_WIDTH <= self.buf.len) {
+                const chunk: VecType = self.buf[self.pos .. self.pos + SIMD_WIDTH][0..SIMD_WIDTH].*;
 
-            // Use SIMD builtins to check if all characters are either spaces or tabs
-            const spaces: Vec16 = @splat(' ');
-            const tabs: Vec16 = @splat('\t');
-            const is_space = chunk == spaces;
-            const is_tab = chunk == tabs;
-            const true_vec: @Vector(SIMD_WIDTH, bool) = @splat(true);
-            const is_trivial = @select(bool, is_space, true_vec, is_tab);
-            const all_trivial = @reduce(.And, is_trivial);
+                // Use SIMD builtins to check if all characters are either spaces or tabs
+                const spaces: VecType = @splat(' ');
+                const tabs: VecType = @splat('\t');
+                const is_space = chunk == spaces;
+                const is_tab = chunk == tabs;
+                const true_vec: @Vector(SIMD_WIDTH, bool) = @splat(true);
+                const is_trivial = @select(bool, is_space, true_vec, is_tab);
+                const all_trivial = @reduce(.And, is_trivial);
 
-            // If not all characters are spaces or tabs, fall back to scalar processing
-            if (!all_trivial) {
-                break;
-            }
+                // If not all characters are spaces or tabs, fall back to scalar processing
+                if (!all_trivial) {
+                    break;
+                }
 
-            // Process the chunk - all characters are spaces or tabs
-            if (sawNewline) {
-                // Use SIMD to count spaces efficiently
-                const ones: @Vector(SIMD_WIDTH, u16) = @splat(1);
-                const zeros: @Vector(SIMD_WIDTH, u16) = @splat(0);
-                const space_count = @reduce(.Add, @select(u16, is_space, ones, zeros));
-                indent += space_count;
+                // Process the chunk - all characters are spaces or tabs
+                if (sawNewline) {
+                    // Use SIMD to count spaces efficiently
+                    const ones: @Vector(SIMD_WIDTH, u16) = @splat(1);
+                    const zeros: @Vector(SIMD_WIDTH, u16) = @splat(0);
+                    const space_count = @reduce(.Add, @select(u16, is_space, ones, zeros));
+                    indent += space_count;
 
-                // Handle tabs individually due to tab width alignment complexity
-                for (0..SIMD_WIDTH) |i| {
-                    if (chunk[i] == '\t') {
-                        indent = (indent + self.tab_width) & ~(self.tab_width - 1);
+                    // Handle tabs individually due to tab width alignment complexity
+                    for (0..SIMD_WIDTH) |i| {
+                        if (chunk[i] == '\t') {
+                            indent = (indent + self.tab_width) & ~(self.tab_width - 1);
+                        }
                     }
                 }
+                self.pos += SIMD_WIDTH;
+                self.chomp_trivia_simd_chunks_processed += 1;
             }
-            self.pos += SIMD_WIDTH;
-            self.chomp_trivia_simd_chunks_processed += 1;
         }
 
         // Scalar processing for remaining characters and special cases
@@ -2259,6 +2291,10 @@ test "chompTrivia SIMD correctness" {
     const expect = std.testing.expect;
     const expectEqual = std.testing.expectEqual;
 
+    // Get SIMD configuration
+    const simd_enabled = comptime Cursor.isSimdEnabled();
+    const simd_width = comptime Cursor.getSimdWidth();
+
     // Test cases with expected results to verify SIMD path produces correct results
     const TestCase = struct {
         input: []const u8,
@@ -2267,6 +2303,28 @@ test "chompTrivia SIMD correctness" {
         expected_simd_chunks: u32, // expected number of SIMD chunks processed
         description: []const u8,
     };
+
+    // Create dynamic input strings based on SIMD width
+    var arena = std.heap.ArenaAllocator.init(gpa);
+    defer arena.deinit();
+    const allocator = arena.allocator();
+
+    // Generate test inputs dynamically
+    const exact_width_spaces = try allocator.alloc(u8, simd_width + 5); // +5 for "hello"
+    @memset(exact_width_spaces[0..simd_width], ' ');
+    @memcpy(exact_width_spaces[simd_width..], "hello");
+
+    const over_width_spaces = try allocator.alloc(u8, simd_width + 6); // +6 for " world"
+    @memset(over_width_spaces[0 .. simd_width + 1], ' ');
+    @memcpy(over_width_spaces[simd_width + 1 ..], "world");
+
+    const double_width_spaces = try allocator.alloc(u8, simd_width * 2 + 4); // +4 for "test"
+    @memset(double_width_spaces[0 .. simd_width * 2], ' ');
+    @memcpy(double_width_spaces[simd_width * 2 ..], "test");
+
+    const exact_width_tabs = try allocator.alloc(u8, simd_width + 5); // +5 for "world"
+    @memset(exact_width_tabs[0..simd_width], '\t');
+    @memcpy(exact_width_tabs[simd_width..], "world");
 
     const test_cases = [_]TestCase{
         .{
@@ -2277,25 +2335,25 @@ test "chompTrivia SIMD correctness" {
             .description = "Simple 4 spaces",
         },
         .{
-            .input = "                hello",
+            .input = exact_width_spaces,
             .expected_result = null,
-            .expected_pos = 16,
-            .expected_simd_chunks = 1,
-            .description = "Exactly 16 spaces (1 SIMD chunk)",
+            .expected_pos = @intCast(simd_width),
+            .expected_simd_chunks = if (simd_enabled) 1 else 0,
+            .description = "Exactly SIMD_WIDTH spaces (1 SIMD chunk)",
         },
         .{
-            .input = "                 world",
+            .input = over_width_spaces,
             .expected_result = null,
-            .expected_pos = 17,
-            .expected_simd_chunks = 1,
-            .description = "17 spaces (crosses SIMD boundary)",
+            .expected_pos = @intCast(simd_width + 1),
+            .expected_simd_chunks = if (simd_enabled) 1 else 0,
+            .description = "SIMD_WIDTH+1 spaces (crosses SIMD boundary)",
         },
         .{
-            .input = "                                test",
+            .input = double_width_spaces,
             .expected_result = null,
-            .expected_pos = 32,
-            .expected_simd_chunks = 2,
-            .description = "32 spaces (2 SIMD chunks)",
+            .expected_pos = @intCast(simd_width * 2),
+            .expected_simd_chunks = if (simd_enabled) 2 else 0,
+            .description = "2*SIMD_WIDTH spaces (2 SIMD chunks)",
         },
         .{
             .input = "\t\t\t\thello",
@@ -2308,15 +2366,15 @@ test "chompTrivia SIMD correctness" {
             .input = "    \t    \t    world",
             .expected_result = null,
             .expected_pos = 14,
-            .expected_simd_chunks = 0,
-            .description = "Mixed spaces and tabs (14 chars, no SIMD)",
+            .expected_simd_chunks = if (simd_enabled and simd_width <= 8) 1 else 0,
+            .description = "Mixed spaces and tabs (14 chars)",
         },
         .{
-            .input = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tworld",
+            .input = exact_width_tabs,
             .expected_result = null,
-            .expected_pos = 16,
-            .expected_simd_chunks = 1,
-            .description = "16 tabs (1 SIMD chunk)",
+            .expected_pos = @intCast(simd_width),
+            .expected_simd_chunks = if (simd_enabled) 1 else 0,
+            .description = "SIMD_WIDTH tabs (1 SIMD chunk)",
         },
         .{
             .input = "",
@@ -2347,7 +2405,7 @@ test "chompTrivia SIMD correctness" {
             .description = "Newline with following indentation",
         },
         .{
-            .input = "\n                hello",
+            .input = "\nimmediate",
             .expected_result = 0,
             .expected_pos = 1,
             .expected_simd_chunks = 0,

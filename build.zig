@@ -44,8 +44,39 @@ pub fn build(b: *std.Build) void {
     const tracy_callstack = b.option(bool, "tracy-callstack", "Include callstack information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_allocation = b.option(bool, "tracy-allocation", "Include allocation information with Tracy data. Does nothing if -Dtracy is not provided") orelse (tracy != null);
     const tracy_callstack_depth: u32 = b.option(u32, "tracy-callstack-depth", "Declare callstack depth for Tracy data. Does nothing if -Dtracy_callstack is not provided") orelse 10;
+
+    // SIMD configuration
+    // For complete documentation, see: src/README.simd.md
+    const simd_enabled = b.option(bool, "simd", "Enable SIMD optimizations") orelse true;
+
+    // Detect optimal SIMD width based on target CPU features
+    const default_simd_width = detectOptimalSimdWidth(target);
+    const user_simd_width = b.option(u32, "simd-width", "SIMD vector width for tokenizer (8, 16, 32, or 64)");
+    const simd_width = user_simd_width orelse default_simd_width;
+
     if (tracy_callstack) {
         std.log.warn("Tracy callstack is enable. This can significantly skew timings, but is important for understanding source location. Be cautious when generating timing and analyzing results.", .{});
+    }
+
+    // Validate SIMD width
+    if (simd_enabled) {
+        // Check if width is valid
+        if (simd_width != 8 and simd_width != 16 and simd_width != 32 and simd_width != 64) {
+            std.log.err("Invalid SIMD width: {}. Must be 8, 16, 32, or 64.", .{simd_width});
+            return;
+        }
+
+        // Check if width is supported by target
+        const max_supported_width = getMaxSupportedSimdWidth(target);
+        if (user_simd_width != null and simd_width > max_supported_width) {
+            std.log.err("SIMD width {} exceeds maximum supported by target ({}). Consider using -Dsimd-width={} or a smaller value.", .{ simd_width, max_supported_width, max_supported_width });
+            return;
+        }
+
+        // Informational message about SIMD configuration
+        if (user_simd_width == null) {
+            std.log.info("detected SIMD width: {} bytes for target {s}", .{ simd_width, @tagName(target.result.cpu.arch) });
+        }
     }
 
     // Create compile time build options
@@ -59,6 +90,8 @@ pub fn build(b: *std.Build) void {
     }
     build_options.addOption(bool, "enable_tracy_allocation", tracy_allocation);
     build_options.addOption(u32, "tracy_callstack_depth", tracy_callstack_depth);
+    build_options.addOption(bool, "simd_enabled", simd_enabled);
+    build_options.addOption(u32, "simd_width", simd_width);
 
     // add main roc exe
     const roc_exe = addMainExe(b, build_options, target, optimize, strip, enable_llvm, use_system_llvm, user_llvm_path, tracy) orelse return;
@@ -631,3 +664,63 @@ const llvm_libs = [_][]const u8{
     "LLVMSupport",
     "LLVMDemangle",
 };
+
+/// Detect the optimal SIMD width based on target CPU features
+fn detectOptimalSimdWidth(target: ResolvedTarget) u32 {
+    const cpu_arch = target.result.cpu.arch;
+
+    // Check CPU features for vector instruction support
+    const cpu_features = target.result.cpu.features;
+
+    switch (cpu_arch) {
+        .x86_64, .x86 => {
+            // Check for AVX-512 (64-byte vectors)
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.x86.Feature.avx512f))) {
+                return 64;
+            }
+            // Check for AVX/AVX2 (32-byte vectors)
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.x86.Feature.avx)) or
+                cpu_features.isEnabled(@intFromEnum(std.Target.x86.Feature.avx2)))
+            {
+                return 32;
+            }
+            // Check for SSE2 (16-byte vectors) - almost universal on x86_64
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.x86.Feature.sse2))) {
+                return 16;
+            }
+            // Fallback to SSE (8-byte vectors)
+            return 8;
+        },
+        .aarch64 => {
+            // ARM NEON supports 16-byte vectors (128-bit)
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.aarch64.Feature.neon))) {
+                return 16;
+            }
+            return 8;
+        },
+        .arm => {
+            // ARM NEON supports 16-byte vectors when available
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.arm.Feature.neon))) {
+                return 16;
+            }
+            return 8;
+        },
+        .riscv64, .riscv32 => {
+            // RISC-V Vector extension can support various widths
+            // For now, default to 16 bytes when vector extension is available
+            if (cpu_features.isEnabled(@intFromEnum(std.Target.riscv.Feature.v))) {
+                return 16;
+            }
+            return 8;
+        },
+        else => {
+            // Conservative default for unknown architectures
+            return 8;
+        },
+    }
+}
+
+/// Get the maximum supported SIMD width for the target
+fn getMaxSupportedSimdWidth(target: ResolvedTarget) u32 {
+    return detectOptimalSimdWidth(target);
+}
