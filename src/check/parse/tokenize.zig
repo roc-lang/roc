@@ -562,6 +562,8 @@ pub const Cursor = struct {
     message_count: u32,
     tab_width: u8 = 4, // TODO: make this configurable
     comment: ?Comment = null,
+    // Debug counter to track SIMD path usage in chompTrivia
+    chomp_trivia_simd_chunks_processed: u32 = 0,
 
     /// Initialize a Cursor with the given input buffer and a pre-allocated messages slice.
     pub fn init(buf: []const u8, messages: []Diagnostic) Cursor {
@@ -570,6 +572,7 @@ pub const Cursor = struct {
             .pos = 0,
             .messages = messages,
             .message_count = 0,
+            .chomp_trivia_simd_chunks_processed = 0,
         };
     }
 
@@ -637,6 +640,47 @@ pub const Cursor = struct {
         var sawNewline = false;
         var indent: u16 = 0;
 
+        // SIMD fast path: process chunks of spaces and tabs
+        const SIMD_WIDTH = 16;
+        const Vec16 = @Vector(SIMD_WIDTH, u8);
+
+        while (self.pos + SIMD_WIDTH <= self.buf.len) {
+            const chunk: Vec16 = self.buf[self.pos .. self.pos + SIMD_WIDTH][0..SIMD_WIDTH].*;
+
+            // Use SIMD builtins to check if all characters are either spaces or tabs
+            const spaces: Vec16 = @splat(' ');
+            const tabs: Vec16 = @splat('\t');
+            const is_space = chunk == spaces;
+            const is_tab = chunk == tabs;
+            const true_vec: @Vector(SIMD_WIDTH, bool) = @splat(true);
+            const is_trivial = @select(bool, is_space, true_vec, is_tab);
+            const all_trivial = @reduce(.And, is_trivial);
+
+            // If not all characters are spaces or tabs, fall back to scalar processing
+            if (!all_trivial) {
+                break;
+            }
+
+            // Process the chunk - all characters are spaces or tabs
+            if (sawNewline) {
+                // Use SIMD to count spaces efficiently
+                const ones: @Vector(SIMD_WIDTH, u16) = @splat(1);
+                const zeros: @Vector(SIMD_WIDTH, u16) = @splat(0);
+                const space_count = @reduce(.Add, @select(u16, is_space, ones, zeros));
+                indent += space_count;
+
+                // Handle tabs individually due to tab width alignment complexity
+                for (0..SIMD_WIDTH) |i| {
+                    if (chunk[i] == '\t') {
+                        indent = (indent + self.tab_width) & ~(self.tab_width - 1);
+                    }
+                }
+            }
+            self.pos += SIMD_WIDTH;
+            self.chomp_trivia_simd_chunks_processed += 1;
+        }
+
+        // Scalar processing for remaining characters and special cases
         while (self.pos < self.buf.len) {
             const b = self.buf[self.pos];
             if (b == ' ') {
@@ -2208,4 +2252,127 @@ test "tokenizer" {
             .StringPart,
         },
     );
+}
+
+test "chompTrivia SIMD correctness" {
+    const gpa = std.testing.allocator;
+    const expect = std.testing.expect;
+    const expectEqual = std.testing.expectEqual;
+
+    // Test cases with expected results to verify SIMD path produces correct results
+    const TestCase = struct {
+        input: []const u8,
+        expected_result: ?u16, // null means no newline found
+        expected_pos: u32, // expected cursor position after chompTrivia
+        expected_simd_chunks: u32, // expected number of SIMD chunks processed
+        description: []const u8,
+    };
+
+    const test_cases = [_]TestCase{
+        .{
+            .input = "    hello",
+            .expected_result = null,
+            .expected_pos = 4,
+            .expected_simd_chunks = 0,
+            .description = "Simple 4 spaces",
+        },
+        .{
+            .input = "                hello",
+            .expected_result = null,
+            .expected_pos = 16,
+            .expected_simd_chunks = 1,
+            .description = "Exactly 16 spaces (1 SIMD chunk)",
+        },
+        .{
+            .input = "                 world",
+            .expected_result = null,
+            .expected_pos = 17,
+            .expected_simd_chunks = 1,
+            .description = "17 spaces (crosses SIMD boundary)",
+        },
+        .{
+            .input = "                                test",
+            .expected_result = null,
+            .expected_pos = 32,
+            .expected_simd_chunks = 2,
+            .description = "32 spaces (2 SIMD chunks)",
+        },
+        .{
+            .input = "\t\t\t\thello",
+            .expected_result = null,
+            .expected_pos = 4,
+            .expected_simd_chunks = 0,
+            .description = "4 tabs only",
+        },
+        .{
+            .input = "    \t    \t    world",
+            .expected_result = null,
+            .expected_pos = 14,
+            .expected_simd_chunks = 0,
+            .description = "Mixed spaces and tabs (14 chars, no SIMD)",
+        },
+        .{
+            .input = "\t\t\t\t\t\t\t\t\t\t\t\t\t\t\t\tworld",
+            .expected_result = null,
+            .expected_pos = 16,
+            .expected_simd_chunks = 1,
+            .description = "16 tabs (1 SIMD chunk)",
+        },
+        .{
+            .input = "",
+            .expected_result = null,
+            .expected_pos = 0,
+            .expected_simd_chunks = 0,
+            .description = "Empty string",
+        },
+        .{
+            .input = "immediate",
+            .expected_result = null,
+            .expected_pos = 0,
+            .expected_simd_chunks = 0,
+            .description = "No leading whitespace",
+        },
+        .{
+            .input = "    # comment",
+            .expected_result = null,
+            .expected_pos = 13,
+            .expected_simd_chunks = 0,
+            .description = "Comment after spaces",
+        },
+        .{
+            .input = "  \n  more",
+            .expected_result = 0,
+            .expected_pos = 3,
+            .expected_simd_chunks = 0,
+            .description = "Newline with following indentation",
+        },
+        .{
+            .input = "\n                hello",
+            .expected_result = 0,
+            .expected_pos = 1,
+            .expected_simd_chunks = 0,
+            .description = "Immediate newline",
+        },
+    };
+
+    for (test_cases) |test_case| {
+        var messages = std.ArrayList(Diagnostic).init(gpa);
+        defer messages.deinit();
+
+        var cursor = Cursor.init(test_case.input, messages.items);
+        const result = cursor.chompTrivia();
+
+        // Test the result
+        if (test_case.expected_result) |expected| {
+            try expectEqual(expected, result.?);
+        } else {
+            try expect(result == null);
+        }
+
+        // Test cursor position
+        try expectEqual(test_case.expected_pos, cursor.pos);
+
+        // Test SIMD path usage
+        try expectEqual(test_case.expected_simd_chunks, cursor.chomp_trivia_simd_chunks_processed);
+    }
 }
