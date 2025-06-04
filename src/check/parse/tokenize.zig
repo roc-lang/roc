@@ -692,21 +692,22 @@ pub const Cursor = struct {
                     break;
                 }
 
-                // Process the chunk - all characters are spaces or tabs
-                if (sawNewline) {
-                    // Use SIMD to count spaces efficiently
-                    const ones: @Vector(SIMD_WIDTH, u16) = @splat(1);
-                    const zeros: @Vector(SIMD_WIDTH, u16) = @splat(0);
-                    const space_count = @reduce(.Add, @select(u16, is_space, ones, zeros));
-                    indent += space_count;
+                const ones: @Vector(SIMD_WIDTH, u16) = @splat(1);
+                const zeros: @Vector(SIMD_WIDTH, u16) = @splat(0);
 
-                    // Handle tabs individually due to tab width alignment complexity
-                    for (0..SIMD_WIDTH) |i| {
-                        if (chunk[i] == '\t') {
-                            indent = (indent + self.tab_width) & ~(self.tab_width - 1);
-                        }
-                    }
+                // Use SIMD to count spaces efficiently
+                const space_count = @reduce(.Add, @select(u16, is_space, ones, zeros));
+                indent += space_count;
+
+                // Use SIMD to count tabs efficiently
+                const tab_count = @reduce(.Add, @select(u16, is_tab, ones, zeros));
+                indent += tab_count;
+
+                // Increment indent for each tab character
+                for (0..tab_count) |_| {
+                    indent = (indent + self.tab_width) & ~(self.tab_width - 1);
                 }
+
                 self.pos += SIMD_WIDTH;
                 self.chomp_trivia_simd_chunks_processed += 1;
             }

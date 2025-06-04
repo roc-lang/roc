@@ -108,6 +108,20 @@ pub fn build(b: *std.Build) void {
     add_tracy(b, build_options, snapshot_exe, target, false, tracy);
     install_and_run(b, no_bin, snapshot_exe, snapshot_step, snapshot_step);
 
+    // Add test_chomp_perf
+    const test_chomp_perf_exe = b.addExecutable(.{
+        .name = "test_chomp_perf",
+        .root_source_file = b.path("test_chomp_perf.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+    });
+    test_chomp_perf_exe.root_module.addOptions("build_options", build_options);
+    add_tracy(b, build_options, test_chomp_perf_exe, target, false, tracy);
+
+    const test_chomp_perf_step = b.step("test_chomp_perf", "Quick chompTrivia performance test");
+    install_and_run(b, no_bin, test_chomp_perf_exe, test_chomp_perf_step, test_chomp_perf_step);
+
     const all_tests = b.addTest(.{
         .root_source_file = b.path("src/test.zig"),
         .target = target,
