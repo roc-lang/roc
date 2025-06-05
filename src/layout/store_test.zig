@@ -52,6 +52,7 @@ test "addTypeVar - maximum nesting depth" {
 test "addTypeVar - record with maximum fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
+    const usize_alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize));
 
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
@@ -101,21 +102,20 @@ test "addTypeVar - record with maximum fields" {
             try testing.expectEqual(num_fields, record_fields.len);
 
             // Verify fields are sorted by alignment then name
-            var prev_alignment: ?layout.Alignment = null;
+            var prev_alignment: ?std.mem.Alignment = null;
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
                 const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.idx));
-                const usize_alignment = layout.Alignment.fromBytes(@alignOf(usize));
                 const field_alignment = field_layout.alignment(usize_alignment);
                 const field_name_str = type_store.env.idents.getText(field_name);
 
                 if (prev_alignment) |prev| {
                     // Alignment should be descending or equal
-                    try testing.expect(field_alignment.toBytes() <= prev.toBytes());
+                    try testing.expect(field_alignment.toByteUnits() <= prev.toByteUnits());
 
                     // If same alignment, names should be ascending
-                    if (field_alignment.toBytes() == prev.toBytes()) {
+                    if (field_alignment.toByteUnits() == prev.toByteUnits()) {
                         if (prev_name_in_group) |prev_name| {
                             try testing.expect(std.mem.order(u8, prev_name, field_name_str) == .lt);
                         }
@@ -409,14 +409,14 @@ test "addTypeVar - record size calculation with padding" {
     switch (result_layout.*) {
         .record => |rec| {
             // Record should have 8-byte alignment (from u64)
-            try testing.expectEqual(@as(u32, 8), rec.alignment.toBytes());
+            try testing.expectEqual(8, rec.alignment.toByteUnits());
 
             // Size should be 16 bytes (with padding)
-            try testing.expectEqual(@as(u32, 16), rec.size.toBytes());
+            try testing.expectEqual(16, rec.size);
 
             // Verify field order
             const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
-            try testing.expectEqual(@as(usize, 3), rec_fields.len);
+            try testing.expectEqual(3, rec_fields.len);
 
             // First field should be 'b' (u64, 8-byte alignment)
             const field_0_name = type_store.env.idents.getText(rec_fields.items(.name)[0]);

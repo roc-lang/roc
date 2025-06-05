@@ -5,10 +5,10 @@ const types = @import("../types/types.zig");
 const types_store = @import("../types/store.zig");
 const layout = @import("./layout.zig");
 const base = @import("../base.zig");
+const target = @import("../base/target.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 const work = @import("./work.zig");
-const Alignment = layout.Alignment;
 
 const Var = types.Var;
 const Layout = layout.Layout;
@@ -75,6 +75,10 @@ pub const Store = struct {
         return self.layouts.get(@enumFromInt(idx.idx));
     }
 
+    fn targetUsize(self: *Self) target.TargetUsize {
+        return self.env.target.target_usize;
+    }
+
     /// Note: the caller must verify ahead of time that the given variable does not
     /// resolve to a flex var or rigid var, unless that flex var or rigid var is
     /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
@@ -105,6 +109,8 @@ pub const Store = struct {
         // To make this function stack-safe, we use a manual stack instead of recursing.
         // We reuse that stack from call to call to avoid reallocating it.
         self.work.clearRetainingCapacity();
+
+        const target_usize = self.targetUsize();
 
         var result: ?Idx = null;
         var iterations: u32 = 0;
@@ -369,12 +375,11 @@ pub const Store = struct {
                                                                 fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                                                     const a_layout = ctx.store.getLayout(a.layout);
                                                                     const b_layout = ctx.store.getLayout(b.layout);
-                                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                                    const a_alignment = a_layout.alignment(usize_alignment);
-                                                                    const b_alignment = b_layout.alignment(usize_alignment);
+                                                                    const a_alignment = a_layout.alignment(ctx.store.targetUsize());
+                                                                    const b_alignment = b_layout.alignment(ctx.store.targetUsize());
 
-                                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                                    if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
+                                                                        return a_alignment.toByteUnits() > b_alignment.toByteUnits();
                                                                     }
 
                                                                     const a_str = ctx.env.idents.getText(a.name);
@@ -396,21 +401,20 @@ pub const Store = struct {
                                                             }
 
                                                             // Calculate alignment and size
-                                                            var parent_max_alignment = Alignment.fromBytes(1);
-                                                            var parent_current_offset = layout.Size.fromBytes(0);
+                                                            var parent_max_alignment = std.mem.Alignment.@"1";
+                                                            var parent_current_offset: u32 = 0;
 
                                                             for (parent_temp_fields.items) |temp_field| {
                                                                 const field_layout = self.getLayout(temp_field.layout);
-                                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                                const field_alignment = field_layout.alignment(usize_alignment);
-                                                                const field_size = field_layout.size(@sizeOf(usize));
+                                                                const field_alignment = field_layout.alignment(target_usize);
+                                                                const field_size = field_layout.size(target_usize);
 
-                                                                parent_max_alignment = Alignment.max(parent_max_alignment, field_alignment);
-                                                                parent_current_offset = parent_current_offset.alignForward(field_alignment);
-                                                                parent_current_offset = layout.Size.add(parent_current_offset, layout.Size.fromBytes(field_size));
+                                                                parent_max_alignment = parent_max_alignment.max(field_alignment);
+                                                                parent_current_offset = @intCast(std.mem.alignForward(u32, parent_current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+                                                                parent_current_offset = parent_current_offset + field_size;
                                                             }
 
-                                                            const parent_total_size = parent_current_offset.alignForward(parent_max_alignment);
+                                                            const parent_total_size = @as(u32, @intCast(std.mem.alignForward(u32, parent_current_offset, @as(u32, @intCast(parent_max_alignment.toByteUnits())))));
                                                             const parent_fields_range = collections.NonEmptyRange.init(@intCast(parent_fields_start), @intCast(parent_num_resolved)) catch unreachable;
 
                                                             self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
@@ -451,29 +455,30 @@ pub const Store = struct {
                                             const AlignmentSortCtx = struct {
                                                 store: *Self,
                                                 env: *base.ModuleEnv,
-                                                fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
-                                                    const a_layout = ctx.store.getLayout(a.layout);
-                                                    const b_layout = ctx.store.getLayout(b.layout);
-                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                    const a_alignment = a_layout.alignment(usize_alignment);
-                                                    const b_alignment = b_layout.alignment(usize_alignment);
+                                                target_usize: target.TargetUsize,
+                                                pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
+                                                    const lhs_layout = ctx.store.getLayout(lhs.layout);
+                                                    const rhs_layout = ctx.store.getLayout(rhs.layout);
+
+                                                    const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                                                    const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
 
                                                     // First sort by alignment (descending - higher alignment first)
-                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                    if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                                                        return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                                                     }
 
                                                     // Then sort by name (ascending)
-                                                    const a_str = ctx.env.idents.getText(a.name);
-                                                    const b_str = ctx.env.idents.getText(b.name);
-                                                    return std.mem.order(u8, a_str, b_str) == .lt;
+                                                    const lhs_str = ctx.env.idents.getText(lhs.name);
+                                                    const rhs_str = ctx.env.idents.getText(rhs.name);
+                                                    return std.mem.order(u8, lhs_str, rhs_str) == .lt;
                                                 }
                                             };
 
                                             std.mem.sort(
                                                 RecordField,
                                                 temp_fields.items,
-                                                AlignmentSortCtx{ .store = self, .env = self.env },
+                                                AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = target_usize },
                                                 AlignmentSortCtx.lessThan,
                                             );
 
@@ -483,29 +488,29 @@ pub const Store = struct {
                                             }
 
                                             // Calculate max alignment and total size of all fields
-                                            var max_alignment = Alignment.fromBytes(1);
-                                            var current_offset = layout.Size.fromBytes(0);
+                                            var max_alignment = std.mem.Alignment.@"1";
+                                            var current_offset: u32 = 0;
 
                                             var field_idx: u32 = 0;
                                             while (field_idx < temp_fields.items.len) : (field_idx += 1) {
                                                 const temp_field = temp_fields.items[field_idx];
                                                 const field_layout = self.getLayout(temp_field.layout);
-                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                const field_alignment = field_layout.alignment(usize_alignment);
-                                                const field_size = field_layout.size(@sizeOf(usize));
+
+                                                const field_alignment = field_layout.alignment(target_usize);
+                                                const field_size = field_layout.size(target_usize);
 
                                                 // Update max alignment
-                                                max_alignment = Alignment.max(max_alignment, field_alignment);
+                                                max_alignment = max_alignment.max(field_alignment);
 
                                                 // Align current offset to field's alignment
-                                                current_offset = current_offset.alignForward(field_alignment);
+                                                current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
                                                 // Add field size
-                                                current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                                current_offset = current_offset + field_size;
                                             }
 
                                             // Final size must be aligned to the record's alignment
-                                            const total_size = current_offset.alignForward(max_alignment);
+                                            const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
                                             // Create the record layout with the fields range
                                             const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
@@ -622,15 +627,16 @@ pub const Store = struct {
                                                             const ParentSortCtx2 = struct {
                                                                 store: *Self,
                                                                 env: *base.ModuleEnv,
+                                                                usize_alignment: std.mem.Alignment,
                                                                 fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                                                     const a_layout = ctx.store.getLayout(a.layout);
                                                                     const b_layout = ctx.store.getLayout(b.layout);
-                                                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                                    const a_alignment = a_layout.alignment(usize_alignment);
-                                                                    const b_alignment = b_layout.alignment(usize_alignment);
 
-                                                                    if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                                                        return a_alignment.toBytes() > b_alignment.toBytes();
+                                                                    const a_alignment = a_layout.alignment(ctx.usize_alignment);
+                                                                    const b_alignment = b_layout.alignment(ctx.usize_alignment);
+
+                                                                    if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
+                                                                        return a_alignment.toByteUnits() > b_alignment.toByteUnits();
                                                                     }
 
                                                                     const a_str = ctx.env.idents.getText(a.name);
@@ -642,7 +648,7 @@ pub const Store = struct {
                                                             std.mem.sort(
                                                                 RecordField,
                                                                 parent_temp_fields.items,
-                                                                ParentSortCtx2{ .store = self, .env = self.env },
+                                                                ParentSortCtx2{ .store = self, .env = self.env, .usize_alignment = target_usize },
                                                                 ParentSortCtx2.lessThan,
                                                             );
 
@@ -650,21 +656,21 @@ pub const Store = struct {
                                                                 _ = self.record_fields.append(self.env.gpa, sorted_field);
                                                             }
 
-                                                            var parent_max_alignment = Alignment.fromBytes(1);
-                                                            var parent_current_offset = layout.Size.fromBytes(0);
+                                                            var parent_max_alignment = std.mem.Alignment.@"1";
+                                                            var parent_current_offset: u32 = 0;
 
                                                             for (parent_temp_fields.items) |temp_field| {
                                                                 const field_layout = self.getLayout(temp_field.layout);
-                                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                                const field_alignment = field_layout.alignment(usize_alignment);
-                                                                const field_size = field_layout.size(@sizeOf(usize));
 
-                                                                parent_max_alignment = Alignment.max(parent_max_alignment, field_alignment);
-                                                                parent_current_offset = parent_current_offset.alignForward(field_alignment);
-                                                                parent_current_offset = layout.Size.add(parent_current_offset, layout.Size.fromBytes(field_size));
+                                                                const field_alignment = field_layout.alignment(target_usize);
+                                                                const field_size = field_layout.size(target_usize);
+
+                                                                parent_max_alignment = parent_max_alignment.max(field_alignment);
+                                                                parent_current_offset = @intCast(std.mem.alignForward(u32, parent_current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+                                                                parent_current_offset = parent_current_offset + field_size;
                                                             }
 
-                                                            const parent_total_size = parent_current_offset.alignForward(parent_max_alignment);
+                                                            const parent_total_size = @as(u32, @intCast(std.mem.alignForward(u32, parent_current_offset, @as(u32, @intCast(parent_max_alignment.toByteUnits())))));
                                                             const parent_fields_range = collections.NonEmptyRange.init(@intCast(parent_fields_start), @intCast(parent_num_resolved)) catch unreachable;
 
                                                             self.work.resolved_record_fields.shrinkRetainingCapacity(updated_parent.resolved_fields_start);
@@ -704,20 +710,21 @@ pub const Store = struct {
                                             });
                                         }
 
-                                        // Sort fields by alignment (descending) first, then by name (ascending)
+                                        // Sort parent fields by alignment (descending) first, then by name (ascending)
                                         const AlignmentSortCtx = struct {
                                             store: *Self,
                                             env: *base.ModuleEnv,
+                                            usize_alignment: std.mem.Alignment,
                                             fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                                 const a_layout = ctx.store.getLayout(a.layout);
                                                 const b_layout = ctx.store.getLayout(b.layout);
-                                                const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                const a_alignment = a_layout.alignment(usize_alignment);
-                                                const b_alignment = b_layout.alignment(usize_alignment);
+
+                                                const a_alignment = a_layout.alignment(ctx.usize_alignment);
+                                                const b_alignment = b_layout.alignment(ctx.usize_alignment);
 
                                                 // First sort by alignment (descending - higher alignment first)
-                                                if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                                    return a_alignment.toBytes() > b_alignment.toBytes();
+                                                if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
+                                                    return a_alignment.toByteUnits() > b_alignment.toByteUnits();
                                                 }
 
                                                 // Then sort by name (ascending)
@@ -730,7 +737,7 @@ pub const Store = struct {
                                         std.mem.sort(
                                             RecordField,
                                             temp_fields.items,
-                                            AlignmentSortCtx{ .store = self, .env = self.env },
+                                            AlignmentSortCtx{ .store = self, .env = self.env, .usize_alignment = target_usize },
                                             AlignmentSortCtx.lessThan,
                                         );
 
@@ -740,29 +747,29 @@ pub const Store = struct {
                                         }
 
                                         // Calculate max alignment and total size
-                                        var max_alignment = Alignment.fromBytes(1);
-                                        var current_offset = layout.Size.fromBytes(0);
+                                        var max_alignment = std.mem.Alignment.@"1";
+                                        var current_offset: u32 = 0;
 
                                         var field_idx: u32 = 0;
                                         while (field_idx < temp_fields.items.len) : (field_idx += 1) {
                                             const temp_field = temp_fields.items[field_idx];
                                             const field_layout = self.getLayout(temp_field.layout);
-                                            const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                            const field_alignment = field_layout.alignment(usize_alignment);
-                                            const field_size = field_layout.size(@sizeOf(usize));
+
+                                            const field_alignment = field_layout.alignment(target_usize);
+                                            const field_size = field_layout.size(target_usize);
 
                                             // Update max alignment
-                                            max_alignment = Alignment.max(max_alignment, field_alignment);
+                                            max_alignment = max_alignment.max(field_alignment);
 
                                             // Align current offset to field's alignment
-                                            current_offset = current_offset.alignForward(field_alignment);
+                                            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
                                             // Add field size
-                                            current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                            current_offset = current_offset + field_size;
                                         }
 
                                         // Final size must be aligned to the record's alignment
-                                        const total_size = current_offset.alignForward(max_alignment);
+                                        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
                                         // Create the record layout with the fields range
                                         const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
@@ -948,16 +955,17 @@ pub const Store = struct {
                                                     const InnerFieldSorter = struct {
                                                         store: *Self,
                                                         env: *base.ModuleEnv,
+                                                        usize_alignment: std.mem.Alignment,
                                                         pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                                                             const lhs_layout = ctx.store.getLayout(lhs.layout);
                                                             const rhs_layout = ctx.store.getLayout(rhs.layout);
-                                                            const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                            const lhs_alignment = lhs_layout.alignment(usize_alignment);
-                                                            const rhs_alignment = rhs_layout.alignment(usize_alignment);
+
+                                                            const lhs_alignment = lhs_layout.alignment(ctx.usize_alignment);
+                                                            const rhs_alignment = rhs_layout.alignment(ctx.usize_alignment);
 
                                                             // First sort by alignment (descending - higher alignment first)
-                                                            if (lhs_alignment.toBytes() != rhs_alignment.toBytes()) {
-                                                                return lhs_alignment.toBytes() > rhs_alignment.toBytes();
+                                                            if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                                                                return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                                                             }
 
                                                             // Then sort by name (ascending)
@@ -966,7 +974,7 @@ pub const Store = struct {
                                                             return std.mem.order(u8, lhs_str, rhs_str) == .lt;
                                                         }
                                                     };
-                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env }, InnerFieldSorter.lessThan);
+                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env, .usize_alignment = target_usize }, InnerFieldSorter.lessThan);
 
                                                     // Now add them to the record_fields store
                                                     for (inner_temp_fields.items) |inner_field| {
@@ -974,29 +982,29 @@ pub const Store = struct {
                                                     }
 
                                                     // Calculate max alignment and total size of all fields
-                                                    var max_alignment = Alignment.fromBytes(1);
-                                                    var current_offset = layout.Size.fromBytes(0);
+                                                    var max_alignment = std.mem.Alignment.@"1";
+                                                    var current_offset: u32 = 0;
 
                                                     var field_idx: u32 = 0;
                                                     while (field_idx < inner_temp_fields.items.len) : (field_idx += 1) {
                                                         const temp_field = inner_temp_fields.items[field_idx];
                                                         const field_layout = self.getLayout(temp_field.layout);
-                                                        const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                                        const field_alignment = field_layout.alignment(usize_alignment);
-                                                        const field_size = field_layout.size(@sizeOf(usize));
+
+                                                        const field_alignment = field_layout.alignment(target_usize);
+                                                        const field_size = field_layout.size(target_usize);
 
                                                         // Update max alignment
-                                                        max_alignment = Alignment.max(max_alignment, field_alignment);
+                                                        max_alignment = max_alignment.max(field_alignment);
 
                                                         // Align current offset to field's alignment
-                                                        current_offset = current_offset.alignForward(field_alignment);
+                                                        current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
                                                         // Add field size
-                                                        current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                                        current_offset = current_offset + field_size;
                                                     }
 
                                                     // Final size must be aligned to the record's alignment
-                                                    const total_size = current_offset.alignForward(max_alignment);
+                                                    const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
                                                     // Clean up resolved fields for this record
                                                     self.work.resolved_record_fields.shrinkRetainingCapacity(inner_updated_record.resolved_fields_start);
@@ -1042,16 +1050,17 @@ pub const Store = struct {
                                 const AlignmentSortCtx = struct {
                                     store: *Self,
                                     env: *base.ModuleEnv,
+                                    usize_alignment: std.mem.Alignment,
                                     fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                         const a_layout = ctx.store.getLayout(a.layout);
                                         const b_layout = ctx.store.getLayout(b.layout);
-                                        const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                        const a_alignment = a_layout.alignment(usize_alignment);
-                                        const b_alignment = b_layout.alignment(usize_alignment);
+
+                                        const a_alignment = a_layout.alignment(ctx.usize_alignment);
+                                        const b_alignment = b_layout.alignment(ctx.usize_alignment);
 
                                         // First sort by alignment (descending - higher alignment first)
-                                        if (a_alignment.toBytes() != b_alignment.toBytes()) {
-                                            return a_alignment.toBytes() > b_alignment.toBytes();
+                                        if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
+                                            return a_alignment.toByteUnits() > b_alignment.toByteUnits();
                                         }
 
                                         // Then sort by name (ascending)
@@ -1064,7 +1073,7 @@ pub const Store = struct {
                                 std.mem.sort(
                                     RecordField,
                                     temp_fields.items,
-                                    AlignmentSortCtx{ .store = self, .env = self.env },
+                                    AlignmentSortCtx{ .store = self, .env = self.env, .usize_alignment = target_usize },
                                     AlignmentSortCtx.lessThan,
                                 );
 
@@ -1074,29 +1083,29 @@ pub const Store = struct {
                                 }
 
                                 // Calculate max alignment and total size
-                                var max_alignment = Alignment.fromBytes(1);
-                                var current_offset = layout.Size.fromBytes(0);
+                                var max_alignment = std.mem.Alignment.@"1";
+                                var current_offset: u32 = 0;
 
                                 var field_idx: u32 = 0;
                                 while (field_idx < temp_fields.items.len) : (field_idx += 1) {
                                     const temp_field = temp_fields.items[field_idx];
                                     const field_layout = self.getLayout(temp_field.layout);
-                                    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-                                    const field_alignment = field_layout.alignment(usize_alignment);
-                                    const field_size = field_layout.size(@sizeOf(usize));
+
+                                    const field_alignment = field_layout.alignment(target_usize);
+                                    const field_size = field_layout.size(target_usize);
 
                                     // Update max alignment
-                                    max_alignment = Alignment.max(max_alignment, field_alignment);
+                                    max_alignment = max_alignment.max(field_alignment);
 
                                     // Align current offset to field's alignment
-                                    current_offset = current_offset.alignForward(field_alignment);
+                                    current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
 
                                     // Add field size
-                                    current_offset = layout.Size.add(current_offset, layout.Size.fromBytes(field_size));
+                                    current_offset = current_offset + field_size;
                                 }
 
                                 // Final size must be aligned to the record's alignment
-                                const total_size = current_offset.alignForward(max_alignment);
+                                const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
 
                                 // Create the record layout with the fields range
                                 const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
@@ -1676,9 +1685,9 @@ test "alignment - record alignment is max of field alignments" {
     // Record alignment should be the max of its field alignments
     // U8 has alignment 1, U32 has alignment 4, U64 has alignment 8
     // So the record should have alignment 8
-    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
     const alignment = record_layout.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment.toBytes());
+    try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
 
     // Test with different field order - alignment should still be the same
     const fields2 = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
@@ -1694,7 +1703,7 @@ test "alignment - record alignment is max of field alignments" {
     const record_layout2 = layout_store.getLayout(record_layout_idx2);
 
     const alignment2 = record_layout2.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment2.toBytes());
+    try testing.expectEqual(@as(u32, 8), alignment2.toByteUnits());
 }
 
 test "alignment - deeply nested record alignment (non-recursive)" {
@@ -1755,9 +1764,10 @@ test "alignment - deeply nested record alignment (non-recursive)" {
 
     // Test alignment calculation
     // The deeply nested record should still have alignment 8 (from the U64 field)
-    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
+    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+
     const alignment = outermost_layout.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment.toBytes());
+    try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
 }
 
 test "addTypeVar - bare empty record returns error" {
@@ -1949,9 +1959,11 @@ test "record size calculation" {
     // a: u8 (1 byte) at offset 12
     // c: u8 (1 byte) at offset 13
     // Total: 14 bytes, but aligned to 8 bytes = 16 bytes
-    try testing.expectEqual(@as(u32, 16), record_layout.size(@sizeOf(usize)));
-    const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-    try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment).toBytes());
+    const target_usize = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+    try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
+    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+
+    try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment).toByteUnits());
 }
 
 test "addTypeVar - nested record" {
@@ -2502,7 +2514,7 @@ test "addTypeVar - record alignment edge cases" {
     switch (result_layout.*) {
         .record => |rec| {
             // Record should have 16-byte alignment (maximum of all fields)
-            try testing.expectEqual(@as(u32, 16), rec.alignment.toBytes());
+            try testing.expectEqual(@as(u32, 16), rec.alignment.toByteUnits());
 
             // Fields should be sorted by alignment (descending) then name
             const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
@@ -3237,10 +3249,12 @@ test "alignment - record with log2 alignment representation" {
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u4, 0), record_layout.record.alignment.log2_value); // log2(1) = 0
-        const usize_alignment = Alignment.fromBytes(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 1), record_layout.alignment(usize_alignment).toBytes());
-        try testing.expectEqual(@as(u32, 1), record_layout.size(@sizeOf(usize))); // size = 1 byte
+        try testing.expectEqual(1, record_layout.record.alignment.toByteUnits());
+        const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+
+        try testing.expectEqual(@as(u32, 1), record_layout.alignment(usize_alignment).toByteUnits());
+        const target_usize = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+        try testing.expectEqual(@as(u32, 1), record_layout.size(target_usize)); // size = 1 byte
     }
 
     // Test 2: Record with U32 field (alignment 4, log2 = 2)
@@ -3257,10 +3271,11 @@ test "alignment - record with log2 alignment representation" {
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u4, 2), record_layout.record.alignment.log2_value); // log2(4) = 2
-        const usize_alignment2 = Alignment.fromBytes(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 4), record_layout.alignment(usize_alignment2).toBytes());
-        try testing.expectEqual(@as(u32, 4), record_layout.size(@sizeOf(usize))); // size = 4 bytes
+        try testing.expectEqual(@as(u32, 4), record_layout.record.alignment.toByteUnits()); // alignment = 4
+        const usize_alignment2 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+        try testing.expectEqual(@as(u32, 4), record_layout.alignment(usize_alignment2).toByteUnits());
+        const target_usize2 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+        try testing.expectEqual(@as(u32, 4), record_layout.size(target_usize2)); // size = 4 bytes
     }
 
     // Test 3: Record with U64 field (alignment 8, log2 = 3)
@@ -3277,10 +3292,11 @@ test "alignment - record with log2 alignment representation" {
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u4, 3), record_layout.record.alignment.log2_value); // log2(8) = 3
-        const usize_alignment3 = Alignment.fromBytes(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment3).toBytes());
-        try testing.expectEqual(@as(u32, 8), record_layout.size(@sizeOf(usize))); // size = 8 bytes
+        try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // alignment = 8
+        const usize_alignment3 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment3).toByteUnits());
+        const target_usize3 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+        try testing.expectEqual(@as(u32, 8), record_layout.size(target_usize3)); // size = 8 bytes
     }
 
     // Test 4: Record with mixed fields - should use max alignment
@@ -3300,11 +3316,12 @@ test "alignment - record with log2 alignment representation" {
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u4, 3), record_layout.record.alignment.log2_value); // max(log2(1), log2(8)) = 3
-        const usize_alignment4 = Alignment.fromBytes(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment4).toBytes());
+        try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // max alignment = 8
+        const usize_alignment4 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
+        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment4).toByteUnits());
         // After sorting: u64 (8 bytes) at offset 0, u8 (1 byte) at offset 8, total size 16 (aligned to 8)
-        try testing.expectEqual(@as(u32, 16), record_layout.size(@sizeOf(usize)));
+        const target_usize4 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
+        try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize4));
     }
 }
 
