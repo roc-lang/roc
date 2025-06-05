@@ -3,7 +3,7 @@
 const std = @import("std");
 const types = @import("../types/types.zig");
 const types_store = @import("../types/store.zig");
-const layout = @import("./layout.zig");
+const layout_ = @import("./layout.zig");
 const base = @import("../base.zig");
 const target = @import("../base/target.zig");
 const collections = @import("../collections.zig");
@@ -11,12 +11,11 @@ const Ident = @import("../base/Ident.zig");
 const work = @import("./work.zig");
 
 const Var = types.Var;
-const Layout = layout.Layout;
-const Idx = layout.Idx;
+const Layout = layout_.Layout;
+const Idx = layout_.Idx;
+const RecordField = layout_.RecordField;
 const Work = work.Work;
 const exitOnOom = collections.utils.exitOnOom;
-
-const RecordField = layout.RecordField;
 
 /// Errors that can occur during layout computation
 pub const LayoutError = error{
@@ -64,8 +63,8 @@ pub const Store = struct {
         self.work.deinit(self.env.gpa);
     }
 
-    fn insertLayout(self: *Self, layout_: Layout) std.mem.Allocator.Error!Idx {
-        const safe_idx = self.layouts.append(self.env.gpa, layout_);
+    fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        const safe_idx = self.layouts.append(self.env.gpa, layout);
         return Idx{
             .idx = @intCast(@intFromEnum(safe_idx)),
         };
@@ -133,7 +132,7 @@ pub const Store = struct {
     fn finishRecord(
         self: *Store,
         updated_record: work.Work.PendingRecord,
-    ) (LayoutError || std.mem.Allocator.Error)!Idx {
+    ) (LayoutError || std.mem.Allocator.Error)!Layout {
         const target_usize = self.targetUsize();
         const resolved_fields_end = self.work.resolved_record_fields.len;
         const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
@@ -217,12 +216,11 @@ pub const Store = struct {
 
         // Create the record layout with the fields range
         const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
-        const record_layout = Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
 
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return try self.insertLayout(record_layout);
+        return Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
@@ -256,21 +254,18 @@ pub const Store = struct {
         // We reuse that stack from call to call to avoid reallocating it.
         self.work.clearRetainingCapacity();
 
-        const target_usize = self.targetUsize();
-
-        var result: ?Idx = null;
         var iterations: u32 = 0;
         const max_iterations = 10000; // Safety limit to prevent infinite loops
 
-        outer: while (true) {
+        while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
                 std.debug.panic("Layout computation exceeded iteration limit - possible infinite loop\n", .{});
             }
 
-            var layout_idx = switch (current.desc.content) {
+            var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => try self.insertLayout(.str),
+                    .str => .str,
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .box);
                         // Push a pending Box container and "recurse" on the elem type
@@ -293,22 +288,19 @@ pub const Store = struct {
                         current = var_store.resolveVar(custom_type.backing_var);
                         continue;
                     },
-                    .num => |num| blk: {
-                        const layout_to_insert = switch (num) {
-                            .int => |int| switch (int) {
-                                .exact => |precision| Layout{ .int = precision },
-                                // For Int(a), use the default precision for an Int.
-                                .flex_var => Layout{ .int = types.Num.Int.Precision.default },
-                            },
-                            .frac => |frac| switch (frac) {
-                                .exact => |precision| Layout{ .frac = precision },
-                                // For Frac(a), use the default precision for a Frac.
-                                .flex_var => Layout{ .frac = types.Num.Frac.Precision.default },
-                            },
-                            // Num(a) defaults to Int(a), so use the default precision for an Int.
+                    .num => |num| switch (num) {
+                        .int => |int| switch (int) {
+                            .exact => |precision| Layout{ .int = precision },
+                            // For Int(a), use the default precision for an Int.
                             .flex_var => Layout{ .int = types.Num.Int.Precision.default },
-                        };
-                        break :blk try self.insertLayout(layout_to_insert);
+                        },
+                        .frac => |frac| switch (frac) {
+                            .exact => |precision| Layout{ .frac = precision },
+                            // For Frac(a), use the default precision for a Frac.
+                            .flex_var => Layout{ .frac = types.Num.Frac.Precision.default },
+                        },
+                        // Num(a) defaults to Int(a), so use the default precision for an Int.
+                        .flex_var => Layout{ .int = types.Num.Int.Precision.default },
                     },
                     .tuple => |tuple| {
                         // TODO
@@ -324,8 +316,6 @@ pub const Store = struct {
                         const num_fields = try self.gatherRecordFields(var_store, record_type);
 
                         if (num_fields == 0) {
-                            // This is an empty record!
-                            // Return error for zero-sized type
                             continue :flat_type .empty_record;
                         }
 
@@ -356,11 +346,11 @@ pub const Store = struct {
                             switch (pending_container) {
                                 .list => {
                                     // It turned out we were getting the layout for a List({})
-                                    break :blk try self.insertLayout(.list_zero_sized);
+                                    break :blk .list_zero_sized;
                                 },
                                 .box => {
                                     // It turned out we were getting the layout for a Box({})
-                                    break :blk try self.insertLayout(.box_zero_sized);
+                                    break :blk .box_zero_sized;
                                 },
                                 .record => |pending_record| {
                                     // It turned out we were getting the layout for a record field
@@ -403,7 +393,7 @@ pub const Store = struct {
                     // Flex vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.getLastOrNull()) |pending_container| {
                         if (pending_container == .box or pending_container == .list) {
-                            break :blk try self.insertLayout(.host_opaque);
+                            break :blk .host_opaque;
                         }
                     }
 
@@ -414,7 +404,7 @@ pub const Store = struct {
                     // Rigid vars can only be sent to the host if boxed.
                     if (self.work.pending_containers.getLastOrNull()) |pending_container| {
                         if (pending_container == .box or pending_container == .list) {
-                            break :blk try self.insertLayout(.host_opaque);
+                            break :blk .host_opaque;
                         }
                     }
 
@@ -431,35 +421,19 @@ pub const Store = struct {
                 .err => return LayoutError.TypeContainedMismatch,
             };
 
-            // We actually resolved a layout and didn't `continue`!
+            // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
+            var layout_idx = try self.insertLayout(layout);
             try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
 
             // Next, see if this was part of some pending work.
-            while (self.work.pending_containers.items.len > 0) {
-                const pending_container = self.work.pending_containers.pop().?;
+            while (self.work.pending_containers.pop()) |pending_container| {
                 switch (pending_container) {
                     .box => {
-                        // We got the layout for the box's content
-                        // Check if the content is zero-sized
-                        const content_layout = self.getLayout(layout_idx);
-                        const box_layout = switch (content_layout.*) {
-                            .box_zero_sized, .list_zero_sized => Layout.box_zero_sized,
-                            else => Layout{ .box = layout_idx },
-                        };
-                        const box_layout_idx = try self.insertLayout(box_layout);
-                        layout_idx = box_layout_idx;
+                        layout = Layout{ .box = layout_idx };
                     },
                     .list => {
-                        // We got the layout for the list's element
-                        // Check if the element is zero-sized
-                        const element_layout = self.getLayout(layout_idx);
-                        const list_layout = switch (element_layout.*) {
-                            .box_zero_sized, .list_zero_sized => Layout.list_zero_sized,
-                            else => Layout{ .list = layout_idx },
-                        };
-                        const list_layout_idx = try self.insertLayout(list_layout);
-                        layout_idx = list_layout_idx;
+                        layout = Layout{ .list = layout_idx };
                     },
                     .record => |pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
@@ -476,279 +450,29 @@ pub const Store = struct {
                         });
 
                         if (updated_record.pending_fields == 0) {
-                            // We finished the record we were working on.
-                            // Copy only this record's resolved fields into a contiguous chunk in record_fields
-                            const resolved_fields_end = self.work.resolved_record_fields.len;
-                            const num_resolved_fields = resolved_fields_end - updated_record.resolved_fields_start;
-
-                            // Check if all fields were zero-sized
-                            if (num_resolved_fields == 0) {
-                                // All fields were zero-sized, this is an empty record
-                                // Clean up
-                                self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-                                // Check if we're inside another container
-                                if (self.work.pending_containers.items.len > 0) {
-                                    // We're inside a container (box/list)
-                                    const inner_outer_container = self.work.pending_containers.pop().?;
-                                    switch (inner_outer_container) {
-                                        .box => {
-                                            layout_idx = try self.insertLayout(.box_zero_sized);
-                                        },
-                                        .list => {
-                                            layout_idx = try self.insertLayout(.list_zero_sized);
-                                        },
-                                        .record => |inner_pending_record| {
-                                            // It turned out we were getting the layout for a record field
-                                            // whose type is a zero-sized type, which means that field should be dropped.
-                                            std.debug.assert(inner_pending_record.pending_fields > 0);
-                                            var inner_updated_record = inner_pending_record;
-                                            inner_updated_record.pending_fields -= 1;
-
-                                            // The current field we're working on has turned out to be zero-sized, so drop it.
-                                            _ = self.work.pending_record_fields.pop() orelse unreachable;
-
-                                            if (inner_updated_record.pending_fields == 0) {
-                                                // We finished the record we were working on.
-                                                const inner_resolved_fields_end = self.work.resolved_record_fields.len;
-                                                const inner_num_resolved_fields = inner_resolved_fields_end - inner_updated_record.resolved_fields_start;
-
-                                                if (inner_num_resolved_fields == 0) {
-                                                    // All fields were zero-sized, this is an empty record
-                                                    self.work.resolved_record_fields.shrinkRetainingCapacity(inner_updated_record.resolved_fields_start);
-
-                                                    // Check if we're inside another container
-                                                    if (self.work.pending_containers.items.len > 0) {
-                                                        // We're inside a container, handle it appropriately
-                                                        const outer_container = self.work.pending_containers.pop().?;
-                                                        switch (outer_container) {
-                                                            .box => {
-                                                                layout_idx = try self.insertLayout(.box_zero_sized);
-                                                            },
-                                                            .list => {
-                                                                layout_idx = try self.insertLayout(.list_zero_sized);
-                                                            },
-                                                            .record => unreachable, // Records shouldn't be directly nested in this way
-                                                        }
-                                                    } else {
-                                                        // This is a top-level zero-sized record
-                                                        return LayoutError.ZeroSizedType;
-                                                    }
-                                                } else {
-                                                    const inner_fields_start = self.record_fields.items.len;
-
-                                                    // Copy only this record's resolved fields to the record_fields store
-                                                    const inner_field_names = self.work.resolved_record_fields.items(.field_name);
-                                                    const inner_field_idxs = self.work.resolved_record_fields.items(.field_idx);
-
-                                                    // First, collect the fields into a temporary array so we can sort them
-                                                    var inner_temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
-                                                    defer inner_temp_fields.deinit();
-
-                                                    for (inner_updated_record.resolved_fields_start..inner_resolved_fields_end) |i| {
-                                                        try inner_temp_fields.append(.{
-                                                            .name = inner_field_names[i],
-                                                            .layout = inner_field_idxs[i],
-                                                        });
-                                                    }
-
-                                                    // Sort the fields by name
-                                                    const InnerFieldSorter = struct {
-                                                        store: *Self,
-                                                        env: *base.ModuleEnv,
-                                                        target_usize: target.TargetUsize,
-                                                        pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
-                                                            const lhs_layout = ctx.store.getLayout(lhs.layout);
-                                                            const rhs_layout = ctx.store.getLayout(rhs.layout);
-
-                                                            const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
-                                                            const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
-
-                                                            // First sort by alignment (descending - higher alignment first)
-                                                            if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
-                                                                return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
-                                                            }
-
-                                                            // Then sort by name (ascending)
-                                                            const lhs_str = ctx.env.idents.getText(lhs.name);
-                                                            const rhs_str = ctx.env.idents.getText(rhs.name);
-                                                            return std.mem.order(u8, lhs_str, rhs_str) == .lt;
-                                                        }
-                                                    };
-                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env, .target_usize = self.targetUsize() }, InnerFieldSorter.lessThan);
-
-                                                    // Now add them to the record_fields store
-                                                    for (inner_temp_fields.items) |inner_field| {
-                                                        _ = self.record_fields.append(self.env.gpa, inner_field);
-                                                    }
-
-                                                    // Calculate max alignment and total size of all fields
-                                                    var max_alignment = std.mem.Alignment.@"1";
-                                                    var current_offset: u32 = 0;
-
-                                                    var field_idx: u32 = 0;
-                                                    while (field_idx < inner_temp_fields.items.len) : (field_idx += 1) {
-                                                        const temp_field = inner_temp_fields.items[field_idx];
-                                                        const field_layout = self.getLayout(temp_field.layout);
-
-                                                        const field_alignment = field_layout.alignment(target_usize);
-                                                        const field_size = field_layout.size(target_usize);
-
-                                                        // Update max alignment
-                                                        max_alignment = max_alignment.max(field_alignment);
-
-                                                        // Align current offset to field's alignment
-                                                        current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-
-                                                        // Add field size
-                                                        current_offset = current_offset + field_size;
-                                                    }
-
-                                                    // Final size must be aligned to the record's alignment
-                                                    const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
-
-                                                    // Clean up resolved fields for this record
-                                                    self.work.resolved_record_fields.shrinkRetainingCapacity(inner_updated_record.resolved_fields_start);
-
-                                                    // Create the record layout with the fields range
-                                                    const fields_range = collections.NonEmptyRange.init(@intCast(inner_fields_start), @intCast(inner_temp_fields.items.len)) catch unreachable;
-                                                    layout_idx = try self.insertLayout(.{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } });
-                                                }
-                                            } else {
-                                                // More fields to process, push the updated record back
-                                                try self.work.pending_containers.append(self.env.gpa, .{ .record = inner_updated_record });
-                                                continue :outer;
-                                            }
-
-                                            // Continue with the layout we just created
-                                            // The layout_idx is ready to be processed by the outer loop
-                                        },
-                                    }
-                                } else {
-                                    // This is a top-level zero-sized record
-                                    return LayoutError.ZeroSizedType;
-                                }
-                            } else {
-                                const fields_start = self.record_fields.items.len;
-
-                                // Copy only this record's resolved fields to the record_fields store
-                                const field_names = self.work.resolved_record_fields.items(.field_name);
-                                const field_idxs = self.work.resolved_record_fields.items(.field_idx);
-
-                                // First, collect the fields into a temporary array so we can sort them
-                                var temp_fields = std.ArrayList(RecordField).init(self.env.gpa);
-                                defer temp_fields.deinit();
-
-                                var i: u32 = updated_record.resolved_fields_start;
-                                while (i < resolved_fields_end) : (i += 1) {
-                                    try temp_fields.append(.{
-                                        .name = field_names[i],
-                                        .layout = field_idxs[i],
-                                    });
-                                }
-
-                                // Sort fields by alignment (descending) first, then by name (ascending)
-                                const AlignmentSortCtx = struct {
-                                    store: *Self,
-                                    env: *base.ModuleEnv,
-                                    target_usize: target.TargetUsize,
-                                    fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
-                                        const a_layout = ctx.store.getLayout(a.layout);
-                                        const b_layout = ctx.store.getLayout(b.layout);
-
-                                        const a_alignment = a_layout.alignment(ctx.target_usize);
-                                        const b_alignment = b_layout.alignment(ctx.target_usize);
-
-                                        // First sort by alignment (descending - higher alignment first)
-                                        if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
-                                            return a_alignment.toByteUnits() > b_alignment.toByteUnits();
-                                        }
-
-                                        // Then sort by name (ascending)
-                                        const a_str = ctx.env.idents.getText(a.name);
-                                        const b_str = ctx.env.idents.getText(b.name);
-                                        return std.mem.order(u8, a_str, b_str) == .lt;
-                                    }
-                                };
-
-                                std.mem.sort(
-                                    RecordField,
-                                    temp_fields.items,
-                                    AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
-                                    AlignmentSortCtx.lessThan,
-                                );
-
-                                // Now append the sorted fields
-                                for (temp_fields.items) |sorted_field| {
-                                    _ = self.record_fields.append(self.env.gpa, sorted_field);
-                                }
-
-                                // Calculate max alignment and total size
-                                var max_alignment = std.mem.Alignment.@"1";
-                                var current_offset: u32 = 0;
-
-                                var field_idx: u32 = 0;
-                                while (field_idx < temp_fields.items.len) : (field_idx += 1) {
-                                    const temp_field = temp_fields.items[field_idx];
-                                    const field_layout = self.getLayout(temp_field.layout);
-
-                                    const field_alignment = field_layout.alignment(target_usize);
-                                    const field_size = field_layout.size(target_usize);
-
-                                    // Update max alignment
-                                    max_alignment = max_alignment.max(field_alignment);
-
-                                    // Align current offset to field's alignment
-                                    current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
-
-                                    // Add field size
-                                    current_offset = current_offset + field_size;
-                                }
-
-                                // Final size must be aligned to the record's alignment
-                                const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
-
-                                // Create the record layout with the fields range
-                                const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
-                                const record_layout = Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
-                                layout_idx = try self.insertLayout(record_layout);
-
-                                // Remove only this record's resolved fields
-                                self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-                            }
+                            layout = try self.finishRecord(updated_record);
                         } else {
-                            // Still have fields to process, push the container back
+                            // There are still fields remaining to process, so put the pending container back
+                            // TODO we coul avoid the pushing and popping here by having the loop just peek at the last one
                             try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
 
-                            // Get the next field to process
+                            // Process the next field in the outer loop.
                             const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
                             current = var_store.resolveVar(next_field.var_);
                             break;
                         }
                     },
                 }
+
+                layout_idx = try self.insertLayout(layout);
+                // TODO store var in pending_container and add this to the var_to_layout cache
             }
 
-            // Save the layout result
-            result = layout_idx;
+            // Since there are no pending containers remaining, there shouldn't be any pending record fields either.
+            std.debug.assert(self.work.pending_record_fields.len == 0);
 
-            // Check if we have more work to do
-            if (self.work.pending_record_fields.len > 0) {
-                // Get the next field to process
-                const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                current = var_store.resolveVar(next_field.var_);
-                continue;
-            }
-
-            // No more work, we're done
-            break;
-        }
-
-        if (result) |r| {
-            return r;
-        } else {
-            // This should never happen - we should always have a result or have returned an error
-            std.debug.panic("Internal error: addTypeVar completed without setting a result\n", .{});
+            // No more pending containers; we're done!
+            return layout_idx;
         }
     }
 };
