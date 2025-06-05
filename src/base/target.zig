@@ -15,8 +15,8 @@ pub const TargetUsize = enum(u1) {
     u64 = 1,
 
     /// The size of the target usize, in bytes
-    pub fn size(self: @This()) usize {
-        return self.alignment().toByteUnits();
+    pub fn size(self: @This()) u32 {
+        return @as(u32, @intCast(self.alignment().toByteUnits()));
     }
 
     /// The alignment of the target usize
@@ -35,6 +35,11 @@ pub const TargetUsize = enum(u1) {
             unreachable;
         },
     };
+
+    /// Returns an array of all TargetUsize variants that Roc supports
+    pub fn all() [2]TargetUsize {
+        return .{ .u32, .u64 };
+    }
 };
 
 test "TargetUsize conversion to usize" {

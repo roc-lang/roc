@@ -33,26 +33,18 @@ pub const Layout = union(enum) {
     list_zero_sized, // e.g. a List({}) - this can come up, so we need to make a special implementation for it.
     host_opaque,
     record: Record,
-    tuple: Tuple,
-    closure: Closure,
-    tagged_union: TagUnion,
 
-    /// Get the alignment of this layout in bytes.
+    /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
         return switch (self) {
             .int => |precision| precision.alignment(),
             .frac => |precision| precision.alignment(),
             .str, .box, .box_zero_sized, .list, .list_zero_sized, .host_opaque => target_usize.alignment(),
             .record => |rec| rec.alignment,
-            .tuple => @panic("TODO: implement tuple alignment"),
-            .closure => @panic("TODO: implement closure alignment"),
-            .tagged_union => @panic("TODO: implement tagged_union alignment"),
         };
     }
 
-    /// Get the size of this layout in bytes.
-    /// The usize_bytes parameter refers to how many bytes we should treat
-    /// `usize` as, based on the target we're building for.
+    /// This layout's size in bytes, given a particular target usize.
     pub fn size(self: Layout, target_usize: target.TargetUsize) u32 {
         return switch (self) {
             .int => |precision| @as(u32, @intCast(precision.size())),
@@ -61,9 +53,6 @@ pub const Layout = union(enum) {
             .box, .box_zero_sized => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
             .str, .list, .list_zero_sized => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
             .record => |rec| rec.size,
-            .tuple => @panic("TODO: implement tuple size"),
-            .closure => @panic("TODO: implement closure size"),
-            .tagged_union => @panic("TODO: implement tagged_union size"),
         };
     }
 };
@@ -92,171 +81,124 @@ pub const Record = struct {
     }
 };
 
-/// Tuple layout (ordered collection of fields)
-pub const Tuple = struct {
-    // TODO: implement
-};
-
-/// Closure layout
-pub const Closure = struct {
-    // TODO: implement
-};
-
-/// Tagged union layout
-pub const TagUnion = struct {
-    // TODO: implement
-};
-
-test "Layout size in bytes" {
-    const testing = std.testing;
-
-    // Test the size of the Layout tagged union
-    const layout_size = @sizeOf(Layout);
-
-    // The Layout should be reasonably small since it's used frequently
-    // A typical tagged union in Zig will be the size of the largest variant plus tag overhead
-    try testing.expect(layout_size <= 20); // Reasonable upper bound
+test "Size of Layout type" {
+    // The Layout should have small size since it's used frequently, so avoid letting this number increase!
+    try std.testing.expect(@sizeOf(Layout) <= 20);
 }
 
-test "Layout.alignment() - primitive types" {
+test "Layout.size() and Layout.alignment() - number types" {
     const testing = std.testing;
 
+    // ints
     const u8_layout = Layout{ .int = .u8 };
+    const i8_layout = Layout{ .int = .i8 };
     const u16_layout = Layout{ .int = .u16 };
+    const i16_layout = Layout{ .int = .i16 };
     const u32_layout = Layout{ .int = .u32 };
+    const i32_layout = Layout{ .int = .i32 };
     const u64_layout = Layout{ .int = .u64 };
+    const i64_layout = Layout{ .int = .i64 };
     const u128_layout = Layout{ .int = .u128 };
-    const f32_layout = Layout{ .frac = .f32 };
-    const f64_layout = Layout{ .frac = .f64 };
-    const dec_layout = Layout{ .frac = .dec };
-    const str_layout: Layout = .str;
-
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize));
-
-    try testing.expectEqual(std.mem.Alignment.@"1", u8_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"2", u16_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"4", u32_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"8", u64_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"16", u128_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"4", f32_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"8", f64_layout.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.@"16", dec_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, str_layout.alignment(usize_alignment));
-}
-
-test "Layout.alignment() - container types" {
-    const testing = std.testing;
-
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize));
-
-    // Test str, box, list, and host_opaque alignments
-    const str_layout = Layout{ .str = {} };
-    const box_layout = Layout{ .box = .{ .idx = 0 } };
-    const box_zero_layout = Layout{ .box_zero_sized = {} };
-    const list_layout = Layout{ .list = .{ .idx = 0 } };
-    const list_zero_layout = Layout{ .list_zero_sized = {} };
-    const host_opaque_layout = Layout{ .host_opaque = {} };
-
-    try testing.expectEqual(usize_alignment, str_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, box_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, box_zero_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, list_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, list_zero_layout.alignment(usize_alignment));
-    try testing.expectEqual(usize_alignment, host_opaque_layout.alignment(usize_alignment));
-}
-
-test "Layout.alignment() - record types" {
-    const testing = std.testing;
-
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize));
-
-    // Test record with alignment 4
-    const record_align4 = Layout{ .record = .{
-        .fields = .{ .start = 0, .count = 2 },
-        .alignment = std.mem.Alignment.@"4",
-        .size = 8,
-    } };
-
-    // Test record with alignment 16
-    const record_align16 = Layout{ .record = .{
-        .fields = .{ .start = 0, .count = 1 },
-        .alignment = std.mem.Alignment.@"16",
-        .size = 16,
-    } };
-
-    try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), record_align4.alignment(usize_alignment));
-    try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), record_align16.alignment(usize_alignment));
-}
-
-test "Layout.size() - primitive types" {
-    const testing = std.testing;
-
-    // integers
-    const u8_layout = Layout{ .int = .u8 };
-    const u16_layout = Layout{ .int = .u16 };
-    const u32_layout = Layout{ .int = .u32 };
-    const u64_layout = Layout{ .int = .u64 };
-    const u128_layout = Layout{ .int = .u128 };
-
-    const native: target.TargetUsize = target.TargetUsize.native;
-
-    try testing.expectEqual(@as(u32, 1), u8_layout.size(native));
-    try testing.expectEqual(@as(u32, 2), u16_layout.size(native));
-    try testing.expectEqual(@as(u32, 4), u32_layout.size(native));
-    try testing.expectEqual(@as(u32, 8), u64_layout.size(native));
-    try testing.expectEqual(@as(u32, 16), u128_layout.size(native));
+    const i128_layout = Layout{ .int = .i128 };
 
     // floats
     const f32_layout = Layout{ .frac = .f32 };
     const f64_layout = Layout{ .frac = .f64 };
     const dec_layout = Layout{ .frac = .dec };
 
-    try testing.expectEqual(@as(u32, 4), f32_layout.size(native));
-    try testing.expectEqual(@as(u32, 8), f64_layout.size(native));
-    try testing.expectEqual(@as(u32, 16), dec_layout.size(native));
+    for (target.TargetUsize.all()) |target_usize| {
+        // Alignment
+        try testing.expectEqual(std.mem.Alignment.@"1", u8_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"1", i8_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"2", u16_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"2", i16_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", u32_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", i32_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", u64_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", i64_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", u128_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", i128_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", f32_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", f64_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", dec_layout.alignment(target_usize));
 
-    // strings
-    const str_layout: Layout = .str;
-
-    try testing.expectEqual(@as(u32, @sizeOf(usize) * 3), str_layout.size(native));
+        // Size
+        try testing.expectEqual(1, u8_layout.size(target_usize));
+        try testing.expectEqual(1, i8_layout.size(target_usize));
+        try testing.expectEqual(2, u16_layout.size(target_usize));
+        try testing.expectEqual(2, i16_layout.size(target_usize));
+        try testing.expectEqual(4, u32_layout.size(target_usize));
+        try testing.expectEqual(4, i32_layout.size(target_usize));
+        try testing.expectEqual(8, u64_layout.size(target_usize));
+        try testing.expectEqual(8, i64_layout.size(target_usize));
+        try testing.expectEqual(16, u128_layout.size(target_usize));
+        try testing.expectEqual(16, i128_layout.size(target_usize));
+        try testing.expectEqual(4, f32_layout.size(target_usize));
+        try testing.expectEqual(8, f64_layout.size(target_usize));
+        try testing.expectEqual(16, dec_layout.size(target_usize));
+    }
 }
 
-test "Layout.size() - container types" {
+test "Layout.size() and Layout.alignment()- types containing pointers" {
     const testing = std.testing;
 
-    const usize_bytes: u32 = @sizeOf(usize);
-    const target_usize = target.TargetUsize.native;
+    const str_layout: Layout = .str;
+    const host_opaque_layout: Layout = .host_opaque;
+    const box_layout: Layout = .{ .box = .{ .idx = 0 } };
+    const box_zero_layout: Layout = .box_zero_sized;
+    const list_layout: Layout = .{ .list = .{ .idx = 0 } };
+    const list_zero_layout: Layout = .list_zero_sized;
 
-    // Test host_opaque size (should be usize)
-    const host_opaque_layout = Layout{ .host_opaque = {} };
-    try testing.expectEqual(usize_bytes, host_opaque_layout.size(target_usize));
+    for (target.TargetUsize.all()) |target_usize| {
+        // Alignment
+        try testing.expectEqual(target_usize.alignment(), str_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), box_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), box_zero_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), list_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), list_zero_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), host_opaque_layout.alignment(target_usize));
 
-    // Test box sizes (should be usize - pointer size)
-    const box_layout = Layout{ .box = .{ .idx = 0 } };
-    const box_zero_layout = Layout{ .box_zero_sized = {} };
-    try testing.expectEqual(usize_bytes, box_layout.size(target_usize));
-    try testing.expectEqual(usize_bytes, box_zero_layout.size(target_usize));
+        // Size
+        try testing.expectEqual(target_usize.size(), host_opaque_layout.size(target_usize));
+        try testing.expectEqual(target_usize.size(), box_layout.size(target_usize));
+        try testing.expectEqual(target_usize.size(), box_zero_layout.size(target_usize));
+        // TODO do something like (target_usize.size() * (@sizeOf(Str) / @sizeOf(usize))) once we have the builtins imported here
+        try testing.expectEqual(target_usize.size() * 3, str_layout.size(target_usize));
+        try testing.expectEqual(target_usize.size() * 3, list_layout.size(target_usize));
+        try testing.expectEqual(target_usize.size() * 3, list_zero_layout.size(target_usize));
+    }
+}
 
-    // Test str and list sizes (should be 3 * usize)
-    const str_layout = Layout{ .str = {} };
-    const list_layout = Layout{ .list = .{ .idx = 0 } };
-    const list_zero_layout = Layout{ .list_zero_sized = {} };
-    try testing.expectEqual(usize_bytes * 3, str_layout.size(target_usize));
-    try testing.expectEqual(usize_bytes * 3, list_layout.size(target_usize));
-    try testing.expectEqual(usize_bytes * 3, list_zero_layout.size(target_usize));
+test "Layout.alignment() - record types" {
+    const testing = std.testing;
+
+    const record_align4 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 2 },
+        .alignment = std.mem.Alignment.@"4",
+        .size = 8,
+    } };
+
+    const record_align16 = Layout{ .record = .{
+        .fields = .{ .start = 0, .count = 1 },
+        .alignment = std.mem.Alignment.@"16",
+        .size = 16,
+    } };
+
+    for (target.TargetUsize.all()) |target_usize| {
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), record_align4.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), record_align16.alignment(target_usize));
+    }
 }
 
 test "Record.getFields()" {
     const testing = std.testing;
 
-    // Create a Record layout
     const record = Record{
         .fields = .{ .start = 10, .count = 5 },
         .alignment = std.mem.Alignment.fromByteUnits(8),
         .size = 40,
     };
 
-    // Test getFields() method
     const fields_range = record.getFields();
     try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
     try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.end));

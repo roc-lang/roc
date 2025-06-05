@@ -478,7 +478,7 @@ pub const Store = struct {
                                             std.mem.sort(
                                                 RecordField,
                                                 temp_fields.items,
-                                                AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = target_usize },
+                                                AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
                                                 AlignmentSortCtx.lessThan,
                                             );
 
@@ -627,13 +627,13 @@ pub const Store = struct {
                                                             const ParentSortCtx2 = struct {
                                                                 store: *Self,
                                                                 env: *base.ModuleEnv,
-                                                                usize_alignment: std.mem.Alignment,
+                                                                target_usize: target.TargetUsize,
                                                                 fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                                                     const a_layout = ctx.store.getLayout(a.layout);
                                                                     const b_layout = ctx.store.getLayout(b.layout);
 
-                                                                    const a_alignment = a_layout.alignment(ctx.usize_alignment);
-                                                                    const b_alignment = b_layout.alignment(ctx.usize_alignment);
+                                                                    const a_alignment = a_layout.alignment(ctx.target_usize);
+                                                                    const b_alignment = b_layout.alignment(ctx.target_usize);
 
                                                                     if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
                                                                         return a_alignment.toByteUnits() > b_alignment.toByteUnits();
@@ -648,7 +648,7 @@ pub const Store = struct {
                                                             std.mem.sort(
                                                                 RecordField,
                                                                 parent_temp_fields.items,
-                                                                ParentSortCtx2{ .store = self, .env = self.env, .usize_alignment = target_usize },
+                                                                ParentSortCtx2{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
                                                                 ParentSortCtx2.lessThan,
                                                             );
 
@@ -714,30 +714,30 @@ pub const Store = struct {
                                         const AlignmentSortCtx = struct {
                                             store: *Self,
                                             env: *base.ModuleEnv,
-                                            usize_alignment: std.mem.Alignment,
-                                            fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
-                                                const a_layout = ctx.store.getLayout(a.layout);
-                                                const b_layout = ctx.store.getLayout(b.layout);
+                                            target_usize: target.TargetUsize,
+                                            pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
+                                                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                                                const rhs_layout = ctx.store.getLayout(rhs.layout);
 
-                                                const a_alignment = a_layout.alignment(ctx.usize_alignment);
-                                                const b_alignment = b_layout.alignment(ctx.usize_alignment);
+                                                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                                                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
 
                                                 // First sort by alignment (descending - higher alignment first)
-                                                if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
-                                                    return a_alignment.toByteUnits() > b_alignment.toByteUnits();
+                                                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                                                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
                                                 }
 
                                                 // Then sort by name (ascending)
-                                                const a_str = ctx.env.idents.getText(a.name);
-                                                const b_str = ctx.env.idents.getText(b.name);
-                                                return std.mem.order(u8, a_str, b_str) == .lt;
+                                                const lhs_str = ctx.env.idents.getText(lhs.name);
+                                                const rhs_str = ctx.env.idents.getText(rhs.name);
+                                                return std.mem.order(u8, lhs_str, rhs_str) == .lt;
                                             }
                                         };
 
                                         std.mem.sort(
                                             RecordField,
                                             temp_fields.items,
-                                            AlignmentSortCtx{ .store = self, .env = self.env, .usize_alignment = target_usize },
+                                            AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
                                             AlignmentSortCtx.lessThan,
                                         );
 
@@ -955,13 +955,13 @@ pub const Store = struct {
                                                     const InnerFieldSorter = struct {
                                                         store: *Self,
                                                         env: *base.ModuleEnv,
-                                                        usize_alignment: std.mem.Alignment,
+                                                        target_usize: target.TargetUsize,
                                                         pub fn lessThan(ctx: @This(), lhs: RecordField, rhs: RecordField) bool {
                                                             const lhs_layout = ctx.store.getLayout(lhs.layout);
                                                             const rhs_layout = ctx.store.getLayout(rhs.layout);
 
-                                                            const lhs_alignment = lhs_layout.alignment(ctx.usize_alignment);
-                                                            const rhs_alignment = rhs_layout.alignment(ctx.usize_alignment);
+                                                            const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                                                            const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
 
                                                             // First sort by alignment (descending - higher alignment first)
                                                             if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
@@ -974,7 +974,7 @@ pub const Store = struct {
                                                             return std.mem.order(u8, lhs_str, rhs_str) == .lt;
                                                         }
                                                     };
-                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env, .usize_alignment = target_usize }, InnerFieldSorter.lessThan);
+                                                    std.mem.sort(RecordField, inner_temp_fields.items, InnerFieldSorter{ .store = self, .env = self.env, .target_usize = self.targetUsize() }, InnerFieldSorter.lessThan);
 
                                                     // Now add them to the record_fields store
                                                     for (inner_temp_fields.items) |inner_field| {
@@ -1050,13 +1050,13 @@ pub const Store = struct {
                                 const AlignmentSortCtx = struct {
                                     store: *Self,
                                     env: *base.ModuleEnv,
-                                    usize_alignment: std.mem.Alignment,
+                                    target_usize: target.TargetUsize,
                                     fn lessThan(ctx: @This(), a: RecordField, b: RecordField) bool {
                                         const a_layout = ctx.store.getLayout(a.layout);
                                         const b_layout = ctx.store.getLayout(b.layout);
 
-                                        const a_alignment = a_layout.alignment(ctx.usize_alignment);
-                                        const b_alignment = b_layout.alignment(ctx.usize_alignment);
+                                        const a_alignment = a_layout.alignment(ctx.target_usize);
+                                        const b_alignment = b_layout.alignment(ctx.target_usize);
 
                                         // First sort by alignment (descending - higher alignment first)
                                         if (a_alignment.toByteUnits() != b_alignment.toByteUnits()) {
@@ -1073,7 +1073,7 @@ pub const Store = struct {
                                 std.mem.sort(
                                     RecordField,
                                     temp_fields.items,
-                                    AlignmentSortCtx{ .store = self, .env = self.env, .usize_alignment = target_usize },
+                                    AlignmentSortCtx{ .store = self, .env = self.env, .target_usize = self.targetUsize() },
                                     AlignmentSortCtx.lessThan,
                                 );
 
@@ -1685,9 +1685,10 @@ test "alignment - record alignment is max of field alignments" {
     // Record alignment should be the max of its field alignments
     // U8 has alignment 1, U32 has alignment 4, U64 has alignment 8
     // So the record should have alignment 8
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-    const alignment = record_layout.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
+    for (target.TargetUsize.all()) |target_usize| {
+        const alignment = record_layout.alignment(target_usize);
+        try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
+    }
 
     // Test with different field order - alignment should still be the same
     const fields2 = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
@@ -1702,8 +1703,10 @@ test "alignment - record alignment is max of field alignments" {
     const record_layout_idx2 = try layout_store.addTypeVar(&type_store, record_var2);
     const record_layout2 = layout_store.getLayout(record_layout_idx2);
 
-    const alignment2 = record_layout2.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment2.toByteUnits());
+    for (target.TargetUsize.all()) |target_usize| {
+        const alignment2 = record_layout2.alignment(target_usize);
+        try testing.expectEqual(@as(u32, 8), alignment2.toByteUnits());
+    }
 }
 
 test "alignment - deeply nested record alignment (non-recursive)" {
@@ -1764,10 +1767,10 @@ test "alignment - deeply nested record alignment (non-recursive)" {
 
     // Test alignment calculation
     // The deeply nested record should still have alignment 8 (from the U64 field)
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-
-    const alignment = outermost_layout.alignment(usize_alignment);
-    try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
+    for (target.TargetUsize.all()) |target_usize| {
+        const alignment = outermost_layout.alignment(target_usize);
+        try testing.expectEqual(@as(u32, 8), alignment.toByteUnits());
+    }
 }
 
 test "addTypeVar - bare empty record returns error" {
@@ -1959,11 +1962,10 @@ test "record size calculation" {
     // a: u8 (1 byte) at offset 12
     // c: u8 (1 byte) at offset 13
     // Total: 14 bytes, but aligned to 8 bytes = 16 bytes
-    const target_usize = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
-    try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-
-    try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment).toByteUnits());
+    for (target.TargetUsize.all()) |target_usize| {
+        try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
+        try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
+    }
 }
 
 test "addTypeVar - nested record" {
@@ -3250,11 +3252,11 @@ test "alignment - record with log2 alignment representation" {
 
         try testing.expect(record_layout.* == .record);
         try testing.expectEqual(1, record_layout.record.alignment.toByteUnits());
-        const usize_alignment = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
 
-        try testing.expectEqual(@as(u32, 1), record_layout.alignment(usize_alignment).toByteUnits());
-        const target_usize = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
-        try testing.expectEqual(@as(u32, 1), record_layout.size(target_usize)); // size = 1 byte
+        for (target.TargetUsize.all()) |target_usize| {
+            try testing.expectEqual(@as(u32, 1), record_layout.alignment(target_usize).toByteUnits());
+            try testing.expectEqual(@as(u32, 1), record_layout.size(target_usize)); // size = 1 byte
+        }
     }
 
     // Test 2: Record with U32 field (alignment 4, log2 = 2)
@@ -3272,10 +3274,11 @@ test "alignment - record with log2 alignment representation" {
 
         try testing.expect(record_layout.* == .record);
         try testing.expectEqual(@as(u32, 4), record_layout.record.alignment.toByteUnits()); // alignment = 4
-        const usize_alignment2 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 4), record_layout.alignment(usize_alignment2).toByteUnits());
-        const target_usize2 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
-        try testing.expectEqual(@as(u32, 4), record_layout.size(target_usize2)); // size = 4 bytes
+
+        for (target.TargetUsize.all()) |target_usize| {
+            try testing.expectEqual(@as(u32, 4), record_layout.alignment(target_usize).toByteUnits());
+            try testing.expectEqual(@as(u32, 4), record_layout.size(target_usize)); // size = 4 bytes
+        }
     }
 
     // Test 3: Record with U64 field (alignment 8, log2 = 3)
@@ -3293,10 +3296,11 @@ test "alignment - record with log2 alignment representation" {
 
         try testing.expect(record_layout.* == .record);
         try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // alignment = 8
-        const usize_alignment3 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment3).toByteUnits());
-        const target_usize3 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
-        try testing.expectEqual(@as(u32, 8), record_layout.size(target_usize3)); // size = 8 bytes
+
+        for (target.TargetUsize.all()) |target_usize| {
+            try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
+            try testing.expectEqual(@as(u32, 8), record_layout.size(target_usize)); // size = 8 bytes
+        }
     }
 
     // Test 4: Record with mixed fields - should use max alignment
@@ -3317,11 +3321,12 @@ test "alignment - record with log2 alignment representation" {
 
         try testing.expect(record_layout.* == .record);
         try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // max alignment = 8
-        const usize_alignment4 = std.mem.Alignment.fromByteUnits(@sizeOf(usize));
-        try testing.expectEqual(@as(u32, 8), record_layout.alignment(usize_alignment4).toByteUnits());
-        // After sorting: u64 (8 bytes) at offset 0, u8 (1 byte) at offset 8, total size 16 (aligned to 8)
-        const target_usize4 = if (@sizeOf(usize) == 8) target.TargetUsize.u64 else target.TargetUsize.u32;
-        try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize4));
+
+        for (target.TargetUsize.all()) |target_usize| {
+            try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
+            // After sorting: u64 (8 bytes) at offset 0, u8 (1 byte) at offset 8, total size 16 (aligned to 8)
+            try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
+        }
     }
 }
 

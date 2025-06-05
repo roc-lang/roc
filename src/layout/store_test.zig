@@ -9,6 +9,7 @@ const layout = @import("layout.zig");
 const Store = @import("store.zig").Store;
 const Ident = @import("../base/Ident.zig");
 const collections = @import("../collections.zig");
+const target = @import("../base/target.zig");
 
 test "addTypeVar - maximum nesting depth" {
     const testing = std.testing;
@@ -52,7 +53,6 @@ test "addTypeVar - maximum nesting depth" {
 test "addTypeVar - record with maximum fields" {
     const testing = std.testing;
     const gpa = testing.allocator;
-    const usize_alignment = std.mem.Alignment.fromByteUnits(@alignOf(usize));
 
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
@@ -101,13 +101,14 @@ test "addTypeVar - record with maximum fields" {
             const record_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
             try testing.expectEqual(num_fields, record_fields.len);
 
-            // Verify fields are sorted by alignment then name
+            // Verify fields are sorted by alignment then name for the target used to create the layout
+            const target_usize = module_env.target.target_usize;
             var prev_alignment: ?std.mem.Alignment = null;
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
                 const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.idx));
-                const field_alignment = field_layout.alignment(usize_alignment);
+                const field_alignment = field_layout.alignment(target_usize);
                 const field_name_str = type_store.env.idents.getText(field_name);
 
                 if (prev_alignment) |prev| {
