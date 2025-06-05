@@ -166,32 +166,32 @@ pub const Store = struct {
     // sub list getters //
 
     /// Given a range, get a slice of alias args from the backing array
-    pub fn getAliasArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getAliasArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.alias_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of tuple from the backing list
-    pub fn getTupleElemsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getTupleElemsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.tuple_elems.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of type from to the backing
-    pub fn getCustomTypeArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getCustomTypeArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.custom_type_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of func from the backing list
-    pub fn getFuncArgsSlice(self: *Self, range: VarSafeList.Range) VarSafeList.Slice {
+    pub fn getFuncArgsSlice(self: *const Self, range: VarSafeList.Range) VarSafeList.Slice {
         return self.func_args.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of record fields from the backing array
-    pub fn getRecordFieldsSlice(self: *Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
+    pub fn getRecordFieldsSlice(self: *const Self, range: RecordFieldSafeMultiList.Range) RecordFieldSafeMultiList.Slice {
         return self.record_fields.rangeToSlice(range);
     }
 
     /// Given a range, get a slice of tags from the backing array
-    pub fn getTagsSlice(self: *Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
+    pub fn getTagsSlice(self: *const Self, range: TagSafeMultiList.Range) TagSafeMultiList.Slice {
         return self.tags.rangeToSlice(range);
     }
 
