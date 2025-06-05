@@ -257,7 +257,7 @@ pub const Store = struct {
         var iterations: u32 = 0;
         const max_iterations = 10000; // Safety limit to prevent infinite loops
 
-        while (true) {
+        outer: while (true) {
             iterations += 1;
             if (iterations > max_iterations) {
                 std.debug.panic("Layout computation exceeded iteration limit - possible infinite loop\n", .{});
@@ -459,7 +459,7 @@ pub const Store = struct {
                             // Process the next field in the outer loop.
                             const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
                             current = var_store.resolveVar(next_field.var_);
-                            break;
+                            continue :outer;
                         }
                     },
                 }
