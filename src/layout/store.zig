@@ -79,6 +79,57 @@ pub const Store = struct {
         return self.env.target.target_usize;
     }
 
+    /// Add the record's fields to self.pending_record_fields,
+    /// then add the record's extension fields too (recursively).
+    fn gatherRecordFields(
+        self: *Self,
+        var_store: *const types_store.Store,
+        record_type: types.Record,
+    ) (LayoutError || std.mem.Allocator.Error)!usize {
+        var num_fields = record_type.fields.len();
+
+        const field_slice = var_store.getRecordFieldsSlice(record_type.fields);
+        for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
+            // TODO is it possible that here we're encountering record fields with names
+            // already in the list? Would type-checking have already deduped them?
+            // We would certainly rather not spend time doing hashmap things if we can avoid it here.
+            try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+        }
+
+        var current_ext = record_type.ext;
+        while (true) {
+            const resolved_ext = var_store.resolveVar(current_ext);
+            switch (resolved_ext.desc.content) {
+                .structure => |ext_flat_type| switch (ext_flat_type) {
+                    .empty_record => break,
+                    .record => |ext_record| {
+                        if (ext_record.fields.len() > 0) {
+                            num_fields += ext_record.fields.len();
+                            const ext_field_slice = var_store.getRecordFieldsSlice(ext_record.fields);
+                            for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
+                                // TODO is it possible that here we're adding fields with names
+                                // already in the list? Would type-checking have already collapsed these?
+                                // We would certainly rather not spend time doing hashmap things
+                                // if we can avoid it here.
+                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
+                            }
+                            current_ext = ext_record.ext;
+                        } else {
+                            break;
+                        }
+                    },
+                    else => return LayoutError.InvalidRecordExtension,
+                },
+                .alias => |alias| {
+                    current_ext = alias.backing_var;
+                },
+                else => return LayoutError.InvalidRecordExtension,
+            }
+        }
+
+        return num_fields;
+    }
+
     /// Note: the caller must verify ahead of time that the given variable does not
     /// resolve to a flex var or rigid var, unless that flex var or rigid var is
     /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
@@ -133,13 +184,13 @@ pub const Store = struct {
                     },
                     .list => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .list);
-                        // Push a pending Box container and "recurse" on the elem type
+                        // Push a pending List container and "recurse" on the elem type
                         current = var_store.resolveVar(elem_var);
                         continue;
                     },
                     .custom_type => |custom_type| {
                         // TODO special-case the builtin Num type here.
-                        // If we have one of those, then convert it to a num layout,
+                        // If we have one of those, then convert it to a Num layout,
                         // or to a runtime error if it's an invalid elem type.
 
                         // From a layout perspective, custom types are identical to type aliases:
@@ -175,47 +226,7 @@ pub const Store = struct {
                         @panic("TODO: func layout");
                     },
                     .record => |record_type| {
-                        var num_fields = record_type.fields.len();
-
-                        // Collect the record's fields, then add its extension fields.
-                        const field_slice = @constCast(var_store).getRecordFieldsSlice(record_type.fields);
-                        for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
-                            // TODO is it possible that here we're encountering record fields with names
-                            // already in the list? Would type-checking have already deduped them?
-                            // We would certainly rather not spend time doing hashmap things if we can avoid it here.
-                            try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
-                        }
-
-                        var current_ext = record_type.ext;
-                        while (true) {
-                            const resolved_ext = var_store.resolveVar(current_ext);
-                            switch (resolved_ext.desc.content) {
-                                .structure => |ext_flat_type| switch (ext_flat_type) {
-                                    .empty_record => break,
-                                    .record => |ext_record| {
-                                        if (ext_record.fields.len() > 0) {
-                                            num_fields += ext_record.fields.len();
-                                            const ext_field_slice = @constCast(var_store).getRecordFieldsSlice(ext_record.fields);
-                                            for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
-                                                // TODO is it possible that here we're adding fields with names
-                                                // already in the list? Would type-checking have already collapsed these?
-                                                // We would certainly rather not spend time doing hashmap things
-                                                // if we can avoid it here.
-                                                try self.work.pending_record_fields.append(self.env.gpa, .{ .name = name, .var_ = var_ });
-                                            }
-                                            current_ext = ext_record.ext;
-                                        } else {
-                                            break;
-                                        }
-                                    },
-                                    else => return LayoutError.InvalidRecordExtension,
-                                },
-                                .alias => |alias| {
-                                    current_ext = alias.backing_var;
-                                },
-                                else => return LayoutError.InvalidRecordExtension,
-                            }
-                        }
+                        const num_fields = try self.gatherRecordFields(var_store, record_type);
 
                         switch (num_fields) {
                             0 => {
