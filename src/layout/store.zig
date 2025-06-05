@@ -174,7 +174,7 @@ pub const Store = struct {
             }
 
             var layout_idx = switch (current.desc.content) {
-                .structure => |flat_type| switch (flat_type) {
+                .structure => |flat_type| flat_type: switch (flat_type) {
                     .str => try self.insertLayout(.str),
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .box);
@@ -228,54 +228,46 @@ pub const Store = struct {
                     .record => |record_type| {
                         const num_fields = try self.gatherRecordFields(var_store, record_type);
 
-                        switch (num_fields) {
-                            0 => {
-                                // This is an empty record!
-                                // Return error for zero-sized type
-                                return LayoutError.ZeroSizedType;
-                            },
-                            else => {
-                                // Handle both single-field and multi-field records
-                                if (num_fields > 1) {
-                                    // Sort these fields *descending* by field name. (Descending because we will pop
-                                    // these off one at a time to build up the layout, resulting in the layout being
-                                    // sorted *ascending* by field name. Later, it will be further sorted by alignment.)
-                                    const SortCtx = struct {
-                                        fields: *@TypeOf(self.work.pending_record_fields),
-                                        env: *base.ModuleEnv,
-                                        pub fn lessThan(ctx: @This(), a_idx: usize, b_idx: usize) bool {
-                                            const a = ctx.fields.get(a_idx);
-                                            const b = ctx.fields.get(b_idx);
-                                            const a_str = ctx.env.idents.getText(a.name);
-                                            const b_str = ctx.env.idents.getText(b.name);
-                                            // Sort descending (b before a)
-                                            return std.mem.order(u8, b_str, a_str) == .lt;
-                                        }
-                                    };
-
-                                    self.work.pending_record_fields.sortSpan(
-                                        self.work.pending_record_fields.len - num_fields,
-                                        self.work.pending_record_fields.len,
-                                        SortCtx{ .fields = &self.work.pending_record_fields, .env = self.env },
-                                    );
-                                }
-
-                                try self.work.pending_containers.append(self.env.gpa, .{
-                                    .record = .{
-                                        .num_fields = @intCast(num_fields),
-                                        .pending_fields = @intCast(num_fields),
-                                        .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
-                                    },
-                                });
-
-                                // Start working on the last pending field (we want to pop them).
-                                const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-
-                                current = var_store.resolveVar(field.var_);
-                                continue;
-                            },
+                        if (num_fields == 0) {
+                            // This is an empty record!
+                            // Return error for zero-sized type
+                            continue :flat_type .empty_record;
                         }
-                        // For the switch expression to type check, we need to continue processing
+
+                        // Sort these fields *descending* by field name. (Descending because we will pop
+                        // these off one at a time to build up the layout, resulting in the layout being
+                        // sorted *ascending* by field name. Later, it will be further sorted by alignment.)
+                        const SortCtx = struct {
+                            fields: *@TypeOf(self.work.pending_record_fields),
+                            env: *base.ModuleEnv,
+                            pub fn lessThan(ctx: @This(), a_idx: usize, b_idx: usize) bool {
+                                const a = ctx.fields.get(a_idx);
+                                const b = ctx.fields.get(b_idx);
+                                const a_str = ctx.env.idents.getText(a.name);
+                                const b_str = ctx.env.idents.getText(b.name);
+                                // Sort descending (b before a)
+                                return std.mem.order(u8, b_str, a_str) == .lt;
+                            }
+                        };
+
+                        self.work.pending_record_fields.sortSpan(
+                            self.work.pending_record_fields.len - num_fields,
+                            self.work.pending_record_fields.len,
+                            SortCtx{ .fields = &self.work.pending_record_fields, .env = self.env },
+                        );
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .record = .{
+                                .num_fields = @intCast(num_fields),
+                                .pending_fields = @intCast(num_fields),
+                                .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+
+                        current = var_store.resolveVar(field.var_);
                         continue;
                     },
                     .tag_union => |tag_union| {
