@@ -1963,33 +1963,40 @@ test "addTypeVar - comprehensive nested record combinations" {
                 // Should have returned an error, not reached here
                 try testing.expect(false);
             } else {
-                try testing.expect(result_layout.tag == .record);
+                // The record might be optimized to record_wrapping_scalar if it has only one field
+                if (result_layout.tag == .record_wrapping_scalar) {
+                    // Single field was optimized - this counts as 1 non-zero field
+                    try testing.expectEqual(@as(usize, 1), expected_non_zero_fields);
+                } else {
+                    try testing.expect(result_layout.tag == .record);
 
-                // Count actual non-zero fields in the result
-                const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
-                const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
-                const actual_field_count = field_slice.len;
+                    // Count actual non-zero fields in the result
+                    const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
+                    const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
+                    const actual_field_count = field_slice.len;
 
-                // Verify each field has a valid layout
-                for (0..field_slice.len) |i| {
-                    const field = field_slice.get(i);
-                    const field_layout = test_layout_store.getLayout(field.layout);
-                    switch (field_layout.tag) {
-                        .scalar => {}, // Valid non-zero field
-                        .record => {
-                            // Verify nested record has fields
-                            const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
-                            const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
-                            try testing.expect(nested_slice.len > 0);
-                        },
-                        else => {
-                            // Unexpected layout type
-                            try testing.expect(false);
-                        },
+                    // Verify each field has a valid layout
+                    for (0..field_slice.len) |i| {
+                        const field = field_slice.get(i);
+                        const field_layout = test_layout_store.getLayout(field.layout);
+                        switch (field_layout.tag) {
+                            .scalar => {}, // Valid non-zero field
+                            .record => {
+                                // Verify nested record has fields
+                                const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
+                                const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
+                                try testing.expect(nested_slice.len > 0);
+                            },
+                            .record_wrapping_scalar => {}, // Valid optimized single-field record
+                            else => {
+                                // Unexpected layout type
+                                try testing.expect(false);
+                            },
+                        }
                     }
-                }
 
-                try testing.expect(actual_field_count == expected_non_zero_fields);
+                    try testing.expect(actual_field_count == expected_non_zero_fields);
+                }
             }
         }
     }
@@ -2041,19 +2048,11 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.tag == .record);
+    // The record was optimized to record_wrapping_scalar
+    try testing.expect(record_layout.tag == .record_wrapping_scalar);
 
-    // Verify we only have 1 field (data field should be dropped because inner record is empty)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
-
-    // Field name (str)
-    const name_field = field_slice.get(0);
-    try testing.expect(name_field.name == name_ident);
-    const name_layout = layout_store.getLayout(name_field.layout);
-    try testing.expect(name_layout.tag == .scalar);
-
-    // Only 1 field (data field was dropped because the inner record was empty)
-    try testing.expectEqual(@as(usize, 1), field_slice.len);
+    // Verify it's a string scalar
+    try testing.expect(record_layout.data.record_wrapping_scalar.scalar.tag == .str);
 }
 
 test "addTypeVar - list of record with all zero-sized fields" {
@@ -2121,9 +2120,10 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.tag == .record);
-        try testing.expectEqual(1, record_layout.data.record.alignment.toByteUnits());
+        // The record was optimized to record_wrapping_scalar
+        try testing.expect(record_layout.tag == .record_wrapping_scalar);
 
+        // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 1), record_layout.alignment(target_usize).toByteUnits());
             try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(record_layout.*)); // size = 1 byte
@@ -2143,9 +2143,10 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.tag == .record);
-        try testing.expectEqual(@as(u32, 4), record_layout.data.record.alignment.toByteUnits()); // alignment = 4
+        // The record was optimized to record_wrapping_scalar
+        try testing.expect(record_layout.tag == .record_wrapping_scalar);
 
+        // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 4), record_layout.alignment(target_usize).toByteUnits());
             try testing.expectEqual(@as(u32, 4), layout_store.layoutSize(record_layout.*)); // size = 4 bytes
@@ -2165,9 +2166,10 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.tag == .record);
-        try testing.expectEqual(@as(u32, 8), record_layout.data.record.alignment.toByteUnits()); // alignment = 8
+        // The record was optimized to record_wrapping_scalar
+        try testing.expect(record_layout.tag == .record_wrapping_scalar);
 
+        // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
             try testing.expectEqual(@as(u32, 8), layout_store.layoutSize(record_layout.*)); // size = 8 bytes
@@ -2618,6 +2620,11 @@ test "addTypeVar - record field type changes through alias" {
             try testing.expect(field_layout.tag == .scalar);
             try testing.expect(field_layout.data.scalar.data.int == .u64);
         },
+        .record_wrapping_scalar => {
+            // The record was optimized to record_wrapping_scalar
+            try testing.expect(result_layout.data.record_wrapping_scalar.scalar.tag == .int);
+            try testing.expect(result_layout.data.record_wrapping_scalar.scalar.data.int == .u64);
+        },
         else => try testing.expect(false),
     }
 }
@@ -2943,7 +2950,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         try testing.expect(result_layout.tag == .box);
         // The data.box should contain an index to the record layout
         const record_layout = layout_store.getLayout(result_layout.data.box);
-        try testing.expect(record_layout.tag == .record);
+        // The record was optimized to record_wrapping_scalar
+        try testing.expect(record_layout.tag == .record_wrapping_scalar);
     }
 
     // Test List(Record) - should use .list with index
@@ -2956,7 +2964,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         try testing.expect(result_layout.tag == .list);
         // The data.list should contain an index to the record layout
         const record_layout = layout_store.getLayout(result_layout.data.list);
-        try testing.expect(record_layout.tag == .record);
+        // The record was optimized to record_wrapping_scalar
+        try testing.expect(record_layout.tag == .record_wrapping_scalar);
     }
 
     // Test Box(List(I32)) - should use .box with index since List(I32) is not a scalar
@@ -3231,7 +3240,7 @@ test "addTypeVar - record_wrapping_scalar optimization" {
         // Should use the compact representation
         try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
         try testing.expectEqual(layout.ScalarTag.str, record_layout.data.record_wrapping_scalar.scalar.tag);
-        try testing.expectEqual(@as(u20, 100), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+        try testing.expectEqual(@as(Ident.IdxFieldType, 100), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
     }
 
     // Test 2: Record with single int field
@@ -3251,7 +3260,7 @@ test "addTypeVar - record_wrapping_scalar optimization" {
         try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
         try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
         try testing.expectEqual(types.Num.Int.Precision.i32, record_layout.data.record_wrapping_scalar.scalar.data.int);
-        try testing.expectEqual(@as(u20, 42), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+        try testing.expectEqual(@as(Ident.IdxFieldType, 42), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
     }
 
     // Test 3: Record with single bool field
@@ -3273,12 +3282,12 @@ test "addTypeVar - record_wrapping_scalar optimization" {
         try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
         try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
         try testing.expectEqual(types.Num.Int.Precision.u8, record_layout.data.record_wrapping_scalar.scalar.data.int);
-        try testing.expectEqual(@as(u20, 999), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+        try testing.expectEqual(@as(Ident.IdxFieldType, 999), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
     }
 
-    // Test 4: Record with field name index at limit (2^20 - 1)
+    // Test 4: Record with field name index at limit
     {
-        const field_name = Ident.Idx{ .idx = std.math.maxInt(u20), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const field_name = Ident.Idx{ .idx = std.math.maxInt(Ident.IdxFieldType), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
         const str_var = type_store.freshFromContent(.{ .structure = .str });
 
         const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
@@ -3291,28 +3300,10 @@ test "addTypeVar - record_wrapping_scalar optimization" {
         const record_layout = layout_store.getLayout(record_layout_idx);
 
         try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-        try testing.expectEqual(@as(u20, std.math.maxInt(u20)), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+        try testing.expectEqual(@as(Ident.IdxFieldType, std.math.maxInt(Ident.IdxFieldType)), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
     }
 
-    // Test 5: Record with field name index exceeding limit should use regular record
-    {
-        const field_name = Ident.Idx{ .idx = std.math.maxInt(u20) + 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const str_var = type_store.freshFromContent(.{ .structure = .str });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = str_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        // Should fall back to regular record layout
-        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
-    }
-
-    // Test 6: Record with single non-scalar field should use regular record
+    // Test 5: Record with single non-scalar field should use regular record
     {
         const field_name = Ident.Idx{ .idx = 50, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
         const inner_str_var = type_store.freshFromContent(.{ .structure = .str });

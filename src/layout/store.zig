@@ -295,14 +295,10 @@ pub const Store = struct {
             const single_field = temp_fields.items[0];
             const field_layout = self.getLayout(single_field.layout);
 
-            // Check if the field is a scalar
-            if (field_layout.asScalar()) |scalar| {
-                // Check if the field name index fits in 20 bits
-                if (single_field.name.idx <= std.math.maxInt(u20)) {
-                    const compact_idx = layout_.CompactIdentIdx{ .idx = @intCast(single_field.name.idx) };
-                    return Layout.recordWrappingScalar(scalar, compact_idx);
-                }
-            } else |_| {}
+            // Check if the field is a scalar (but not a record_wrapping_scalar)
+            if (field_layout.tag == .scalar) {
+                return Layout.recordWrappingScalar(field_layout.data.scalar, single_field.name);
+            }
         }
 
         return Layout.record(max_alignment, record_idx);
@@ -681,18 +677,20 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        // Check if the element layout is a scalar
-                        if (self.getLayout(layout_idx).asScalar()) |scalar| {
-                            layout = Layout.boxOfScalar(scalar);
-                        } else |_| {
+                        // Check if the element layout is a scalar (but not a record_wrapping_scalar)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (elem_layout.tag == .scalar) {
+                            layout = Layout.boxOfScalar(elem_layout.data.scalar);
+                        } else {
                             layout = Layout.box(layout_idx);
                         }
                     },
                     .list => {
-                        // Check if the element layout is a scalar
-                        if (self.getLayout(layout_idx).asScalar()) |scalar| {
-                            layout = Layout.listOfScalar(scalar);
-                        } else |_| {
+                        // Check if the element layout is a scalar (but not a record_wrapping_scalar)
+                        const elem_layout = self.getLayout(layout_idx);
+                        if (elem_layout.tag == .scalar) {
+                            layout = Layout.listOfScalar(elem_layout.data.scalar);
+                        } else {
                             layout = Layout.list(layout_idx);
                         }
                     },

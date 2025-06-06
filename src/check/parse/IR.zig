@@ -1412,14 +1412,14 @@ pub const NodeStore = struct {
                 node.tag = .ty_ty;
                 node.region = t.region;
                 node.main_token = t.region.start;
-                node.data.rhs = @bitCast(t.ident);
+                node.data.rhs = @as(u32, @intCast(@as(Ident.IdxRepr, @bitCast(t.ident))));
             },
             .mod_ty => |t| {
                 node.tag = .ty_mod_ty;
                 node.region = t.region;
                 node.main_token = t.region.start;
-                node.data.lhs = @bitCast(t.mod_ident);
-                node.data.rhs = @bitCast(t.ty_ident);
+                node.data.lhs = @as(u32, @intCast(@as(Ident.IdxRepr, @bitCast(t.mod_ident))));
+                node.data.rhs = @as(u32, @intCast(@as(Ident.IdxRepr, @bitCast(t.ty_ident))));
             },
             .tag_union => |tu| {
                 node.tag = .ty_union;
@@ -2097,14 +2097,14 @@ pub const NodeStore = struct {
             },
             .ty_ty => {
                 return .{ .ty = .{
-                    .ident = @bitCast(node.data.rhs),
+                    .ident = @as(Ident.Idx, @bitCast(@as(Ident.IdxRepr, @intCast(node.data.rhs)))),
                     .region = node.region,
                 } };
             },
             .ty_mod_ty => {
                 return .{ .mod_ty = .{
-                    .mod_ident = @bitCast(node.data.lhs),
-                    .ty_ident = @bitCast(node.data.rhs),
+                    .mod_ident = @as(Ident.Idx, @bitCast(@as(Ident.IdxRepr, @intCast(node.data.lhs)))),
+                    .ty_ident = @as(Ident.Idx, @bitCast(@as(Ident.IdxRepr, @intCast(node.data.rhs)))),
                     .region = node.region,
                 } };
             },
