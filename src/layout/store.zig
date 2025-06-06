@@ -14,6 +14,8 @@ const Var = types.Var;
 const Layout = layout_.Layout;
 const Idx = layout_.Idx;
 const RecordField = layout_.RecordField;
+const Scalar = layout_.Scalar;
+const ScalarTag = layout_.ScalarTag;
 const RecordData = layout_.RecordData;
 const RecordIdx = layout_.RecordIdx;
 const TupleField = layout_.TupleField;
@@ -51,15 +53,76 @@ pub const Store = struct {
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
+    // Number of primitive types that are pre-populated in the layout store
+    // Must be kept in sync with the sentinel values in layout.zig Idx enum
+    const PRIMITIVE_COUNT = 16;
+
+    /// Get the sentinel Idx for a given scalar type
+    fn getScalarSentinelIdx(scalar: Scalar) Idx {
+        switch (scalar.tag) {
+            .bool => return .bool,
+            .str => return .str,
+            .host_opaque => return .host_opaque,
+            .int => switch (scalar.data.int) {
+                .u8 => return .u8,
+                .i8 => return .i8,
+                .u16 => return .u16,
+                .i16 => return .i16,
+                .u32 => return .u32,
+                .i32 => return .i32,
+                .u64 => return .u64,
+                .i64 => return .i64,
+                .u128 => return .u128,
+                .i128 => return .i128,
+            },
+            .frac => switch (scalar.data.frac) {
+                .f32 => return .f32,
+                .f64 => return .f64,
+                .dec => return .dec,
+            },
+        }
+    }
+
     pub fn init(env: *base.ModuleEnv, type_store: *const types_store.Store) Self {
         var layouts_by_var = collections.ArrayListMap(Var, Idx).init(env.gpa);
         const capacity = type_store.getNumVars();
         layouts_by_var.ensureTotalCapacity(capacity) catch |err| exitOnOom(err);
 
+        var layouts = collections.SafeList(Layout){};
+
+        // Pre-populate primitive type layouts in order matching the Idx enum
+        // 0: bool
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .bool = {} }, .tag = .bool } }, .tag = .scalar });
+
+        // 1: str
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar });
+
+        // 2: host_opaque
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .host_opaque = {} }, .tag = .host_opaque } }, .tag = .scalar });
+
+        // 3-12: Integer types
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u8 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i8 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u16 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i16 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u32 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i32 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u64 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i64 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u128 }, .tag = .int } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i128 }, .tag = .int } }, .tag = .scalar });
+
+        // 13-15: Floating point types
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .f32 }, .tag = .frac } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .f64 }, .tag = .frac } }, .tag = .scalar });
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .dec }, .tag = .frac } }, .tag = .scalar });
+
+        std.debug.assert(layouts.len() == PRIMITIVE_COUNT);
+
         return .{
             .env = env,
             .types_store = type_store,
-            .layouts = collections.SafeList(Layout){},
+            .layouts = layouts,
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
             .record_data = collections.SafeList(RecordData).initCapacity(env.gpa, 256),
@@ -82,14 +145,18 @@ pub const Store = struct {
     }
 
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+        // For scalar types, return the appropriate sentinel value instead of inserting
+        if (layout.tag == .scalar) {
+            return getScalarSentinelIdx(layout.data.scalar);
+        }
+
+        // For non-scalar types, insert as normal
         const safe_idx = self.layouts.append(self.env.gpa, layout);
-        return Idx{
-            .int_idx = @intCast(@intFromEnum(safe_idx)),
-        };
+        return @enumFromInt(@intFromEnum(safe_idx));
     }
 
     pub fn getLayout(self: *Self, idx: Idx) *const Layout {
-        return self.layouts.get(@enumFromInt(idx.int_idx));
+        return self.layouts.get(@enumFromInt(@intFromEnum(idx)));
     }
 
     pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {
@@ -114,16 +181,10 @@ pub const Store = struct {
                 .bool => 1, // bool is 1 byte
                 .str, .host_opaque => target_usize.size(), // str and host_opaque are pointer-sized
             },
-            .box, .box_of_zst, .box_of_scalar => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .list, .list_of_zst, .list_of_scalar => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
+            .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
+            .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
-            .record_wrapping_scalar => switch (layout.data.record_wrapping_scalar.scalar.tag) {
-                .int => layout.data.record_wrapping_scalar.scalar.data.int.size(),
-                .frac => layout.data.record_wrapping_scalar.scalar.data.frac.size(),
-                .bool => 1, // bool is 1 byte
-                .str, .host_opaque => target_usize.size(), // str and host_opaque are pointer-sized
-            },
         };
     }
 
@@ -289,17 +350,6 @@ pub const Store = struct {
 
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
-
-        // Check if we can use the more compact record_wrapping_scalar representation
-        if (num_resolved_fields == 1) {
-            const single_field = temp_fields.items[0];
-            const field_layout = self.getLayout(single_field.layout);
-
-            // Check if the field is a scalar (but not a record_wrapping_scalar)
-            if (field_layout.tag == .scalar) {
-                return Layout.recordWrappingScalar(field_layout.data.scalar, single_field.name);
-            }
-        }
 
         return Layout.record(max_alignment, record_idx);
     }
@@ -677,22 +727,10 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        // Check if the element layout is a scalar (but not a record_wrapping_scalar)
-                        const elem_layout = self.getLayout(layout_idx);
-                        if (elem_layout.tag == .scalar) {
-                            layout = Layout.boxOfScalar(elem_layout.data.scalar);
-                        } else {
-                            layout = Layout.box(layout_idx);
-                        }
+                        layout = Layout.box(layout_idx);
                     },
                     .list => {
-                        // Check if the element layout is a scalar (but not a record_wrapping_scalar)
-                        const elem_layout = self.getLayout(layout_idx);
-                        if (elem_layout.tag == .scalar) {
-                            layout = Layout.listOfScalar(elem_layout.data.scalar);
-                        } else {
-                            layout = Layout.list(layout_idx);
-                        }
+                        layout = Layout.list(layout_idx);
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);

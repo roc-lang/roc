@@ -91,13 +91,12 @@ test "addTypeVar - list of strings" {
     // Convert to layout
     const list_layout_idx = try layout_store.addTypeVar(list_str_var);
 
-    // Verify the layout - List(Str) should use scalar optimization
+    // Verify the layout - List(Str) should be a list with str sentinel
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.tag == .list_of_scalar);
+    try testing.expect(list_layout.tag == .list);
 
-    // Verify the scalar data
-    try testing.expectEqual(layout.ScalarTag.str, list_layout.data.list_of_scalar.tag);
-    try testing.expectEqual({}, list_layout.data.list_of_scalar.data.str);
+    // Verify the element is the str sentinel
+    try testing.expectEqual(layout.Idx.str, list_layout.data.list);
 }
 
 test "addTypeVar - list of box of strings" {
@@ -131,13 +130,12 @@ test "addTypeVar - list of box of strings" {
     const list_layout = layout_store.getLayout(list_layout_idx);
     try testing.expect(list_layout.tag == .list);
 
-    // Verify the outer list element (Box(Str)) - Box(Str) should use scalar optimization
+    // Verify the outer list element (Box(Str))
     const box_layout = layout_store.getLayout(list_layout.data.list);
-    try testing.expect(box_layout.tag == .box_of_scalar);
+    try testing.expect(box_layout.tag == .box);
 
-    // Verify the scalar data
-    try testing.expectEqual(layout.ScalarTag.str, box_layout.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_layout.data.box_of_scalar.data.str);
+    // Verify the element is the str sentinel
+    try testing.expectEqual(layout.Idx.str, box_layout.data.box);
 }
 
 test "addTypeVar - box of flex_var compiles to box of host_opaque" {
@@ -166,11 +164,10 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.tag == .box_of_scalar);
+    try testing.expect(box_layout.tag == .box);
 
-    // Verify the element is host_opaque
-    try testing.expectEqual(layout.ScalarTag.host_opaque, box_layout.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_layout.data.box_of_scalar.data.host_opaque);
+    // Verify the element is host_opaque sentinel
+    try testing.expectEqual(layout.Idx.host_opaque, box_layout.data.box);
 }
 
 test "addTypeVar - num u32" {
@@ -249,15 +246,15 @@ test "addTypeVar - list of num i128" {
     const list_i128_var = type_store.freshFromContent(.{ .structure = .{ .list = i128_var } });
 
     // Convert to layout
+    // Convert to layout
     const list_layout_idx = try layout_store.addTypeVar(list_i128_var);
 
-    // Verify the layout - List(I128) should use scalar optimization
+    // Verify the layout - List(I128) should be a list with i128 sentinel
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.tag == .list_of_scalar);
+    try testing.expect(list_layout.tag == .list);
 
-    // Verify the scalar data
-    try testing.expectEqual(layout.ScalarTag.int, list_layout.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i128, list_layout.data.list_of_scalar.data.int);
+    // Verify the element is the i128 sentinel
+    try testing.expectEqual(layout.Idx.i128, list_layout.data.list);
 }
 
 test "addTypeVar - num dec" {
@@ -392,13 +389,12 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
     // Convert to layout - should default to list of i128
     const list_layout_idx = try layout_store.addTypeVar(list_flex_num_var);
 
-    // Verify the layout - List(FlexVar) should use scalar optimization defaulting to I128
+    // Verify the layout - List(FlexVar) should be a list with i128 sentinel (default for Num)
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.tag == .list_of_scalar);
+    try testing.expect(list_layout.tag == .list);
 
-    // Verify the scalar data
-    try testing.expectEqual(layout.ScalarTag.int, list_layout.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i128, list_layout.data.list_of_scalar.data.int);
+    // Verify the element is the i128 sentinel (default for flex Num)
+    try testing.expectEqual(layout.Idx.i128, list_layout.data.list);
 }
 
 test "addTypeVar - box of flex frac var defaults to box of dec" {
@@ -425,13 +421,12 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     // Convert to layout - should default to box of dec
     const box_layout_idx = try layout_store.addTypeVar(box_flex_frac_var);
 
-    // Verify the layout - Box(FlexFrac) should use scalar optimization defaulting to Dec
+    // Verify the layout - Box(FlexFrac) should be a box with dec sentinel (default for Frac)
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.tag == .box_of_scalar);
+    try testing.expect(box_layout.tag == .box);
 
-    // Verify the scalar data
-    try testing.expectEqual(layout.ScalarTag.frac, box_layout.data.box_of_scalar.tag);
-    try testing.expectEqual(types.Num.Frac.Precision.dec, box_layout.data.box_of_scalar.data.frac);
+    // Verify the element is the dec sentinel (default for flex Frac)
+    try testing.expectEqual(layout.Idx.dec, box_layout.data.box);
 }
 
 test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
@@ -441,11 +436,9 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     var module_env = base.ModuleEnv.init(gpa);
     defer module_env.deinit();
 
-    // Create type store
     var type_store = types_store.Store.init(&module_env);
     defer type_store.deinit();
 
-    // Create layout store
     var layout_store = Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
@@ -463,11 +456,10 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.tag == .box_of_scalar);
+    try testing.expect(box_layout.tag == .box);
 
-    // Verify the element is host_opaque
-    try testing.expectEqual(layout.ScalarTag.host_opaque, box_layout.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_layout.data.box_of_scalar.data.host_opaque);
+    // Verify the element is host_opaque sentinel
+    try testing.expectEqual(layout.Idx.host_opaque, box_layout.data.box);
 }
 
 test "addTypeVar - box of empty record compiles to box_of_zst" {
@@ -1963,40 +1955,35 @@ test "addTypeVar - comprehensive nested record combinations" {
                 // Should have returned an error, not reached here
                 try testing.expect(false);
             } else {
-                // The record might be optimized to record_wrapping_scalar if it has only one field
-                if (result_layout.tag == .record_wrapping_scalar) {
-                    // Single field was optimized - this counts as 1 non-zero field
-                    try testing.expectEqual(@as(usize, 1), expected_non_zero_fields);
-                } else {
-                    try testing.expect(result_layout.tag == .record);
+                // The record might be optimized to record if it has only one field
+                try testing.expect(result_layout.tag == .record);
 
-                    // Count actual non-zero fields in the result
-                    const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
-                    const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
-                    const actual_field_count = field_slice.len;
+                // Count actual non-zero fields in the result
+                const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
+                const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
+                const actual_field_count = field_slice.len;
 
-                    // Verify each field has a valid layout
-                    for (0..field_slice.len) |i| {
-                        const field = field_slice.get(i);
-                        const field_layout = test_layout_store.getLayout(field.layout);
-                        switch (field_layout.tag) {
-                            .scalar => {}, // Valid non-zero field
-                            .record => {
-                                // Verify nested record has fields
-                                const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
-                                const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
-                                try testing.expect(nested_slice.len > 0);
-                            },
-                            .record_wrapping_scalar => {}, // Valid optimized single-field record
-                            else => {
-                                // Unexpected layout type
-                                try testing.expect(false);
-                            },
-                        }
+                // Verify each field has a valid layout
+                for (0..field_slice.len) |i| {
+                    const field = field_slice.get(i);
+                    const field_layout = test_layout_store.getLayout(field.layout);
+                    switch (field_layout.tag) {
+                        .scalar => {}, // Valid non-zero field
+                        .record => {
+                            // Verify nested record has fields
+                            const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
+                            const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
+                            try testing.expect(nested_slice.len > 0);
+                        },
+
+                        else => {
+                            // Unexpected layout type
+                            try testing.expect(false);
+                        },
                     }
-
-                    try testing.expect(actual_field_count == expected_non_zero_fields);
                 }
+
+                try testing.expect(actual_field_count == expected_non_zero_fields);
             }
         }
     }
@@ -2048,11 +2035,8 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    // The record was optimized to record_wrapping_scalar
-    try testing.expect(record_layout.tag == .record_wrapping_scalar);
-
-    // Verify it's a string scalar
-    try testing.expect(record_layout.data.record_wrapping_scalar.scalar.tag == .str);
+    // The record should have a single string field
+    try testing.expect(record_layout.tag == .record);
 }
 
 test "addTypeVar - list of record with all zero-sized fields" {
@@ -2120,8 +2104,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        // The record was optimized to record_wrapping_scalar
-        try testing.expect(record_layout.tag == .record_wrapping_scalar);
+        // The record was optimized to record
+        try testing.expect(record_layout.tag == .record);
 
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
@@ -2143,8 +2127,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        // The record was optimized to record_wrapping_scalar
-        try testing.expect(record_layout.tag == .record_wrapping_scalar);
+        // The record was optimized to record
+        try testing.expect(record_layout.tag == .record);
 
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
@@ -2166,8 +2150,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        // The record was optimized to record_wrapping_scalar
-        try testing.expect(record_layout.tag == .record_wrapping_scalar);
+        // The record was optimized to record
+        try testing.expect(record_layout.tag == .record);
 
         // Verify alignment is still correct
         for (target.TargetUsize.all()) |target_usize| {
@@ -2389,7 +2373,7 @@ test "addTypeVar - maximum nesting depth" {
 
     // This should still work - we don't want arbitrary limits on nesting
     const result = try layout_store.addTypeVar(current_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
     try testing.expect(result_layout.tag == .record);
 }
 
@@ -2437,7 +2421,7 @@ test "addTypeVar - record with maximum fields" {
 
     // Should handle large number of fields
     const result = try layout_store.addTypeVar(record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
         .record => {
@@ -2450,7 +2434,7 @@ test "addTypeVar - record with maximum fields" {
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
-                const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.int_idx));
+                const field_layout = layout_store.layouts.get(@enumFromInt(@intFromEnum(field_layout_idx)));
                 const field_alignment = field_layout.alignment(target_usize);
                 const field_name_str = type_store.env.idents.getText(field_name);
 
@@ -2514,7 +2498,7 @@ test "addTypeVar - record with very long field names" {
 
     // Should handle long field names
     const result = try layout_store.addTypeVar(record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
     try testing.expect(result_layout.tag == .record);
 }
 
@@ -2563,7 +2547,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
         .record => {
@@ -2607,7 +2591,7 @@ test "addTypeVar - record field type changes through alias" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
         .record => {
@@ -2616,15 +2600,11 @@ test "addTypeVar - record field type changes through alias" {
 
             // The field should have the backing type's layout (u64)
             const field_layout_idx = record_fields.items(.layout)[0];
-            const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.int_idx));
+            const field_layout = layout_store.getLayout(field_layout_idx);
             try testing.expect(field_layout.tag == .scalar);
             try testing.expect(field_layout.data.scalar.data.int == .u64);
         },
-        .record_wrapping_scalar => {
-            // The record was optimized to record_wrapping_scalar
-            try testing.expect(result_layout.data.record_wrapping_scalar.scalar.tag == .int);
-            try testing.expect(result_layout.data.record_wrapping_scalar.scalar.data.int == .u64);
-        },
+
         else => try testing.expect(false),
     }
 }
@@ -2676,16 +2656,16 @@ test "addTypeVar - mixed container types" {
 
     // Should handle complex nesting
     const result = try layout_store.addTypeVar(outer_list_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
 
     // Verify it's a list
     try testing.expect(result_layout.tag == .list);
 
     // Verify the inner structure
-    const box_layout = layout_store.layouts.get(@enumFromInt(result_layout.data.list.int_idx));
+    const box_layout = layout_store.getLayout(result_layout.data.list);
     try testing.expect(box_layout.tag == .box);
 
-    const record_layout = layout_store.layouts.get(@enumFromInt(box_layout.data.box.int_idx));
+    const record_layout = layout_store.getLayout(box_layout.data.box);
     try testing.expect(record_layout.tag == .record);
 
     const rec = switch (record_layout.tag) {
@@ -2705,12 +2685,11 @@ test "addTypeVar - mixed container types" {
     // Verify field types
     const field_0_layout_idx = rec_fields.items(.layout)[0];
     const field_1_layout_idx = rec_fields.items(.layout)[1];
-    const field_0_layout = layout_store.layouts.get(@enumFromInt(field_0_layout_idx.int_idx));
-    const field_1_layout = layout_store.layouts.get(@enumFromInt(field_1_layout_idx.int_idx));
+    const field_0_layout = layout_store.getLayout(field_0_layout_idx);
+    const field_1_layout = layout_store.getLayout(field_1_layout_idx);
     try testing.expect(field_0_layout.tag == .scalar);
-    try testing.expect(field_1_layout.tag == .list_of_scalar);
-    try testing.expectEqual(layout.ScalarTag.int, field_1_layout.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.u64, field_1_layout.data.list_of_scalar.data.int);
+    try testing.expect(field_1_layout.tag == .list);
+    try testing.expectEqual(layout.Idx.u64, field_1_layout.data.list);
 }
 
 test "addTypeVar - record size calculation with padding" {
@@ -2755,7 +2734,7 @@ test "addTypeVar - record size calculation with padding" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    const result_layout = layout_store.getLayout(result);
 
     switch (result_layout.tag) {
         .record => {
@@ -2799,7 +2778,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
     var layout_store = Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
-    // Test Box(I32) - should use box_of_scalar
+    // Test Box(I32) - should use box with i32 sentinel
     {
         const i32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
         const box_i32_var = type_store.freshFromContent(.{ .structure = .{ .box = i32_var } });
@@ -2807,12 +2786,11 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const result = try layout_store.addTypeVar(box_i32_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.int, result_layout.data.box_of_scalar.tag);
-        try testing.expectEqual(types.Num.Int.Precision.i32, result_layout.data.box_of_scalar.data.int);
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.i32, result_layout.data.box);
     }
 
-    // Test Box(F64) - should use box_of_scalar
+    // Test Box(F64) - should use box with f64 sentinel
     {
         const f64_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f64 } } } });
         const box_f64_var = type_store.freshFromContent(.{ .structure = .{ .box = f64_var } });
@@ -2820,25 +2798,27 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const result = try layout_store.addTypeVar(box_f64_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.frac, result_layout.data.box_of_scalar.tag);
-        try testing.expectEqual(types.Num.Frac.Precision.f64, result_layout.data.box_of_scalar.data.frac);
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.f64, result_layout.data.box);
     }
 
-    // Test Box(Bool) - should use box_of_scalar
+    // Test Box(Bool) - should use box with bool sentinel
     {
+        // Create a bool layout directly and insert it
         const bool_layout = layout.Layout.booleanType();
-        const box_bool_layout = layout.Layout.boxOfScalar(bool_layout.data.scalar);
-        const box_bool_layout_idx = try layout_store.insertLayout(box_bool_layout);
+        const bool_idx = try layout_store.insertLayout(bool_layout);
 
-        const result_layout = layout_store.getLayout(box_bool_layout_idx);
+        // Create a box layout containing the bool
+        const box_layout = layout.Layout.box(bool_idx);
+        const box_idx = try layout_store.insertLayout(box_layout);
 
-        try testing.expect(result_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.bool, result_layout.data.box_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.box_of_scalar.data.bool);
+        const result_layout = layout_store.getLayout(box_idx);
+
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.bool, result_layout.data.box);
     }
 
-    // Test Box(Str) - should use box_of_scalar
+    // Test Box(Str) - should use box with str sentinel
     {
         const str_var = type_store.freshFromContent(.{ .structure = .str });
         const box_str_var = type_store.freshFromContent(.{ .structure = .{ .box = str_var } });
@@ -2846,9 +2826,8 @@ test "addTypeVar - all scalar types use scalar optimization" {
         const result = try layout_store.addTypeVar(box_str_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.str, result_layout.data.box_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.box_of_scalar.data.str);
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.str, result_layout.data.box);
     }
 }
 
@@ -2865,7 +2844,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     var layout_store = Store.init(&module_env, &type_store);
     defer layout_store.deinit();
 
-    // Test List(U8) - should use list_of_scalar
+    // Test List(U8) - should use list with u8 sentinel
     {
         const u8_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
         const list_u8_var = type_store.freshFromContent(.{ .structure = .{ .list = u8_var } });
@@ -2873,12 +2852,11 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const result = try layout_store.addTypeVar(list_u8_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.int, result_layout.data.list_of_scalar.tag);
-        try testing.expectEqual(types.Num.Int.Precision.u8, result_layout.data.list_of_scalar.data.int);
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.u8, result_layout.data.list);
     }
 
-    // Test List(F32) - should use list_of_scalar
+    // Test List(F32) - should use list with f32 sentinel
     {
         const f32_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .frac = .{ .exact = .f32 } } } });
         const list_f32_var = type_store.freshFromContent(.{ .structure = .{ .list = f32_var } });
@@ -2886,25 +2864,27 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const result = try layout_store.addTypeVar(list_f32_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.frac, result_layout.data.list_of_scalar.tag);
-        try testing.expectEqual(types.Num.Frac.Precision.f32, result_layout.data.list_of_scalar.data.frac);
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.f32, result_layout.data.list);
     }
 
-    // Test List(Bool) - should use list_of_scalar
+    // Test List(Bool)
     {
+        // Create a bool layout directly and insert it
         const bool_layout = layout.Layout.booleanType();
-        const list_bool_layout = layout.Layout.listOfScalar(bool_layout.data.scalar);
-        const list_bool_layout_idx = try layout_store.insertLayout(list_bool_layout);
+        const bool_idx = try layout_store.insertLayout(bool_layout);
 
-        const result_layout = layout_store.getLayout(list_bool_layout_idx);
+        // Create a list layout containing the bool
+        const list_layout = layout.Layout.list(bool_idx);
+        const list_idx = try layout_store.insertLayout(list_layout);
 
-        try testing.expect(result_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.bool, result_layout.data.list_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.list_of_scalar.data.bool);
+        const result_layout = layout_store.getLayout(list_idx);
+
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.bool, result_layout.data.list);
     }
 
-    // Test List(Str) - should use list_of_scalar
+    // Test List(Str) - should use list with str sentinel
     {
         const str_var = type_store.freshFromContent(.{ .structure = .str });
         const list_str_var = type_store.freshFromContent(.{ .structure = .{ .list = str_var } });
@@ -2912,9 +2892,8 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
         const result = try layout_store.addTypeVar(list_str_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.str, result_layout.data.list_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.list_of_scalar.data.str);
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.str, result_layout.data.list);
     }
 }
 
@@ -2950,8 +2929,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         try testing.expect(result_layout.tag == .box);
         // The data.box should contain an index to the record layout
         const record_layout = layout_store.getLayout(result_layout.data.box);
-        // The record was optimized to record_wrapping_scalar
-        try testing.expect(record_layout.tag == .record_wrapping_scalar);
+        // Single field records now use regular record layout
+        try testing.expect(record_layout.tag == .record);
     }
 
     // Test List(Record) - should use .list with index
@@ -2964,8 +2943,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         try testing.expect(result_layout.tag == .list);
         // The data.list should contain an index to the record layout
         const record_layout = layout_store.getLayout(result_layout.data.list);
-        // The record was optimized to record_wrapping_scalar
-        try testing.expect(record_layout.tag == .record_wrapping_scalar);
+        // Single field records now use regular record layout
+        try testing.expect(record_layout.tag == .record);
     }
 
     // Test Box(List(I32)) - should use .box with index since List(I32) is not a scalar
@@ -2980,9 +2959,8 @@ test "addTypeVar - box and list of non-scalar types use indexed approach" {
         try testing.expect(result_layout.tag == .box);
         // The data.box should contain an index to the list layout
         const list_layout = layout_store.getLayout(result_layout.data.box);
-        try testing.expect(list_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.int, list_layout.data.list_of_scalar.tag);
-        try testing.expectEqual(types.Num.Int.Precision.i32, list_layout.data.list_of_scalar.data.int);
+        try testing.expect(list_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.i32, list_layout.data.list);
     }
 }
 
@@ -3002,28 +2980,26 @@ test "addTypeVar - host opaque types use scalar optimization" {
     // Create a flex var (becomes host opaque when boxed)
     const flex_var = type_store.freshFromContent(.{ .flex_var = null });
 
-    // Test Box(FlexVar) - should use box_of_scalar with host_opaque
+    // Test Box(FlexVar) - should use box with host_opaque sentinel
     {
         const box_flex_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
 
         const result = try layout_store.addTypeVar(box_flex_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.host_opaque, result_layout.data.box_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.box_of_scalar.data.host_opaque);
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.host_opaque, result_layout.data.box);
     }
 
-    // Test List(FlexVar) - should use list_of_scalar with host_opaque
+    // Test List(FlexVar) - should use list with host_opaque sentinel
     {
         const list_flex_var = type_store.freshFromContent(.{ .structure = .{ .list = flex_var } });
 
         const result = try layout_store.addTypeVar(list_flex_var);
         const result_layout = layout_store.getLayout(result);
 
-        try testing.expect(result_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.host_opaque, result_layout.data.list_of_scalar.tag);
-        try testing.expectEqual({}, result_layout.data.list_of_scalar.data.host_opaque);
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.host_opaque, result_layout.data.list);
     }
 }
 
@@ -3051,11 +3027,10 @@ test "addTypeVar - mixed scalar optimization in nested structures" {
     // Outer list should use index approach since Box(I64) is not a scalar
     try testing.expect(result_layout.tag == .list);
 
-    // Inner box should use scalar optimization
+    // Inner box should use box with i64 sentinel
     const box_layout = layout_store.getLayout(result_layout.data.list);
-    try testing.expect(box_layout.tag == .box_of_scalar);
-    try testing.expectEqual(layout.ScalarTag.int, box_layout.data.box_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i64, box_layout.data.box_of_scalar.data.int);
+    try testing.expect(box_layout.tag == .box);
+    try testing.expectEqual(layout.Idx.i64, box_layout.data.box);
 }
 
 test "addTypeVar - all integer precisions use scalar optimization" {
@@ -3081,9 +3056,21 @@ test "addTypeVar - all integer precisions use scalar optimization" {
         const box_result = try layout_store.addTypeVar(box_int_var);
         const box_layout = layout_store.getLayout(box_result);
 
-        try testing.expect(box_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.int, box_layout.data.box_of_scalar.tag);
-        try testing.expectEqual(precision, box_layout.data.box_of_scalar.data.int);
+        try testing.expect(box_layout.tag == .box);
+        // Check that the box contains the correct sentinel for this integer type
+        const expected_idx = switch (precision) {
+            .u8 => layout.Idx.u8,
+            .i8 => layout.Idx.i8,
+            .u16 => layout.Idx.u16,
+            .i16 => layout.Idx.i16,
+            .u32 => layout.Idx.u32,
+            .i32 => layout.Idx.i32,
+            .u64 => layout.Idx.u64,
+            .i64 => layout.Idx.i64,
+            .u128 => layout.Idx.u128,
+            .i128 => layout.Idx.i128,
+        };
+        try testing.expectEqual(expected_idx, box_layout.data.box);
 
         // Test List(IntType)
         const list_int_var = type_store.freshFromContent(.{ .structure = .{ .list = int_var } });
@@ -3091,9 +3078,8 @@ test "addTypeVar - all integer precisions use scalar optimization" {
         const list_result = try layout_store.addTypeVar(list_int_var);
         const list_layout = layout_store.getLayout(list_result);
 
-        try testing.expect(list_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.int, list_layout.data.list_of_scalar.tag);
-        try testing.expectEqual(precision, list_layout.data.list_of_scalar.data.int);
+        try testing.expect(list_layout.tag == .list);
+        try testing.expectEqual(expected_idx, list_layout.data.list);
     }
 }
 
@@ -3112,28 +3098,34 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
 
     // Test Box(Bool)
     {
+        // Create a bool layout directly and insert it
         const bool_layout = layout.Layout.booleanType();
-        const box_bool_layout = layout.Layout.boxOfScalar(bool_layout.data.scalar);
-        const box_bool_layout_idx = try layout_store.insertLayout(box_bool_layout);
+        const bool_idx = try layout_store.insertLayout(bool_layout);
 
-        const box_layout = layout_store.getLayout(box_bool_layout_idx);
+        // Create a box layout containing the bool
+        const box_layout = layout.Layout.box(bool_idx);
+        const box_idx = try layout_store.insertLayout(box_layout);
 
-        try testing.expect(box_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.bool, box_layout.data.box_of_scalar.tag);
-        try testing.expectEqual({}, box_layout.data.box_of_scalar.data.bool);
+        const result_layout = layout_store.getLayout(box_idx);
+
+        try testing.expect(result_layout.tag == .box);
+        try testing.expectEqual(layout.Idx.bool, result_layout.data.box);
     }
 
     // Test List(Bool)
     {
+        // Create a bool layout directly and insert it
         const bool_layout = layout.Layout.booleanType();
-        const list_bool_layout = layout.Layout.listOfScalar(bool_layout.data.scalar);
-        const list_bool_layout_idx = try layout_store.insertLayout(list_bool_layout);
+        const bool_idx = try layout_store.insertLayout(bool_layout);
 
-        const list_layout = layout_store.getLayout(list_bool_layout_idx);
+        // Create a list layout containing the bool
+        const list_layout = layout.Layout.list(bool_idx);
+        const list_idx = try layout_store.insertLayout(list_layout);
 
-        try testing.expect(list_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.bool, list_layout.data.list_of_scalar.tag);
-        try testing.expectEqual({}, list_layout.data.list_of_scalar.data.bool);
+        const result_layout = layout_store.getLayout(list_idx);
+
+        try testing.expect(result_layout.tag == .list);
+        try testing.expectEqual(layout.Idx.bool, result_layout.data.list);
     }
 }
 
@@ -3160,9 +3152,14 @@ test "addTypeVar - all frac precisions use scalar optimization" {
         const box_result = try layout_store.addTypeVar(box_frac_var);
         const box_layout = layout_store.getLayout(box_result);
 
-        try testing.expect(box_layout.tag == .box_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.frac, box_layout.data.box_of_scalar.tag);
-        try testing.expectEqual(precision, box_layout.data.box_of_scalar.data.frac);
+        try testing.expect(box_layout.tag == .box);
+        // Check that the box contains the correct sentinel for this float type
+        const expected_idx = switch (precision) {
+            .f32 => layout.Idx.f32,
+            .f64 => layout.Idx.f64,
+            .dec => layout.Idx.dec,
+        };
+        try testing.expectEqual(expected_idx, box_layout.data.box);
 
         // Test List(FracType)
         const list_frac_var = type_store.freshFromContent(.{ .structure = .{ .list = frac_var } });
@@ -3170,9 +3167,8 @@ test "addTypeVar - all frac precisions use scalar optimization" {
         const list_result = try layout_store.addTypeVar(list_frac_var);
         const list_layout = layout_store.getLayout(list_result);
 
-        try testing.expect(list_layout.tag == .list_of_scalar);
-        try testing.expectEqual(layout.ScalarTag.frac, list_layout.data.list_of_scalar.tag);
-        try testing.expectEqual(precision, list_layout.data.list_of_scalar.data.frac);
+        try testing.expect(list_layout.tag == .list);
+        try testing.expectEqual(expected_idx, list_layout.data.list);
     }
 }
 
@@ -3210,169 +3206,6 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     try testing.expect(layout_store.layouts_by_var.entries.capacity >= type_store.getNumVars());
 }
 
-test "addTypeVar - record_wrapping_scalar optimization" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    var type_store = types_store.Store.init(&module_env);
-    defer type_store.deinit();
-
-    var layout_store = Store.init(&module_env, &type_store);
-    defer layout_store.deinit();
-
-    // Test 1: Record with single scalar field should use record_wrapping_scalar
-    {
-        const field_name = Ident.Idx{ .idx = 100, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const str_var = type_store.freshFromContent(.{ .structure = .str });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = str_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        // Should use the compact representation
-        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-        try testing.expectEqual(layout.ScalarTag.str, record_layout.data.record_wrapping_scalar.scalar.tag);
-        try testing.expectEqual(@as(Ident.IdxFieldType, 100), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
-    }
-
-    // Test 2: Record with single int field
-    {
-        const field_name = Ident.Idx{ .idx = 42, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = int_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-        try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
-        try testing.expectEqual(types.Num.Int.Precision.i32, record_layout.data.record_wrapping_scalar.scalar.data.int);
-        try testing.expectEqual(@as(Ident.IdxFieldType, 42), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
-    }
-
-    // Test 3: Record with single bool field
-    {
-        const field_name = Ident.Idx{ .idx = 999, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        // Use u8 as a placeholder for bool since there's no bool type in the type system yet
-        const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = bool_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        // Since we used u8 as placeholder, it will be an int scalar
-        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-        try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
-        try testing.expectEqual(types.Num.Int.Precision.u8, record_layout.data.record_wrapping_scalar.scalar.data.int);
-        try testing.expectEqual(@as(Ident.IdxFieldType, 999), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
-    }
-
-    // Test 4: Record with field name index at limit
-    {
-        const field_name = Ident.Idx{ .idx = std.math.maxInt(Ident.IdxFieldType), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const str_var = type_store.freshFromContent(.{ .structure = .str });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = str_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-        try testing.expectEqual(@as(Ident.IdxFieldType, std.math.maxInt(Ident.IdxFieldType)), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
-    }
-
-    // Test 5: Record with single non-scalar field should use regular record
-    {
-        const field_name = Ident.Idx{ .idx = 50, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const inner_str_var = type_store.freshFromContent(.{ .structure = .str });
-        const list_var = type_store.freshFromContent(.{ .structure = .{ .list = inner_str_var } });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field_name, .var_ = list_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        // Should use regular record layout (not record_wrapping_scalar)
-        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
-    }
-
-    // Test 7: Record with multiple fields should use regular record
-    {
-        const field1_name = Ident.Idx{ .idx = 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const field2_name = Ident.Idx{ .idx = 2, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-        const str_var = type_store.freshFromContent(.{ .structure = .str });
-        const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
-
-        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-            .{ .name = field1_name, .var_ = str_var },
-            .{ .name = field2_name, .var_ = bool_var },
-        });
-
-        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-        const record_layout_idx = try layout_store.addTypeVar(record_var);
-        const record_layout = layout_store.getLayout(record_layout_idx);
-
-        // Should use regular record layout (not record_wrapping_scalar)
-        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
-    }
-
-    // Test 8: Layout size for record_wrapping_scalar
-    {
-        const field_name = Ident.Idx{ .idx = 10, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
-
-        // Test different scalar sizes
-        // Get the pointer size for str type dynamically
-        const str_layout = layout.Layout.str();
-        const str_size = layout_store.layoutSize(str_layout);
-
-        const test_cases = [_]struct { var_type: types.Content, expected_size: u32 }{
-            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } }, .expected_size = 1 },
-            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } }, .expected_size = 4 },
-            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .i64 } } } }, .expected_size = 8 },
-            .{ .var_type = .{ .structure = .str }, .expected_size = str_size }, // pointer size
-        };
-
-        for (test_cases) |test_case| {
-            const scalar_var = type_store.freshFromContent(test_case.var_type);
-
-            const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
-                .{ .name = field_name, .var_ = scalar_var },
-            });
-
-            const ext = type_store.freshFromContent(.{ .structure = .empty_record });
-            const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
-            const record_layout_idx = try layout_store.addTypeVar(record_var);
-            const record_layout = layout_store.getLayout(record_layout_idx);
-
-            try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
-            try testing.expectEqual(test_case.expected_size, layout_store.layoutSize(record_layout.*));
-        }
-    }
-}
+// The record optimization has been removed from the layout system.
+// Records with single scalar fields now use the regular record layout.
+// This makes the layout system simpler and more consistent.

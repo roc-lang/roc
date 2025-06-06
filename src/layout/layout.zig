@@ -12,13 +12,10 @@ pub const LayoutTag = enum(u4) {
     scalar,
     box,
     box_of_zst, // Box of a zero-sized type, e.g. Box({}) - needs a special-cased runtime implementation
-    box_of_scalar, // Box of a scalar value, e.g. Box(Str) - has a more compact representation than .box
     list,
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
-    list_of_scalar, // List of scalar values, e.g. List(Str) - has a more compact representation than .list
     record,
     tuple,
-    record_wrapping_scalar, // Record with exactly one scalar field - more compact than .record
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -49,28 +46,40 @@ pub const Scalar = packed struct {
     tag: ScalarTag,
 };
 
-/// A compact identifier index that fits in 20 bits (max 1M identifiers per module)
-/// TODO: change the normal Ident.Idx to be this instead.
-pub const CompactIdentIdx = packed struct(u20) {
-    idx: u20,
-};
-
-/// Record wrapping scalar - a record with exactly one scalar field
-pub const RecordWrappingScalar = packed struct(u28) {
-    scalar: Scalar, // u7 (u4 for data union + u3 for tag)
-    field_name_idx: Ident.Idx, // u21 (u3 for attributes + Ident.IDX_BITS for idx)
-};
-
 /// Index into a Layout Store
-pub const Idx = packed struct {
-    int_idx: @Type(.{
-        .int = .{
-            .signedness = .unsigned,
-            // Some Layout variants are just the Tag followed by Idx, so use as many
-            // bits as we can spare from the Layout for Idx.
-            .bits = layout_bit_size - @bitSizeOf(LayoutTag),
-        },
-    }),
+pub const Idx = enum(@Type(.{
+    .int = .{
+        .signedness = .unsigned,
+        // Some Layout variants are just the Tag followed by Idx, so use as many
+        // bits as we can spare from the Layout for Idx.
+        .bits = layout_bit_size - @bitSizeOf(LayoutTag),
+    },
+})) {
+    // Sentinel values for primitive types
+    bool = 0,
+    str = 1,
+    host_opaque = 2,
+
+    // Integer types
+    u8 = 3,
+    i8 = 4,
+    u16 = 5,
+    i16 = 6,
+    u32 = 7,
+    i32 = 8,
+    u64 = 9,
+    i64 = 10,
+    u128 = 11,
+    i128 = 12,
+
+    // Floating point types
+    f32 = 13,
+    f64 = 14,
+    dec = 15,
+
+    // Regular indices start from here
+    // Must be kept in sync with PRIMITIVE_COUNT in store.zig
+    _,
 };
 
 /// Union of Layout data
@@ -79,13 +88,10 @@ pub const LayoutUnion = packed union {
     scalar: Scalar,
     box: Idx,
     box_of_zst: void,
-    box_of_scalar: Scalar,
     list: Idx,
     list_of_zst: void,
-    list_of_scalar: Scalar,
     record: RecordLayout,
     tuple: TupleLayout,
-    record_wrapping_scalar: RecordWrappingScalar,
 };
 
 /// The runtime memory layout of a Roc value.
@@ -113,16 +119,13 @@ pub const Layout = packed struct {
             .scalar => switch (self.data.scalar.tag) {
                 .int => self.data.scalar.data.int.alignment(),
                 .frac => self.data.scalar.data.frac.alignment(),
-                .bool, .str, .host_opaque => target_usize.alignment(),
+                .bool => std.mem.Alignment.@"1",
+                .str, .host_opaque => target_usize.alignment(),
             },
+            .box, .box_of_zst => target_usize.alignment(),
+            .list, .list_of_zst => target_usize.alignment(),
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
-            .box, .box_of_zst, .box_of_scalar, .list, .list_of_zst, .list_of_scalar => target_usize.alignment(),
-            .record_wrapping_scalar => switch (self.data.record_wrapping_scalar.scalar.tag) {
-                .int => self.data.record_wrapping_scalar.scalar.data.int.alignment(),
-                .frac => self.data.record_wrapping_scalar.scalar.data.frac.alignment(),
-                .bool, .str, .host_opaque => target_usize.alignment(),
-            },
         };
     }
 
@@ -158,10 +161,6 @@ pub const Layout = packed struct {
     }
 
     /// box of scalar layout (e.g. Box(I32), Box(Str))
-    pub fn boxOfScalar(scalar: Scalar) Layout {
-        return Layout{ .data = .{ .box_of_scalar = scalar }, .tag = .box_of_scalar };
-    }
-
     /// Create a list layout with the given element layout index
     pub fn list(elem_idx: Idx) Layout {
         return Layout{ .data = .{ .list = elem_idx }, .tag = .list };
@@ -173,10 +172,6 @@ pub const Layout = packed struct {
     }
 
     /// list of scalar layout (e.g. List(I32), List(Str))
-    pub fn listOfScalar(scalar: Scalar) Layout {
-        return Layout{ .data = .{ .list_of_scalar = scalar }, .tag = .list_of_scalar };
-    }
-
     /// host opaque layout (the void* that we pass to the host for e.g. flex vars)
     pub fn hostOpaque() Layout {
         return Layout{ .data = .{ .scalar = .{ .data = .{ .host_opaque = {} }, .tag = .host_opaque } }, .tag = .scalar };
@@ -192,19 +187,11 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = idx } }, .tag = .tuple };
     }
 
-    /// record wrapping scalar layout - a record with exactly one scalar field
-    pub fn recordWrappingScalar(scalar: Scalar, field_name_idx: Ident.Idx) Layout {
-        return Layout{ .data = .{ .record_wrapping_scalar = .{
-            .scalar = scalar,
-            .field_name_idx = field_name_idx,
-        } }, .tag = .record_wrapping_scalar };
-    }
-
     /// Convert a layout to a scalar if possible, otherwise return an error
+    /// Get the scalar value if this layout represents a scalar
     pub fn asScalar(self: Layout) !Scalar {
         return switch (self.tag) {
             .scalar => self.data.scalar,
-            .record_wrapping_scalar => self.data.record_wrapping_scalar.scalar,
             else => error.NotAScalar,
         };
     }
@@ -316,7 +303,7 @@ test "Layout.alignment() - scalar types" {
         try testing.expectEqual(std.mem.Alignment.@"4", Layout.frac(.f32).alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"8", Layout.frac(.f64).alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"16", Layout.frac(.dec).alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.booleanType().alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"1", Layout.booleanType().alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.str().alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.hostOpaque().alignment(target_usize));
     }
@@ -326,12 +313,10 @@ test "Layout.alignment() - types containing pointers" {
     const testing = std.testing;
 
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(target_usize.alignment(), Layout.box(.{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.box(.bool).alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.boxOfZst().alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.boxOfScalar(.{ .data = .{ .int = .i32 }, .tag = .int }).alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.list(.{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.list(.bool).alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), Layout.listOfZst().alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), Layout.listOfScalar(.{ .data = .{ .str = {} }, .tag = .str }).alignment(target_usize));
     }
 }
 
@@ -339,8 +324,8 @@ test "Layout.alignment() - record types" {
     const testing = std.testing;
 
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.record(std.mem.Alignment.@"4", .{ .int_idx = 0 }).alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.record(std.mem.Alignment.@"16", .{ .int_idx = 1 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.record(std.mem.Alignment.@"16", RecordIdx{ .int_idx = 1 }).alignment(target_usize));
     }
 }
 
@@ -395,40 +380,37 @@ test "Layout.asScalar() - non-scalar types" {
     const testing = std.testing;
 
     // Test that non-scalar types return null
-    const box_layout = Layout.box(.{ .int_idx = 0 });
+    const box_layout = Layout.box(.bool);
     try testing.expectError(error.NotAScalar, box_layout.asScalar());
 
-    const list_layout = Layout.list(.{ .int_idx = 0 });
+    const list_layout = Layout.list(.bool);
     try testing.expectError(error.NotAScalar, list_layout.asScalar());
 
-    const record_layout = Layout.record(std.mem.Alignment.@"4", .{ .int_idx = 0 });
+    const record_layout = Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 });
     try testing.expectError(error.NotAScalar, record_layout.asScalar());
 }
 
 test "Layout scalar variants" {
     const testing = std.testing;
 
-    // Test box_of_scalar
-    const box_int_scalar = Layout.boxOfScalar(.{ .data = .{ .int = .i32 }, .tag = .int });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_int_scalar.tag);
-    try testing.expectEqual(ScalarTag.int, box_int_scalar.data.box_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i32, box_int_scalar.data.box_of_scalar.data.int);
+    // Test scalar type creation
+    const int_scalar = Layout.int(.i32);
+    try testing.expectEqual(LayoutTag.scalar, int_scalar.tag);
+    try testing.expectEqual(ScalarTag.int, int_scalar.data.scalar.tag);
+    try testing.expectEqual(types.Num.Int.Precision.i32, int_scalar.data.scalar.data.int);
 
-    const box_str_scalar = Layout.boxOfScalar(.{ .data = .{ .str = {} }, .tag = .str });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_str_scalar.tag);
-    try testing.expectEqual(ScalarTag.str, box_str_scalar.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_str_scalar.data.box_of_scalar.data.str);
+    const str_scalar = Layout.str();
+    try testing.expectEqual(LayoutTag.scalar, str_scalar.tag);
+    try testing.expectEqual(ScalarTag.str, str_scalar.data.scalar.tag);
 
-    // Test list_of_scalar
-    const list_frac_scalar = Layout.listOfScalar(.{ .data = .{ .frac = .f64 }, .tag = .frac });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_frac_scalar.tag);
-    try testing.expectEqual(ScalarTag.frac, list_frac_scalar.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Frac.Precision.f64, list_frac_scalar.data.list_of_scalar.data.frac);
+    const frac_scalar = Layout.frac(.f64);
+    try testing.expectEqual(LayoutTag.scalar, frac_scalar.tag);
+    try testing.expectEqual(ScalarTag.frac, frac_scalar.data.scalar.tag);
+    try testing.expectEqual(types.Num.Frac.Precision.f64, frac_scalar.data.scalar.data.frac);
 
-    const list_host_opaque_scalar = Layout.listOfScalar(.{ .data = .{ .host_opaque = {} }, .tag = .host_opaque });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_host_opaque_scalar.tag);
-    try testing.expectEqual(ScalarTag.host_opaque, list_host_opaque_scalar.data.list_of_scalar.tag);
-    try testing.expectEqual({}, list_host_opaque_scalar.data.list_of_scalar.data.host_opaque);
+    const host_opaque_scalar = Layout.hostOpaque();
+    try testing.expectEqual(LayoutTag.scalar, host_opaque_scalar.tag);
+    try testing.expectEqual(ScalarTag.host_opaque, host_opaque_scalar.data.scalar.tag);
 
     // Test zst variants separately
     const box_zst = Layout.boxOfZst();
@@ -441,80 +423,57 @@ test "Layout scalar variants" {
 test "Scalar memory optimization - comprehensive coverage" {
     const testing = std.testing;
 
-    // Test all scalar variants in box_of_scalar
-    const box_int = Layout.boxOfScalar(.{ .data = .{ .int = .u64 }, .tag = .int });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_int.tag);
-    try testing.expectEqual(ScalarTag.int, box_int.data.box_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.u64, box_int.data.box_of_scalar.data.int);
+    // Test all scalar types
+    const int_layout = Layout.int(.u64);
+    try testing.expectEqual(LayoutTag.scalar, int_layout.tag);
+    try testing.expectEqual(ScalarTag.int, int_layout.data.scalar.tag);
+    try testing.expectEqual(types.Num.Int.Precision.u64, int_layout.data.scalar.data.int);
 
-    const box_frac = Layout.boxOfScalar(.{ .data = .{ .frac = .f32 }, .tag = .frac });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_frac.tag);
-    try testing.expectEqual(ScalarTag.frac, box_frac.data.box_of_scalar.tag);
-    try testing.expectEqual(types.Num.Frac.Precision.f32, box_frac.data.box_of_scalar.data.frac);
+    const frac_layout = Layout.frac(.f32);
+    try testing.expectEqual(LayoutTag.scalar, frac_layout.tag);
+    try testing.expectEqual(ScalarTag.frac, frac_layout.data.scalar.tag);
+    try testing.expectEqual(types.Num.Frac.Precision.f32, frac_layout.data.scalar.data.frac);
 
-    const box_bool = Layout.boxOfScalar(.{ .data = .{ .bool = {} }, .tag = .bool });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_bool.tag);
-    try testing.expectEqual(ScalarTag.bool, box_bool.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_bool.data.box_of_scalar.data.bool);
+    const bool_layout = Layout.booleanType();
+    try testing.expectEqual(LayoutTag.scalar, bool_layout.tag);
+    try testing.expectEqual(ScalarTag.bool, bool_layout.data.scalar.tag);
 
-    const box_str = Layout.boxOfScalar(.{ .data = .{ .str = {} }, .tag = .str });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_str.tag);
-    try testing.expectEqual(ScalarTag.str, box_str.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_str.data.box_of_scalar.data.str);
+    const str_layout = Layout.str();
+    try testing.expectEqual(LayoutTag.scalar, str_layout.tag);
+    try testing.expectEqual(ScalarTag.str, str_layout.data.scalar.tag);
 
-    const box_host_opaque = Layout.boxOfScalar(.{ .data = .{ .host_opaque = {} }, .tag = .host_opaque });
-    try testing.expectEqual(LayoutTag.box_of_scalar, box_host_opaque.tag);
-    try testing.expectEqual(ScalarTag.host_opaque, box_host_opaque.data.box_of_scalar.tag);
-    try testing.expectEqual({}, box_host_opaque.data.box_of_scalar.data.host_opaque);
+    const host_opaque_layout = Layout.hostOpaque();
+    try testing.expectEqual(LayoutTag.scalar, host_opaque_layout.tag);
+    try testing.expectEqual(ScalarTag.host_opaque, host_opaque_layout.data.scalar.tag);
 
-    const box_zst = Layout.boxOfZst();
-    try testing.expectEqual(LayoutTag.box_of_zst, box_zst.tag);
+    // Test different integer precisions
+    const int_i128 = Layout.int(.i128);
+    try testing.expectEqual(LayoutTag.scalar, int_i128.tag);
+    try testing.expectEqual(ScalarTag.int, int_i128.data.scalar.tag);
+    try testing.expectEqual(types.Num.Int.Precision.i128, int_i128.data.scalar.data.int);
 
-    // Test all scalar variants in list_of_scalar
-    const list_int = Layout.listOfScalar(.{ .data = .{ .int = .i16 }, .tag = .int });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_int.tag);
-    try testing.expectEqual(ScalarTag.int, list_int.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i16, list_int.data.list_of_scalar.data.int);
-
-    const list_frac = Layout.listOfScalar(.{ .data = .{ .frac = .f64 }, .tag = .frac });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_frac.tag);
-    try testing.expectEqual(ScalarTag.frac, list_frac.data.list_of_scalar.tag);
-    try testing.expectEqual(types.Num.Frac.Precision.f64, list_frac.data.list_of_scalar.data.frac);
-
-    const list_bool = Layout.listOfScalar(.{ .data = .{ .bool = {} }, .tag = .bool });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_bool.tag);
-    try testing.expectEqual(ScalarTag.bool, list_bool.data.list_of_scalar.tag);
-    try testing.expectEqual({}, list_bool.data.list_of_scalar.data.bool);
-
-    const list_str = Layout.listOfScalar(.{ .data = .{ .str = {} }, .tag = .str });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_str.tag);
-    try testing.expectEqual(ScalarTag.str, list_str.data.list_of_scalar.tag);
-    try testing.expectEqual({}, list_str.data.list_of_scalar.data.str);
-
-    const list_host_opaque = Layout.listOfScalar(.{ .data = .{ .host_opaque = {} }, .tag = .host_opaque });
-    try testing.expectEqual(LayoutTag.list_of_scalar, list_host_opaque.tag);
-    try testing.expectEqual(ScalarTag.host_opaque, list_host_opaque.data.list_of_scalar.tag);
-    try testing.expectEqual({}, list_host_opaque.data.list_of_scalar.data.host_opaque);
-
-    const list_zst = Layout.listOfZst();
-    try testing.expectEqual(LayoutTag.list_of_zst, list_zst.tag);
+    // Test different float precisions
+    const frac_f64 = Layout.frac(.f64);
+    try testing.expectEqual(LayoutTag.scalar, frac_f64.tag);
+    try testing.expectEqual(ScalarTag.frac, frac_f64.data.scalar.tag);
+    try testing.expectEqual(types.Num.Frac.Precision.f64, frac_f64.data.scalar.data.frac);
 }
 
 test "Non-scalar layout variants - fallback to indexed approach" {
     const testing = std.testing;
 
     // Test non-scalar box (should use .box tag with index)
-    const box_non_scalar = Layout.box(.{ .int_idx = 42 });
+    const box_non_scalar = Layout.box(@as(Idx, @enumFromInt(42)));
     try testing.expectEqual(LayoutTag.box, box_non_scalar.tag);
-    try testing.expectEqual(@as(u27, 42), box_non_scalar.data.box.int_idx);
+    try testing.expectEqual(@as(u28, 42), @intFromEnum(box_non_scalar.data.box));
 
     // Test non-scalar list (should use .list tag with index)
-    const list_non_scalar = Layout.list(.{ .int_idx = 123 });
+    const list_non_scalar = Layout.list(@as(Idx, @enumFromInt(123)));
     try testing.expectEqual(LayoutTag.list, list_non_scalar.tag);
-    try testing.expectEqual(@as(u27, 123), list_non_scalar.data.list.int_idx);
+    try testing.expectEqual(@as(u28, 123), @intFromEnum(list_non_scalar.data.list));
 
     // Test record layout (definitely non-scalar)
-    const record_layout = Layout.record(std.mem.Alignment.@"8", .{ .int_idx = 456 });
+    const record_layout = Layout.record(std.mem.Alignment.@"8", RecordIdx{ .int_idx = 456 });
     try testing.expectEqual(LayoutTag.record, record_layout.tag);
     try testing.expectEqual(std.mem.Alignment.@"8", record_layout.data.record.alignment);
     try testing.expectEqual(@as(u19, 456), record_layout.data.record.idx.int_idx);
@@ -541,13 +500,11 @@ test "Layout.asScalar() - edge cases and error handling" {
 
     // Test that complex layouts cannot be converted to scalars
     const complex_layouts = [_]Layout{
-        Layout.box(.{ .int_idx = 0 }),
-        Layout.list(.{ .int_idx = 0 }),
+        Layout.box(.bool),
+        Layout.list(.bool),
         Layout.boxOfZst(), // ZST containers are not scalars themselves
         Layout.listOfZst(), // ZST containers are not scalars themselves
-        Layout.boxOfScalar(.{ .data = .{ .int = .i32 }, .tag = .int }), // This is already a scalar container, not a scalar itself
-        Layout.listOfScalar(.{ .data = .{ .frac = .f64 }, .tag = .frac }), // This is already a scalar container, not a scalar itself
-        Layout.record(std.mem.Alignment.@"4", .{ .int_idx = 0 }),
+        Layout.record(std.mem.Alignment.@"4", RecordIdx{ .int_idx = 0 }),
     };
 
     for (complex_layouts) |layout| {
@@ -560,7 +517,7 @@ test "Layout.alignment() - tuple types" {
 
     for (target.TargetUsize.all()) |target_usize| {
         // Test tuple alignment
-        const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", .{ .int_idx = 0 });
+        const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", TupleIdx{ .int_idx = 0 });
         try testing.expectEqual(std.mem.Alignment.@"8", tuple_layout.alignment(target_usize));
     }
 }
@@ -592,11 +549,11 @@ test "TupleField structure" {
     const testing = std.testing;
     const tuple_field = TupleField{
         .index = 1,
-        .layout = Idx{ .int_idx = 5 },
+        .layout = @as(Idx, @enumFromInt(5)),
     };
 
     try testing.expectEqual(@as(u24, 1), tuple_field.index);
-    try testing.expectEqual(@as(@TypeOf(tuple_field.layout.int_idx), 5), tuple_field.layout.int_idx);
+    try testing.expectEqual(@as(u28, 5), @intFromEnum(tuple_field.layout));
 }
 
 test "Tuple memory optimization - comprehensive coverage" {
@@ -604,10 +561,10 @@ test "Tuple memory optimization - comprehensive coverage" {
 
     // Test that tuple layouts properly handle different field types
     const tuple_layouts = [_]Layout{
-        Layout.tuple(std.mem.Alignment.@"1", .{ .int_idx = 0 }),
-        Layout.tuple(std.mem.Alignment.@"4", .{ .int_idx = 1 }),
-        Layout.tuple(std.mem.Alignment.@"8", .{ .int_idx = 2 }),
-        Layout.tuple(std.mem.Alignment.@"16", .{ .int_idx = 3 }),
+        Layout.tuple(std.mem.Alignment.@"1", TupleIdx{ .int_idx = 0 }),
+        Layout.tuple(std.mem.Alignment.@"4", TupleIdx{ .int_idx = 1 }),
+        Layout.tuple(std.mem.Alignment.@"8", TupleIdx{ .int_idx = 2 }),
+        Layout.tuple(std.mem.Alignment.@"16", TupleIdx{ .int_idx = 3 }),
     };
 
     for (tuple_layouts) |layout| {
@@ -657,51 +614,6 @@ test "TupleData size calculation" {
     }
 }
 
-test "record_wrapping_scalar layout creation" {
-    const testing = std.testing;
-
-    // Test with int scalar
-    const int_scalar = Scalar{ .data = .{ .int = .i32 }, .tag = .int };
-    const field_name_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 42 };
-    const layout = Layout.recordWrappingScalar(int_scalar, field_name_idx);
-
-    try testing.expectEqual(LayoutTag.record_wrapping_scalar, layout.tag);
-    try testing.expectEqual(ScalarTag.int, layout.data.record_wrapping_scalar.scalar.tag);
-    try testing.expectEqual(types.Num.Int.Precision.i32, layout.data.record_wrapping_scalar.scalar.data.int);
-    try testing.expectEqual(@as(Ident.IdxFieldType, 42), layout.data.record_wrapping_scalar.field_name_idx.idx);
-}
-
-test "record_wrapping_scalar alignment" {
-    const testing = std.testing;
-
-    for (target.TargetUsize.all()) |target_usize| {
-        // Test with different scalar types
-        const int_scalar = Scalar{ .data = .{ .int = .i64 }, .tag = .int };
-        const int_layout = Layout.recordWrappingScalar(int_scalar, .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 1 });
-        try testing.expectEqual(std.mem.Alignment.@"8", int_layout.alignment(target_usize));
-
-        const bool_scalar = Scalar{ .data = .{ .bool = {} }, .tag = .bool };
-        const bool_layout = Layout.recordWrappingScalar(bool_scalar, .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 2 });
-        try testing.expectEqual(target_usize.alignment(), bool_layout.alignment(target_usize));
-
-        const str_scalar = Scalar{ .data = .{ .str = {} }, .tag = .str };
-        const str_layout = Layout.recordWrappingScalar(str_scalar, .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 3 });
-        try testing.expectEqual(target_usize.alignment(), str_layout.alignment(target_usize));
-    }
-}
-
-test "record_wrapping_scalar asScalar" {
-    const testing = std.testing;
-
-    // Test that asScalar returns the wrapped scalar
-    const scalar = Scalar{ .data = .{ .frac = .f64 }, .tag = .frac };
-    const layout = Layout.recordWrappingScalar(scalar, .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 100 });
-
-    const extracted_scalar = try layout.asScalar();
-    try testing.expectEqual(ScalarTag.frac, extracted_scalar.tag);
-    try testing.expectEqual(types.Num.Frac.Precision.f64, extracted_scalar.data.frac);
-}
-
 test "Ident.Idx limits" {
     const testing = std.testing;
 
@@ -711,70 +623,4 @@ test "Ident.Idx limits" {
 
     // Test that it's exactly 21 bits (3 for attributes + Ident.IDX_BITS for idx)
     try testing.expectEqual(@as(u32, @bitSizeOf(Ident.Idx)), @bitSizeOf(Ident.Attributes) + Ident.IDX_BITS);
-}
-
-test "RecordWrappingScalar size" {
-    const testing = std.testing;
-
-    // RecordWrappingScalar should be exactly 28 bits:
-    // - Scalar: 7 bits (4 for data union + 3 for tag)
-    // - Ident.Idx: 21 bits (3 for attributes + Ident.IDX_BITS for idx)
-    // Total: 28 bits
-    try testing.expectEqual(@as(u32, @bitSizeOf(RecordWrappingScalar)), 28);
-
-    // Test with various scalars
-    const test_scalars = [_]Scalar{
-        .{ .data = .{ .int = .i32 }, .tag = .int },
-        .{ .data = .{ .bool = {} }, .tag = .bool },
-        .{ .data = .{ .str = {} }, .tag = .str },
-        .{ .data = .{ .frac = .f64 }, .tag = .frac },
-        .{ .data = .{ .host_opaque = {} }, .tag = .host_opaque },
-    };
-
-    for (test_scalars) |scalar| {
-        const rws = RecordWrappingScalar{
-            .scalar = scalar,
-            .field_name_idx = .{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = 12345 },
-        };
-
-        // Verify we can round-trip the data
-        try testing.expectEqual(scalar.tag, rws.scalar.tag);
-        try testing.expectEqual(@as(Ident.IdxFieldType, 12345), rws.field_name_idx.idx);
-    }
-}
-
-test "record_wrapping_scalar comprehensive" {
-    const testing = std.testing;
-
-    // Test all scalar types can be wrapped
-    const scalars = [_]struct { scalar: Scalar, name: []const u8 }{
-        .{ .scalar = .{ .data = .{ .int = .i8 }, .tag = .int }, .name = "i8" },
-        .{ .scalar = .{ .data = .{ .int = .i16 }, .tag = .int }, .name = "i16" },
-        .{ .scalar = .{ .data = .{ .int = .i32 }, .tag = .int }, .name = "i32" },
-        .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int }, .name = "i64" },
-        .{ .scalar = .{ .data = .{ .int = .i128 }, .tag = .int }, .name = "i128" },
-        .{ .scalar = .{ .data = .{ .frac = .f32 }, .tag = .frac }, .name = "f32" },
-        .{ .scalar = .{ .data = .{ .frac = .f64 }, .tag = .frac }, .name = "f64" },
-        .{ .scalar = .{ .data = .{ .bool = {} }, .tag = .bool }, .name = "bool" },
-        .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str }, .name = "str" },
-        .{ .scalar = .{ .data = .{ .host_opaque = {} }, .tag = .host_opaque }, .name = "host_opaque" },
-    };
-
-    for (scalars, 0..) |test_case, i| {
-        const field_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = @intCast(i * 1000) };
-        const layout = Layout.recordWrappingScalar(test_case.scalar, field_idx);
-
-        // Verify layout tag
-        try testing.expectEqual(LayoutTag.record_wrapping_scalar, layout.tag);
-
-        // Verify scalar data is preserved
-        try testing.expectEqual(test_case.scalar.tag, layout.data.record_wrapping_scalar.scalar.tag);
-
-        // Verify field name index is preserved
-        try testing.expectEqual(@as(Ident.IdxFieldType, @intCast(i * 1000)), layout.data.record_wrapping_scalar.field_name_idx.idx);
-
-        // Verify asScalar works
-        const extracted = try layout.asScalar();
-        try testing.expectEqual(test_case.scalar.tag, extracted.tag);
-    }
 }
