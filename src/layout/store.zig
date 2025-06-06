@@ -57,30 +57,42 @@ pub const Store = struct {
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
     const PRIMITIVE_COUNT = 16;
 
-    /// Get the sentinel Idx for a given scalar type
-    fn getScalarSentinelIdx(scalar: Scalar) Idx {
-        switch (scalar.tag) {
-            .bool => return .bool,
-            .str => return .str,
-            .host_opaque => return .host_opaque,
-            .int => switch (scalar.data.int) {
-                .u8 => return .u8,
-                .i8 => return .i8,
-                .u16 => return .u16,
-                .i16 => return .i16,
-                .u32 => return .u32,
-                .i32 => return .i32,
-                .u64 => return .u64,
-                .i64 => return .i64,
-                .u128 => return .u128,
-                .i128 => return .i128,
-            },
-            .frac => switch (scalar.data.frac) {
-                .f32 => return .f32,
-                .f64 => return .f64,
-                .dec => return .dec,
-            },
-        }
+    /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
+    /// This relies on the careful ordering of ScalarTag and Idx enum values.
+    pub fn idxForScalar(scalar: Scalar) Idx {
+        // Map scalar to idx using pure arithmetic:
+        // bool (tag 0) -> 0
+        // str (tag 1) -> 1
+        // host_opaque (tag 2) -> 2
+        // int (tag 3) with precision p -> 3 + p
+        // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
+
+        // In the packed struct, ScalarData comes first (4 bits), then ScalarTag (3 bits)
+        // For numeric types (int/frac), the precision enum is stored in ScalarData
+        // For void types (bool/str/host_opaque), ScalarData is 0
+
+        const tag = @intFromEnum(scalar.tag);
+
+        // Get the precision bits directly from the packed representation
+        // This works because in a packed union, all fields start at bit 0
+        const scalar_bits = @as(u7, @bitCast(scalar));
+        const precision = scalar_bits & 0xF; // Lower 4 bits contain precision for numeric types
+
+        // Create masks for different tag ranges
+        // is_numeric: 1 when tag >= 3, else 0
+        const is_numeric = @as(u7, @intFromBool(tag >= 3));
+        const is_frac = @as(u7, @intFromBool(scalar.tag == .frac));
+
+        // Calculate the base index
+        // For non-numeric (tag 0-2): base_idx = tag
+        // For int (tag 3): base_idx = 3
+        // For frac (tag 4): base_idx = 11 (to map to indices 13-15)
+        const base_idx = tag + ((is_frac * 8) - is_frac); // Could also do (is_frac * 7) but * 8 can become a bit shift
+
+        // Calculate the final index
+        // For non-numeric: idx = base_idx (precision is 0)
+        // For numeric: idx = base_idx + precision
+        return @enumFromInt(base_idx + (is_numeric * precision));
     }
 
     pub fn init(env: *base.ModuleEnv, type_store: *const types_store.Store) Self {
@@ -147,7 +159,7 @@ pub const Store = struct {
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return getScalarSentinelIdx(layout.data.scalar);
+            return idxForScalar(layout.data.scalar);
         }
 
         // For non-scalar types, insert as normal

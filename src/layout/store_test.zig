@@ -3206,6 +3206,93 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     try testing.expect(layout_store.layouts_by_var.entries.capacity >= type_store.getNumVars());
 }
 
-// The record optimization has been removed from the layout system.
-// Records with single scalar fields now use the regular record layout.
-// This makes the layout system simpler and more consistent.
+test "idxForScalar - arithmetic mapping with no branches" {
+    const testing = std.testing;
+
+    // Test every possible scalar type to ensure arithmetic mapping is correct
+
+    // bool
+    {
+        const scalar = layout.Scalar{ .data = .{ .bool = {} }, .tag = .bool };
+        const idx = Store.idxForScalar(scalar);
+        try testing.expectEqual(layout.Idx.bool, idx);
+    }
+
+    // str
+    {
+        const scalar = layout.Scalar{ .data = .{ .str = {} }, .tag = .str };
+        const idx = Store.idxForScalar(scalar);
+        try testing.expectEqual(layout.Idx.str, idx);
+    }
+
+    // host_opaque
+    {
+        const scalar = layout.Scalar{ .data = .{ .host_opaque = {} }, .tag = .host_opaque };
+        const idx = Store.idxForScalar(scalar);
+        try testing.expectEqual(layout.Idx.host_opaque, idx);
+    }
+
+    // int
+    {
+        const int_tests = [_]struct { precision: types.Num.Int.Precision, expected: layout.Idx }{
+            .{ .precision = .u8, .expected = .u8 },
+            .{ .precision = .i8, .expected = .i8 },
+            .{ .precision = .u16, .expected = .u16 },
+            .{ .precision = .i16, .expected = .i16 },
+            .{ .precision = .u32, .expected = .u32 },
+            .{ .precision = .i32, .expected = .i32 },
+            .{ .precision = .u64, .expected = .u64 },
+            .{ .precision = .i64, .expected = .i64 },
+            .{ .precision = .u128, .expected = .u128 },
+            .{ .precision = .i128, .expected = .i128 },
+        };
+
+        for (int_tests) |test_case| {
+            const scalar = layout.Scalar{ .data = .{ .int = test_case.precision }, .tag = .int };
+            const idx = Store.idxForScalar(scalar);
+            try testing.expectEqual(test_case.expected, idx);
+        }
+    }
+
+    // frac
+    {
+        const frac_tests = [_]struct { precision: types.Num.Frac.Precision, expected: layout.Idx }{
+            .{ .precision = .f32, .expected = .f32 },
+            .{ .precision = .f64, .expected = .f64 },
+            .{ .precision = .dec, .expected = .dec },
+        };
+
+        for (frac_tests) |test_case| {
+            const scalar = layout.Scalar{ .data = .{ .frac = test_case.precision }, .tag = .frac };
+            const idx = Store.idxForScalar(scalar);
+            try testing.expectEqual(test_case.expected, idx);
+        }
+    }
+
+    // Verify the arithmetic mapping directly
+    // bool (tag 0) -> idx 0
+    try testing.expectEqual(@as(u28, 0), @intFromEnum(layout.Idx.bool));
+
+    // str (tag 1) -> idx 1
+    try testing.expectEqual(@as(u28, 1), @intFromEnum(layout.Idx.str));
+
+    // host_opaque (tag 2) -> idx 2
+    try testing.expectEqual(@as(u28, 2), @intFromEnum(layout.Idx.host_opaque));
+
+    // int (tag 3) with precision 0-9 -> idx 3-12
+    try testing.expectEqual(@as(u28, 3), @intFromEnum(layout.Idx.u8)); // 3 + 0
+    try testing.expectEqual(@as(u28, 4), @intFromEnum(layout.Idx.i8)); // 3 + 1
+    try testing.expectEqual(@as(u28, 5), @intFromEnum(layout.Idx.u16)); // 3 + 2
+    try testing.expectEqual(@as(u28, 6), @intFromEnum(layout.Idx.i16)); // 3 + 3
+    try testing.expectEqual(@as(u28, 7), @intFromEnum(layout.Idx.u32)); // 3 + 4
+    try testing.expectEqual(@as(u28, 8), @intFromEnum(layout.Idx.i32)); // 3 + 5
+    try testing.expectEqual(@as(u28, 9), @intFromEnum(layout.Idx.u64)); // 3 + 6
+    try testing.expectEqual(@as(u28, 10), @intFromEnum(layout.Idx.i64)); // 3 + 7
+    try testing.expectEqual(@as(u28, 11), @intFromEnum(layout.Idx.u128)); // 3 + 8
+    try testing.expectEqual(@as(u28, 12), @intFromEnum(layout.Idx.i128)); // 3 + 9
+
+    // frac (tag 4) with precision 2-4 -> idx 13-15
+    try testing.expectEqual(@as(u28, 13), @intFromEnum(layout.Idx.f32)); // 13 + (2 - 2)
+    try testing.expectEqual(@as(u28, 14), @intFromEnum(layout.Idx.f64)); // 13 + (3 - 2)
+    try testing.expectEqual(@as(u28, 15), @intFromEnum(layout.Idx.dec)); // 13 + (4 - 2)
+}

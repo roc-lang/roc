@@ -35,22 +35,17 @@ pub fn for_text(text: []const u8) Ident {
     };
 }
 
-/// Number of bits used for the index field in Ident.Idx
-pub const IDX_BITS = 18;
-
 /// The type used for the index field in Ident.Idx
-pub const IdxFieldType = @Type(.{ .int = .{ .signedness = .unsigned, .bits = IDX_BITS } });
+pub const IdxInt = u24;
 
 /// The index from the store, with the attributes packed into unused bytes.
-///
-/// With IDX_BITS bits for the ID we can store up to 2^IDX_BITS identifiers.
-pub const Idx = packed struct(u21) {
+pub const Idx = packed struct {
     attributes: Attributes,
-    idx: IdxFieldType,
+    idx: IdxInt,
 };
 
 /// The bit representation type for Ident.Idx when stored as an integer
-pub const IdxRepr = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(Attributes) + IDX_BITS } });
+pub const IdxRepr = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(Idx) } });
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.
 pub const Attributes = packed struct(u3) {
@@ -95,7 +90,7 @@ pub const Store = struct {
 
         return Idx{
             .attributes = ident.attributes,
-            .idx = @as(IdxFieldType, @intCast(@intFromEnum(idx))),
+            .idx = @as(IdxInt, @intCast(@intFromEnum(idx))),
         };
     }
 
@@ -137,7 +132,7 @@ pub const Store = struct {
 
         return Idx{
             .attributes = attributes,
-            .idx = @as(IdxFieldType, @truncate(@intFromEnum(idx))),
+            .idx = @as(IdxInt, @truncate(@intFromEnum(idx))),
         };
     }
 

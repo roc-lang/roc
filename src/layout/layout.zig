@@ -22,22 +22,22 @@ pub const LayoutTag = enum(u4) {
 /// We verify this with a test, and make use of it to calculate Idx sizes.
 const layout_bit_size = 32;
 
-/// Tag for Scalar variants
+/// Tag for scalar variants - ordered to match Idx enum for arithmetic mapping
 pub const ScalarTag = enum(u3) {
-    bool,
-    str,
-    int,
-    frac,
-    host_opaque, // void* on the host, e.g. a flex var that was allowed to pass through to the host
+    bool = 0, // Maps to Idx 0
+    str = 1, // Maps to Idx 1
+    host_opaque = 2, // Maps to Idx 2
+    int = 3, // Maps to Idx 3-12 (add precision value)
+    frac = 4, // Maps to Idx 13-15 (add precision value + 11)
 };
 
-/// Scalar union data
+/// Scalar union data - ordered to match ScalarTag
 pub const ScalarData = packed union {
     bool: void,
     str: void,
+    host_opaque: void,
     int: types.Num.Int.Precision,
     frac: types.Num.Frac.Precision,
-    host_opaque: void,
 };
 
 /// Scalar types that can be stored directly in box_of_scalar or list_of_scalar
@@ -56,11 +56,12 @@ pub const Idx = enum(@Type(.{
     },
 })) {
     // Sentinel values for primitive types
+    // Note: the layout store's idxForScalar method relies on these exact numbers!
     bool = 0,
     str = 1,
     host_opaque = 2,
 
-    // Integer types
+    // ints
     u8 = 3,
     i8 = 4,
     u16 = 5,
@@ -72,7 +73,7 @@ pub const Idx = enum(@Type(.{
     u128 = 11,
     i128 = 12,
 
-    // Floating point types
+    // fracs
     f32 = 13,
     f64 = 14,
     dec = 15,
@@ -612,15 +613,4 @@ test "TupleData size calculation" {
         try testing.expectEqual(@as(u32, 0), @intFromEnum(fields_range.start));
         try testing.expectEqual(case.field_count, @intFromEnum(fields_range.end));
     }
-}
-
-test "Ident.Idx limits" {
-    const testing = std.testing;
-
-    // Test maximum value (2^18 - 1 = 262143)
-    const max_idx = Ident.Idx{ .attributes = .{ .effectful = false, .ignored = false, .reassignable = false }, .idx = std.math.maxInt(Ident.IdxFieldType) };
-    try testing.expectEqual(@as(Ident.IdxFieldType, std.math.maxInt(Ident.IdxFieldType)), max_idx.idx);
-
-    // Test that it's exactly 21 bits (3 for attributes + Ident.IDX_BITS for idx)
-    try testing.expectEqual(@as(u32, @bitSizeOf(Ident.Idx)), @bitSizeOf(Ident.Attributes) + Ident.IDX_BITS);
 }
