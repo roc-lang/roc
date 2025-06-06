@@ -16,8 +16,9 @@ pub const NonEmptyRange = @import("collections/safe_list.zig").NonEmptyRange;
 
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
 
-/// ArrayListMap is a key-value map that uses direct indexing instead of hashing.
-/// Keys must be convertible to usize indices, and key value 0 is reserved as a sentinel.
+/// A key-value map that uses direct array indexing instead of hashing.
+/// Keys must enums that are convertible to indices, and key value 0 is reserved
+/// as a sentinel value which indicates an empty slot.
 pub fn ArrayListMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
