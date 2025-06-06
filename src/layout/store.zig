@@ -16,6 +16,9 @@ const Idx = layout_.Idx;
 const RecordField = layout_.RecordField;
 const RecordData = layout_.RecordData;
 const RecordIdx = layout_.RecordIdx;
+const TupleField = layout_.TupleField;
+const TupleData = layout_.TupleData;
+const TupleIdx = layout_.TupleIdx;
 const Work = work.Work;
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -38,6 +41,8 @@ pub const Store = struct {
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
     record_data: collections.SafeList(RecordData),
+    tuple_fields: TupleField.SafeMultiList,
+    tuple_data: collections.SafeList(TupleData),
 
     // Cache to avoid duplicate work
     // TODO make this be a flat array with `!0` values indicating emptiness,
@@ -54,6 +59,8 @@ pub const Store = struct {
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
             .record_data = collections.SafeList(RecordData).initCapacity(env.gpa, 256),
+            .tuple_fields = TupleField.SafeMultiList.initCapacity(env.gpa, 256),
+            .tuple_data = collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = std.AutoHashMapUnmanaged(Var, Idx){},
             .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
         };
@@ -64,6 +71,8 @@ pub const Store = struct {
         self.tuple_elems.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
         self.record_data.deinit(self.env.gpa);
+        self.tuple_fields.deinit(self.env.gpa);
+        self.tuple_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
@@ -83,6 +92,10 @@ pub const Store = struct {
         return self.record_data.get(@enumFromInt(idx.int_idx));
     }
 
+    pub fn getTupleData(self: *const Self, idx: TupleIdx) *const TupleData {
+        return self.tuple_data.get(@enumFromInt(idx.int_idx));
+    }
+
     fn targetUsize(self: *const Self) target.TargetUsize {
         return self.env.target.target_usize;
     }
@@ -100,6 +113,7 @@ pub const Store = struct {
             .box, .box_of_zst, .box_of_scalar => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list, .list_of_zst, .list_of_scalar => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
+            .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
         };
     }
 
@@ -149,6 +163,22 @@ pub const Store = struct {
                 },
                 else => return LayoutError.InvalidRecordExtension,
             }
+        }
+
+        return num_fields;
+    }
+
+    /// Add the tuple's fields to self.pending_tuple_fields
+    fn gatherTupleFields(
+        self: *Self,
+        var_store: *const types_store.Store,
+        tuple_type: types.Tuple,
+    ) (LayoutError || std.mem.Allocator.Error)!usize {
+        const elem_slice = var_store.getTupleElemsSlice(tuple_type.elems);
+        const num_fields = elem_slice.len;
+
+        for (elem_slice, 0..) |var_, index| {
+            try self.work.pending_tuple_fields.append(self.env.gpa, .{ .index = @intCast(index), .var_ = var_ });
         }
 
         return num_fields;
@@ -255,6 +285,104 @@ pub const Store = struct {
         return Layout.record(max_alignment, record_idx);
     }
 
+    fn finishTuple(
+        self: *Store,
+        updated_tuple: work.Work.PendingTuple,
+    ) (LayoutError || std.mem.Allocator.Error)!Layout {
+        const target_usize = self.targetUsize();
+        const resolved_fields_end = self.work.resolved_tuple_fields.len;
+        const num_resolved_fields = resolved_fields_end - updated_tuple.resolved_fields_start;
+        const fields_start = self.tuple_fields.items.len;
+
+        // Copy only this tuple's resolved fields to the tuple_fields store
+        const field_indices = self.work.resolved_tuple_fields.items(.field_index);
+        const field_idxs = self.work.resolved_tuple_fields.items(.field_idx);
+
+        // First, collect the fields into a temporary array so we can sort them
+        var temp_fields = std.ArrayList(TupleField).init(self.env.gpa);
+        defer temp_fields.deinit();
+
+        for (updated_tuple.resolved_fields_start..resolved_fields_end) |i| {
+            try temp_fields.append(.{
+                .index = field_indices[i],
+                .layout = field_idxs[i],
+            });
+        }
+
+        // Sort fields by alignment (descending) first, then by index (ascending)
+        const AlignmentSortCtx = struct {
+            store: *Self,
+            target_usize: target.TargetUsize,
+            pub fn lessThan(ctx: @This(), lhs: TupleField, rhs: TupleField) bool {
+                const lhs_layout = ctx.store.getLayout(lhs.layout);
+                const rhs_layout = ctx.store.getLayout(rhs.layout);
+
+                const lhs_alignment = lhs_layout.alignment(ctx.target_usize);
+                const rhs_alignment = rhs_layout.alignment(ctx.target_usize);
+
+                // First sort by alignment (descending - higher alignment first)
+                if (lhs_alignment.toByteUnits() != rhs_alignment.toByteUnits()) {
+                    return lhs_alignment.toByteUnits() > rhs_alignment.toByteUnits();
+                }
+
+                // Then sort by index (ascending)
+                return lhs.index < rhs.index;
+            }
+        };
+
+        std.mem.sort(
+            TupleField,
+            temp_fields.items,
+            AlignmentSortCtx{ .store = self, .target_usize = self.targetUsize() },
+            AlignmentSortCtx.lessThan,
+        );
+
+        // Now add them to the tuple_fields store in the sorted order
+        for (temp_fields.items) |sorted_field| {
+            _ = self.tuple_fields.append(self.env.gpa, sorted_field);
+        }
+
+        // Calculate max alignment and total size of all fields
+        var max_alignment = std.mem.Alignment.@"1";
+        var current_offset: u32 = 0;
+        var field_idx: u32 = 0;
+
+        while (field_idx < temp_fields.items.len) : (field_idx += 1) {
+            const temp_field = temp_fields.items[field_idx];
+            const field_layout = self.getLayout(temp_field.layout);
+
+            const field_alignment = field_layout.alignment(target_usize);
+            const field_size = self.layoutSize(field_layout.*);
+
+            // Update max alignment
+            max_alignment = max_alignment.max(field_alignment);
+
+            // Align current offset to field's alignment
+            current_offset = @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(field_alignment.toByteUnits()))));
+
+            // Add field size
+            current_offset = current_offset + field_size;
+        }
+
+        // Final size must be aligned to the tuple's alignment
+        const total_size = @as(u32, @intCast(std.mem.alignForward(u32, current_offset, @as(u32, @intCast(max_alignment.toByteUnits())))));
+
+        // Create the tuple layout with the fields range
+        const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
+
+        // Store the tuple data
+        const tuple_idx = TupleIdx{ .int_idx = @intCast(self.tuple_data.len()) };
+        _ = self.tuple_data.append(self.env.gpa, TupleData{
+            .size = total_size,
+            .fields = fields_range,
+        });
+
+        // Remove only this tuple's resolved fields
+        self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
+
+        return Layout.tuple(max_alignment, tuple_idx);
+    }
+
     /// Note: the caller must verify ahead of time that the given variable does not
     /// resolve to a flex var or rigid var, unless that flex var or rigid var is
     /// wrapped in a Box or a Num (e.g. `Num a` or `Int a`).
@@ -341,10 +469,29 @@ pub const Store = struct {
                         // Num(a) defaults to Int(a), so use the default precision for an Int.
                         .flex_var => Layout.int(types.Num.Int.Precision.default),
                     },
-                    .tuple => |tuple| {
-                        // TODO
-                        _ = tuple;
-                        @panic("TODO: tuple layout");
+                    .tuple => |tuple_type| {
+                        const num_fields = try self.gatherTupleFields(var_store, tuple_type);
+
+                        if (num_fields == 0) {
+                            continue :flat_type .empty_record; // Empty tuple is like empty record
+                        }
+
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .{
+                                .tuple = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .pending_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_tuple_fields.len),
+                                },
+                            },
+                        });
+
+                        // Start working on the last pending field (we want to pop them).
+                        const last_field_idx = self.work.pending_tuple_fields.len - 1;
+                        const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
+                        current = var_store.resolveVar(last_pending_field.var_);
+                        continue :outer;
                     },
                     .func => |func| {
                         // TODO
@@ -424,6 +571,39 @@ pub const Store = struct {
 
                                         // Get the next field to process
                                         const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
+                                        current = var_store.resolveVar(next_field.var_);
+                                        continue;
+                                    }
+                                },
+                                .tuple => |pending_tuple| {
+                                    // It turned out we were getting the layout for a tuple field
+                                    std.debug.assert(pending_tuple.pending_fields > 0);
+                                    var updated_tuple = pending_tuple;
+                                    updated_tuple.pending_fields -= 1;
+
+                                    // The current field we're working on turned out to be zero-sized, so drop it.
+                                    _ = self.work.pending_tuple_fields.pop() orelse unreachable;
+
+                                    if (updated_tuple.pending_fields == 0) {
+                                        if (self.work.resolved_tuple_fields.len == updated_tuple.resolved_fields_start) {
+                                            // All fields were zero-sized, so the parent container turned
+                                            // out to be an empty tuple as well.
+                                            self.work.resolved_tuple_fields.shrinkRetainingCapacity(updated_tuple.resolved_fields_start);
+
+                                            continue :flat_type .empty_record; // Empty tuple is like empty record
+                                        } else {
+                                            // We finished the tuple we were working on.
+                                            break :blk try self.finishTuple(updated_tuple);
+                                        }
+                                    } else {
+                                        // Still have pending fields to process
+                                        try self.work.pending_containers.append(self.env.gpa, .{
+                                            .var_ = pending_item.var_,
+                                            .container = .{ .tuple = updated_tuple },
+                                        });
+
+                                        // Get the next field to process
+                                        const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
                                         current = var_store.resolveVar(next_field.var_);
                                         continue;
                                     }
@@ -516,6 +696,28 @@ pub const Store = struct {
                             continue :outer;
                         }
                     },
+                    .tuple => |*pending_tuple| {
+                        std.debug.assert(pending_tuple.pending_fields > 0);
+                        pending_tuple.pending_fields -= 1;
+
+                        // Pop the field we just processed
+                        const pending_field = self.work.pending_tuple_fields.pop() orelse unreachable;
+
+                        // Add to resolved fields
+                        try self.work.resolved_tuple_fields.append(self.env.gpa, .{
+                            .field_index = pending_field.index,
+                            .field_idx = layout_idx,
+                        });
+
+                        if (pending_tuple.pending_fields == 0) {
+                            layout = try self.finishTuple(pending_tuple.*);
+                        } else {
+                            // There are still fields remaining to process, so process the next one in the outer loop.
+                            const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
+                            current = var_store.resolveVar(next_field.var_);
+                            continue :outer;
+                        }
+                    },
                 }
 
                 // We're done with this container, so remove it from pending_containers
@@ -526,8 +728,9 @@ pub const Store = struct {
                 try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
             }
 
-            // Since there are no pending containers remaining, there shouldn't be any pending record fields either.
+            // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.
             std.debug.assert(self.work.pending_record_fields.len == 0);
+            std.debug.assert(self.work.pending_tuple_fields.len == 0);
 
             // No more pending containers; we're done!
             return layout_idx;

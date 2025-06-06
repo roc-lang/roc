@@ -17,6 +17,7 @@ pub const LayoutTag = enum(u4) {
     list_of_zst, // List of zero-sized types, e.g. List({}) - needs a special-cased runtime implementation
     list_of_scalar, // List of scalar values, e.g. List(Str) - has a more compact representation than .list
     record,
+    tuple,
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -70,6 +71,7 @@ pub const LayoutUnion = packed union {
     list_of_zst: void,
     list_of_scalar: Scalar,
     record: RecordLayout,
+    tuple: TupleLayout,
 };
 
 /// The runtime memory layout of a Roc value.
@@ -100,6 +102,7 @@ pub const Layout = packed struct {
                 .bool, .str, .host_opaque => target_usize.alignment(),
             },
             .record => self.data.record.alignment,
+            .tuple => self.data.tuple.alignment,
             .box, .box_of_zst, .box_of_scalar, .list, .list_of_zst, .list_of_scalar => target_usize.alignment(),
         };
     }
@@ -165,6 +168,11 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .record = .{ .alignment = record_alignment, .idx = idx } }, .tag = .record };
     }
 
+    /// tuple layout with the given alignment and TupleIdx
+    pub fn tuple(tuple_alignment: std.mem.Alignment, idx: TupleIdx) Layout {
+        return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = idx } }, .tag = .tuple };
+    }
+
     /// Convert a layout to a scalar if possible, otherwise return an error
     pub fn asScalar(self: Layout) !Scalar {
         return switch (self.tag) {
@@ -213,6 +221,48 @@ pub const RecordData = struct {
 
     pub fn getFields(self: RecordData) RecordField.SafeMultiList.Range {
         return self.fields.toRange(RecordField.SafeMultiList.Idx);
+    }
+};
+
+/// Tuple field layout
+pub const TupleField = struct {
+    /// The index of the field in the original tuple (e.g. 0 would be the first element in the tuple)
+    index: u16,
+    /// The layout of the field's value
+    layout: Idx,
+
+    /// A SafeMultiList for storing tuple fields
+    pub const SafeMultiList = collections.SafeMultiList(TupleField);
+};
+
+/// Tuple layout - stores alignment and index to full data in Store
+pub const TupleLayout = packed struct {
+    /// Alignment of the tuple
+    alignment: std.mem.Alignment,
+    /// Index into the Store's tuple data
+    idx: TupleIdx,
+};
+
+/// Index into the Store's tuple data
+pub const TupleIdx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // We need to be able to fit this in a Layout along with the alignment field in the TupleLayout.
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
+        },
+    }),
+};
+
+/// Tuple data stored in the layout Store
+pub const TupleData = struct {
+    /// Size of the tuple, in bytes
+    size: u32,
+    /// Range of fields in the tuple_fields list
+    fields: collections.NonEmptyRange,
+
+    pub fn getFields(self: TupleData) TupleField.SafeMultiList.Range {
+        return self.fields.toRange(TupleField.SafeMultiList.Idx);
     }
 };
 
@@ -474,5 +524,107 @@ test "Layout.asScalar() - edge cases and error handling" {
 
     for (complex_layouts) |layout| {
         try testing.expectError(error.NotAScalar, layout.asScalar());
+    }
+}
+
+test "Layout.alignment() - tuple types" {
+    const testing = std.testing;
+
+    for (target.TargetUsize.all()) |target_usize| {
+        // Test tuple alignment
+        const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", .{ .int_idx = 0 });
+        try testing.expectEqual(std.mem.Alignment.@"8", tuple_layout.alignment(target_usize));
+    }
+}
+
+test "TupleData.getFields()" {
+    const testing = std.testing;
+    const tuple_data = TupleData{
+        .size = 24,
+        .fields = .{ .start = 10, .count = 3 },
+    };
+
+    const fields_range = tuple_data.getFields();
+    try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
+    try testing.expectEqual(@as(u32, 13), @intFromEnum(fields_range.end));
+}
+
+test "Layout tuple variants" {
+    const testing = std.testing;
+    // Test tuple layout creation
+    const tuple_idx = TupleIdx{ .int_idx = 42 };
+    const tuple_layout = Layout.tuple(std.mem.Alignment.@"8", tuple_idx);
+
+    try testing.expectEqual(LayoutTag.tuple, tuple_layout.tag);
+    try testing.expectEqual(std.mem.Alignment.@"8", tuple_layout.data.tuple.alignment);
+    try testing.expectEqual(@as(@TypeOf(tuple_idx.int_idx), 42), tuple_layout.data.tuple.idx.int_idx);
+}
+
+test "TupleField structure" {
+    const testing = std.testing;
+    const tuple_field = TupleField{
+        .index = 1,
+        .layout = Idx{ .int_idx = 5 },
+    };
+
+    try testing.expectEqual(@as(u24, 1), tuple_field.index);
+    try testing.expectEqual(@as(@TypeOf(tuple_field.layout.int_idx), 5), tuple_field.layout.int_idx);
+}
+
+test "Tuple memory optimization - comprehensive coverage" {
+    const testing = std.testing;
+
+    // Test that tuple layouts properly handle different field types
+    const tuple_layouts = [_]Layout{
+        Layout.tuple(std.mem.Alignment.@"1", .{ .int_idx = 0 }),
+        Layout.tuple(std.mem.Alignment.@"4", .{ .int_idx = 1 }),
+        Layout.tuple(std.mem.Alignment.@"8", .{ .int_idx = 2 }),
+        Layout.tuple(std.mem.Alignment.@"16", .{ .int_idx = 3 }),
+    };
+
+    for (tuple_layouts) |layout| {
+        try testing.expectEqual(LayoutTag.tuple, layout.tag);
+
+        // Test that tuple layouts cannot be converted to scalars
+        try testing.expectError(error.NotAScalar, layout.asScalar());
+    }
+}
+
+test "TupleIdx bit packing" {
+    const testing = std.testing;
+
+    // Test that TupleIdx can hold large values
+    const large_value: u32 = 65535; // Large but reasonable value
+    const tuple_idx = TupleIdx{ .int_idx = large_value };
+    try testing.expectEqual(large_value, tuple_idx.int_idx);
+
+    // Test tuple layout with large index
+    const tuple_layout = Layout.tuple(std.mem.Alignment.@"1", tuple_idx);
+    try testing.expectEqual(large_value, tuple_layout.data.tuple.idx.int_idx);
+}
+
+test "TupleData size calculation" {
+    const testing = std.testing;
+
+    // Test various tuple sizes
+    const test_cases = [_]struct { size: u32, field_count: u32 }{
+        .{ .size = 0, .field_count = 0 },
+        .{ .size = 8, .field_count = 1 },
+        .{ .size = 16, .field_count = 2 },
+        .{ .size = 32, .field_count = 4 },
+        .{ .size = 1024, .field_count = 64 },
+    };
+
+    for (test_cases) |case| {
+        const tuple_data = TupleData{
+            .size = case.size,
+            .fields = .{ .start = 0, .count = case.field_count },
+        };
+
+        try testing.expectEqual(case.size, tuple_data.size);
+
+        const fields_range = tuple_data.getFields();
+        try testing.expectEqual(@as(u32, 0), @intFromEnum(fields_range.start));
+        try testing.expectEqual(case.field_count, @intFromEnum(fields_range.end));
     }
 }
