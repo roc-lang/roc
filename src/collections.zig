@@ -14,6 +14,10 @@ pub const SafeMultiList = @import("collections/safe_list.zig").SafeMultiList;
 
 pub const NonEmptyRange = @import("collections/safe_list.zig").NonEmptyRange;
 
+pub const SentinelList = @import("collections/sentinel_list.zig").SentinelList;
+
+pub const SentinelMultiList = @import("collections/sentinel_list.zig").SentinelMultiList;
+
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
 
 /// ArrayListMap is a key-value map that uses direct indexing instead of hashing.
