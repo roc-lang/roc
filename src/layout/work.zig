@@ -6,21 +6,23 @@ const types = @import("../types/types.zig");
 const layout = @import("./layout.zig");
 const Ident = @import("../base/Ident.zig");
 
-/// Tuple field for layout work - similar to RecordField but with index instead of name
-pub const TupleField = struct {
-    index: u16,
-    var_: types.Var,
-};
-
 /// Work queue for layout computation, tracking pending and resolved containers
 pub const Work = struct {
-    pub const PendingContainerItem = struct { var_: types.Var, container: PendingContainer };
-
     pending_containers: std.MultiArrayList(PendingContainerItem),
     pending_record_fields: std.MultiArrayList(types.RecordField),
     resolved_record_fields: std.MultiArrayList(ResolvedRecordField),
     pending_tuple_fields: std.MultiArrayList(TupleField),
     resolved_tuple_fields: std.MultiArrayList(ResolvedTupleField),
+
+    pub const PendingContainerItem = struct { var_: types.Var, container: PendingContainer };
+
+    /// Tuple field for layout work - similar to RecordField but with index instead of name.
+    /// We need to explicitly record the index because zero-sized tuple fields might have
+    /// been dropped, and yet we need to know what the original indices were for debuginfo.
+    pub const TupleField = struct {
+        index: u16,
+        var_: types.Var,
+    };
 
     pub const ResolvedRecordField = struct {
         field_name: Ident.Idx,
