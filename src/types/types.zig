@@ -196,9 +196,9 @@ pub const Num = union(enum) {
             pub const default = Num.Frac.Precision.dec;
 
             /// Size in bytes
-            pub fn size(self: @This()) usize {
+            pub fn size(self: @This()) u32 {
                 // frac values always have the same size as their alignment
-                return self.alignment().toByteUnits();
+                return @as(u32, @intCast(self.alignment().toByteUnits()));
             }
 
             /// Alignment
@@ -234,9 +234,9 @@ pub const Num = union(enum) {
             pub const default = Num.Int.Precision.i128;
 
             /// Size in bytes
-            pub fn size(self: @This()) usize {
+            pub fn size(self: @This()) u32 {
                 // int values always have the same size as their alignment
-                return self.alignment().toByteUnits();
+                return @as(u32, @intCast(self.alignment().toByteUnits()));
             }
 
             /// Alignment

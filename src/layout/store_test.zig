@@ -37,7 +37,7 @@ test "addTypeVar - str" {
 
     // Verify the layout
     const str_layout = layout_store.getLayout(str_layout_idx);
-    try testing.expect(str_layout.* == .str);
+    try testing.expect(str_layout.tag == .str);
 }
 
 test "addTypeVar - list of strings" {
@@ -66,11 +66,11 @@ test "addTypeVar - list of strings" {
 
     // Verify the layout
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list);
+    try testing.expect(list_layout.tag == .list);
 
     // Verify the element layout
-    const elem_layout = layout_store.getLayout(list_layout.list);
-    try testing.expect(elem_layout.* == .str);
+    const elem_layout = layout_store.getLayout(list_layout.data.list);
+    try testing.expect(elem_layout.tag == .str);
 }
 
 test "addTypeVar - list of box of strings" {
@@ -102,15 +102,15 @@ test "addTypeVar - list of box of strings" {
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list);
+    try testing.expect(list_layout.tag == .list);
 
     // Verify the box layout
-    const box_layout = layout_store.getLayout(list_layout.list);
-    try testing.expect(box_layout.* == .box);
+    const box_layout = layout_store.getLayout(list_layout.data.list);
+    try testing.expect(box_layout.tag == .box);
 
     // Verify the str layout
-    const str_layout = layout_store.getLayout(box_layout.box);
-    try testing.expect(str_layout.* == .str);
+    const str_layout = layout_store.getLayout(box_layout.data.box);
+    try testing.expect(str_layout.tag == .str);
 }
 
 test "addTypeVar - box of flex_var compiles to box of host_opaque" {
@@ -139,11 +139,11 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box);
+    try testing.expect(box_layout.tag == .box);
 
     // Verify the element is host_opaque
-    const elem_layout = layout_store.getLayout(box_layout.box);
-    try testing.expect(elem_layout.* == .host_opaque);
+    const elem_layout = layout_store.getLayout(box_layout.data.box);
+    try testing.expect(elem_layout.tag == .host_opaque);
 }
 
 test "addTypeVar - num u32" {
@@ -169,8 +169,8 @@ test "addTypeVar - num u32" {
 
     // Verify the layout
     const u32_layout = layout_store.getLayout(u32_layout_idx);
-    try testing.expect(u32_layout.* == .int);
-    try testing.expect(u32_layout.int == .u32);
+    try testing.expect(u32_layout.tag == .int);
+    try testing.expect(u32_layout.data.int == .u32);
 }
 
 test "addTypeVar - num f64" {
@@ -196,8 +196,8 @@ test "addTypeVar - num f64" {
 
     // Verify the layout
     const f64_layout = layout_store.getLayout(f64_layout_idx);
-    try testing.expect(f64_layout.* == .frac);
-    try testing.expect(f64_layout.frac == .f64);
+    try testing.expect(f64_layout.tag == .frac);
+    try testing.expect(f64_layout.data.frac == .f64);
 }
 
 test "addTypeVar - list of num i128" {
@@ -226,12 +226,12 @@ test "addTypeVar - list of num i128" {
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list);
+    try testing.expect(list_layout.tag == .list);
 
     // Verify the element layout
-    const elem_layout = layout_store.getLayout(list_layout.list);
-    try testing.expect(elem_layout.* == .int);
-    try testing.expect(elem_layout.int == .i128);
+    const elem_layout = layout_store.getLayout(list_layout.data.list);
+    try testing.expect(elem_layout.tag == .int);
+    try testing.expect(elem_layout.data.int == .i128);
 }
 
 test "addTypeVar - num dec" {
@@ -256,9 +256,9 @@ test "addTypeVar - num dec" {
     const dec_layout_idx = try layout_store.addTypeVar(&type_store, dec_var);
 
     // Verify the layout
-    const dec_layout = layout_store.getLayout(dec_layout_idx);
-    try testing.expect(dec_layout.* == .frac);
-    try testing.expect(dec_layout.frac == .dec);
+    const num_dec_layout = layout_store.getLayout(dec_layout_idx);
+    try testing.expect(num_dec_layout.tag == .frac);
+    try testing.expect(num_dec_layout.data.frac == .dec);
 }
 
 test "addTypeVar - flex num var defaults to i128" {
@@ -284,8 +284,8 @@ test "addTypeVar - flex num var defaults to i128" {
 
     // Verify the layout
     const num_layout = layout_store.getLayout(layout_idx);
-    try testing.expect(num_layout.* == .int);
-    try testing.expect(num_layout.int == .i128);
+    try testing.expect(num_layout.tag == .int);
+    try testing.expect(num_layout.data.int == .i128);
 }
 
 test "addTypeVar - flex int var defaults to i128" {
@@ -310,9 +310,9 @@ test "addTypeVar - flex int var defaults to i128" {
     const layout_idx = try layout_store.addTypeVar(&type_store, flex_int_var);
 
     // Verify the layout
-    const int_layout = layout_store.getLayout(layout_idx);
-    try testing.expect(int_layout.* == .int);
-    try testing.expect(int_layout.int == .i128);
+    const int_i64_layout = layout_store.getLayout(layout_idx);
+    try testing.expect(int_i64_layout.tag == .int);
+    try testing.expect(int_i64_layout.data.int == .i128);
 }
 
 test "addTypeVar - flex frac var defaults to dec" {
@@ -337,9 +337,9 @@ test "addTypeVar - flex frac var defaults to dec" {
     const layout_idx = try layout_store.addTypeVar(&type_store, flex_frac_var);
 
     // Verify the layout
-    const frac_layout = layout_store.getLayout(layout_idx);
-    try testing.expect(frac_layout.* == .frac);
-    try testing.expect(frac_layout.frac == .dec);
+    const frac_f64_layout = layout_store.getLayout(layout_idx);
+    try testing.expect(frac_f64_layout.tag == .frac);
+    try testing.expect(frac_f64_layout.data.frac == .dec);
 }
 
 test "addTypeVar - list of flex num var defaults to list of i128" {
@@ -368,12 +368,12 @@ test "addTypeVar - list of flex num var defaults to list of i128" {
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list);
+    try testing.expect(list_layout.tag == .list);
 
     // Verify the element layout defaults to i128
-    const elem_layout = layout_store.getLayout(list_layout.list);
-    try testing.expect(elem_layout.* == .int);
-    try testing.expect(elem_layout.int == .i128);
+    const elem_layout = layout_store.getLayout(list_layout.data.list);
+    try testing.expect(elem_layout.tag == .int);
+    try testing.expect(elem_layout.data.int == .i128);
 }
 
 test "addTypeVar - box of flex frac var defaults to box of dec" {
@@ -402,12 +402,12 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box);
+    try testing.expect(box_layout.tag == .box);
 
     // Verify the element defaults to dec
-    const elem_layout = layout_store.getLayout(box_layout.box);
-    try testing.expect(elem_layout.* == .frac);
-    try testing.expect(elem_layout.frac == .dec);
+    const elem_layout = layout_store.getLayout(box_layout.data.box);
+    try testing.expect(elem_layout.tag == .frac);
+    try testing.expect(elem_layout.data.frac == .dec);
 }
 
 test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
@@ -439,11 +439,11 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
 
     // Verify the box layout
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box);
+    try testing.expect(box_layout.tag == .box);
 
     // Verify the element is host_opaque
-    const elem_layout = layout_store.getLayout(box_layout.box);
-    try testing.expect(elem_layout.* == .host_opaque);
+    const elem_layout = layout_store.getLayout(box_layout.data.box);
+    try testing.expect(elem_layout.tag == .host_opaque);
 }
 
 test "addTypeVar - box of empty record compiles to box_of_zst" {
@@ -472,7 +472,7 @@ test "addTypeVar - box of empty record compiles to box_of_zst" {
 
     // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box_of_zst);
+    try testing.expect(box_layout.tag == .box_of_zst);
 }
 
 test "addTypeVar - list of empty tag union compiles to list_of_zst" {
@@ -501,7 +501,7 @@ test "addTypeVar - list of empty tag union compiles to list_of_zst" {
 
     // Verify the layout is list_of_zst
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list_of_zst);
+    try testing.expect(list_layout.tag == .list_of_zst);
 }
 
 test "alignment - record alignment is max of field alignments" {
@@ -719,26 +719,26 @@ test "addTypeVar - simple record" {
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify the fields are sorted by alignment then name
     // Both str and u32 have same alignment on 64-bit systems (8 bytes for str pointer, 4 bytes for u32 but u32 comes first due to smaller alignment)
     // Actually str has alignment of usize (8 on 64-bit), u32 has alignment 4
     // So str should come first (higher alignment), then u32
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // First field: name (str) - higher alignment (8 bytes on 64-bit)
     const name_field = field_slice.get(0);
     try testing.expect(name_field.name == name_ident);
     const name_layout = layout_store.getLayout(name_field.layout);
-    try testing.expect(name_layout.* == .str);
+    try testing.expect(name_layout.tag == .str);
 
     // Second field: age (u32) - lower alignment (4 bytes)
     const age_field = field_slice.get(1);
     try testing.expect(age_field.name == age_ident);
     const age_layout = layout_store.getLayout(age_field.layout);
-    try testing.expect(age_layout.* == .int);
-    try testing.expect(age_layout.int == .u32);
+    try testing.expect(age_layout.tag == .int);
+    try testing.expect(age_layout.data.int == .u32);
 
     // Only 2 fields
     try testing.expectEqual(@as(usize, 2), field_slice.len);
@@ -784,7 +784,7 @@ test "record size calculation" {
     const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // After sorting by alignment then name:
     // d: u64 (8 bytes) at offset 0
@@ -843,44 +843,44 @@ test "addTypeVar - nested record" {
 
     // Verify the outer layout
     const player_layout = layout_store.getLayout(player_layout_idx);
-    try testing.expect(player_layout.* == .record);
+    try testing.expect(player_layout.tag == .record);
 
     // Verify the outer fields
-    const player_record_data = layout_store.getRecordData(player_layout.record.idx);
+    const player_record_data = layout_store.getRecordData(player_layout.data.record.idx);
     const outer_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(player_record_data.fields.start), .end = @enumFromInt(player_record_data.fields.start + player_record_data.fields.count) });
 
     // First field: name (str)
     const name_field = outer_field_slice.get(0);
     try testing.expect(name_field.name == name_ident);
     const name_layout = layout_store.getLayout(name_field.layout);
-    try testing.expect(name_layout.* == .str);
+    try testing.expect(name_layout.tag == .str);
 
     // Second field: position (record)
     const position_field = outer_field_slice.get(1);
     try testing.expect(position_field.name == position_ident);
     const position_layout = layout_store.getLayout(position_field.layout);
-    try testing.expect(position_layout.* == .record);
+    try testing.expect(position_layout.tag == .record);
 
     // Exactly 2 outer fields
     try testing.expectEqual(@as(usize, 2), outer_field_slice.len);
 
     // Verify the inner record fields
-    const position_record_data = layout_store.getRecordData(position_layout.record.idx);
+    const position_record_data = layout_store.getRecordData(position_layout.data.record.idx);
     const inner_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(position_record_data.fields.start), .end = @enumFromInt(position_record_data.fields.start + position_record_data.fields.count) });
 
     // Inner field x (i32)
     const x_field = inner_field_slice.get(0);
     try testing.expect(x_field.name == x_ident);
     const x_layout = layout_store.getLayout(x_field.layout);
-    try testing.expect(x_layout.* == .int);
-    try testing.expect(x_layout.int == .i32);
+    try testing.expect(x_layout.tag == .int);
+    try testing.expect(x_layout.data.int == .i32);
 
     // Inner field y (i32)
     const y_field = inner_field_slice.get(1);
     try testing.expect(y_field.name == y_ident);
     const y_layout = layout_store.getLayout(y_field.layout);
-    try testing.expect(y_layout.* == .int);
-    try testing.expect(y_layout.int == .i32);
+    try testing.expect(y_layout.tag == .int);
+    try testing.expect(y_layout.data.int == .i32);
 
     // Exactly 2 inner fields
     try testing.expectEqual(@as(usize, 2), inner_field_slice.len);
@@ -924,28 +924,28 @@ test "addTypeVar - list of records" {
 
     // Verify the list layout
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list);
+    try testing.expect(list_layout.tag == .list);
 
     // Verify the record element
-    const record_layout = layout_store.getLayout(list_layout.list);
-    try testing.expect(record_layout.* == .record);
+    const record_layout = layout_store.getLayout(list_layout.data.list);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify the record fields
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // First field: id (u64)
     const id_field = field_slice.get(0);
     try testing.expect(id_field.name == id_ident);
     const id_layout = layout_store.getLayout(id_field.layout);
-    try testing.expect(id_layout.* == .int);
-    try testing.expect(id_layout.int == .u64);
+    try testing.expect(id_layout.tag == .int);
+    try testing.expect(id_layout.data.int == .u64);
 
     // The bool field is actually a u8
     const active_field = field_slice.get(1);
     try testing.expect(active_field.name == active_ident);
-    const active_layout = layout_store.getLayout(active_field.layout);
-    try testing.expect(active_layout.* == .int);
-    try testing.expect(active_layout.int == .u8);
+    const active_field_layout = layout_store.getLayout(active_field.layout);
+    try testing.expect(active_field_layout.tag == .int);
+    try testing.expect(active_field_layout.data.int == .u8);
 
     // Exactly 2 fields
     try testing.expectEqual(@as(usize, 2), field_slice.len);
@@ -995,10 +995,10 @@ test "addTypeVar - record with extension" {
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify we have all 3 fields (x from main, y and z from extension)
-    const record_data = layout_store.getRecordData(record_layout.record.idx);
+    const record_data = layout_store.getRecordData(record_layout.data.record.idx);
     const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_data.fields.start), .end = @enumFromInt(record_data.fields.start + record_data.fields.count) });
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 
@@ -1010,21 +1010,21 @@ test "addTypeVar - record with extension" {
     const x_field = field_slice.get(0);
     try testing.expect(x_field.name == x_ident);
     const x_layout = layout_store.getLayout(x_field.layout);
-    try testing.expect(x_layout.* == .str);
+    try testing.expect(x_layout.tag == .str);
 
     // Field z (f64) - comes before y due to alignment
     const z_field = field_slice.get(1);
     try testing.expect(z_field.name == z_ident);
     const z_layout = layout_store.getLayout(z_field.layout);
-    try testing.expect(z_layout.* == .frac);
-    try testing.expect(z_layout.frac == .f64);
+    try testing.expect(z_layout.tag == .frac);
+    try testing.expect(z_layout.data.frac == .f64);
 
     // Field y (i32) - comes last due to smaller alignment
     const y_field = field_slice.get(2);
     try testing.expect(y_field.name == y_ident);
     const y_layout = layout_store.getLayout(y_field.layout);
-    try testing.expect(y_layout.* == .int);
-    try testing.expect(y_layout.int == .i32);
+    try testing.expect(y_layout.tag == .int);
+    try testing.expect(y_layout.data.int == .i32);
 
     // Exactly 3 fields
     try testing.expectEqual(@as(usize, 3), field_slice.len);
@@ -1117,19 +1117,19 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
 
     // Should resolve to List(Box(List(Box(empty_record))))
     // Outer list
-    try testing.expect(result_layout.* == .list);
+    try testing.expect(result_layout.tag == .list);
 
     // Outer box
-    const outer_box_layout = layout_store.getLayout(result_layout.list);
-    try testing.expect(outer_box_layout.* == .box);
+    const outer_box_layout = layout_store.getLayout(result_layout.data.list);
+    try testing.expect(outer_box_layout.tag == .box);
 
     // Inner list
-    const inner_list_layout = layout_store.getLayout(outer_box_layout.box);
-    try testing.expect(inner_list_layout.* == .list);
+    const inner_list_layout = layout_store.getLayout(outer_box_layout.data.box);
+    try testing.expect(inner_list_layout.tag == .list);
 
-    // Inner box
-    const inner_box_layout = layout_store.getLayout(inner_list_layout.list);
-    try testing.expect(inner_box_layout.* == .box_of_zst);
+    // Inner box (should be box_of_zst since the innermost type is empty record)
+    const inner_box_layout = layout_store.getLayout(inner_list_layout.data.list);
+    try testing.expect(inner_box_layout.tag == .box_of_zst);
 }
 
 test "addTypeVar - record with single zero-sized field in container" {
@@ -1164,7 +1164,7 @@ test "addTypeVar - record with single zero-sized field in container" {
     const result_layout = layout_store.getLayout(result);
 
     // List of empty record should be list_of_zst
-    try testing.expect(result_layout.* == .list_of_zst);
+    try testing.expect(result_layout.tag == .list_of_zst);
 }
 
 test "addTypeVar - record field ordering stability" {
@@ -1229,17 +1229,17 @@ test "addTypeVar - record field ordering stability" {
     const layout3 = layout_store.getLayout(result3);
 
     // All should produce records with fields in same order (sorted by name: aaa, bbb, ccc)
-    switch (layout1.*) {
-        .record => |rec1| {
-            const fields_1 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec1.idx).getFields());
+    switch (layout1.tag) {
+        .record => {
+            const fields_1 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(layout1.data.record.idx).getFields());
 
-            switch (layout2.*) {
-                .record => |rec2| {
-                    const fields_2 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec2.idx).getFields());
+            switch (layout2.tag) {
+                .record => {
+                    const fields_2 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(layout2.data.record.idx).getFields());
 
-                    switch (layout3.*) {
-                        .record => |rec3| {
-                            const fields_3 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec3.idx).getFields());
+                    switch (layout3.tag) {
+                        .record => {
+                            const fields_3 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(layout3.data.record.idx).getFields());
 
                             // All should have 3 fields
                             try testing.expectEqual(@as(usize, 3), fields_1.len);
@@ -1294,13 +1294,13 @@ test "addTypeVar - empty record in different contexts" {
     const box_empty = type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
     const result2 = try layout_store.addTypeVar(&type_store, box_empty);
     const result2_layout = layout_store.getLayout(result2);
-    try testing.expect(result2_layout.* == .box_of_zst);
+    try testing.expect(result2_layout.tag == .box_of_zst);
 
     // Test 3: List of empty record
     const list_empty = type_store.freshFromContent(.{ .structure = .{ .list = empty_record } });
     const result3 = try layout_store.addTypeVar(&type_store, list_empty);
     const result3_layout = layout_store.getLayout(result3);
-    try testing.expect(result3_layout.* == .list_of_zst);
+    try testing.expect(result3_layout.tag == .list_of_zst);
 
     // Test 4: Record containing only empty record field
     const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
@@ -1358,14 +1358,13 @@ test "addTypeVar - record alignment edge cases" {
 
     const result = try layout_store.addTypeVar(&type_store, record_var);
     const result_layout = layout_store.getLayout(result);
-
-    switch (result_layout.*) {
-        .record => |rec| {
+    switch (result_layout.tag) {
+        .record => {
             // Record should have 16-byte alignment (maximum of all fields)
-            try testing.expectEqual(@as(u32, 16), rec.alignment.toByteUnits());
+            try testing.expectEqual(@as(u32, 16), result_layout.data.record.alignment.toByteUnits());
 
             // Fields should be sorted by alignment (descending) then name
-            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
+            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             try testing.expectEqual(@as(usize, 5), rec_fields.len);
 
             // Verify order: align16, align8, align4, align2, align1
@@ -1421,11 +1420,11 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify we have 3 fields (x appears twice - from main and extension, plus y from extension)
     // TODO: Field deduplication should happen at the type-checking level, not in layout generation
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // All fields here have same type alignment, so sorted by name: x, x, y
@@ -1434,20 +1433,20 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
     const x_field1 = field_slice.get(0);
     try testing.expect(x_field1.name == x_ident);
     const x_layout1 = layout_store.getLayout(x_field1.layout);
-    try testing.expect(x_layout1.* == .str);
+    try testing.expect(x_layout1.tag == .str);
 
     // Field x (str) - second occurrence
     const x_field2 = field_slice.get(1);
     try testing.expect(x_field2.name == x_ident);
     const x_layout2 = layout_store.getLayout(x_field2.layout);
-    try testing.expect(x_layout2.* == .str);
+    try testing.expect(x_layout2.tag == .str);
 
     // Field y (i32)
     const y_field = field_slice.get(2);
     try testing.expect(y_field.name == y_ident);
     const y_layout = layout_store.getLayout(y_field.layout);
-    try testing.expect(y_layout.* == .int);
-    try testing.expect(y_layout.int == .i32);
+    try testing.expect(y_layout.tag == .int);
+    try testing.expect(y_layout.data.int == .i32);
 
     // Exactly 3 fields
     try testing.expectEqual(@as(usize, 3), field_slice.len);
@@ -1494,10 +1493,10 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // We get both fields even though they have the same name but different types
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str is 8-byte aligned, i32 is 4-byte aligned
@@ -1507,14 +1506,14 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     const x_field1 = field_slice.get(0);
     try testing.expect(x_field1.name == x_ident);
     const x_layout1 = layout_store.getLayout(x_field1.layout);
-    try testing.expect(x_layout1.* == .str);
+    try testing.expect(x_layout1.tag == .str);
 
     // Field x (i32) - from extension
     const x_field2 = field_slice.get(1);
     try testing.expect(x_field2.name == x_ident);
     const x_layout2 = layout_store.getLayout(x_field2.layout);
-    try testing.expect(x_layout2.* == .int);
-    try testing.expect(x_layout2.int == .i32);
+    try testing.expect(x_layout2.tag == .int);
+    try testing.expect(x_layout2.data.int == .i32);
 
     // Exactly 2 fields
     try testing.expectEqual(@as(usize, 2), field_slice.len);
@@ -1605,10 +1604,10 @@ test "addTypeVar - record with chained extensions" {
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify we have all 4 fields from all levels
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str and f64 are 8-byte aligned, i32 is 4-byte aligned, u8 is 1-byte aligned
@@ -1618,28 +1617,28 @@ test "addTypeVar - record with chained extensions" {
     const w_field = field_slice.get(0);
     try testing.expect(w_field.name == w_ident);
     const w_layout = layout_store.getLayout(w_field.layout);
-    try testing.expect(w_layout.* == .str);
+    try testing.expect(w_layout.tag == .str);
 
     // Field y (f64) - comes before x due to alignment
     const y_field = field_slice.get(1);
     try testing.expect(y_field.name == y_ident);
     const y_layout = layout_store.getLayout(y_field.layout);
-    try testing.expect(y_layout.* == .frac);
-    try testing.expect(y_layout.frac == .f64);
+    try testing.expect(y_layout.tag == .frac);
+    try testing.expect(y_layout.data.frac == .f64);
 
     // Field x (i32)
     const x_field = field_slice.get(2);
     try testing.expect(x_field.name == x_ident);
     const x_layout = layout_store.getLayout(x_field.layout);
-    try testing.expect(x_layout.* == .int);
-    try testing.expect(x_layout.int == .i32);
+    try testing.expect(x_layout.tag == .int);
+    try testing.expect(x_layout.data.int == .i32);
 
     // Field z (u8)
     const z_field = field_slice.get(3);
     try testing.expect(z_field.name == z_ident);
     const z_layout = layout_store.getLayout(z_field.layout);
-    try testing.expect(z_layout.* == .int);
-    try testing.expect(z_layout.int == .u8);
+    try testing.expect(z_layout.tag == .int);
+    try testing.expect(z_layout.data.int == .u8);
 
     // Exactly 4 fields
     try testing.expectEqual(@as(usize, 4), field_slice.len);
@@ -1684,10 +1683,10 @@ test "addTypeVar - record with zero-sized fields dropped" {
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify we only have 2 fields (empty field should be dropped)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // Debug: Check the actual field count
     const field_count = field_slice.len;
@@ -1697,14 +1696,14 @@ test "addTypeVar - record with zero-sized fields dropped" {
     const name_field = field_slice.get(0);
     try testing.expect(name_field.name == name_ident);
     const name_layout = layout_store.getLayout(name_field.layout);
-    try testing.expect(name_layout.* == .str);
+    try testing.expect(name_layout.tag == .str);
 
     // Second field: age (i32)
     const age_field = field_slice.get(1);
     try testing.expect(age_field.name == age_ident);
     const age_layout = layout_store.getLayout(age_field.layout);
-    try testing.expect(age_layout.* == .int);
-    try testing.expect(age_layout.int == .i32);
+    try testing.expect(age_layout.tag == .int);
+    try testing.expect(age_layout.data.int == .i32);
 
     // Exactly 2 fields (empty field was dropped)
     try testing.expectEqual(@as(usize, 2), field_slice.len);
@@ -1784,7 +1783,7 @@ test "addTypeVar - box of record with all zero-sized fields" {
 
     // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box_of_zst);
+    try testing.expect(box_layout.tag == .box_of_zst);
 }
 
 test "addTypeVar - comprehensive nested record combinations" {
@@ -1940,10 +1939,10 @@ test "addTypeVar - comprehensive nested record combinations" {
                 // Should have returned an error, not reached here
                 try testing.expect(false);
             } else {
-                try testing.expect(result_layout.* == .record);
+                try testing.expect(result_layout.tag == .record);
 
                 // Count actual non-zero fields in the result
-                const result_record_data = test_layout_store.getRecordData(result_layout.record.idx);
+                const result_record_data = test_layout_store.getRecordData(result_layout.data.record.idx);
                 const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
                 const actual_field_count = field_slice.len;
 
@@ -1951,11 +1950,11 @@ test "addTypeVar - comprehensive nested record combinations" {
                 for (0..field_slice.len) |i| {
                     const field = field_slice.get(i);
                     const field_layout = test_layout_store.getLayout(field.layout);
-                    switch (field_layout.*) {
+                    switch (field_layout.tag) {
                         .str => {}, // Valid non-zero field
-                        .record => |rec| {
+                        .record => {
                             // Verify nested record has fields
-                            const nested_record_data = test_layout_store.getRecordData(rec.idx);
+                            const nested_record_data = test_layout_store.getRecordData(field_layout.data.record.idx);
                             const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
                             try testing.expect(nested_slice.len > 0);
                         },
@@ -2018,16 +2017,16 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
 
     // Verify the layout
     const record_layout = layout_store.getLayout(record_layout_idx);
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify we only have 1 field (data field should be dropped because inner record is empty)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // Field name (str)
     const name_field = field_slice.get(0);
     try testing.expect(name_field.name == name_ident);
     const name_layout = layout_store.getLayout(name_field.layout);
-    try testing.expect(name_layout.* == .str);
+    try testing.expect(name_layout.tag == .str);
 
     // Only 1 field (data field was dropped because the inner record was empty)
     try testing.expectEqual(@as(usize, 1), field_slice.len);
@@ -2067,7 +2066,7 @@ test "addTypeVar - list of record with all zero-sized fields" {
     const list_layout_idx = try layout_store.addTypeVar(&type_store, list_var);
     const list_layout = layout_store.getLayout(list_layout_idx);
 
-    try testing.expect(list_layout.* == .list_of_zst);
+    try testing.expect(list_layout.tag == .list_of_zst);
 }
 
 test "alignment - record with log2 alignment representation" {
@@ -2098,8 +2097,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(1, record_layout.record.alignment.toByteUnits());
+        try testing.expect(record_layout.tag == .record);
+        try testing.expectEqual(1, record_layout.data.record.alignment.toByteUnits());
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 1), record_layout.alignment(target_usize).toByteUnits());
@@ -2120,8 +2119,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u32, 4), record_layout.record.alignment.toByteUnits()); // alignment = 4
+        try testing.expect(record_layout.tag == .record);
+        try testing.expectEqual(@as(u32, 4), record_layout.data.record.alignment.toByteUnits()); // alignment = 4
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 4), record_layout.alignment(target_usize).toByteUnits());
@@ -2142,8 +2141,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // alignment = 8
+        try testing.expect(record_layout.tag == .record);
+        try testing.expectEqual(@as(u32, 8), record_layout.data.record.alignment.toByteUnits()); // alignment = 8
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
@@ -2167,8 +2166,8 @@ test "alignment - record with log2 alignment representation" {
         const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
         const record_layout = layout_store.getLayout(record_layout_idx);
 
-        try testing.expect(record_layout.* == .record);
-        try testing.expectEqual(@as(u32, 8), record_layout.record.alignment.toByteUnits()); // max alignment = 8
+        try testing.expect(record_layout.tag == .record);
+        try testing.expectEqual(@as(u32, 8), record_layout.data.record.alignment.toByteUnits()); // max alignment = 8
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
@@ -2220,39 +2219,39 @@ test "record fields sorted by alignment then name" {
     const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify fields are sorted by alignment (descending) then by name (ascending)
     // Expected order: b (u64, align 8), d (u64, align 8), a (u32, align 4), c (u8, align 1)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // First field: b (u64, alignment 8)
     const field1 = field_slice.get(0);
     try testing.expect(field1.name == b_ident);
     const layout1 = layout_store.getLayout(field1.layout);
-    try testing.expect(layout1.* == .int);
-    try testing.expect(layout1.int == .u64);
+    try testing.expect(layout1.tag == .int);
+    try testing.expect(layout1.data.int == .u64);
 
     // Second field: d (u64, alignment 8)
     const field2 = field_slice.get(1);
     try testing.expect(field2.name == d_ident);
     const layout2 = layout_store.getLayout(field2.layout);
-    try testing.expect(layout2.* == .int);
-    try testing.expect(layout2.int == .u64);
+    try testing.expect(layout2.tag == .int);
+    try testing.expect(layout2.data.int == .u64);
 
     // Third field: a (u32, alignment 4)
     const field3 = field_slice.get(2);
     try testing.expect(field3.name == a_ident);
     const layout3 = layout_store.getLayout(field3.layout);
-    try testing.expect(layout3.* == .int);
-    try testing.expect(layout3.int == .u32);
+    try testing.expect(layout3.tag == .int);
+    try testing.expect(layout3.data.int == .u32);
 
     // Fourth field: c (u8, alignment 1)
     const field4 = field_slice.get(3);
     try testing.expect(field4.name == c_ident);
     const layout4 = layout_store.getLayout(field4.layout);
-    try testing.expect(layout4.* == .int);
-    try testing.expect(layout4.int == .u8);
+    try testing.expect(layout4.tag == .int);
+    try testing.expect(layout4.data.int == .u8);
 
     // Exactly 4 fields
     try testing.expectEqual(@as(usize, 4), field_slice.len);
@@ -2298,32 +2297,32 @@ test "record fields with same alignment sorted by name" {
     const record_layout_idx = try layout_store.addTypeVar(&type_store, record_var);
     const record_layout = layout_store.getLayout(record_layout_idx);
 
-    try testing.expect(record_layout.* == .record);
+    try testing.expect(record_layout.tag == .record);
 
     // Verify fields are sorted alphabetically since they all have the same alignment
     // Expected order: apple, banana, zebra
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.data.record.idx).fields.start + layout_store.getRecordData(record_layout.data.record.idx).fields.count) });
 
     // First field: apple
     const field1 = field_slice.get(0);
     try testing.expect(field1.name == apple_ident);
     const layout1 = layout_store.getLayout(field1.layout);
-    try testing.expect(layout1.* == .int);
-    try testing.expect(layout1.int == .u32);
+    try testing.expect(layout1.tag == .int);
+    try testing.expect(layout1.data.int == .u32);
 
     // Second field: banana
     const field2 = field_slice.get(1);
     try testing.expect(field2.name == banana_ident);
     const layout2 = layout_store.getLayout(field2.layout);
-    try testing.expect(layout2.* == .frac);
-    try testing.expect(layout2.frac == .f32);
+    try testing.expect(layout2.tag == .frac);
+    try testing.expect(layout2.data.frac == .f32);
 
     // Third field: zebra
     const field3 = field_slice.get(2);
     try testing.expect(field3.name == zebra_ident);
     const layout3 = layout_store.getLayout(field3.layout);
-    try testing.expect(layout3.* == .int);
-    try testing.expect(layout3.int == .i32);
+    try testing.expect(layout3.tag == .int);
+    try testing.expect(layout3.data.int == .i32);
 
     // Exactly 3 fields
     try testing.expectEqual(@as(usize, 3), field_slice.len);
@@ -2364,8 +2363,8 @@ test "addTypeVar - maximum nesting depth" {
 
     // This should still work - we don't want arbitrary limits on nesting
     const result = try layout_store.addTypeVar(&type_store, current_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
-    try testing.expect(result_layout.* == .record);
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    try testing.expect(result_layout.tag == .record);
 }
 
 test "addTypeVar - record with maximum fields" {
@@ -2412,11 +2411,11 @@ test "addTypeVar - record with maximum fields" {
 
     // Should handle large number of fields
     const result = try layout_store.addTypeVar(&type_store, record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
 
-    switch (result_layout.*) {
-        .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
+    switch (result_layout.tag) {
+        .record => {
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             try testing.expectEqual(num_fields, record_fields.len);
 
             // Verify fields are sorted by alignment then name for the target used to create the layout
@@ -2425,7 +2424,7 @@ test "addTypeVar - record with maximum fields" {
             var prev_name_in_group: ?[]const u8 = null;
 
             for (record_fields.items(.layout), record_fields.items(.name)) |field_layout_idx, field_name| {
-                const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.idx));
+                const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.int_idx));
                 const field_alignment = field_layout.alignment(target_usize);
                 const field_name_str = type_store.env.idents.getText(field_name);
 
@@ -2489,8 +2488,8 @@ test "addTypeVar - record with very long field names" {
 
     // Should handle long field names
     const result = try layout_store.addTypeVar(&type_store, record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
-    try testing.expect(result_layout.* == .record);
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
+    try testing.expect(result_layout.tag == .record);
 }
 
 test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
@@ -2538,11 +2537,11 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(&type_store, record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
 
-    switch (result_layout.*) {
-        .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
+    switch (result_layout.tag) {
+        .record => {
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             // Only non-zero-sized fields should remain
             try testing.expectEqual(expected_non_zero_count, record_fields.len);
         },
@@ -2582,18 +2581,18 @@ test "addTypeVar - record field type changes through alias" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(&type_store, record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
 
-    switch (result_layout.*) {
-        .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
+    switch (result_layout.tag) {
+        .record => {
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             try testing.expectEqual(@as(usize, 1), record_fields.len);
 
             // The field should have the backing type's layout (u64)
             const field_layout_idx = record_fields.items(.layout)[0];
-            const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.idx));
-            try testing.expect(field_layout.* == .int);
-            try testing.expect(field_layout.*.int == .u64);
+            const field_layout = layout_store.layouts.get(@enumFromInt(field_layout_idx.int_idx));
+            try testing.expect(field_layout.tag == .int);
+            try testing.expect(field_layout.data.int == .u64);
         },
         else => try testing.expect(false),
     }
@@ -2646,20 +2645,20 @@ test "addTypeVar - mixed container types" {
 
     // Should handle complex nesting
     const result = try layout_store.addTypeVar(&type_store, outer_list_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
 
     // Verify it's a list
-    try testing.expect(result_layout.* == .list);
+    try testing.expect(result_layout.tag == .list);
 
     // Verify the inner structure
-    const box_layout = layout_store.layouts.get(@enumFromInt(result_layout.list.idx));
-    try testing.expect(box_layout.* == .box);
+    const box_layout = layout_store.layouts.get(@enumFromInt(result_layout.data.list.int_idx));
+    try testing.expect(box_layout.tag == .box);
 
-    const record_layout = layout_store.layouts.get(@enumFromInt(box_layout.*.box.idx));
-    try testing.expect(record_layout.* == .record);
+    const record_layout = layout_store.layouts.get(@enumFromInt(box_layout.data.box.int_idx));
+    try testing.expect(record_layout.tag == .record);
 
-    const rec = switch (record_layout.*) {
-        .record => |r| r,
+    const rec = switch (record_layout.tag) {
+        .record => record_layout.data.record,
         else => unreachable,
     };
     const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
@@ -2675,10 +2674,10 @@ test "addTypeVar - mixed container types" {
     // Verify field types
     const field_0_layout_idx = rec_fields.items(.layout)[0];
     const field_1_layout_idx = rec_fields.items(.layout)[1];
-    const field_0_layout = layout_store.layouts.get(@enumFromInt(field_0_layout_idx.idx));
-    const field_1_layout = layout_store.layouts.get(@enumFromInt(field_1_layout_idx.idx));
-    try testing.expect(field_0_layout.* == .str);
-    try testing.expect(field_1_layout.* == .list);
+    const field_0_layout = layout_store.layouts.get(@enumFromInt(field_0_layout_idx.int_idx));
+    const field_1_layout = layout_store.layouts.get(@enumFromInt(field_1_layout_idx.int_idx));
+    try testing.expect(field_0_layout.tag == .str);
+    try testing.expect(field_1_layout.tag == .list);
 }
 
 test "addTypeVar - record size calculation with padding" {
@@ -2723,19 +2722,19 @@ test "addTypeVar - record size calculation with padding" {
     const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields_slice, .ext = empty_ext } } });
 
     const result = try layout_store.addTypeVar(&type_store, record_var);
-    const result_layout = layout_store.layouts.get(@enumFromInt(result.idx));
+    const result_layout = layout_store.layouts.get(@enumFromInt(result.int_idx));
 
-    switch (result_layout.*) {
-        .record => |rec| {
+    switch (result_layout.tag) {
+        .record => {
             // Record should have 8-byte alignment (from u64)
-            try testing.expectEqual(8, rec.alignment.toByteUnits());
+            try testing.expectEqual(8, result_layout.data.record.alignment.toByteUnits());
 
             // Size should be 16 bytes (with padding)
-            const rec_data = layout_store.getRecordData(rec.idx);
+            const rec_data = layout_store.getRecordData(result_layout.data.record.idx);
             try testing.expectEqual(16, rec_data.size);
 
             // Verify field order
-            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
+            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(result_layout.data.record.idx).getFields());
             try testing.expectEqual(3, rec_fields.len);
 
             // First field should be 'b' (u64, 8-byte alignment)

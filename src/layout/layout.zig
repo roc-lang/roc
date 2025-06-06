@@ -7,9 +7,49 @@ const collections = @import("../collections.zig");
 const Ident = @import("../base/Ident.zig");
 const target = @import("../base/target.zig");
 
+/// Tag for Layout variants
+pub const LayoutTag = enum(u5) {
+    int = 0,
+    frac = 1,
+    str = 2,
+    box = 3,
+    box_of_zst = 4,
+    list = 5,
+    list_of_zst = 6,
+    host_opaque = 7,
+    record = 8,
+    // Note: this is intentionally u5 in anticipation of needing more than 16 variants
+    // in the future, even though we don't have that many yet.
+};
+
+/// The Layout untagged union should take up this many bits in memory.
+/// We verify this with a test, and make use of it to calculate Idx sizes.
+const layout_bit_size = 32;
+
 /// Index into a Layout Store
-pub const Idx = packed struct(u24) {
-    idx: u24,
+pub const Idx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // Some Layout variants are just the Tag followed by Idx, so use as many
+            // bits as we can spare from the Layout for Idx.
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag),
+        },
+    }),
+};
+
+/// Union of Layout data
+/// The largest variant must fit in 27 bits to leave room for the 5-bit tag
+pub const LayoutUnion = packed union {
+    int: types.Num.Int.Precision,
+    frac: types.Num.Frac.Precision,
+    str: void,
+    box: Idx,
+    box_of_zst: void,
+    list: Idx,
+    list_of_zst: void,
+    host_opaque: void,
+    record: RecordLayout,
 };
 
 /// The runtime memory layout of a Roc value.
@@ -23,26 +63,64 @@ pub const Idx = packed struct(u24) {
 /// Records and tuples have both been flattened (to remove their extensions)
 /// and converted into structs whose fields are sorted by alignment and then
 /// alphabetically by field name (or numerically by tuple field index).
-pub const Layout = union(enum) {
-    int: types.Num.Int.Precision,
-    frac: types.Num.Frac.Precision,
-    str,
-    box: Idx,
-    box_of_zst, // A Box of a zero-sized type, e.g. a Box({}) - this can come up, so we need an implementation for it.
-    list: Idx,
-    list_of_zst, // A List of a zero-sized type, e.g. a Box({}) - this can come up, so we need an implementation for it.
-    host_opaque,
-    record: RecordLayout,
-    // TODO add `single_field_record: Idx` and `single_tag_union: Idx`
+pub const Layout = packed struct {
+    data: LayoutUnion,
+    tag: LayoutTag,
 
     /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
-        return switch (self) {
-            .int => |precision| precision.alignment(),
-            .frac => |precision| precision.alignment(),
+        return switch (self.tag) {
+            .int => self.data.int.alignment(),
+            .frac => self.data.frac.alignment(),
+            .record => self.data.record.alignment,
             .str, .box, .box_of_zst, .list, .list_of_zst, .host_opaque => target_usize.alignment(),
-            .record => |rec| rec.alignment,
         };
+    }
+
+    /// int layout with the given precision
+    /// Create an int layout with the given precision
+    pub fn int(precision: types.Num.Int.Precision) Layout {
+        return Layout{ .data = .{ .int = precision }, .tag = .int };
+    }
+
+    /// Create a frac layout with the given precision
+    pub fn frac(precision: types.Num.Frac.Precision) Layout {
+        return Layout{ .data = .{ .frac = precision }, .tag = .frac };
+    }
+
+    /// str layout
+    pub fn str() Layout {
+        return Layout{ .data = .{ .str = {} }, .tag = .str };
+    }
+
+    /// box layout with the given element layout
+    pub fn box(elem_idx: Idx) Layout {
+        return Layout{ .data = .{ .box = elem_idx }, .tag = .box };
+    }
+
+    /// box of zero-sized type layout (e.g. Box({}))
+    pub fn boxOfZst() Layout {
+        return Layout{ .data = .{ .box_of_zst = {} }, .tag = .box_of_zst };
+    }
+
+    /// Create a list layout with the given element layout index
+    pub fn list(elem_idx: Idx) Layout {
+        return Layout{ .data = .{ .list = elem_idx }, .tag = .list };
+    }
+
+    /// list of zero-sized type layout (e.g. List({}))
+    pub fn listOfZst() Layout {
+        return Layout{ .data = .{ .list_of_zst = {} }, .tag = .list_of_zst };
+    }
+
+    /// host opaque layout (the void* that we pass to the host for e.g. flex vars)
+    pub fn hostOpaque() Layout {
+        return Layout{ .data = .{ .host_opaque = {} }, .tag = .host_opaque };
+    }
+
+    /// record layout with the given alignment and RecordIdx
+    pub fn record(record_alignment: std.mem.Alignment, idx: RecordIdx) Layout {
+        return Layout{ .data = .{ .record = .{ .alignment = record_alignment, .idx = idx } }, .tag = .record };
     }
 };
 
@@ -66,8 +144,14 @@ pub const RecordLayout = packed struct {
 };
 
 /// Index into the Store's record data
-pub const RecordIdx = packed struct(u24) {
-    idx: u24,
+pub const RecordIdx = packed struct {
+    int_idx: @Type(.{
+        .int = .{
+            .signedness = .unsigned,
+            // We need to be able to fit this in a Layout along with the alignment field in the RecordLayout.
+            .bits = layout_bit_size - @bitSizeOf(LayoutTag) - @bitSizeOf(std.mem.Alignment),
+        },
+    }),
 };
 
 /// Record data stored in the layout Store
@@ -83,86 +167,49 @@ pub const RecordData = struct {
 };
 
 test "Size of Layout type" {
-    // The Layout should have small size since it's used frequently, so avoid letting this number increase!
-    // With the Record data moved to separate storage, we've reduced from 20 bytes to 12 bytes
-    try std.testing.expectEqual(@sizeOf(Layout), 8);
+    // The Layout should have small size since it's used a ton, so avoid letting this number increase!
+    try std.testing.expectEqual(@bitSizeOf(Layout), layout_bit_size);
 }
 
 test "Layout.alignment() - number types" {
     const testing = std.testing;
 
-    // ints
-    const u8_layout = Layout{ .int = .u8 };
-    const i8_layout = Layout{ .int = .i8 };
-    const u16_layout = Layout{ .int = .u16 };
-    const i16_layout = Layout{ .int = .i16 };
-    const u32_layout = Layout{ .int = .u32 };
-    const i32_layout = Layout{ .int = .i32 };
-    const u64_layout = Layout{ .int = .u64 };
-    const i64_layout = Layout{ .int = .i64 };
-    const u128_layout = Layout{ .int = .u128 };
-    const i128_layout = Layout{ .int = .i128 };
-
-    // floats
-    const f32_layout = Layout{ .frac = .f32 };
-    const f64_layout = Layout{ .frac = .f64 };
-    const dec_layout = Layout{ .frac = .dec };
-
     for (target.TargetUsize.all()) |target_usize| {
-        // Alignment
-        try testing.expectEqual(std.mem.Alignment.@"1", u8_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"1", i8_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"2", u16_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"2", i16_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"4", u32_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"4", i32_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"8", u64_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"8", i64_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"16", u128_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"16", i128_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"4", f32_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"8", f64_layout.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.@"16", dec_layout.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"1", Layout.int(.u8).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"1", Layout.int(.i8).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"2", Layout.int(.u16).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"2", Layout.int(.i16).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", Layout.int(.u32).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", Layout.int(.i32).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", Layout.int(.u64).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", Layout.int(.i64).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", Layout.int(.u128).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", Layout.int(.i128).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"4", Layout.frac(.f32).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"8", Layout.frac(.f64).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.@"16", Layout.frac(.dec).alignment(target_usize));
     }
 }
 
 test "Layout.alignment() - types containing pointers" {
     const testing = std.testing;
 
-    const str_layout: Layout = .str;
-    const host_opaque_layout: Layout = .host_opaque;
-    const box_layout: Layout = .{ .box = .{ .idx = 0 } };
-    const box_zero_layout: Layout = .box_of_zst;
-    const list_layout: Layout = .{ .list = .{ .idx = 0 } };
-    const list_zero_layout: Layout = .list_of_zst;
-
     for (target.TargetUsize.all()) |target_usize| {
-        // Alignment
-        try testing.expectEqual(target_usize.alignment(), str_layout.alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), box_layout.alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), box_zero_layout.alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), list_layout.alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), list_zero_layout.alignment(target_usize));
-        try testing.expectEqual(target_usize.alignment(), host_opaque_layout.alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.str().alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.box(.{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.boxOfZst().alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.list(.{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.listOfZst().alignment(target_usize));
+        try testing.expectEqual(target_usize.alignment(), Layout.hostOpaque().alignment(target_usize));
     }
 }
 
 test "Layout.alignment() - record types" {
     const testing = std.testing;
 
-    const record_align4 = Layout{ .record = .{
-        .alignment = std.mem.Alignment.@"4",
-        .idx = .{ .idx = 0 },
-    } };
-
-    const record_align16 = Layout{ .record = .{
-        .alignment = std.mem.Alignment.@"16",
-        .idx = .{ .idx = 1 },
-    } };
-
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), record_align4.alignment(target_usize));
-        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), record_align16.alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(4), Layout.record(std.mem.Alignment.@"4", .{ .int_idx = 0 }).alignment(target_usize));
+        try testing.expectEqual(std.mem.Alignment.fromByteUnits(16), Layout.record(std.mem.Alignment.@"16", .{ .int_idx = 1 }).alignment(target_usize));
     }
 }
 

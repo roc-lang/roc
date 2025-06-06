@@ -71,16 +71,16 @@ pub const Store = struct {
     fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_idx = self.layouts.append(self.env.gpa, layout);
         return Idx{
-            .idx = @intCast(@intFromEnum(safe_idx)),
+            .int_idx = @intCast(@intFromEnum(safe_idx)),
         };
     }
 
     pub fn getLayout(self: *Self, idx: Idx) *const Layout {
-        return self.layouts.get(@enumFromInt(idx.idx));
+        return self.layouts.get(@enumFromInt(idx.int_idx));
     }
 
     pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {
-        return self.record_data.get(@enumFromInt(idx.idx));
+        return self.record_data.get(@enumFromInt(idx.int_idx));
     }
 
     fn targetUsize(self: *const Self) target.TargetUsize {
@@ -90,13 +90,13 @@ pub const Store = struct {
     /// Get the size in bytes of a layout, given the store's target usize.
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         const target_usize = self.targetUsize();
-        return switch (layout) {
-            .int => |precision| @as(u32, @intCast(precision.size())),
-            .frac => |precision| @as(u32, @intCast(precision.size())),
-            .host_opaque => @as(u32, @intCast(target_usize.size())), // a void* pointer
-            .box, .box_of_zst => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
-            .str, .list, .list_of_zst => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
-            .record => |rec| self.record_data.get(@enumFromInt(rec.idx.idx)).size,
+        return switch (layout.tag) {
+            .int => layout.data.int.size(),
+            .frac => layout.data.frac.size(),
+            .host_opaque => target_usize.size(), // a void* pointer
+            .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
+            .str, .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
+            .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
         };
     }
 
@@ -240,7 +240,7 @@ pub const Store = struct {
         const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
 
         // Store the record data
-        const record_idx = RecordIdx{ .idx = @intCast(self.record_data.len()) };
+        const record_idx = RecordIdx{ .int_idx = @intCast(self.record_data.len()) };
         _ = self.record_data.append(self.env.gpa, RecordData{
             .size = total_size,
             .fields = fields_range,
@@ -249,7 +249,7 @@ pub const Store = struct {
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout{ .record = .{ .alignment = max_alignment, .idx = record_idx } };
+        return Layout.record(max_alignment, record_idx);
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not
@@ -295,7 +295,7 @@ pub const Store = struct {
 
             var layout = switch (current.desc.content) {
                 .structure => |flat_type| flat_type: switch (flat_type) {
-                    .str => .str,
+                    .str => Layout.str(),
                     .box => |elem_var| {
                         try self.work.pending_containers.append(self.env.gpa, .{
                             .var_ = current.var_,
@@ -326,17 +326,17 @@ pub const Store = struct {
                     },
                     .num => |num| switch (num) {
                         .int => |int| switch (int) {
-                            .exact => |precision| Layout{ .int = precision },
+                            .exact => |precision| Layout.int(precision),
                             // For Int(a), use the default precision for an Int.
-                            .flex_var => Layout{ .int = types.Num.Int.Precision.default },
+                            .flex_var => Layout.int(types.Num.Int.Precision.default),
                         },
                         .frac => |frac| switch (frac) {
-                            .exact => |precision| Layout{ .frac = precision },
+                            .exact => |precision| Layout.frac(precision),
                             // For Frac(a), use the default precision for a Frac.
-                            .flex_var => Layout{ .frac = types.Num.Frac.Precision.default },
+                            .flex_var => Layout.frac(types.Num.Frac.Precision.default),
                         },
                         // Num(a) defaults to Int(a), so use the default precision for an Int.
-                        .flex_var => Layout{ .int = types.Num.Int.Precision.default },
+                        .flex_var => Layout.int(types.Num.Int.Precision.default),
                     },
                     .tuple => |tuple| {
                         // TODO
@@ -386,11 +386,11 @@ pub const Store = struct {
                             switch (pending_item.container) {
                                 .list => {
                                     // It turned out we were getting the layout for a List({})
-                                    break :blk .list_of_zst;
+                                    break :blk Layout.listOfZst();
                                 },
                                 .box => {
                                     // It turned out we were getting the layout for a Box({})
-                                    break :blk .box_of_zst;
+                                    break :blk Layout.boxOfZst();
                                 },
                                 .record => |pending_record| {
                                     // It turned out we were getting the layout for a record field
@@ -437,7 +437,7 @@ pub const Store = struct {
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                         if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk .host_opaque;
+                            break :blk Layout.hostOpaque();
                         }
                     }
 
@@ -449,7 +449,7 @@ pub const Store = struct {
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                         if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk .host_opaque;
+                            break :blk Layout.hostOpaque();
                         }
                     }
 
@@ -476,10 +476,10 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        layout = Layout{ .box = layout_idx };
+                        layout = Layout.box(layout_idx);
                     },
                     .list => {
-                        layout = Layout{ .list = layout_idx };
+                        layout = Layout.list(layout_idx);
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
