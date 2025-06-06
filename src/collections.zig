@@ -17,7 +17,7 @@ pub const NonEmptyRange = @import("collections/safe_list.zig").NonEmptyRange;
 pub const SmallStringInterner = @import("collections/SmallStringInterner.zig");
 
 /// A key-value map that uses direct array indexing instead of hashing.
-/// Keys must enums that are convertible to indices, and key value 0 is reserved
+/// Keys must be enums that are convertible to indices, and key value 0 is reserved
 /// as a sentinel value which indicates an empty slot.
 pub fn ArrayListMap(comptime K: type, comptime V: type) type {
     return struct {
@@ -52,10 +52,10 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
                 // Copy old entries
                 @memcpy(new_entries[0..self.entries.len], self.entries);
 
-                // Zero out the new portion
+                // Zero out the new bytes after the copied-over entries
                 @memset(new_entries[self.entries.len..], std.mem.zeroes(V));
 
-                // Free old allocation and update
+                // Free old allocation and update backing memory
                 allocator.free(self.entries);
                 self.entries = new_entries;
             }
@@ -65,16 +65,15 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
 
         pub fn get(self: Self, key: K) ?V {
             const index = @as(usize, @intFromEnum(key));
+            std.debug.assert(index != 0); // 0 is reserved as sentinel
 
             if (index >= self.entries.len) {
                 return null;
             }
 
             const value = self.entries[index];
-            // Check if value is the zero/sentinel value
-            // For packed structs, we check if all bytes are zero
-            const zero_value = std.mem.zeroes(V);
-            if (std.meta.eql(value, zero_value)) {
+
+            if (isZero(V, value)) {
                 return null;
             } else {
                 return value;
@@ -88,8 +87,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
                 return false;
             }
 
-            const zero_value = std.mem.zeroes(V);
-            return !std.meta.eql(self.entries[index], zero_value);
+            return isZero(V, self.entries[index]);
         }
 
         pub fn remove(self: *Self, key: K) bool {
@@ -99,20 +97,18 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
                 return false;
             }
 
-            const zero_value = std.mem.zeroes(V);
-            if (!std.meta.eql(self.entries[index], zero_value)) {
-                self.entries[index] = zero_value;
-                return true;
-            } else {
-                return false;
-            }
+            const was_present = !isZero(self[index]);
+
+            self.entries[index] = std.mem.zeroes(V);
+
+            return was_present;
         }
 
+        /// How many slots are filled in the map
         pub fn count(self: Self) usize {
             var total: usize = 0;
-            const zero_value = std.mem.zeroes(V);
             for (self.entries) |value| {
-                if (!std.meta.eql(value, zero_value)) total += 1;
+                if (!isZero(value)) total += 1;
             }
             return total;
         }
@@ -134,8 +130,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
                     it.index += 1;
 
                     const value = it.map.entries[current_index];
-                    const zero_value = std.mem.zeroes(V);
-                    if (!std.meta.eql(value, zero_value)) {
+                    if (!isZero(value)) {
                         return .{
                             .key = @as(K, @enumFromInt(current_index)),
                             .value = value,
@@ -151,4 +146,8 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             };
         };
     };
+}
+
+fn isZero(comptime T: type, value: T) bool {
+    return std.meta.eql(value, std.mem.zeroes(T));
 }
