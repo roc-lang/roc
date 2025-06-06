@@ -725,7 +725,7 @@ test "addTypeVar - simple record" {
     // Both str and u32 have same alignment on 64-bit systems (8 bytes for str pointer, 4 bytes for u32 but u32 comes first due to smaller alignment)
     // Actually str has alignment of usize (8 on 64-bit), u32 has alignment 4
     // So str should come first (higher alignment), then u32
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // First field: name (str) - higher alignment (8 bytes on 64-bit)
     const name_field = field_slice.get(0);
@@ -793,7 +793,7 @@ test "record size calculation" {
     // c: u8 (1 byte) at offset 13
     // Total: 14 bytes, but aligned to 8 bytes = 16 bytes
     for (target.TargetUsize.all()) |target_usize| {
-        try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
+        try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout.*));
         try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
     }
 }
@@ -846,7 +846,8 @@ test "addTypeVar - nested record" {
     try testing.expect(player_layout.* == .record);
 
     // Verify the outer fields
-    const outer_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(player_layout.record.fields.start), .end = @enumFromInt(player_layout.record.fields.start + player_layout.record.fields.count) });
+    const player_record_data = layout_store.getRecordData(player_layout.record.idx);
+    const outer_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(player_record_data.fields.start), .end = @enumFromInt(player_record_data.fields.start + player_record_data.fields.count) });
 
     // First field: name (str)
     const name_field = outer_field_slice.get(0);
@@ -864,7 +865,8 @@ test "addTypeVar - nested record" {
     try testing.expectEqual(@as(usize, 2), outer_field_slice.len);
 
     // Verify the inner record fields
-    const inner_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(position_layout.record.fields.start), .end = @enumFromInt(position_layout.record.fields.start + position_layout.record.fields.count) });
+    const position_record_data = layout_store.getRecordData(position_layout.record.idx);
+    const inner_field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(position_record_data.fields.start), .end = @enumFromInt(position_record_data.fields.start + position_record_data.fields.count) });
 
     // Inner field x (i32)
     const x_field = inner_field_slice.get(0);
@@ -929,7 +931,7 @@ test "addTypeVar - list of records" {
     try testing.expect(record_layout.* == .record);
 
     // Verify the record fields
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // First field: id (u64)
     const id_field = field_slice.get(0);
@@ -996,7 +998,8 @@ test "addTypeVar - record with extension" {
     try testing.expect(record_layout.* == .record);
 
     // Verify we have all 3 fields (x from main, y and z from extension)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const record_data = layout_store.getRecordData(record_layout.record.idx);
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_data.fields.start), .end = @enumFromInt(record_data.fields.start + record_data.fields.count) });
     try testing.expectEqual(@as(usize, 3), field_slice.len);
 
     // Fields are sorted by alignment (descending) then by name (ascending)
@@ -1228,15 +1231,15 @@ test "addTypeVar - record field ordering stability" {
     // All should produce records with fields in same order (sorted by name: aaa, bbb, ccc)
     switch (layout1.*) {
         .record => |rec1| {
-            const fields_1 = layout_store.record_fields.rangeToSlice(rec1.getFields());
+            const fields_1 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec1.idx).getFields());
 
             switch (layout2.*) {
                 .record => |rec2| {
-                    const fields_2 = layout_store.record_fields.rangeToSlice(rec2.getFields());
+                    const fields_2 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec2.idx).getFields());
 
                     switch (layout3.*) {
                         .record => |rec3| {
-                            const fields_3 = layout_store.record_fields.rangeToSlice(rec3.getFields());
+                            const fields_3 = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec3.idx).getFields());
 
                             // All should have 3 fields
                             try testing.expectEqual(@as(usize, 3), fields_1.len);
@@ -1362,7 +1365,7 @@ test "addTypeVar - record alignment edge cases" {
             try testing.expectEqual(@as(u32, 16), rec.alignment.toByteUnits());
 
             // Fields should be sorted by alignment (descending) then name
-            const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
             try testing.expectEqual(@as(usize, 5), rec_fields.len);
 
             // Verify order: align16, align8, align4, align2, align1
@@ -1422,7 +1425,7 @@ test "addTypeVar - record with duplicate field in extension (matching types)" {
 
     // Verify we have 3 fields (x appears twice - from main and extension, plus y from extension)
     // TODO: Field deduplication should happen at the type-checking level, not in layout generation
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // All fields here have same type alignment, so sorted by name: x, x, y
@@ -1494,7 +1497,7 @@ test "addTypeVar - record with duplicate field in extension (mismatched types)" 
     try testing.expect(record_layout.* == .record);
 
     // We get both fields even though they have the same name but different types
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str is 8-byte aligned, i32 is 4-byte aligned
@@ -1605,7 +1608,7 @@ test "addTypeVar - record with chained extensions" {
     try testing.expect(record_layout.* == .record);
 
     // Verify we have all 4 fields from all levels
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // Fields are sorted by alignment (descending) then by name (ascending)
     // str and f64 are 8-byte aligned, i32 is 4-byte aligned, u8 is 1-byte aligned
@@ -1684,7 +1687,7 @@ test "addTypeVar - record with zero-sized fields dropped" {
     try testing.expect(record_layout.* == .record);
 
     // Verify we only have 2 fields (empty field should be dropped)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // Debug: Check the actual field count
     const field_count = field_slice.len;
@@ -1940,7 +1943,8 @@ test "addTypeVar - comprehensive nested record combinations" {
                 try testing.expect(result_layout.* == .record);
 
                 // Count actual non-zero fields in the result
-                const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_layout.record.fields.start), .end = @enumFromInt(result_layout.record.fields.start + result_layout.record.fields.count) });
+                const result_record_data = test_layout_store.getRecordData(result_layout.record.idx);
+                const field_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(result_record_data.fields.start), .end = @enumFromInt(result_record_data.fields.start + result_record_data.fields.count) });
                 const actual_field_count = field_slice.len;
 
                 // Verify each field has a valid layout
@@ -1951,7 +1955,8 @@ test "addTypeVar - comprehensive nested record combinations" {
                         .str => {}, // Valid non-zero field
                         .record => |rec| {
                             // Verify nested record has fields
-                            const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(rec.fields.start), .end = @enumFromInt(rec.fields.start + rec.fields.count) });
+                            const nested_record_data = test_layout_store.getRecordData(rec.idx);
+                            const nested_slice = test_layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(nested_record_data.fields.start), .end = @enumFromInt(nested_record_data.fields.start + nested_record_data.fields.count) });
                             try testing.expect(nested_slice.len > 0);
                         },
                         else => {
@@ -2016,7 +2021,7 @@ test "addTypeVar - nested record with inner record having all zero-sized fields"
     try testing.expect(record_layout.* == .record);
 
     // Verify we only have 1 field (data field should be dropped because inner record is empty)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // Field name (str)
     const name_field = field_slice.get(0);
@@ -2098,7 +2103,7 @@ test "alignment - record with log2 alignment representation" {
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 1), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 1), record_layout.size(target_usize)); // size = 1 byte
+            try testing.expectEqual(@as(u32, 1), layout_store.layoutSize(record_layout.*)); // size = 1 byte
         }
     }
 
@@ -2120,7 +2125,7 @@ test "alignment - record with log2 alignment representation" {
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 4), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 4), record_layout.size(target_usize)); // size = 4 bytes
+            try testing.expectEqual(@as(u32, 4), layout_store.layoutSize(record_layout.*)); // size = 4 bytes
         }
     }
 
@@ -2142,7 +2147,7 @@ test "alignment - record with log2 alignment representation" {
 
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
-            try testing.expectEqual(@as(u32, 8), record_layout.size(target_usize)); // size = 8 bytes
+            try testing.expectEqual(@as(u32, 8), layout_store.layoutSize(record_layout.*)); // size = 8 bytes
         }
     }
 
@@ -2168,7 +2173,7 @@ test "alignment - record with log2 alignment representation" {
         for (target.TargetUsize.all()) |target_usize| {
             try testing.expectEqual(@as(u32, 8), record_layout.alignment(target_usize).toByteUnits());
             // After sorting: u64 (8 bytes) at offset 0, u8 (1 byte) at offset 8, total size 16 (aligned to 8)
-            try testing.expectEqual(@as(u32, 16), record_layout.size(target_usize));
+            try testing.expectEqual(@as(u32, 16), layout_store.layoutSize(record_layout.*));
         }
     }
 }
@@ -2219,7 +2224,7 @@ test "record fields sorted by alignment then name" {
 
     // Verify fields are sorted by alignment (descending) then by name (ascending)
     // Expected order: b (u64, align 8), d (u64, align 8), a (u32, align 4), c (u8, align 1)
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // First field: b (u64, alignment 8)
     const field1 = field_slice.get(0);
@@ -2297,7 +2302,7 @@ test "record fields with same alignment sorted by name" {
 
     // Verify fields are sorted alphabetically since they all have the same alignment
     // Expected order: apple, banana, zebra
-    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(record_layout.record.fields.start), .end = @enumFromInt(record_layout.record.fields.start + record_layout.record.fields.count) });
+    const field_slice = layout_store.record_fields.rangeToSlice(.{ .start = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start), .end = @enumFromInt(layout_store.getRecordData(record_layout.record.idx).fields.start + layout_store.getRecordData(record_layout.record.idx).fields.count) });
 
     // First field: apple
     const field1 = field_slice.get(0);
@@ -2411,7 +2416,7 @@ test "addTypeVar - record with maximum fields" {
 
     switch (result_layout.*) {
         .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
             try testing.expectEqual(num_fields, record_fields.len);
 
             // Verify fields are sorted by alignment then name for the target used to create the layout
@@ -2537,7 +2542,7 @@ test "addTypeVar - alternating zero-sized and non-zero-sized fields" {
 
     switch (result_layout.*) {
         .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
             // Only non-zero-sized fields should remain
             try testing.expectEqual(expected_non_zero_count, record_fields.len);
         },
@@ -2581,7 +2586,7 @@ test "addTypeVar - record field type changes through alias" {
 
     switch (result_layout.*) {
         .record => |rec| {
-            const record_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            const record_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
             try testing.expectEqual(@as(usize, 1), record_fields.len);
 
             // The field should have the backing type's layout (u64)
@@ -2657,7 +2662,7 @@ test "addTypeVar - mixed container types" {
         .record => |r| r,
         else => unreachable,
     };
-    const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+    const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
     try testing.expectEqual(@as(usize, 2), rec_fields.len);
 
     // Fields should be sorted by alignment then name
@@ -2726,10 +2731,11 @@ test "addTypeVar - record size calculation with padding" {
             try testing.expectEqual(8, rec.alignment.toByteUnits());
 
             // Size should be 16 bytes (with padding)
-            try testing.expectEqual(16, rec.size);
+            const rec_data = layout_store.getRecordData(rec.idx);
+            try testing.expectEqual(16, rec_data.size);
 
             // Verify field order
-            const rec_fields = layout_store.record_fields.rangeToSlice(rec.getFields());
+            const rec_fields = layout_store.record_fields.rangeToSlice(layout_store.getRecordData(rec.idx).getFields());
             try testing.expectEqual(3, rec_fields.len);
 
             // First field should be 'b' (u64, 8-byte alignment)

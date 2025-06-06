@@ -14,6 +14,8 @@ const Var = types.Var;
 const Layout = layout_.Layout;
 const Idx = layout_.Idx;
 const RecordField = layout_.RecordField;
+const RecordData = layout_.RecordData;
+const RecordIdx = layout_.RecordIdx;
 const Work = work.Work;
 const exitOnOom = collections.utils.exitOnOom;
 
@@ -35,6 +37,7 @@ pub const Store = struct {
     layouts: collections.SafeList(Layout),
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
+    record_data: collections.SafeList(RecordData),
 
     // Cache to avoid duplicate work
     // TODO make this be a flat array with `!0` values indicating emptiness,
@@ -50,6 +53,7 @@ pub const Store = struct {
             .layouts = collections.SafeList(Layout){},
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
+            .record_data = collections.SafeList(RecordData).initCapacity(env.gpa, 256),
             .layouts_by_var = std.AutoHashMapUnmanaged(Var, Idx){},
             .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
         };
@@ -59,6 +63,7 @@ pub const Store = struct {
         self.layouts.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
+        self.record_data.deinit(self.env.gpa);
         self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
@@ -70,12 +75,29 @@ pub const Store = struct {
         };
     }
 
-    pub fn getLayout(self: *Self, idx: Idx) *Layout {
+    pub fn getLayout(self: *Self, idx: Idx) *const Layout {
         return self.layouts.get(@enumFromInt(idx.idx));
     }
 
-    fn targetUsize(self: *Self) target.TargetUsize {
+    pub fn getRecordData(self: *const Self, idx: RecordIdx) *const RecordData {
+        return self.record_data.get(@enumFromInt(idx.idx));
+    }
+
+    fn targetUsize(self: *const Self) target.TargetUsize {
         return self.env.target.target_usize;
+    }
+
+    /// Get the size in bytes of a layout, given the store's target usize.
+    pub fn layoutSize(self: *const Self, layout: Layout) u32 {
+        const target_usize = self.targetUsize();
+        return switch (layout) {
+            .int => |precision| @as(u32, @intCast(precision.size())),
+            .frac => |precision| @as(u32, @intCast(precision.size())),
+            .host_opaque => @as(u32, @intCast(target_usize.size())), // a void* pointer
+            .box, .box_of_zst => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
+            .str, .list, .list_of_zst => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
+            .record => |rec| self.record_data.get(@enumFromInt(rec.idx.idx)).size,
+        };
     }
 
     /// Add the record's fields to self.pending_record_fields,
@@ -199,7 +221,7 @@ pub const Store = struct {
             const field_layout = self.getLayout(temp_field.layout);
 
             const field_alignment = field_layout.alignment(target_usize);
-            const field_size = field_layout.size(target_usize);
+            const field_size = self.layoutSize(field_layout.*);
 
             // Update max alignment
             max_alignment = max_alignment.max(field_alignment);
@@ -217,10 +239,17 @@ pub const Store = struct {
         // Create the record layout with the fields range
         const fields_range = collections.NonEmptyRange.init(@intCast(fields_start), @intCast(num_resolved_fields)) catch unreachable;
 
+        // Store the record data
+        const record_idx = RecordIdx{ .idx = @intCast(self.record_data.len()) };
+        _ = self.record_data.append(self.env.gpa, RecordData{
+            .size = total_size,
+            .fields = fields_range,
+        });
+
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
 
-        return Layout{ .record = .{ .fields = fields_range, .alignment = max_alignment, .size = total_size } };
+        return Layout{ .record = .{ .alignment = max_alignment, .idx = record_idx } };
     }
 
     /// Note: the caller must verify ahead of time that the given variable does not

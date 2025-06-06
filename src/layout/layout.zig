@@ -8,8 +8,8 @@ const Ident = @import("../base/Ident.zig");
 const target = @import("../base/target.zig");
 
 /// Index into a Layout Store
-pub const Idx = packed struct(u32) {
-    idx: u32,
+pub const Idx = packed struct(u24) {
+    idx: u24,
 };
 
 /// The runtime memory layout of a Roc value.
@@ -32,7 +32,7 @@ pub const Layout = union(enum) {
     list: Idx,
     list_of_zst, // A List of a zero-sized type, e.g. a Box({}) - this can come up, so we need an implementation for it.
     host_opaque,
-    record: Record,
+    record: RecordLayout,
     // TODO add `single_field_record: Idx` and `single_tag_union: Idx`
 
     /// This layout's alignment, given a particular target usize.
@@ -42,18 +42,6 @@ pub const Layout = union(enum) {
             .frac => |precision| precision.alignment(),
             .str, .box, .box_of_zst, .list, .list_of_zst, .host_opaque => target_usize.alignment(),
             .record => |rec| rec.alignment,
-        };
-    }
-
-    /// This layout's size in bytes, given a particular target usize.
-    pub fn size(self: Layout, target_usize: target.TargetUsize) u32 {
-        return switch (self) {
-            .int => |precision| @as(u32, @intCast(precision.size())),
-            .frac => |precision| @as(u32, @intCast(precision.size())),
-            .host_opaque => @as(u32, @intCast(target_usize.size())), // a void* pointer
-            .box, .box_of_zst => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
-            .str, .list, .list_of_zst => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
-            .record => |rec| rec.size,
         };
     }
 };
@@ -69,25 +57,38 @@ pub const RecordField = struct {
     pub const SafeMultiList = collections.SafeMultiList(RecordField);
 };
 
-/// Record layout
-pub const Record = struct {
-    fields: collections.NonEmptyRange,
+/// Record layout - stores alignment and index to full data in Store
+pub const RecordLayout = packed struct {
     /// Alignment of the record
     alignment: std.mem.Alignment,
+    /// Index into the Store's record data
+    idx: RecordIdx,
+};
+
+/// Index into the Store's record data
+pub const RecordIdx = packed struct(u24) {
+    idx: u24,
+};
+
+/// Record data stored in the layout Store
+pub const RecordData = struct {
     /// Size of the record, in bytes
     size: u32,
+    /// Range of fields in the record_fields list
+    fields: collections.NonEmptyRange,
 
-    pub fn getFields(self: Record) RecordField.SafeMultiList.Range {
+    pub fn getFields(self: RecordData) RecordField.SafeMultiList.Range {
         return self.fields.toRange(RecordField.SafeMultiList.Idx);
     }
 };
 
 test "Size of Layout type" {
     // The Layout should have small size since it's used frequently, so avoid letting this number increase!
-    try std.testing.expect(@sizeOf(Layout) == 20);
+    // With the Record data moved to separate storage, we've reduced from 20 bytes to 12 bytes
+    try std.testing.expectEqual(@sizeOf(Layout), 8);
 }
 
-test "Layout.size() and Layout.alignment() - number types" {
+test "Layout.alignment() - number types" {
     const testing = std.testing;
 
     // ints
@@ -122,25 +123,10 @@ test "Layout.size() and Layout.alignment() - number types" {
         try testing.expectEqual(std.mem.Alignment.@"4", f32_layout.alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"8", f64_layout.alignment(target_usize));
         try testing.expectEqual(std.mem.Alignment.@"16", dec_layout.alignment(target_usize));
-
-        // Size
-        try testing.expectEqual(1, u8_layout.size(target_usize));
-        try testing.expectEqual(1, i8_layout.size(target_usize));
-        try testing.expectEqual(2, u16_layout.size(target_usize));
-        try testing.expectEqual(2, i16_layout.size(target_usize));
-        try testing.expectEqual(4, u32_layout.size(target_usize));
-        try testing.expectEqual(4, i32_layout.size(target_usize));
-        try testing.expectEqual(8, u64_layout.size(target_usize));
-        try testing.expectEqual(8, i64_layout.size(target_usize));
-        try testing.expectEqual(16, u128_layout.size(target_usize));
-        try testing.expectEqual(16, i128_layout.size(target_usize));
-        try testing.expectEqual(4, f32_layout.size(target_usize));
-        try testing.expectEqual(8, f64_layout.size(target_usize));
-        try testing.expectEqual(16, dec_layout.size(target_usize));
     }
 }
 
-test "Layout.size() and Layout.alignment()- types containing pointers" {
+test "Layout.alignment() - types containing pointers" {
     const testing = std.testing;
 
     const str_layout: Layout = .str;
@@ -158,15 +144,6 @@ test "Layout.size() and Layout.alignment()- types containing pointers" {
         try testing.expectEqual(target_usize.alignment(), list_layout.alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), list_zero_layout.alignment(target_usize));
         try testing.expectEqual(target_usize.alignment(), host_opaque_layout.alignment(target_usize));
-
-        // Size
-        try testing.expectEqual(target_usize.size(), host_opaque_layout.size(target_usize));
-        try testing.expectEqual(target_usize.size(), box_layout.size(target_usize));
-        try testing.expectEqual(target_usize.size(), box_zero_layout.size(target_usize));
-        // TODO do something like (target_usize.size() * (@sizeOf(Str) / @sizeOf(usize))) once we have the builtins imported here
-        try testing.expectEqual(target_usize.size() * 3, str_layout.size(target_usize));
-        try testing.expectEqual(target_usize.size() * 3, list_layout.size(target_usize));
-        try testing.expectEqual(target_usize.size() * 3, list_zero_layout.size(target_usize));
     }
 }
 
@@ -174,15 +151,13 @@ test "Layout.alignment() - record types" {
     const testing = std.testing;
 
     const record_align4 = Layout{ .record = .{
-        .fields = .{ .start = 0, .count = 2 },
         .alignment = std.mem.Alignment.@"4",
-        .size = 8,
+        .idx = .{ .idx = 0 },
     } };
 
     const record_align16 = Layout{ .record = .{
-        .fields = .{ .start = 0, .count = 1 },
         .alignment = std.mem.Alignment.@"16",
-        .size = 16,
+        .idx = .{ .idx = 1 },
     } };
 
     for (target.TargetUsize.all()) |target_usize| {
@@ -191,16 +166,15 @@ test "Layout.alignment() - record types" {
     }
 }
 
-test "Record.getFields()" {
+test "RecordData.getFields()" {
     const testing = std.testing;
 
-    const record = Record{
-        .fields = .{ .start = 10, .count = 5 },
-        .alignment = std.mem.Alignment.fromByteUnits(8),
+    const record_data = RecordData{
         .size = 40,
+        .fields = .{ .start = 10, .count = 5 },
     };
 
-    const fields_range = record.getFields();
+    const fields_range = record_data.getFields();
     try testing.expectEqual(@as(u32, 10), @intFromEnum(fields_range.start));
     try testing.expectEqual(@as(u32, 15), @intFromEnum(fields_range.end));
 }
