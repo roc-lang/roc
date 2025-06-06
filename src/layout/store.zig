@@ -39,7 +39,7 @@ pub const Store = struct {
     // Cache to avoid duplicate work
     // TODO make this be a flat array with `!0` values indicating emptiness,
     // initialized to the same length as the Subs equivalent.
-    var_to_layout: std.AutoHashMapUnmanaged(Var, Idx),
+    layouts_by_var: std.AutoHashMapUnmanaged(Var, Idx),
 
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
@@ -50,7 +50,7 @@ pub const Store = struct {
             .layouts = collections.SafeList(Layout){},
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
-            .var_to_layout = std.AutoHashMapUnmanaged(Var, Idx){},
+            .layouts_by_var = std.AutoHashMapUnmanaged(Var, Idx){},
             .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
         };
     }
@@ -59,7 +59,7 @@ pub const Store = struct {
         self.layouts.deinit(self.env.gpa);
         self.tuple_elems.deinit(self.env.gpa);
         self.record_fields.deinit(self.env.gpa);
-        self.var_to_layout.deinit(self.env.gpa);
+        self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
 
@@ -246,7 +246,7 @@ pub const Store = struct {
         var current = var_store.resolveVar(unresolved_var);
 
         // If we've already seen this var, return the layout we resolved it to.
-        if (self.var_to_layout.get(current.var_)) |cached_idx| {
+        if (self.layouts_by_var.get(current.var_)) |cached_idx| {
             return cached_idx;
         }
 
@@ -357,11 +357,11 @@ pub const Store = struct {
                             switch (pending_item.container) {
                                 .list => {
                                     // It turned out we were getting the layout for a List({})
-                                    break :blk .list_zero_sized;
+                                    break :blk .list_of_zst;
                                 },
                                 .box => {
                                     // It turned out we were getting the layout for a Box({})
-                                    break :blk .box_zero_sized;
+                                    break :blk .box_of_zst;
                                 },
                                 .record => |pending_record| {
                                     // It turned out we were getting the layout for a record field
@@ -440,7 +440,7 @@ pub const Store = struct {
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
             layout_idx = try self.insertLayout(layout);
-            try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
+            try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
 
             // If this was part of a pending container that we're working on, update that container.
             while (self.work.pending_containers.len > 0) {
@@ -479,8 +479,9 @@ pub const Store = struct {
                 // We're done with this container, so remove it from pending_containers
                 const pending_item = self.work.pending_containers.pop() orelse unreachable;
                 layout_idx = try self.insertLayout(layout);
-                // Store the layout for this container's var
-                try self.var_to_layout.put(self.env.gpa, pending_item.var_, layout_idx);
+
+                // Add the container's layout to our layouts_by_var cache for later use.
+                try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record fields either.

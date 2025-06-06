@@ -28,18 +28,19 @@ pub const Layout = union(enum) {
     frac: types.Num.Frac.Precision,
     str,
     box: Idx,
-    box_zero_sized, // e.g. a Box({}) - this can come up, so we need a special implementation for it.
+    box_of_zst, // A Box of a zero-sized type, e.g. a Box({}) - this can come up, so we need an implementation for it.
     list: Idx,
-    list_zero_sized, // e.g. a List({}) - this can come up, so we need to make a special implementation for it.
+    list_of_zst, // A List of a zero-sized type, e.g. a Box({}) - this can come up, so we need an implementation for it.
     host_opaque,
     record: Record,
+    // TODO add `single_field_record: Idx` and `single_tag_union: Idx`
 
     /// This layout's alignment, given a particular target usize.
     pub fn alignment(self: Layout, target_usize: target.TargetUsize) std.mem.Alignment {
         return switch (self) {
             .int => |precision| precision.alignment(),
             .frac => |precision| precision.alignment(),
-            .str, .box, .box_zero_sized, .list, .list_zero_sized, .host_opaque => target_usize.alignment(),
+            .str, .box, .box_of_zst, .list, .list_of_zst, .host_opaque => target_usize.alignment(),
             .record => |rec| rec.alignment,
         };
     }
@@ -50,8 +51,8 @@ pub const Layout = union(enum) {
             .int => |precision| @as(u32, @intCast(precision.size())),
             .frac => |precision| @as(u32, @intCast(precision.size())),
             .host_opaque => @as(u32, @intCast(target_usize.size())), // a void* pointer
-            .box, .box_zero_sized => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
-            .str, .list, .list_zero_sized => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
+            .box, .box_of_zst => @as(u32, @intCast(target_usize.size())), // a Box is just a pointer to refcounted memory
+            .str, .list, .list_of_zst => @as(u32, @intCast(target_usize.size())) * 3, // TODO: get this from RocStr.zig and RocList.zig
             .record => |rec| rec.size,
         };
     }
@@ -59,7 +60,7 @@ pub const Layout = union(enum) {
 
 /// Record field layout
 pub const RecordField = struct {
-    /// The name of the field
+    /// The interned string name of the field
     name: Ident.Idx,
     /// The layout of the field's value
     layout: Idx,
@@ -83,7 +84,7 @@ pub const Record = struct {
 
 test "Size of Layout type" {
     // The Layout should have small size since it's used frequently, so avoid letting this number increase!
-    try std.testing.expect(@sizeOf(Layout) <= 20);
+    try std.testing.expect(@sizeOf(Layout) == 20);
 }
 
 test "Layout.size() and Layout.alignment() - number types" {
@@ -145,9 +146,9 @@ test "Layout.size() and Layout.alignment()- types containing pointers" {
     const str_layout: Layout = .str;
     const host_opaque_layout: Layout = .host_opaque;
     const box_layout: Layout = .{ .box = .{ .idx = 0 } };
-    const box_zero_layout: Layout = .box_zero_sized;
+    const box_zero_layout: Layout = .box_of_zst;
     const list_layout: Layout = .{ .list = .{ .idx = 0 } };
-    const list_zero_layout: Layout = .list_zero_sized;
+    const list_zero_layout: Layout = .list_of_zst;
 
     for (target.TargetUsize.all()) |target_usize| {
         // Alignment

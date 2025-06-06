@@ -446,7 +446,7 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     try testing.expect(elem_layout.* == .host_opaque);
 }
 
-test "addTypeVar - box of empty record compiles to box_zero_sized" {
+test "addTypeVar - box of empty record compiles to box_of_zst" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -470,12 +470,12 @@ test "addTypeVar - box of empty record compiles to box_zero_sized" {
     // Convert to layout
     const box_layout_idx = try layout_store.addTypeVar(&type_store, box_empty_record_var);
 
-    // Verify the layout is box_zero_sized
+    // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box_zero_sized);
+    try testing.expect(box_layout.* == .box_of_zst);
 }
 
-test "addTypeVar - list of empty tag union compiles to list_zero_sized" {
+test "addTypeVar - list of empty tag union compiles to list_of_zst" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -499,9 +499,9 @@ test "addTypeVar - list of empty tag union compiles to list_zero_sized" {
     // Convert to layout
     const list_layout_idx = try layout_store.addTypeVar(&type_store, list_empty_tag_union_var);
 
-    // Verify the layout is list_zero_sized
+    // Verify the layout is list_of_zst
     const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list_zero_sized);
+    try testing.expect(list_layout.* == .list_of_zst);
 }
 
 test "alignment - record alignment is max of field alignments" {
@@ -1126,7 +1126,7 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
 
     // Inner box
     const inner_box_layout = layout_store.getLayout(inner_list_layout.list);
-    try testing.expect(inner_box_layout.* == .box_zero_sized);
+    try testing.expect(inner_box_layout.* == .box_of_zst);
 }
 
 test "addTypeVar - record with single zero-sized field in container" {
@@ -1160,8 +1160,8 @@ test "addTypeVar - record with single zero-sized field in container" {
     const result = try layout_store.addTypeVar(&type_store, list_var);
     const result_layout = layout_store.getLayout(result);
 
-    // List of empty record should be list_zero_sized
-    try testing.expect(result_layout.* == .list_zero_sized);
+    // List of empty record should be list_of_zst
+    try testing.expect(result_layout.* == .list_of_zst);
 }
 
 test "addTypeVar - record field ordering stability" {
@@ -1291,13 +1291,13 @@ test "addTypeVar - empty record in different contexts" {
     const box_empty = type_store.freshFromContent(.{ .structure = .{ .box = empty_record } });
     const result2 = try layout_store.addTypeVar(&type_store, box_empty);
     const result2_layout = layout_store.getLayout(result2);
-    try testing.expect(result2_layout.* == .box_zero_sized);
+    try testing.expect(result2_layout.* == .box_of_zst);
 
     // Test 3: List of empty record
     const list_empty = type_store.freshFromContent(.{ .structure = .{ .list = empty_record } });
     const result3 = try layout_store.addTypeVar(&type_store, list_empty);
     const result3_layout = layout_store.getLayout(result3);
-    try testing.expect(result3_layout.* == .list_zero_sized);
+    try testing.expect(result3_layout.* == .list_of_zst);
 
     // Test 4: Record containing only empty record field
     const field_name = type_store.env.idents.insert(gpa, base.Ident.for_text("empty"), base.Region.zero());
@@ -1776,12 +1776,12 @@ test "addTypeVar - box of record with all zero-sized fields" {
     // Create box of this record
     const box_record_var = type_store.freshFromContent(.{ .structure = .{ .box = record_var } });
 
-    // Convert to layout - should become box_zero_sized
+    // Convert to layout - should become box_of_zst
     const box_layout_idx = try layout_store.addTypeVar(&type_store, box_record_var);
 
-    // Verify the layout is box_zero_sized
+    // Verify the layout is box_of_zst
     const box_layout = layout_store.getLayout(box_layout_idx);
-    try testing.expect(box_layout.* == .box_zero_sized);
+    try testing.expect(box_layout.* == .box_of_zst);
 }
 
 test "addTypeVar - comprehensive nested record combinations" {
@@ -2058,11 +2058,11 @@ test "addTypeVar - list of record with all zero-sized fields" {
     // Create list of that record
     const list_var = type_store.freshFromContent(.{ .structure = .{ .list = record_var } });
 
-    // Convert to layout - should be list_zero_sized
+    // Convert to layout - should be list_of_zst
     const list_layout_idx = try layout_store.addTypeVar(&type_store, list_var);
     const list_layout = layout_store.getLayout(list_layout_idx);
 
-    try testing.expect(list_layout.* == .list_zero_sized);
+    try testing.expect(list_layout.* == .list_of_zst);
 }
 
 test "alignment - record with log2 alignment representation" {
