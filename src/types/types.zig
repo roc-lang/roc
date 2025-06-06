@@ -52,12 +52,18 @@ pub const Rank = enum(u4) {
 };
 
 /// A type variable mark
+///
+/// Marks are temporary annotations used during various phases of type inference
+/// and type checking to track state.
+///
+/// Some places `Mark` is used:
+/// * Marking variables as visited in occurs checks to avoid redundant work
+/// * Marking variables for generalizing during solving
 pub const Mark = enum(u32) {
     const Self = @This();
 
-    getVarNames = 0,
-    occurs = 1,
-    none = 2,
+    visited = 0,
+    none = 1,
     _,
 
     /// Get the next mark
@@ -104,6 +110,21 @@ pub const Content = union(enum) {
                 switch (flat_type) {
                     .tag_union => |tag_union| {
                         return tag_union;
+                    },
+                    else => return null,
+                }
+            },
+            else => return null,
+        }
+    }
+
+    /// Unwrap a custom type or return null
+    pub fn unwrapCustomType(content: Self) ?CustomType {
+        switch (content) {
+            .structure => |flat_type| {
+                switch (flat_type) {
+                    .custom_type => |custom_type| {
+                        return custom_type;
                     },
                     else => return null,
                 }

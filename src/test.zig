@@ -5,5 +5,8 @@ test {
     testing.refAllDeclsRecursive(@import("main.zig"));
     testing.refAllDeclsRecursive(@import("snapshot.zig"));
     testing.refAllDeclsRecursive(@import("builtins/main.zig"));
+
+    // TODO: Remove after hooking up
     testing.refAllDeclsRecursive(@import("eval/stack.zig"));
+    testing.refAllDeclsRecursive(@import("check/check_types/occurs.zig"));
 }
