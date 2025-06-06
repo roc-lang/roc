@@ -68,7 +68,7 @@ pub const Store = struct {
         self.work.deinit(self.env.gpa);
     }
 
-    fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
+    pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         const safe_idx = self.layouts.append(self.env.gpa, layout);
         return Idx{
             .int_idx = @intCast(@intFromEnum(safe_idx)),
@@ -91,11 +91,14 @@ pub const Store = struct {
     pub fn layoutSize(self: *const Self, layout: Layout) u32 {
         const target_usize = self.targetUsize();
         return switch (layout.tag) {
-            .int => layout.data.int.size(),
-            .frac => layout.data.frac.size(),
-            .host_opaque => target_usize.size(), // a void* pointer
-            .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
-            .str, .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
+            .scalar => switch (layout.data.scalar.tag) {
+                .int => layout.data.scalar.data.int.size(),
+                .frac => layout.data.scalar.data.frac.size(),
+                .bool => 1, // bool is 1 byte
+                .str, .host_opaque => target_usize.size(), // str and host_opaque are pointer-sized
+            },
+            .box, .box_of_zst, .box_of_scalar => target_usize.size(), // a Box is just a pointer to refcounted memory
+            .list, .list_of_zst, .list_of_scalar => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
         };
     }
@@ -476,10 +479,20 @@ pub const Store = struct {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
                 switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
-                        layout = Layout.box(layout_idx);
+                        // Check if the element layout is a scalar
+                        if (self.getLayout(layout_idx).asScalar()) |scalar| {
+                            layout = Layout.boxOfScalar(scalar);
+                        } else |_| {
+                            layout = Layout.box(layout_idx);
+                        }
                     },
                     .list => {
-                        layout = Layout.list(layout_idx);
+                        // Check if the element layout is a scalar
+                        if (self.getLayout(layout_idx).asScalar()) |scalar| {
+                            layout = Layout.listOfScalar(scalar);
+                        } else |_| {
+                            layout = Layout.list(layout_idx);
+                        }
                     },
                     .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
