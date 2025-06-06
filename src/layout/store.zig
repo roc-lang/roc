@@ -268,13 +268,19 @@ pub const Store = struct {
                 .structure => |flat_type| flat_type: switch (flat_type) {
                     .str => .str,
                     .box => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .box);
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .box,
+                        });
                         // Push a pending Box container and "recurse" on the elem type
                         current = var_store.resolveVar(elem_var);
                         continue;
                     },
                     .list => |elem_var| {
-                        try self.work.pending_containers.append(self.env.gpa, .list);
+                        try self.work.pending_containers.append(self.env.gpa, .{
+                            .var_ = current.var_,
+                            .container = .list,
+                        });
                         // Push a pending List container and "recurse" on the elem type
                         current = var_store.resolveVar(elem_var);
                         continue;
@@ -321,10 +327,13 @@ pub const Store = struct {
                         }
 
                         try self.work.pending_containers.append(self.env.gpa, .{
-                            .record = .{
-                                .num_fields = @intCast(num_fields),
-                                .pending_fields = @intCast(num_fields),
-                                .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                            .var_ = current.var_,
+                            .container = .{
+                                .record = .{
+                                    .num_fields = @intCast(num_fields),
+                                    .pending_fields = @intCast(num_fields),
+                                    .resolved_fields_start = @intCast(self.work.resolved_record_fields.len),
+                                },
                             },
                         });
 
@@ -343,8 +352,9 @@ pub const Store = struct {
                         // Empty records and tag unions are zero-sized, so we need to do something different
                         // depending on the container we're working on (if any). For example, if we're
                         // working on a record field, then we need to drop that field from the container.
-                        if (self.work.pending_containers.pop()) |pending_container| {
-                            switch (pending_container) {
+                        if (self.work.pending_containers.len > 0) {
+                            const pending_item = self.work.pending_containers.pop() orelse unreachable;
+                            switch (pending_item.container) {
                                 .list => {
                                     // It turned out we were getting the layout for a List({})
                                     break :blk .list_zero_sized;
@@ -375,7 +385,10 @@ pub const Store = struct {
                                         }
                                     } else {
                                         // Still have pending fields to process
-                                        try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
+                                        try self.work.pending_containers.append(self.env.gpa, .{
+                                            .var_ = pending_item.var_,
+                                            .container = .{ .record = updated_record },
+                                        });
 
                                         // Get the next field to process
                                         const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
@@ -392,8 +405,9 @@ pub const Store = struct {
                 },
                 .flex_var => |_| blk: {
                     // Flex vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.getLastOrNull()) |pending_container| {
-                        if (pending_container == .box or pending_container == .list) {
+                    if (self.work.pending_containers.len > 0) {
+                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                        if (pending_item.container == .box or pending_item.container == .list) {
                             break :blk .host_opaque;
                         }
                     }
@@ -403,8 +417,9 @@ pub const Store = struct {
                 },
                 .rigid_var => |_| blk: {
                     // Rigid vars can only be sent to the host if boxed.
-                    if (self.work.pending_containers.getLastOrNull()) |pending_container| {
-                        if (pending_container == .box or pending_container == .list) {
+                    if (self.work.pending_containers.len > 0) {
+                        const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
+                        if (pending_item.container == .box or pending_item.container == .list) {
                             break :blk .host_opaque;
                         }
                     }
@@ -427,10 +442,10 @@ pub const Store = struct {
             layout_idx = try self.insertLayout(layout);
             try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
 
-            // Next, see if this was part of a pending container that we're working on.
-            while (self.work.pending_containers.items.len > 0) {
+            // If this was part of a pending container that we're working on, update that container.
+            while (self.work.pending_containers.len > 0) {
                 // Get a pointer to the last pending container, so we can mutate it in-place.
-                switch (self.work.pending_containers.items[self.work.pending_containers.items.len - 1]) {
+                switch (self.work.pending_containers.slice().items(.container)[self.work.pending_containers.len - 1]) {
                     .box => {
                         layout = Layout{ .box = layout_idx };
                     },
@@ -454,7 +469,6 @@ pub const Store = struct {
                             layout = try self.finishRecord(pending_record.*);
                         } else {
                             // There are still fields remaining to process, so process the next one in the outer loop.
-                            // Don't pop the container since we still need it.
                             const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
                             current = var_store.resolveVar(next_field.var_);
                             continue :outer;
@@ -463,9 +477,10 @@ pub const Store = struct {
                 }
 
                 // We're done with this container, so remove it from pending_containers
-                _ = self.work.pending_containers.pop() orelse unreachable;
+                const pending_item = self.work.pending_containers.pop() orelse unreachable;
                 layout_idx = try self.insertLayout(layout);
-                // TODO store var in pending_container and add this to the var_to_layout cache
+                // Store the layout for this container's var
+                try self.var_to_layout.put(self.env.gpa, pending_item.var_, layout_idx);
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record fields either.

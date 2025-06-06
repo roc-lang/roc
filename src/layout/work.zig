@@ -8,7 +8,9 @@ const Ident = @import("../base/Ident.zig");
 
 /// Work queue for layout computation, tracking pending and resolved containers
 pub const Work = struct {
-    pending_containers: std.ArrayListUnmanaged(PendingContainer),
+    pub const PendingContainerItem = struct { var_: types.Var, container: PendingContainer };
+
+    pending_containers: std.MultiArrayList(PendingContainerItem),
     pending_record_fields: std.MultiArrayList(types.RecordField),
     resolved_record_fields: std.MultiArrayList(ResolvedRecordField),
 
@@ -30,7 +32,7 @@ pub const Work = struct {
     };
 
     pub fn initCapacity(allocator: std.mem.Allocator, capacity: usize) !Work {
-        var pending_containers = std.ArrayListUnmanaged(PendingContainer){};
+        var pending_containers = std.MultiArrayList(PendingContainerItem){};
         try pending_containers.ensureTotalCapacity(allocator, capacity);
 
         var pending_record_fields = std.MultiArrayList(types.RecordField){};
