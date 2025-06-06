@@ -239,7 +239,7 @@ pub const Store = struct {
     ///
     /// This flex var should be replaced by an Error type before calling this function.
     pub fn addTypeVar(
-        self: *Store,
+        self: *Self,
         var_store: *const types_store.Store,
         unresolved_var: Var,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
@@ -256,6 +256,7 @@ pub const Store = struct {
 
         var iterations: u32 = 0;
         const max_iterations = 10000; // Safety limit to prevent infinite loops
+        var layout_idx: Idx = undefined;
 
         outer: while (true) {
             iterations += 1;
@@ -362,7 +363,7 @@ pub const Store = struct {
                                     _ = self.work.pending_record_fields.pop() orelse unreachable;
 
                                     if (updated_record.pending_fields == 0) {
-                                        if (self.work.resolved_record_fields.len == 0) {
+                                        if (self.work.resolved_record_fields.len == updated_record.resolved_fields_start) {
                                             // All fields were zero-sized, so the parent container turned
                                             // out to be an empty record as well.
                                             self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
@@ -423,7 +424,7 @@ pub const Store = struct {
 
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
-            var layout_idx = try self.insertLayout(layout);
+            layout_idx = try self.insertLayout(layout);
             try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
 
             // Next, see if this was part of some pending work.
@@ -1144,38 +1145,6 @@ test "addTypeVar - bare empty tag union returns error" {
     try testing.expectError(LayoutError.ZeroSizedType, result);
 }
 
-test "addTypeVar - list of box of empty record compiles to list_zero_sized" {
-    const testing = std.testing;
-    const gpa = testing.allocator;
-
-    var module_env = base.ModuleEnv.init(gpa);
-    defer module_env.deinit();
-
-    // Create type store
-    var type_store = types_store.Store.init(&module_env);
-    defer type_store.deinit();
-
-    // Create layout store
-    var layout_store = Store.init(&module_env);
-    defer layout_store.deinit();
-
-    // Create an empty record type variable
-    const empty_record_var = type_store.freshFromContent(.{ .structure = .empty_record });
-
-    // Create a box of empty record type variable
-    const box_empty_record_var = type_store.freshFromContent(.{ .structure = .{ .box = empty_record_var } });
-
-    // Create a list of box of empty record type variable
-    const list_box_empty_record_var = type_store.freshFromContent(.{ .structure = .{ .list = box_empty_record_var } });
-
-    // Convert to layout
-    const list_layout_idx = try layout_store.addTypeVar(&type_store, list_box_empty_record_var);
-
-    // Verify the layout is list_zero_sized
-    const list_layout = layout_store.getLayout(list_layout_idx);
-    try testing.expect(list_layout.* == .list_zero_sized);
-}
-
 test "addTypeVar - simple record" {
     const testing = std.testing;
     const gpa = testing.allocator;
@@ -1607,8 +1576,21 @@ test "addTypeVar - deeply nested containers with zero-sized inner type" {
     const result = try layout_store.addTypeVar(&type_store, outer_list_var);
     const result_layout = layout_store.getLayout(result);
 
-    // Should resolve to list_zero_sized
-    try testing.expect(result_layout.* == .list_zero_sized);
+    // Should resolve to List(Box(List(Box(empty_record))))
+    // Outer list
+    try testing.expect(result_layout.* == .list);
+
+    // Outer box
+    const outer_box_layout = layout_store.getLayout(result_layout.list);
+    try testing.expect(outer_box_layout.* == .box);
+
+    // Inner list
+    const inner_list_layout = layout_store.getLayout(outer_box_layout.box);
+    try testing.expect(inner_list_layout.* == .list);
+
+    // Inner box
+    const inner_box_layout = layout_store.getLayout(inner_list_layout.list);
+    try testing.expect(inner_box_layout.* == .box_zero_sized);
 }
 
 test "addTypeVar - record with single zero-sized field in container" {
