@@ -338,6 +338,30 @@ Type constraint implementation:
 
 TODO
 
+## Structural Typing
+
+A type system where type equivalence is based on the shape (the set of members and their types) of the values, not the names by which the types were declared.
+Example:
+```roc
+Person : { first_name : Str, last_name : Str }
+
+User : { first_name : Str, last_name : Str }
+
+register_person! : Person => Result {} [InvalidName]
+register_peson! = |person|
+    ...
+
+user : User
+user = { first_name: "Bob", last_name: "Foo"}
+
+# This works even though `register_person!` expects a `Person`, the types have the same structure so they are compatible!
+register_person!(user)
+```
+
+## Nominal Typing
+
+A type system where type equivalence is based on explicit names or declarations, not just structure. Two types are considered the same, only if they have the same name or originate from the same type declaration.
+
 ## Rank
 
 TODO
