@@ -55,7 +55,7 @@ pub const Store = struct {
 
     // Number of primitive types that are pre-populated in the layout store
     // Must be kept in sync with the sentinel values in layout.zig Idx enum
-    const PRIMITIVE_COUNT = 16;
+    const num_scalars = 16;
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
@@ -63,13 +63,13 @@ pub const Store = struct {
         // Map scalar to idx using pure arithmetic:
         // bool (tag 0) -> 0
         // str (tag 1) -> 1
-        // host_opaque (tag 2) -> 2
+        // opaque_ptr (tag 2) -> 2
         // int (tag 3) with precision p -> 3 + p
         // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
 
         // In the packed struct, ScalarData comes first (4 bits), then ScalarTag (3 bits)
         // For numeric types (int/frac), the precision enum is stored in ScalarData
-        // For void types (bool/str/host_opaque), ScalarData is 0
+        // For void types (bool/str/opaque_ptr), ScalarData is 0
 
         const tag = @intFromEnum(scalar.tag);
 
@@ -108,8 +108,8 @@ pub const Store = struct {
         // 1: str
         _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar });
 
-        // 2: host_opaque
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .host_opaque = {} }, .tag = .host_opaque } }, .tag = .scalar });
+        // 2: opaque_ptr
+        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar });
 
         // 3-12: Integer types
         _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u8 }, .tag = .int } }, .tag = .scalar });
@@ -128,7 +128,7 @@ pub const Store = struct {
         _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .f64 }, .tag = .frac } }, .tag = .scalar });
         _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .dec }, .tag = .frac } }, .tag = .scalar });
 
-        std.debug.assert(layouts.len() == PRIMITIVE_COUNT);
+        std.debug.assert(layouts.len() == num_scalars);
 
         return .{
             .env = env,
@@ -190,7 +190,7 @@ pub const Store = struct {
                 .int => layout.data.scalar.data.int.size(),
                 .frac => layout.data.scalar.data.frac.size(),
                 .bool => 1, // bool is 1 byte
-                .str, .host_opaque => target_usize.size(), // str and host_opaque are pointer-sized
+                .str, .opaque_ptr => target_usize.size(), // str and opaque_ptr are pointer-sized
             },
             .box, .box_of_zst => target_usize.size(), // a Box is just a pointer to refcounted memory
             .list, .list_of_zst => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
@@ -699,7 +699,7 @@ pub const Store = struct {
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                         if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.hostOpaque();
+                            break :blk Layout.opaquePtr();
                         }
                     }
 
@@ -711,7 +711,7 @@ pub const Store = struct {
                     if (self.work.pending_containers.len > 0) {
                         const pending_item = self.work.pending_containers.get(self.work.pending_containers.len - 1);
                         if (pending_item.container == .box or pending_item.container == .list) {
-                            break :blk Layout.hostOpaque();
+                            break :blk Layout.opaquePtr();
                         }
                     }
 

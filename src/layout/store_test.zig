@@ -57,7 +57,7 @@ test "addTypeVar - bool" {
     defer layout_store.deinit();
 
     // Create a bool layout directly (since we don't have bool types in the type system yet)
-    const bool_layout = layout.Layout.booleanType();
+    const bool_layout = layout.Layout.boolType();
     const bool_layout_idx = try layout_store.insertLayout(bool_layout);
 
     // Verify the layout
@@ -138,7 +138,7 @@ test "addTypeVar - list of box of strings" {
     try testing.expectEqual(layout.Idx.str, box_layout.data.box);
 }
 
-test "addTypeVar - box of flex_var compiles to box of host_opaque" {
+test "addTypeVar - box of flex_var compiles to box of opaque_ptr" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -166,8 +166,8 @@ test "addTypeVar - box of flex_var compiles to box of host_opaque" {
     const box_layout = layout_store.getLayout(box_layout_idx);
     try testing.expect(box_layout.tag == .box);
 
-    // Verify the element is host_opaque sentinel
-    try testing.expectEqual(layout.Idx.host_opaque, box_layout.data.box);
+    // Verify the element is opaque_ptr sentinel
+    try testing.expectEqual(layout.Idx.opaque_ptr, box_layout.data.box);
 }
 
 test "addTypeVar - num u32" {
@@ -429,7 +429,7 @@ test "addTypeVar - box of flex frac var defaults to box of dec" {
     try testing.expectEqual(layout.Idx.dec, box_layout.data.box);
 }
 
-test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
+test "addTypeVar - box of rigid_var compiles to box of opaque_ptr" {
     const testing = std.testing;
     const gpa = testing.allocator;
 
@@ -458,8 +458,8 @@ test "addTypeVar - box of rigid_var compiles to box of host_opaque" {
     const box_layout = layout_store.getLayout(box_layout_idx);
     try testing.expect(box_layout.tag == .box);
 
-    // Verify the element is host_opaque sentinel
-    try testing.expectEqual(layout.Idx.host_opaque, box_layout.data.box);
+    // Verify the element is opaque_ptr sentinel
+    try testing.expectEqual(layout.Idx.opaque_ptr, box_layout.data.box);
 }
 
 test "addTypeVar - box of empty record compiles to box_of_zst" {
@@ -2805,7 +2805,7 @@ test "addTypeVar - all scalar types use scalar optimization" {
     // Test Box(Bool) - should use box with bool sentinel
     {
         // Create a bool layout directly and insert it
-        const bool_layout = layout.Layout.booleanType();
+        const bool_layout = layout.Layout.boolType();
         const bool_idx = try layout_store.insertLayout(bool_layout);
 
         // Create a box layout containing the bool
@@ -2871,7 +2871,7 @@ test "addTypeVar - list of scalar types uses scalar optimization" {
     // Test List(Bool)
     {
         // Create a bool layout directly and insert it
-        const bool_layout = layout.Layout.booleanType();
+        const bool_layout = layout.Layout.boolType();
         const bool_idx = try layout_store.insertLayout(bool_layout);
 
         // Create a list layout containing the bool
@@ -2980,7 +2980,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
     // Create a flex var (becomes host opaque when boxed)
     const flex_var = type_store.freshFromContent(.{ .flex_var = null });
 
-    // Test Box(FlexVar) - should use box with host_opaque sentinel
+    // Test Box(FlexVar) - should use box with opaque_ptr sentinel
     {
         const box_flex_var = type_store.freshFromContent(.{ .structure = .{ .box = flex_var } });
 
@@ -2988,10 +2988,10 @@ test "addTypeVar - host opaque types use scalar optimization" {
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .box);
-        try testing.expectEqual(layout.Idx.host_opaque, result_layout.data.box);
+        try testing.expectEqual(layout.Idx.opaque_ptr, result_layout.data.box);
     }
 
-    // Test List(FlexVar) - should use list with host_opaque sentinel
+    // Test List(FlexVar) - should use list with opaque_ptr sentinel
     {
         const list_flex_var = type_store.freshFromContent(.{ .structure = .{ .list = flex_var } });
 
@@ -2999,7 +2999,7 @@ test "addTypeVar - host opaque types use scalar optimization" {
         const result_layout = layout_store.getLayout(result);
 
         try testing.expect(result_layout.tag == .list);
-        try testing.expectEqual(layout.Idx.host_opaque, result_layout.data.list);
+        try testing.expectEqual(layout.Idx.opaque_ptr, result_layout.data.list);
     }
 }
 
@@ -3099,7 +3099,7 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     // Test Box(Bool)
     {
         // Create a bool layout directly and insert it
-        const bool_layout = layout.Layout.booleanType();
+        const bool_layout = layout.Layout.boolType();
         const bool_idx = try layout_store.insertLayout(bool_layout);
 
         // Create a box layout containing the bool
@@ -3115,7 +3115,7 @@ test "addTypeVar - all boolean precisions use scalar optimization" {
     // Test List(Bool)
     {
         // Create a bool layout directly and insert it
-        const bool_layout = layout.Layout.booleanType();
+        const bool_layout = layout.Layout.boolType();
         const bool_idx = try layout_store.insertLayout(bool_layout);
 
         // Create a list layout containing the bool
@@ -3225,11 +3225,11 @@ test "idxForScalar - arithmetic mapping with no branches" {
         try testing.expectEqual(layout.Idx.str, idx);
     }
 
-    // host_opaque
+    // opaque_ptr
     {
-        const scalar = layout.Scalar{ .data = .{ .host_opaque = {} }, .tag = .host_opaque };
+        const scalar = layout.Scalar{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr };
         const idx = Store.idxForScalar(scalar);
-        try testing.expectEqual(layout.Idx.host_opaque, idx);
+        try testing.expectEqual(layout.Idx.opaque_ptr, idx);
     }
 
     // int
@@ -3276,8 +3276,8 @@ test "idxForScalar - arithmetic mapping with no branches" {
     // str (tag 1) -> idx 1
     try testing.expectEqual(@as(u28, 1), @intFromEnum(layout.Idx.str));
 
-    // host_opaque (tag 2) -> idx 2
-    try testing.expectEqual(@as(u28, 2), @intFromEnum(layout.Idx.host_opaque));
+    // opaque_ptr (tag 2) -> idx 2
+    try testing.expectEqual(@as(u28, 2), @intFromEnum(layout.Idx.opaque_ptr));
 
     // int (tag 3) with precision 0-9 -> idx 3-12
     try testing.expectEqual(@as(u28, 3), @intFromEnum(layout.Idx.u8)); // 3 + 0
