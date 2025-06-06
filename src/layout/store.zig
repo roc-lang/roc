@@ -96,9 +96,8 @@ pub const Store = struct {
     }
 
     pub fn init(env: *base.ModuleEnv, type_store: *const types_store.Store) Self {
-        var layouts_by_var = collections.ArrayListMap(Var, Idx).init(env.gpa);
         const capacity = type_store.getNumVars();
-        layouts_by_var.ensureTotalCapacity(capacity) catch |err| exitOnOom(err);
+        const layouts_by_var = collections.ArrayListMap(Var, Idx).init(env.gpa, capacity) catch |err| exitOnOom(err);
 
         var layouts = collections.SafeList(Layout){};
 

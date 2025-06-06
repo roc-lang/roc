@@ -3202,8 +3202,8 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     try testing.expect(@intFromEnum(list_var) > 0);
 
     // Verify the ArrayListMap was initialized with capacity
-    // The capacity should be at least as large as the types store
-    try testing.expect(layout_store.layouts_by_var.entries.capacity >= type_store.getNumVars());
+    // The length should be at least as large as the types store
+    try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.getNumVars());
 }
 
 test "idxForScalar - arithmetic mapping with no branches" {
