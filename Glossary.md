@@ -348,7 +348,7 @@ Person : { first_name : Str, last_name : Str }
 User : { first_name : Str, last_name : Str }
 
 register_person! : Person => Result {} [InvalidName]
-register_peson! = |person|
+register_person! = |person|
     ...
 
 user : User
