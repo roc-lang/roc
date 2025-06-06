@@ -8,7 +8,7 @@ const Ident = @import("../base/Ident.zig");
 
 /// Tuple field for layout work - similar to RecordField but with index instead of name
 pub const TupleField = struct {
-    index: u24,
+    index: u16,
     var_: types.Var,
 };
 
@@ -28,7 +28,7 @@ pub const Work = struct {
     };
 
     pub const ResolvedTupleField = struct {
-        field_index: u24,
+        field_index: u16,
         field_idx: layout.Idx,
     };
 

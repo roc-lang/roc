@@ -37,6 +37,7 @@ pub const Store = struct {
     const Self = @This();
 
     env: *base.ModuleEnv,
+    types_store: *const types_store.Store,
     layouts: collections.SafeList(Layout),
     tuple_elems: collections.SafeList(Idx),
     record_fields: RecordField.SafeMultiList,
@@ -45,23 +46,26 @@ pub const Store = struct {
     tuple_data: collections.SafeList(TupleData),
 
     // Cache to avoid duplicate work
-    // TODO make this be a flat array with `!0` values indicating emptiness,
-    // initialized to the same length as the Subs equivalent.
-    layouts_by_var: std.AutoHashMapUnmanaged(Var, Idx),
+    layouts_by_var: collections.ArrayListMap(Var, Idx),
 
     // Reusable work stack for addTypeVar (so it can be stack-safe instead of recursing)
     work: work.Work,
 
-    pub fn init(env: *base.ModuleEnv) Self {
+    pub fn init(env: *base.ModuleEnv, type_store: *const types_store.Store) Self {
+        var layouts_by_var = collections.ArrayListMap(Var, Idx).init(env.gpa);
+        const capacity = type_store.getNumVars();
+        layouts_by_var.ensureTotalCapacity(capacity) catch |err| exitOnOom(err);
+
         return .{
             .env = env,
+            .types_store = type_store,
             .layouts = collections.SafeList(Layout){},
             .tuple_elems = collections.SafeList(Idx).initCapacity(env.gpa, 512),
             .record_fields = RecordField.SafeMultiList.initCapacity(env.gpa, 256),
             .record_data = collections.SafeList(RecordData).initCapacity(env.gpa, 256),
             .tuple_fields = TupleField.SafeMultiList.initCapacity(env.gpa, 256),
             .tuple_data = collections.SafeList(TupleData).initCapacity(env.gpa, 256),
-            .layouts_by_var = std.AutoHashMapUnmanaged(Var, Idx){},
+            .layouts_by_var = layouts_by_var,
             .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
         };
     }
@@ -73,7 +77,7 @@ pub const Store = struct {
         self.record_data.deinit(self.env.gpa);
         self.tuple_fields.deinit(self.env.gpa);
         self.tuple_data.deinit(self.env.gpa);
-        self.layouts_by_var.deinit(self.env.gpa);
+        self.layouts_by_var.deinit();
         self.work.deinit(self.env.gpa);
     }
 
@@ -121,12 +125,11 @@ pub const Store = struct {
     /// then add the record's extension fields too (recursively).
     fn gatherRecordFields(
         self: *Self,
-        var_store: *const types_store.Store,
         record_type: types.Record,
     ) (LayoutError || std.mem.Allocator.Error)!usize {
         var num_fields = record_type.fields.len();
 
-        const field_slice = var_store.getRecordFieldsSlice(record_type.fields);
+        const field_slice = self.types_store.getRecordFieldsSlice(record_type.fields);
         for (field_slice.items(.name), field_slice.items(.var_)) |name, var_| {
             // TODO is it possible that here we're encountering record fields with names
             // already in the list? Would type-checking have already deduped them?
@@ -136,14 +139,14 @@ pub const Store = struct {
 
         var current_ext = record_type.ext;
         while (true) {
-            const resolved_ext = var_store.resolveVar(current_ext);
+            const resolved_ext = self.types_store.resolveVar(current_ext);
             switch (resolved_ext.desc.content) {
                 .structure => |ext_flat_type| switch (ext_flat_type) {
                     .empty_record => break,
                     .record => |ext_record| {
                         if (ext_record.fields.len() > 0) {
                             num_fields += ext_record.fields.len();
-                            const ext_field_slice = var_store.getRecordFieldsSlice(ext_record.fields);
+                            const ext_field_slice = self.types_store.getRecordFieldsSlice(ext_record.fields);
                             for (ext_field_slice.items(.name), ext_field_slice.items(.var_)) |name, var_| {
                                 // TODO is it possible that here we're adding fields with names
                                 // already in the list? Would type-checking have already collapsed these?
@@ -171,10 +174,9 @@ pub const Store = struct {
     /// Add the tuple's fields to self.pending_tuple_fields
     fn gatherTupleFields(
         self: *Self,
-        var_store: *const types_store.Store,
         tuple_type: types.Tuple,
     ) (LayoutError || std.mem.Allocator.Error)!usize {
-        const elem_slice = var_store.getTupleElemsSlice(tuple_type.elems);
+        const elem_slice = self.types_store.getTupleElemsSlice(tuple_type.elems);
         const num_fields = elem_slice.len;
 
         for (elem_slice, 0..) |var_, index| {
@@ -400,10 +402,9 @@ pub const Store = struct {
     /// This flex var should be replaced by an Error type before calling this function.
     pub fn addTypeVar(
         self: *Self,
-        var_store: *const types_store.Store,
         unresolved_var: Var,
     ) (LayoutError || std.mem.Allocator.Error)!Idx {
-        var current = var_store.resolveVar(unresolved_var);
+        var current = self.types_store.resolveVar(unresolved_var);
 
         // If we've already seen this var, return the layout we resolved it to.
         if (self.layouts_by_var.get(current.var_)) |cached_idx| {
@@ -433,7 +434,7 @@ pub const Store = struct {
                             .container = .box,
                         });
                         // Push a pending Box container and "recurse" on the elem type
-                        current = var_store.resolveVar(elem_var);
+                        current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
                     .list => |elem_var| {
@@ -442,7 +443,7 @@ pub const Store = struct {
                             .container = .list,
                         });
                         // Push a pending List container and "recurse" on the elem type
-                        current = var_store.resolveVar(elem_var);
+                        current = self.types_store.resolveVar(elem_var);
                         continue;
                     },
                     .custom_type => |custom_type| {
@@ -452,7 +453,7 @@ pub const Store = struct {
 
                         // From a layout perspective, custom types are identical to type aliases:
                         // all we care about is what's inside, so just unroll it.
-                        current = var_store.resolveVar(custom_type.backing_var);
+                        current = self.types_store.resolveVar(custom_type.backing_var);
                         continue;
                     },
                     .num => |num| switch (num) {
@@ -470,7 +471,7 @@ pub const Store = struct {
                         .flex_var => Layout.int(types.Num.Int.Precision.default),
                     },
                     .tuple => |tuple_type| {
-                        const num_fields = try self.gatherTupleFields(var_store, tuple_type);
+                        const num_fields = try self.gatherTupleFields(tuple_type);
 
                         if (num_fields == 0) {
                             continue :flat_type .empty_record; // Empty tuple is like empty record
@@ -490,7 +491,7 @@ pub const Store = struct {
                         // Start working on the last pending field (we want to pop them).
                         const last_field_idx = self.work.pending_tuple_fields.len - 1;
                         const last_pending_field = self.work.pending_tuple_fields.get(last_field_idx);
-                        current = var_store.resolveVar(last_pending_field.var_);
+                        current = self.types_store.resolveVar(last_pending_field.var_);
                         continue :outer;
                     },
                     .func => |func| {
@@ -499,7 +500,7 @@ pub const Store = struct {
                         @panic("TODO: func layout");
                     },
                     .record => |record_type| {
-                        const num_fields = try self.gatherRecordFields(var_store, record_type);
+                        const num_fields = try self.gatherRecordFields(record_type);
 
                         if (num_fields == 0) {
                             continue :flat_type .empty_record;
@@ -519,7 +520,7 @@ pub const Store = struct {
                         // Start working on the last pending field (we want to pop them).
                         const field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
 
-                        current = var_store.resolveVar(field.var_);
+                        current = self.types_store.resolveVar(field.var_);
                         continue;
                     },
                     .tag_union => |tag_union| {
@@ -571,7 +572,7 @@ pub const Store = struct {
 
                                         // Get the next field to process
                                         const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                                        current = var_store.resolveVar(next_field.var_);
+                                        current = self.types_store.resolveVar(next_field.var_);
                                         continue;
                                     }
                                 },
@@ -604,7 +605,7 @@ pub const Store = struct {
 
                                         // Get the next field to process
                                         const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
-                                        current = var_store.resolveVar(next_field.var_);
+                                        current = self.types_store.resolveVar(next_field.var_);
                                         continue;
                                     }
                                 },
@@ -641,7 +642,7 @@ pub const Store = struct {
                 },
                 .alias => |alias| {
                     // Follow the alias by updating the work item
-                    current = var_store.resolveVar(alias.backing_var);
+                    current = self.types_store.resolveVar(alias.backing_var);
                     continue;
                 },
                 .effectful => @panic("TODO: effectful doesn't make sense as a layout; should be moved out of Content"),
@@ -652,7 +653,7 @@ pub const Store = struct {
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
             layout_idx = try self.insertLayout(layout);
-            try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
+            try self.layouts_by_var.put(current.var_, layout_idx);
 
             // If this was part of a pending container that we're working on, update that container.
             while (self.work.pending_containers.len > 0) {
@@ -692,7 +693,7 @@ pub const Store = struct {
                         } else {
                             // There are still fields remaining to process, so process the next one in the outer loop.
                             const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
-                            current = var_store.resolveVar(next_field.var_);
+                            current = self.types_store.resolveVar(next_field.var_);
                             continue :outer;
                         }
                     },
@@ -714,7 +715,7 @@ pub const Store = struct {
                         } else {
                             // There are still fields remaining to process, so process the next one in the outer loop.
                             const next_field = self.work.pending_tuple_fields.get(self.work.pending_tuple_fields.len - 1);
-                            current = var_store.resolveVar(next_field.var_);
+                            current = self.types_store.resolveVar(next_field.var_);
                             continue :outer;
                         }
                     },
@@ -725,7 +726,7 @@ pub const Store = struct {
                 layout_idx = try self.insertLayout(layout);
 
                 // Add the container's layout to our layouts_by_var cache for later use.
-                try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
+                try self.layouts_by_var.put(pending_item.var_, layout_idx);
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.

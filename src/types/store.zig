@@ -62,7 +62,7 @@ pub const Store = struct {
     /// Init the unification table
     pub fn init(env: *base.ModuleEnv) Self {
         // TODO: eventually use heuristics here to determine sensible defaults
-        return .{
+        var self = Self{
             .env = env,
 
             // slots & descriptors
@@ -78,6 +78,16 @@ pub const Store = struct {
             .tags = TagSafeMultiList.initCapacity(env.gpa, 512),
             .tag_args = VarSafeList.initCapacity(env.gpa, 512),
         };
+
+        // Skip Var 0 by inserting a dummy slot - this ensures all Vars start from 1
+        // This is needed because the Layout store's layouts_by_var uses 0 as a sentinel value
+        // TODO: We can avoid inserting the dummy slot by having the backing pointer
+        // in the SafeList be stored at "index -1" and then just make sure to offset it
+        // back to where the real allocation was on deinit.
+        const dummy_desc_idx = self.descs.insert(env.gpa, .{ .content = .err, .rank = Rank.top_level, .mark = Mark.none });
+        _ = self.slots.insert(env.gpa, .{ .root = dummy_desc_idx });
+
+        return self;
     }
 
     /// Deinit the unification table
@@ -318,6 +328,11 @@ pub const Store = struct {
 
     // helpers //
 
+    /// Get the current number of type variables in the store
+    pub fn getNumVars(self: *const Self) usize {
+        return self.slots.backing.items.len;
+    }
+
     fn varToSlotIdx(var_: Var) SlotStore.Idx {
         return @enumFromInt(@intFromEnum(var_));
     }
@@ -463,4 +478,21 @@ test "resolveVarAndCompressPath - flattens redirect chain to structure" {
     try std.testing.expectEqual(c, result.var_);
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(a));
     try std.testing.expectEqual(Slot{ .redirect = c }, store.getSlot(b));
+}
+
+test "Vars start from 1, not 0" {
+    const gpa = std.testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var store = Store.init(&module_env);
+    defer store.deinit();
+
+    // The first Var created should be 1, not 0
+    const first_var = store.fresh();
+    try std.testing.expectEqual(@as(u32, 1), @intFromEnum(first_var));
+
+    // Verify we have exactly 2 slots: the dummy at 0 and the fresh var at 1
+    try std.testing.expectEqual(@as(usize, 2), store.getNumVars());
 }
