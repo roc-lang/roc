@@ -151,7 +151,7 @@ pub const Store = struct {
         self.record_data.deinit(self.env.gpa);
         self.tuple_fields.deinit(self.env.gpa);
         self.tuple_data.deinit(self.env.gpa);
-        self.layouts_by_var.deinit();
+        self.layouts_by_var.deinit(self.env.gpa);
         self.work.deinit(self.env.gpa);
     }
 
@@ -731,7 +731,7 @@ pub const Store = struct {
             // We actually resolved a layout that wasn't zero-sized!
             // First things first: add it to the cache.
             layout_idx = try self.insertLayout(layout);
-            try self.layouts_by_var.put(current.var_, layout_idx);
+            try self.layouts_by_var.put(self.env.gpa, current.var_, layout_idx);
 
             // If this was part of a pending container that we're working on, update that container.
             while (self.work.pending_containers.len > 0) {
@@ -794,7 +794,7 @@ pub const Store = struct {
                 layout_idx = try self.insertLayout(layout);
 
                 // Add the container's layout to our layouts_by_var cache for later use.
-                try self.layouts_by_var.put(pending_item.var_, layout_idx);
+                try self.layouts_by_var.put(self.env.gpa, pending_item.var_, layout_idx);
             }
 
             // Since there are no pending containers remaining, there shouldn't be any pending record or tuple fields either.

@@ -23,7 +23,6 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
     return struct {
         const Self = @This();
 
-        allocator: std.mem.Allocator,
         // We store V directly, using 0 as a sentinel value meaning "empty"
         entries: []V,
 
@@ -33,23 +32,22 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
             @memset(entries, std.mem.zeroes(V));
 
             return .{
-                .allocator = allocator,
                 .entries = entries,
             };
         }
 
-        pub fn deinit(self: *Self) void {
-            self.allocator.free(self.entries);
+        pub fn deinit(self: *Self, allocator: std.mem.Allocator) void {
+            allocator.free(self.entries);
         }
 
-        pub fn put(self: *Self, key: K, value: V) !void {
+        pub fn put(self: *Self, allocator: std.mem.Allocator, key: K, value: V) !void {
             const index = @as(usize, @intFromEnum(key));
             std.debug.assert(index != 0); // 0 is reserved as sentinel
 
             // Ensure we have capacity for this index
             if (index >= self.entries.len) {
                 const new_capacity = index + 1;
-                const new_entries = try self.allocator.alloc(V, new_capacity);
+                const new_entries = try allocator.alloc(V, new_capacity);
 
                 // Copy old entries
                 @memcpy(new_entries[0..self.entries.len], self.entries);
@@ -58,7 +56,7 @@ pub fn ArrayListMap(comptime K: type, comptime V: type) type {
                 @memset(new_entries[self.entries.len..], std.mem.zeroes(V));
 
                 // Free old allocation and update
-                self.allocator.free(self.entries);
+                allocator.free(self.entries);
                 self.entries = new_entries;
             }
 
