@@ -168,85 +168,91 @@ pub const Tuple = struct {
 
 // numbers //
 
-/// Represents number
+/// Represents numeric types in the type system.
 ///
-/// Numbers are special-cased here. We represent them to the Roc programmer
-/// as opaque types with phantom type variables, but since they come up so
-/// often, we unify that representation into a special (much more compact)
-/// representation which saves a lot of memory.
+/// Numbers are extremely common, so we special-case their representation
+/// for both performance and memory efficiency. While Roc exposes numbers
+/// as opaque types with phantom type variables (eg, `Num(a)`), we avoid
+/// representing them using fully generic applications unless absolutely
+/// necessary.
+///
+/// In most cases—when a specific number type is known (like `U8`) — we store
+/// a compact, canonical form directly. This avoids the need for multiple
+/// indirections, such as separate type variables and layered aliases.
+///
+/// When a polymorphic number is required (eg in the type signature of
+/// a generic function over `Num(a)`), we allow full representation via
+/// `num_poly`, `int_poly`, or `frac_poly`. However, during unification,
+/// if a polymorphic number is unified with a compact one, the compact
+/// form always wins: we discard the polymorphic wrapper and store the
+/// concrete, memory-efficient version instead.
 pub const Num = union(enum) {
-    const Self = @This();
+    num_poly: Var,
+    int_poly: Var,
+    frac_poly: Var,
+    int_precision: Compact.Int.Precision,
+    frac_precision: Compact.Frac.Precision,
+    num_compact: Compact,
 
-    flex_var,
-    int: Int,
-    frac: Frac,
+    /// Represents a compact number
+    pub const Compact = union(enum) {
+        const Self = @This();
 
-    /// the Frac data type
-    pub const Frac = union(enum) {
-        flex_var,
-        exact: Precision,
+        int: Int.Precision,
+        frac: Frac.Precision,
 
-        /// the precision of a frac
-        pub const Precision = enum { f32, f64, dec };
+        /// the Frac data type
+        pub const Frac = struct {
+            /// the precision of a frac
+            pub const Precision = enum { f32, f64, dec };
+        };
+
+        /// the Int data type
+        pub const Int = struct {
+            /// the precision of an int
+            pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
+        };
     };
 
-    /// the Int data type
-    pub const Int = union(enum) {
-        flex_var,
-        exact: Precision,
+    /// a frac f32
+    pub const frac_f32: Num = Num{ .num_compact = Compact{ .frac = .f32 } };
 
-        /// the precision of an int
-        pub const Precision = enum { u8, i8, u16, i16, u32, i32, u64, i64, u128, i128 };
-    };
+    /// a frac f64
+    pub const frac_f64: Num = Num{ .num_compact = Compact{ .frac = .f64 } };
+
+    /// a frac dec
+    pub const frac_dec: Num = Num{ .num_compact = Compact{ .frac = .dec } };
+
+    /// an int u8
+    pub const int_u8: Num = Num{ .num_compact = Compact{ .int = .u8 } };
+
+    /// an int i8
+    pub const int_i8: Num = Num{ .num_compact = Compact{ .int = .i8 } };
+
+    /// an int u16
+    pub const int_u16: Num = Num{ .num_compact = Compact{ .int = .u16 } };
+
+    /// an int i16
+    pub const int_i16: Num = Num{ .num_compact = Compact{ .int = .i16 } };
+
+    /// an int u32
+    pub const int_u32: Num = Num{ .num_compact = Compact{ .int = .u32 } };
+
+    /// an int i32
+    pub const int_i32: Num = Num{ .num_compact = Compact{ .int = .i32 } };
+
+    /// an int u64
+    pub const int_u64: Num = Num{ .num_compact = Compact{ .int = .u64 } };
+
+    /// an int i64
+    pub const int_i64: Num = Num{ .num_compact = Compact{ .int = .i64 } };
+
+    /// an int u128
+    pub const int_u128: Num = Num{ .num_compact = Compact{ .int = .u128 } };
+
+    /// an int i128
+    pub const int_i128: Num = Num{ .num_compact = Compact{ .int = .i128 } };
 };
-
-/// a num flex_var
-pub const num_flex_var: FlatType = .{ .num = Num.flex_var };
-
-/// a frac flex_var
-pub const frac_flex_var: FlatType = .{ .num = Num{ .frac = .flex_var } };
-
-/// a frac f32
-pub const frac_f32: FlatType = .{ .num = Num{ .frac = .{ .exact = .f32 } } };
-
-/// a frac f64
-pub const frac_f64: FlatType = .{ .num = Num{ .frac = .{ .exact = .f64 } } };
-
-/// a frac dec
-pub const frac_dec: FlatType = .{ .num = Num{ .frac = .{ .exact = .dec } } };
-
-/// a int flex_var
-pub const int_flex_var: FlatType = .{ .num = Num{ .int = .flex_var } };
-
-/// an int u8
-pub const int_u8: FlatType = .{ .num = Num{ .int = .{ .exact = .u8 } } };
-
-/// an int i8
-pub const int_i8: FlatType = .{ .num = Num{ .int = .{ .exact = .i8 } } };
-
-/// an int u16
-pub const int_u16: FlatType = .{ .num = Num{ .int = .{ .exact = .u16 } } };
-
-/// an int i16
-pub const int_i16: FlatType = .{ .num = Num{ .int = .{ .exact = .i16 } } };
-
-/// an int u32
-pub const int_u32: FlatType = .{ .num = Num{ .int = .{ .exact = .u32 } } };
-
-/// an int i32
-pub const int_i32: FlatType = .{ .num = Num{ .int = .{ .exact = .i32 } } };
-
-/// an int u64
-pub const int_u64: FlatType = .{ .num = Num{ .int = .{ .exact = .u64 } } };
-
-/// an int i64
-pub const int_i64: FlatType = .{ .num = Num{ .int = .{ .exact = .i64 } } };
-
-/// an int u128
-pub const int_u128: FlatType = .{ .num = Num{ .int = .{ .exact = .u128 } } };
-
-/// an int i128
-pub const int_i128: FlatType = .{ .num = Num{ .int = .{ .exact = .i128 } } };
 
 // custom types //
 
