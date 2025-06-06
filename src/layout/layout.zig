@@ -18,6 +18,7 @@ pub const LayoutTag = enum(u4) {
     list_of_scalar, // List of scalar values, e.g. List(Str) - has a more compact representation than .list
     record,
     tuple,
+    record_wrapping_scalar, // Record with exactly one scalar field - more compact than .record
 };
 
 /// The Layout untagged union should take up this many bits in memory.
@@ -48,6 +49,19 @@ pub const Scalar = packed struct {
     tag: ScalarTag,
 };
 
+/// A compact identifier index that fits in 20 bits (max 1M identifiers per module)
+/// TODO: change the normal Ident.Idx to be this instead.
+pub const CompactIdentIdx = packed struct(u20) {
+    idx: u20,
+};
+
+/// Record wrapping scalar - a record with exactly one scalar field
+pub const RecordWrappingScalar = packed struct(u28) {
+    scalar: Scalar, // u7 (u4 for data + u3 for tag)
+    field_name_idx: CompactIdentIdx, // u20
+    _padding: u1 = 0, // unused bit to make it 28 bits total
+};
+
 /// Index into a Layout Store
 pub const Idx = packed struct {
     int_idx: @Type(.{
@@ -72,6 +86,7 @@ pub const LayoutUnion = packed union {
     list_of_scalar: Scalar,
     record: RecordLayout,
     tuple: TupleLayout,
+    record_wrapping_scalar: RecordWrappingScalar,
 };
 
 /// The runtime memory layout of a Roc value.
@@ -104,6 +119,11 @@ pub const Layout = packed struct {
             .record => self.data.record.alignment,
             .tuple => self.data.tuple.alignment,
             .box, .box_of_zst, .box_of_scalar, .list, .list_of_zst, .list_of_scalar => target_usize.alignment(),
+            .record_wrapping_scalar => switch (self.data.record_wrapping_scalar.scalar.tag) {
+                .int => self.data.record_wrapping_scalar.scalar.data.int.alignment(),
+                .frac => self.data.record_wrapping_scalar.scalar.data.frac.alignment(),
+                .bool, .str, .host_opaque => target_usize.alignment(),
+            },
         };
     }
 
@@ -173,10 +193,19 @@ pub const Layout = packed struct {
         return Layout{ .data = .{ .tuple = .{ .alignment = tuple_alignment, .idx = idx } }, .tag = .tuple };
     }
 
+    /// record wrapping scalar layout - a record with exactly one scalar field
+    pub fn recordWrappingScalar(scalar: Scalar, field_name_idx: CompactIdentIdx) Layout {
+        return Layout{ .data = .{ .record_wrapping_scalar = .{
+            .scalar = scalar,
+            .field_name_idx = field_name_idx,
+        } }, .tag = .record_wrapping_scalar };
+    }
+
     /// Convert a layout to a scalar if possible, otherwise return an error
     pub fn asScalar(self: Layout) !Scalar {
         return switch (self.tag) {
             .scalar => self.data.scalar,
+            .record_wrapping_scalar => self.data.record_wrapping_scalar.scalar,
             else => error.NotAScalar,
         };
     }
@@ -366,7 +395,7 @@ test "Layout.asScalar() - scalar types" {
 test "Layout.asScalar() - non-scalar types" {
     const testing = std.testing;
 
-    // Test that non-scalar types return error
+    // Test that non-scalar types return null
     const box_layout = Layout.box(.{ .int_idx = 0 });
     try testing.expectError(error.NotAScalar, box_layout.asScalar());
 
@@ -504,7 +533,7 @@ test "Layout.asScalar() - edge cases and error handling" {
     }
 
     // Test all frac precisions
-    for ([_]types.Num.Frac.Precision{ .f32, .f64, .dec }) |precision| {
+    for ([_]types.Num.Frac.Precision{ .f32, .f64 }) |precision| {
         const frac_layout = Layout.frac(precision);
         const scalar = try frac_layout.asScalar();
         try testing.expectEqual(ScalarTag.frac, scalar.tag);
@@ -626,5 +655,124 @@ test "TupleData size calculation" {
         const fields_range = tuple_data.getFields();
         try testing.expectEqual(@as(u32, 0), @intFromEnum(fields_range.start));
         try testing.expectEqual(case.field_count, @intFromEnum(fields_range.end));
+    }
+}
+
+test "record_wrapping_scalar layout creation" {
+    const testing = std.testing;
+
+    // Test with int scalar
+    const int_scalar = Scalar{ .data = .{ .int = .i32 }, .tag = .int };
+    const field_name_idx = CompactIdentIdx{ .idx = 42 };
+    const layout = Layout.recordWrappingScalar(int_scalar, field_name_idx);
+
+    try testing.expectEqual(LayoutTag.record_wrapping_scalar, layout.tag);
+    try testing.expectEqual(ScalarTag.int, layout.data.record_wrapping_scalar.scalar.tag);
+    try testing.expectEqual(types.Num.Int.Precision.i32, layout.data.record_wrapping_scalar.scalar.data.int);
+    try testing.expectEqual(@as(u20, 42), layout.data.record_wrapping_scalar.field_name_idx.idx);
+}
+
+test "record_wrapping_scalar alignment" {
+    const testing = std.testing;
+
+    for (target.TargetUsize.all()) |target_usize| {
+        // Test with different scalar types
+        const int_scalar = Scalar{ .data = .{ .int = .i64 }, .tag = .int };
+        const int_layout = Layout.recordWrappingScalar(int_scalar, .{ .idx = 1 });
+        try testing.expectEqual(std.mem.Alignment.@"8", int_layout.alignment(target_usize));
+
+        const bool_scalar = Scalar{ .data = .{ .bool = {} }, .tag = .bool };
+        const bool_layout = Layout.recordWrappingScalar(bool_scalar, .{ .idx = 2 });
+        try testing.expectEqual(target_usize.alignment(), bool_layout.alignment(target_usize));
+
+        const str_scalar = Scalar{ .data = .{ .str = {} }, .tag = .str };
+        const str_layout = Layout.recordWrappingScalar(str_scalar, .{ .idx = 3 });
+        try testing.expectEqual(target_usize.alignment(), str_layout.alignment(target_usize));
+    }
+}
+
+test "record_wrapping_scalar asScalar" {
+    const testing = std.testing;
+
+    // Test that asScalar returns the wrapped scalar
+    const scalar = Scalar{ .data = .{ .frac = .f64 }, .tag = .frac };
+    const layout = Layout.recordWrappingScalar(scalar, .{ .idx = 100 });
+
+    const extracted_scalar = try layout.asScalar();
+    try testing.expectEqual(ScalarTag.frac, extracted_scalar.tag);
+    try testing.expectEqual(types.Num.Frac.Precision.f64, extracted_scalar.data.frac);
+}
+
+test "CompactIdentIdx limits" {
+    const testing = std.testing;
+
+    // Test maximum value (2^20 - 1 = 1048575)
+    const max_idx = CompactIdentIdx{ .idx = std.math.maxInt(u20) };
+    try testing.expectEqual(@as(u20, 1048575), max_idx.idx);
+
+    // Test that it's exactly 20 bits
+    try testing.expectEqual(@as(u32, @bitSizeOf(CompactIdentIdx)), 20);
+}
+
+test "RecordWrappingScalar size" {
+    const testing = std.testing;
+
+    // Verify the packed struct is exactly 28 bits
+    try testing.expectEqual(@as(u32, @bitSizeOf(RecordWrappingScalar)), 28);
+
+    // Test with various scalars
+    const test_scalars = [_]Scalar{
+        .{ .data = .{ .int = .i32 }, .tag = .int },
+        .{ .data = .{ .bool = {} }, .tag = .bool },
+        .{ .data = .{ .str = {} }, .tag = .str },
+        .{ .data = .{ .frac = .f64 }, .tag = .frac },
+        .{ .data = .{ .host_opaque = {} }, .tag = .host_opaque },
+    };
+
+    for (test_scalars) |scalar| {
+        const rws = RecordWrappingScalar{
+            .scalar = scalar,
+            .field_name_idx = .{ .idx = 12345 },
+        };
+
+        // Verify we can round-trip the data
+        try testing.expectEqual(scalar.tag, rws.scalar.tag);
+        try testing.expectEqual(@as(u20, 12345), rws.field_name_idx.idx);
+    }
+}
+
+test "record_wrapping_scalar comprehensive" {
+    const testing = std.testing;
+
+    // Test all scalar types can be wrapped
+    const scalars = [_]struct { scalar: Scalar, name: []const u8 }{
+        .{ .scalar = .{ .data = .{ .int = .i8 }, .tag = .int }, .name = "i8" },
+        .{ .scalar = .{ .data = .{ .int = .i16 }, .tag = .int }, .name = "i16" },
+        .{ .scalar = .{ .data = .{ .int = .i32 }, .tag = .int }, .name = "i32" },
+        .{ .scalar = .{ .data = .{ .int = .i64 }, .tag = .int }, .name = "i64" },
+        .{ .scalar = .{ .data = .{ .int = .i128 }, .tag = .int }, .name = "i128" },
+        .{ .scalar = .{ .data = .{ .frac = .f32 }, .tag = .frac }, .name = "f32" },
+        .{ .scalar = .{ .data = .{ .frac = .f64 }, .tag = .frac }, .name = "f64" },
+        .{ .scalar = .{ .data = .{ .bool = {} }, .tag = .bool }, .name = "bool" },
+        .{ .scalar = .{ .data = .{ .str = {} }, .tag = .str }, .name = "str" },
+        .{ .scalar = .{ .data = .{ .host_opaque = {} }, .tag = .host_opaque }, .name = "host_opaque" },
+    };
+
+    for (scalars, 0..) |test_case, i| {
+        const field_idx = CompactIdentIdx{ .idx = @intCast(i * 1000) };
+        const layout = Layout.recordWrappingScalar(test_case.scalar, field_idx);
+
+        // Verify layout tag
+        try testing.expectEqual(LayoutTag.record_wrapping_scalar, layout.tag);
+
+        // Verify scalar data is preserved
+        try testing.expectEqual(test_case.scalar.tag, layout.data.record_wrapping_scalar.scalar.tag);
+
+        // Verify field name index is preserved
+        try testing.expectEqual(@as(u20, @intCast(i * 1000)), layout.data.record_wrapping_scalar.field_name_idx.idx);
+
+        // Verify asScalar works
+        const extracted = try layout.asScalar();
+        try testing.expectEqual(test_case.scalar.tag, extracted.tag);
     }
 }

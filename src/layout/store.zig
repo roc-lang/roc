@@ -118,6 +118,12 @@ pub const Store = struct {
             .list, .list_of_zst, .list_of_scalar => target_usize.size(), // TODO: get this from RocStr.zig and RocList.zig
             .record => self.record_data.get(@enumFromInt(layout.data.record.idx.int_idx)).size,
             .tuple => self.tuple_data.get(@enumFromInt(layout.data.tuple.idx.int_idx)).size,
+            .record_wrapping_scalar => switch (layout.data.record_wrapping_scalar.scalar.tag) {
+                .int => layout.data.record_wrapping_scalar.scalar.data.int.size(),
+                .frac => layout.data.record_wrapping_scalar.scalar.data.frac.size(),
+                .bool => 1, // bool is 1 byte
+                .str, .host_opaque => target_usize.size(), // str and host_opaque are pointer-sized
+            },
         };
     }
 
@@ -283,6 +289,21 @@ pub const Store = struct {
 
         // Remove only this record's resolved fields
         self.work.resolved_record_fields.shrinkRetainingCapacity(updated_record.resolved_fields_start);
+
+        // Check if we can use the more compact record_wrapping_scalar representation
+        if (num_resolved_fields == 1) {
+            const single_field = temp_fields.items[0];
+            const field_layout = self.getLayout(single_field.layout);
+
+            // Check if the field is a scalar
+            if (field_layout.asScalar()) |scalar| {
+                // Check if the field name index fits in 20 bits
+                if (single_field.name.idx <= std.math.maxInt(u20)) {
+                    const compact_idx = layout_.CompactIdentIdx{ .idx = @intCast(single_field.name.idx) };
+                    return Layout.recordWrappingScalar(scalar, compact_idx);
+                }
+            } else |_| {}
+        }
 
         return Layout.record(max_alignment, record_idx);
     }

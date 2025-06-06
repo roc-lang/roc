@@ -3200,3 +3200,188 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     // The capacity should be at least as large as the types store
     try testing.expect(layout_store.layouts_by_var.entries.capacity >= type_store.getNumVars());
 }
+
+test "addTypeVar - record_wrapping_scalar optimization" {
+    const testing = std.testing;
+    const gpa = testing.allocator;
+
+    var module_env = base.ModuleEnv.init(gpa);
+    defer module_env.deinit();
+
+    var type_store = types_store.Store.init(&module_env);
+    defer type_store.deinit();
+
+    var layout_store = Store.init(&module_env, &type_store);
+    defer layout_store.deinit();
+
+    // Test 1: Record with single scalar field should use record_wrapping_scalar
+    {
+        const field_name = Ident.Idx{ .idx = 100, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const str_var = type_store.freshFromContent(.{ .structure = .str });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = str_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        // Should use the compact representation
+        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
+        try testing.expectEqual(layout.ScalarTag.str, record_layout.data.record_wrapping_scalar.scalar.tag);
+        try testing.expectEqual(@as(u20, 100), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+    }
+
+    // Test 2: Record with single int field
+    {
+        const field_name = Ident.Idx{ .idx = 42, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const int_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = int_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
+        try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
+        try testing.expectEqual(types.Num.Int.Precision.i32, record_layout.data.record_wrapping_scalar.scalar.data.int);
+        try testing.expectEqual(@as(u20, 42), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+    }
+
+    // Test 3: Record with single bool field
+    {
+        const field_name = Ident.Idx{ .idx = 999, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        // Use u8 as a placeholder for bool since there's no bool type in the type system yet
+        const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = bool_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        // Since we used u8 as placeholder, it will be an int scalar
+        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
+        try testing.expectEqual(layout.ScalarTag.int, record_layout.data.record_wrapping_scalar.scalar.tag);
+        try testing.expectEqual(types.Num.Int.Precision.u8, record_layout.data.record_wrapping_scalar.scalar.data.int);
+        try testing.expectEqual(@as(u20, 999), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+    }
+
+    // Test 4: Record with field name index at limit (2^20 - 1)
+    {
+        const field_name = Ident.Idx{ .idx = std.math.maxInt(u20), .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const str_var = type_store.freshFromContent(.{ .structure = .str });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = str_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
+        try testing.expectEqual(@as(u20, std.math.maxInt(u20)), record_layout.data.record_wrapping_scalar.field_name_idx.idx);
+    }
+
+    // Test 5: Record with field name index exceeding limit should use regular record
+    {
+        const field_name = Ident.Idx{ .idx = std.math.maxInt(u20) + 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const str_var = type_store.freshFromContent(.{ .structure = .str });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = str_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        // Should fall back to regular record layout
+        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
+    }
+
+    // Test 6: Record with single non-scalar field should use regular record
+    {
+        const field_name = Ident.Idx{ .idx = 50, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const inner_str_var = type_store.freshFromContent(.{ .structure = .str });
+        const list_var = type_store.freshFromContent(.{ .structure = .{ .list = inner_str_var } });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field_name, .var_ = list_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        // Should use regular record layout (not record_wrapping_scalar)
+        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
+    }
+
+    // Test 7: Record with multiple fields should use regular record
+    {
+        const field1_name = Ident.Idx{ .idx = 1, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const field2_name = Ident.Idx{ .idx = 2, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+        const str_var = type_store.freshFromContent(.{ .structure = .str });
+        const bool_var = type_store.freshFromContent(.{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } });
+
+        const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+            .{ .name = field1_name, .var_ = str_var },
+            .{ .name = field2_name, .var_ = bool_var },
+        });
+
+        const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+        const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+        const record_layout_idx = try layout_store.addTypeVar(record_var);
+        const record_layout = layout_store.getLayout(record_layout_idx);
+
+        // Should use regular record layout (not record_wrapping_scalar)
+        try testing.expectEqual(layout.LayoutTag.record, record_layout.tag);
+    }
+
+    // Test 8: Layout size for record_wrapping_scalar
+    {
+        const field_name = Ident.Idx{ .idx = 10, .attributes = .{ .effectful = false, .ignored = false, .reassignable = false } };
+
+        // Test different scalar sizes
+        // Get the pointer size for str type dynamically
+        const str_layout = layout.Layout.str();
+        const str_size = layout_store.layoutSize(str_layout);
+
+        const test_cases = [_]struct { var_type: types.Content, expected_size: u32 }{
+            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .u8 } } } }, .expected_size = 1 },
+            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .i32 } } } }, .expected_size = 4 },
+            .{ .var_type = .{ .structure = .{ .num = .{ .int = .{ .exact = .i64 } } } }, .expected_size = 8 },
+            .{ .var_type = .{ .structure = .str }, .expected_size = str_size }, // pointer size
+        };
+
+        for (test_cases) |test_case| {
+            const scalar_var = type_store.freshFromContent(test_case.var_type);
+
+            const fields = type_store.record_fields.appendSlice(type_store.env.gpa, &[_]types.RecordField{
+                .{ .name = field_name, .var_ = scalar_var },
+            });
+
+            const ext = type_store.freshFromContent(.{ .structure = .empty_record });
+            const record_var = type_store.freshFromContent(.{ .structure = .{ .record = .{ .fields = fields, .ext = ext } } });
+            const record_layout_idx = try layout_store.addTypeVar(record_var);
+            const record_layout = layout_store.getLayout(record_layout_idx);
+
+            try testing.expectEqual(layout.LayoutTag.record_wrapping_scalar, record_layout.tag);
+            try testing.expectEqual(test_case.expected_size, layout_store.layoutSize(record_layout.*));
+        }
+    }
+}
