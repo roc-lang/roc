@@ -1,5 +1,7 @@
+//! Build targets, such as x86-64 Linux
 const std = @import("std");
 
+/// A build target, such as x86-64 Linux
 pub const Target = struct {
     target_usize: TargetUsize,
 
