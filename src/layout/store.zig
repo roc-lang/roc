@@ -427,19 +427,19 @@ pub const Store = struct {
             layout_idx = try self.insertLayout(layout);
             try self.var_to_layout.put(self.env.gpa, current.var_, layout_idx);
 
-            // Next, see if this was part of some pending work.
-            while (self.work.pending_containers.pop()) |pending_container| {
-                switch (pending_container) {
+            // Next, see if this was part of a pending container that we're working on.
+            while (self.work.pending_containers.items.len > 0) {
+                // Get a pointer to the last pending container, so we can mutate it in-place.
+                switch (self.work.pending_containers.items[self.work.pending_containers.items.len - 1]) {
                     .box => {
                         layout = Layout{ .box = layout_idx };
                     },
                     .list => {
                         layout = Layout{ .list = layout_idx };
                     },
-                    .record => |pending_record| {
+                    .record => |*pending_record| {
                         std.debug.assert(pending_record.pending_fields > 0);
-                        var updated_record = pending_record;
-                        updated_record.pending_fields -= 1;
+                        pending_record.pending_fields -= 1;
 
                         // Pop the field we just processed
                         const pending_field = self.work.pending_record_fields.pop() orelse unreachable;
@@ -450,14 +450,11 @@ pub const Store = struct {
                             .field_idx = layout_idx,
                         });
 
-                        if (updated_record.pending_fields == 0) {
-                            layout = try self.finishRecord(updated_record);
+                        if (pending_record.pending_fields == 0) {
+                            layout = try self.finishRecord(pending_record.*);
                         } else {
-                            // There are still fields remaining to process, so put the pending container back
-                            // TODO we coul avoid the pushing and popping here by having the loop just peek at the last one
-                            try self.work.pending_containers.append(self.env.gpa, .{ .record = updated_record });
-
-                            // Process the next field in the outer loop.
+                            // There are still fields remaining to process, so process the next one in the outer loop.
+                            // Don't pop the container since we still need it.
                             const next_field = self.work.pending_record_fields.get(self.work.pending_record_fields.len - 1);
                             current = var_store.resolveVar(next_field.var_);
                             continue :outer;
@@ -465,6 +462,8 @@ pub const Store = struct {
                     },
                 }
 
+                // We're done with this container, so remove it from pending_containers
+                _ = self.work.pending_containers.pop() orelse unreachable;
                 layout_idx = try self.insertLayout(layout);
                 // TODO store var in pending_container and add this to the var_to_layout cache
             }
