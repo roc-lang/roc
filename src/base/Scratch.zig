@@ -3,7 +3,7 @@
 
 const std = @import("std");
 const exitOnOom = @import("../collections/utils.zig").exitOnOom;
-const DataSpan = @import("../base.zig");
+const base = @import("../base.zig");
 
 /// A stack for easily adding and removing index types when doing recursive operations
 pub fn Scratch(comptime T: type) type {
@@ -36,7 +36,7 @@ pub fn Scratch(comptime T: type) type {
 
         /// Creates a new span starting at start.  Moves the items from scratch
         /// to extra_data as appropriate.
-        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) DataSpan {
+        pub fn spanFromStart(self: *Self, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32)) base.DataSpan {
             const end = self.items.len;
             defer self.items.shrinkRetainingCapacity(start);
             var i = @as(usize, @intCast(start));
@@ -48,7 +48,7 @@ pub fn Scratch(comptime T: type) type {
             return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
         }
 
-        /// Clears any WhereClauseIds added to scratch from start until the end.
+        /// Clears any ids added to scratch from start until the end.
         /// Should be used wherever the scratch items will not be used,
         /// as in when parsing fails.
         pub fn clearFrom(self: *Self, start: u32) void {

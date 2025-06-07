@@ -1840,7 +1840,7 @@ pub const NodeStore = struct {
             .string => {
                 return .{ .string = .{
                     .token = node.main_token,
-                    .parts = .{ .span = DataSpan{
+                    .parts = .{ .span = base.DataSpan{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
@@ -1849,7 +1849,7 @@ pub const NodeStore = struct {
             },
             .list => {
                 return .{ .list = .{
-                    .items = .{ .span = DataSpan{
+                    .items = .{ .span = base.DataSpan{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
@@ -1858,7 +1858,7 @@ pub const NodeStore = struct {
             },
             .tuple => {
                 return .{ .tuple = .{
-                    .items = .{ .span = DataSpan{
+                    .items = .{ .span = base.DataSpan{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
@@ -1903,7 +1903,7 @@ pub const NodeStore = struct {
                 const function = store.extra_data.items[@as(usize, @intCast(node.main_token))];
                 return .{ .apply = .{
                     .@"fn" = .{ .id = function },
-                    .args = .{ .span = DataSpan{
+                    .args = .{ .span = base.DataSpan{
                         .start = node.data.lhs,
                         .len = node.data.rhs,
                     } },
@@ -2182,7 +2182,7 @@ pub const NodeStore = struct {
 
     /// Represents a delimited collection of other nodes
     pub const Collection = struct {
-        span: DataSpan,
+        span: base.DataSpan,
         region: Region,
     };
 
@@ -3520,22 +3520,17 @@ pub const NodeStore = struct {
         }
     };
 
-    pub const DataSpan = struct {
-        start: u32,
-        len: u32,
-    };
-
-    pub const ExprSpan = struct { span: DataSpan };
-    pub const StatementSpan = struct { span: DataSpan };
-    pub const TokenSpan = struct { span: DataSpan };
-    pub const PatternSpan = struct { span: DataSpan };
-    pub const PatternRecordFieldSpan = struct { span: DataSpan };
-    pub const RecordFieldSpan = struct { span: DataSpan };
-    pub const WhenBranchSpan = struct { span: DataSpan };
-    pub const TypeAnnoSpan = struct { span: DataSpan };
-    pub const AnnoRecordFieldSpan = struct { span: DataSpan };
-    pub const ExposedItemSpan = struct { span: DataSpan };
-    pub const WhereClauseSpan = struct { span: DataSpan };
+    pub const ExprSpan = struct { span: base.DataSpan };
+    pub const StatementSpan = struct { span: base.DataSpan };
+    pub const TokenSpan = struct { span: base.DataSpan };
+    pub const PatternSpan = struct { span: base.DataSpan };
+    pub const PatternRecordFieldSpan = struct { span: base.DataSpan };
+    pub const RecordFieldSpan = struct { span: base.DataSpan };
+    pub const WhenBranchSpan = struct { span: base.DataSpan };
+    pub const TypeAnnoSpan = struct { span: base.DataSpan };
+    pub const AnnoRecordFieldSpan = struct { span: base.DataSpan };
+    pub const ExposedItemSpan = struct { span: base.DataSpan };
+    pub const WhereClauseSpan = struct { span: base.DataSpan };
 
     /// Returns the start position for a new Span of ExprIdxs in scratch
     pub fn scratchExprTop(store: *NodeStore) u32 {
@@ -3892,7 +3887,7 @@ pub const NodeStore = struct {
             store.extra_data.append(store.gpa, store.scratch_exposed_items.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
-        const span = DataSpan{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
+        const span = base.DataSpan{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
         return .{ .span = span };
     }
 
