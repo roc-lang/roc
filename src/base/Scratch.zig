@@ -24,12 +24,17 @@ pub fn Scratch(comptime T: type) type {
             self.items.deinit(gpa);
         }
 
-        /// Returns the start position for a new Span of whereClauseIdxs in scratch
+        /// Returns the number of items in the scratch
+        pub fn len(self: *Self) u32 {
+            return @as(u32, @intCast(self.items.items.len));
+        }
+
+        /// Returns the start position for a new Span of indexes in scratch
         pub fn top(self: *Self) u32 {
             return @as(u32, @intCast(self.items.len));
         }
 
-        /// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
+        /// Places a new index of type `T` in the scratch.  Will panic on OOM.
         pub fn append(self: *Self, gpa: std.mem.Allocator, idx: T) void {
             self.items.append(gpa, idx) catch |err| exitOnOom(err);
         }

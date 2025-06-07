@@ -617,7 +617,7 @@ pub const NodeStore = struct {
     gpa: std.mem.Allocator,
     nodes: Node.List,
     extra_data: std.ArrayListUnmanaged(u32),
-    scratch_statements: std.ArrayListUnmanaged(StatementIdx),
+    scratch_statements: base.Scratch(StatementIdx),
     scratch_tokens: std.ArrayListUnmanaged(TokenIdx),
     scratch_exprs: std.ArrayListUnmanaged(ExprIdx),
     scratch_patterns: std.ArrayListUnmanaged(PatternIdx),
@@ -637,7 +637,7 @@ pub const NodeStore = struct {
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
             .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-            .scratch_statements = std.ArrayListUnmanaged(StatementIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_statements = base.Scratch(StatementIdx).init(gpa),
             .scratch_tokens = std.ArrayListUnmanaged(TokenIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_exprs = std.ArrayListUnmanaged(ExprIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_patterns = std.ArrayListUnmanaged(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
@@ -685,7 +685,7 @@ pub const NodeStore = struct {
     /// Ensures that all scratch buffers in the store
     /// are clear for use.
     pub fn emptyScratch(store: *NodeStore) void {
-        store.scratch_statements.shrinkRetainingCapacity(0);
+        store.scratch_statements.clearFrom(0);
         store.scratch_tokens.shrinkRetainingCapacity(0);
         store.scratch_exprs.shrinkRetainingCapacity(0);
         store.scratch_patterns.shrinkRetainingCapacity(0);
@@ -3577,24 +3577,24 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of StatementIdxs in scratch
     pub fn scratchStatementTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_statements.items.len));
+        return store.scratch_statements.len();
     }
 
     /// Places a new StatementIdx in the scratch.  Will panic on OOM.
     pub fn addScratchStatement(store: *NodeStore, idx: StatementIdx) void {
-        store.scratch_statements.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_statements.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn statementSpanFrom(store: *NodeStore, start: u32) StatementSpan {
-        const end = store.scratch_statements.items.len;
-        defer store.scratch_statements.shrinkRetainingCapacity(start);
+        const end = store.scratch_statements.len();
+        defer store.scratch_statements.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         std.debug.assert(end >= i);
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_statements.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_statements.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3604,7 +3604,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchStatementsFrom(store: *NodeStore, start: u32) void {
-        store.scratch_statements.shrinkRetainingCapacity(start);
+        store.scratch_statements.clearFrom(start);
     }
 
     /// Returns a new Statement slice so that the caller can iterate through
