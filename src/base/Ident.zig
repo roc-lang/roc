@@ -35,13 +35,17 @@ pub fn for_text(text: []const u8) Ident {
     };
 }
 
+/// The type used for the index field in Ident.Idx
+pub const IdxInt = u24;
+
 /// The index from the store, with the attributes packed into unused bytes.
-///
-/// With 29-bits for the ID we can store up to 536,870,912 identifiers.
-pub const Idx = packed struct(u32) {
+pub const Idx = packed struct {
     attributes: Attributes,
-    idx: u29,
+    idx: IdxInt,
 };
+
+/// The bit representation type for Ident.Idx when stored as an integer
+pub const IdxRepr = @Type(.{ .int = .{ .signedness = .unsigned, .bits = @bitSizeOf(Idx) } });
 
 /// Identifier attributes such as if it is effectful, ignored, or reassignable.
 pub const Attributes = packed struct(u3) {
@@ -86,7 +90,7 @@ pub const Store = struct {
 
         return Idx{
             .attributes = ident.attributes,
-            .idx = @as(u29, @intCast(@intFromEnum(idx))),
+            .idx = @as(IdxInt, @intCast(@intFromEnum(idx))),
         };
     }
 
@@ -128,7 +132,7 @@ pub const Store = struct {
 
         return Idx{
             .attributes = attributes,
-            .idx = @truncate(@intFromEnum(idx)),
+            .idx = @as(IdxInt, @truncate(@intFromEnum(idx))),
         };
     }
 

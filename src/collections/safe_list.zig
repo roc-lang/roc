@@ -31,6 +31,28 @@ pub fn SafeRange(comptime Idx: type) type {
     };
 }
 
+/// A range that's guaranteed to have at least one element
+pub const NonEmptyRange = struct {
+    start: u32,
+    /// This count will never be zero
+    count: u32,
+
+    pub fn init(start: u32, count: u32) !NonEmptyRange {
+        if (count == 0) {
+            return error.EmptyRange;
+        }
+        return NonEmptyRange{ .start = start, .count = count };
+    }
+
+    /// Convert to a SafeRange with the given index type
+    pub fn toRange(self: NonEmptyRange, comptime Idx: type) SafeRange(Idx) {
+        return SafeRange(Idx){
+            .start = @enumFromInt(self.start),
+            .end = @enumFromInt(self.start + self.count),
+        };
+    }
+};
+
 /// Wraps a `std.ArrayList` to provide a list that's safer to access
 /// with arbitrary indices.
 ///

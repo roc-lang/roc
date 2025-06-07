@@ -11,6 +11,7 @@ const problem = @import("../problem.zig");
 const collections = @import("../collections.zig");
 const Ident = @import("Ident.zig");
 const StringLiteral = @import("StringLiteral.zig");
+const Target = @import("./target.zig").Target;
 
 const Type = type_mod.Type;
 const Problem = problem.Problem;
@@ -22,6 +23,7 @@ idents: Ident.Store = .{},
 ident_ids_for_slicing: collections.SafeList(Ident.Idx),
 strings: StringLiteral.Store,
 problems: Problem.List,
+target: Target,
 
 /// Initialize the module environment.
 pub fn init(gpa: std.mem.Allocator) Self {
@@ -32,6 +34,7 @@ pub fn init(gpa: std.mem.Allocator) Self {
         .ident_ids_for_slicing = collections.SafeList(Ident.Idx).initCapacity(gpa, 256),
         .strings = StringLiteral.Store.initCapacityBytes(gpa, 4096),
         .problems = Problem.List.initCapacity(gpa, 64),
+        .target = Target.native,
     };
 }
 
