@@ -73,15 +73,34 @@ fn parseCheck(args: []const []const u8) CliArgs {
 }
 
 fn parseBuild(args: []const []const u8) CliArgs {
-    if (args.len == 0) return CliArgs{ .build = BuildArgs{ .file = "main.roc" } };
-    // var file = "main.roc";
-    // for (args) |arg| {
-    //     if
-    // }
-    return CliArgs{ .build = BuildArgs{ .file = args[0] } };
+    var build_args = BuildArgs{ .file = "main.roc" };
+    for (args) |arg| {
+        if (mem.eql(u8, arg, "-h") or mem.eql(u8, arg, "--help")) {
+            return CliArgs{ .help = 
+            \\TODO build help message here
+        };
+        } else if (mem.startsWith(u8, arg, "--output")) {
+            var iter = mem.splitScalar(u8, arg, '=');
+            _ = iter.next();
+            const value = iter.next().?;
+            build_args.output = value;
+        } else if (mem.startsWith(u8, arg, "--opt")) {
+            var iter = mem.splitScalar(u8, arg, '=');
+            _ = iter.next();
+            const value = iter.next().?;
+            if (mem.eql(u8, value, "size")) {
+                build_args.opt = .size;
+            } else if (mem.eql(u8, value, "speed")) {
+                build_args.opt = .speed;
+            } else {
+                return CliArgs{ .invalid = "--opt can be either speed or size" };
+            }
+        } else {
+            build_args.file = arg;
+        }
+    }
+    return CliArgs{ .build = build_args };
 }
-
-// fn get_flag_name([]const u8) ?[]const u8 {}
 
 fn parseRun(args: []const []const u8) CliArgs {
     _ = args;
@@ -127,5 +146,15 @@ test "roc build" {
         const result = parse(&[_][]const u8{ "build", "--opt=size" });
         try testing.expectEqualStrings("main.roc", result.build.file);
         try testing.expectEqual(OptLevel.size, result.build.opt);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "--opt=speed", "foo/bar.roc", "--output=mypath" });
+        try testing.expectEqualStrings("foo/bar.roc", result.build.file);
+        try testing.expectEqual(OptLevel.speed, result.build.opt);
+        try testing.expectEqualStrings("mypath", result.build.output.?);
+    }
+    {
+        const result = parse(&[_][]const u8{ "build", "--opt=invalid" });
+        try testing.expectEqualStrings("--opt can be either speed or size", result.invalid);
     }
 }
