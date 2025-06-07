@@ -622,7 +622,7 @@ pub const NodeStore = struct {
     scratch_exprs: base.Scratch(ExprIdx),
     scratch_patterns: base.Scratch(PatternIdx),
     scratch_record_fields: base.Scratch(RecordFieldIdx),
-    scratch_pattern_record_fields: std.ArrayListUnmanaged(PatternRecordFieldIdx),
+    scratch_pattern_record_fields: base.Scratch(PatternRecordFieldIdx),
     scratch_when_branches: std.ArrayListUnmanaged(WhenBranchIdx),
     scratch_type_annos: std.ArrayListUnmanaged(TypeAnnoIdx),
     scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
@@ -642,7 +642,7 @@ pub const NodeStore = struct {
             .scratch_exprs = base.Scratch(ExprIdx).init(gpa),
             .scratch_patterns = base.Scratch(PatternIdx).init(gpa),
             .scratch_record_fields = base.Scratch(RecordFieldIdx).init(gpa),
-            .scratch_pattern_record_fields = std.ArrayListUnmanaged(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_pattern_record_fields = base.Scratch(PatternRecordFieldIdx).init(gpa),
             .scratch_when_branches = std.ArrayListUnmanaged(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_type_annos = std.ArrayListUnmanaged(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_anno_record_fields = std.ArrayListUnmanaged(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
@@ -690,7 +690,7 @@ pub const NodeStore = struct {
         store.scratch_exprs.clearFrom(0);
         store.scratch_patterns.clearFrom(0);
         store.scratch_record_fields.clearFrom(0);
-        store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
+        store.scratch_pattern_record_fields.clearFrom(0);
         store.scratch_when_branches.shrinkRetainingCapacity(0);
         store.scratch_type_annos.shrinkRetainingCapacity(0);
         store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
@@ -3658,23 +3658,23 @@ pub const NodeStore = struct {
     }
     /// Returns the start position for a new Span of patternRecordFieldIdxs in scratch
     pub fn scratchPatternRecordFieldTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_pattern_record_fields.items.len));
+        return store.scratch_pattern_record_fields.top();
     }
 
     /// Places a new PatternRecordFieldIdx in the scratch.  Will panic on OOM.
     pub fn addScratchPatternRecordField(store: *NodeStore, idx: PatternRecordFieldIdx) void {
-        store.scratch_pattern_record_fields.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_pattern_record_fields.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn patternRecordFieldSpanFrom(store: *NodeStore, start: u32) PatternRecordFieldSpan {
-        const end = store.scratch_pattern_record_fields.items.len;
-        defer store.scratch_pattern_record_fields.shrinkRetainingCapacity(start);
+        const end = store.scratch_pattern_record_fields.top();
+        defer store.scratch_pattern_record_fields.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_pattern_record_fields.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_pattern_record_fields.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3684,7 +3684,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchPatternRecordFieldsFrom(store: *NodeStore, start: u32) void {
-        store.scratch_pattern_record_fields.shrinkRetainingCapacity(start);
+        store.scratch_pattern_record_fields.clearFrom(start);
     }
 
     /// Returns a new RecordField slice so that the caller can iterate through
