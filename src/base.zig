@@ -12,6 +12,7 @@ pub const ModuleEnv = @import("base/ModuleEnv.zig");
 pub const ModuleImport = @import("base/ModuleImport.zig");
 pub const StringLiteral = @import("base/StringLiteral.zig");
 pub const DiagnosticPosition = @import("base/DiagnosticPosition.zig");
+pub const Scratch = @import("base/scratch.zig").Scratch;
 
 pub const ModuleWork = module_work.ModuleWork;
 pub const ModuleWorkIdx = module_work.ModuleWorkIdx;
@@ -65,4 +66,10 @@ pub const FloatLiteral = union(enum) {
 pub const NumLiteral = union(enum) {
     Int: IntLiteral,
     Float: FloatLiteral,
+};
+
+/// Just a small struct to take a span of data in an array
+pub const DataSpan = struct {
+    start: u32,
+    len: u32,
 };

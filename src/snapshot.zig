@@ -2,7 +2,8 @@ const std = @import("std");
 const testing = std.testing;
 const Allocator = std.mem.Allocator;
 const base = @import("base.zig");
-const can = @import("check/canonicalize.zig");
+const Can = @import("check/canonicalize.zig");
+const Scope = @import("check/canonicalize/Scope.zig");
 const parse = @import("check/parse.zig");
 const fmt = @import("fmt.zig");
 
@@ -577,10 +578,14 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Write CANONICALIZE SECTION
     if (content.has_canonicalize) {
-        var can_ir = can.IR.init(&module_env);
+        var can_ir = Can.IR.init(module_env);
         defer can_ir.deinit();
         parse_ast.store.emptyScratch();
-        can.canonicalize(&can_ir, &parse_ast);
+        var scope = Scope.init(&can_ir.env, &.{}, &.{});
+        defer scope.deinit();
+        var can = Can.init(&can_ir, &parse_ast, &scope);
+
+        can.canonicalize_file();
 
         var canonicalized = std.ArrayList(u8).init(gpa);
         defer canonicalized.deinit();

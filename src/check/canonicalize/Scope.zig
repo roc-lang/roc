@@ -13,18 +13,20 @@ const exitOnOom = collections.utils.exitOnOom;
 
 const Self = @This();
 
+const TagMap = std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx);
+
 env: *base.ModuleEnv,
 /// The custom alias that this file is centered around, if one has been defined.
 focused_custom_alias: ?Alias.Idx = null,
 // TODO: handle renaming, e.g. `CustomType := [ExportedName as LocalName]`
-custom_tags: std.AutoHashMapUnmanaged(Ident.Idx, Alias.Idx) = .{},
+custom_tags: TagMap = TagMap.empty,
 /// Identifiers/aliases that are in scope, and defined in the current module.
 levels: Levels,
 
 /// Initialize a new scope.
 pub fn init(
     env: *base.ModuleEnv,
-    builtin_aliases: []const struct { alias: Alias.Idx, name: Ident.Idx },
+    builtin_aliases: []const struct { alias: Ident.Idx, name: Ident.Idx },
     builtin_idents: []const Ident.Idx,
 ) Self {
     var scope = Self{ .env = env, .levels = Levels{ .env = env } };
@@ -50,8 +52,10 @@ pub fn init(
 
 /// Deinitialize a scope's memory
 pub fn deinit(self: *Self) void {
-    self.custom_tags.deinit(self.env.gpa);
-    self.levels.deinit();
+    // if (self.custom_tags.size > 0) {
+    //     self.custom_tags.deinit(self.env.gpa);
+    // }
+    Levels.deinit(&self.levels);
 }
 
 /// Generates a unique ident like "1" or "5" in the home module.
@@ -127,12 +131,16 @@ pub const Level = struct {
     /// todo
     pub const AliasInScope = struct {
         scope_name: Ident.Idx,
-        alias: Alias.Idx,
+        alias: Ident.Idx,
     };
     /// todo
     pub fn deinit(self: *Level, gpa: std.mem.Allocator) void {
-        self.idents.deinit(gpa);
-        self.aliases.deinit(gpa);
+        if (self.idents.items.len > 0) {
+            self.idents.deinit(gpa);
+        }
+        if (self.aliases.items.len > 0) {
+            self.aliases.deinit(gpa);
+        }
     }
 };
 
@@ -158,14 +166,15 @@ pub const Levels = struct {
             self.env.problems.append(self.env.gpa, Problem.Compiler.make(.{
                 .canonicalize = .exited_top_scope_level,
             })) catch |err| exitOnOom(err);
-        } else {
-            _ = self.levels.pop();
+            return;
         }
+        _ = self.levels.pop();
     }
     /// todo
     pub fn iter(self: *Levels, comptime item_kind: Level.ItemKind) Iterator(item_kind) {
         return Iterator(item_kind).new(self);
     }
+
     fn contains(
         self: *Levels,
         comptime item_kind: Level.ItemKind,
@@ -173,13 +182,23 @@ pub const Levels = struct {
     ) ?Level.Item(item_kind) {
         var items_in_scope = Iterator(item_kind).new(self);
         while (items_in_scope.nextData()) |item_in_scope| {
-            if (self.env.idents.identsHaveSameText(name, item_in_scope.scope_name)) {
-                return item_in_scope;
+            switch (item_kind) {
+                .alias => {
+                    if (self.env.idents.identsHaveSameText(name, item_in_scope.alias)) {
+                        return item_in_scope;
+                    }
+                },
+                .ident => {
+                    if (self.env.idents.identsHaveSameText(name, item_in_scope.ident)) {
+                        return item_in_scope;
+                    }
+                },
             }
         }
 
         return null;
     }
+
     /// todo
     pub fn lookup(
         self: *Levels,
