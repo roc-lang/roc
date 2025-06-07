@@ -626,7 +626,7 @@ pub const NodeStore = struct {
     scratch_when_branches: base.Scratch(WhenBranchIdx),
     scratch_type_annos: base.Scratch(TypeAnnoIdx),
     scratch_anno_record_fields: base.Scratch(AnnoRecordFieldIdx),
-    scratch_exposed_items: std.ArrayListUnmanaged(ExposedItemIdx),
+    scratch_exposed_items: base.Scratch(ExposedItemIdx),
     scratch_where_clauses: std.ArrayListUnmanaged(WhereClauseIdx),
 
     /// Initialize the store with an assumed capacity to
@@ -646,7 +646,7 @@ pub const NodeStore = struct {
             .scratch_when_branches = base.Scratch(WhenBranchIdx).init(gpa),
             .scratch_type_annos = base.Scratch(TypeAnnoIdx).init(gpa),
             .scratch_anno_record_fields = base.Scratch(AnnoRecordFieldIdx).init(gpa),
-            .scratch_exposed_items = std.ArrayListUnmanaged(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_exposed_items = base.Scratch(ExposedItemIdx).init(gpa),
             .scratch_where_clauses = std.ArrayListUnmanaged(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
         };
 
@@ -694,7 +694,7 @@ pub const NodeStore = struct {
         store.scratch_when_branches.clearFrom(0);
         store.scratch_type_annos.clearFrom(0);
         store.scratch_anno_record_fields.clearFrom(0);
-        store.scratch_exposed_items.shrinkRetainingCapacity(0);
+        store.scratch_exposed_items.clearFrom(0);
         store.scratch_where_clauses.shrinkRetainingCapacity(0);
     }
 
@@ -3878,18 +3878,18 @@ pub const NodeStore = struct {
 
     /// Places a new ExposedItemIdx in the scratch.  Will panic on OOM.
     pub fn addScratchExposedItem(store: *NodeStore, idx: ExposedItemIdx) void {
-        store.scratch_exposed_items.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_exposed_items.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn exposedItemSpanFrom(store: *NodeStore, start: u32) ExposedItemSpan {
-        const end = store.scratch_exposed_items.items.len;
-        defer store.scratch_exposed_items.shrinkRetainingCapacity(start);
+        const end = store.scratch_exposed_items.top();
+        defer store.scratch_exposed_items.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_exposed_items.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_exposed_items.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         const span = DataSpan{ .start = ed_start, .len = @as(u32, @intCast(end)) - start };
@@ -3900,7 +3900,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchExposedItemsFrom(store: *NodeStore, start: u32) void {
-        store.scratch_exposed_items.shrinkRetainingCapacity(start);
+        store.scratch_exposed_items.clearFrom(start);
     }
 
     /// Returns a new ExposedItem slice so that the caller can iterate through
