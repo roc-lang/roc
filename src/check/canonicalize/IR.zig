@@ -4,31 +4,24 @@ const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 const Alias = @import("./Alias.zig");
-const sexpr = @import("../../base/sexpr.zig"); // Added import
-
+const sexpr = @import("../../base/sexpr.zig");
+const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
+const Scratch = base.Scratch;
+const DataSpan = base.DataSpan;
 const Ident = base.Ident;
 const Region = base.Region;
 const ModuleImport = base.ModuleImport;
+const ModuleEnv = base.ModuleEnv;
 const StringLiteral = base.StringLiteral;
 const TypeVar = types.Var;
 const Problem = problem.Problem;
+
 const Self = @This();
 
 env: base.ModuleEnv,
-aliases: Alias.List,
-imports: ModuleImport.Store,
-defs: Def.List,
-exprs: Expr.List,
-exprs_at_regions: ExprAtRegion.List,
-typed_exprs_at_regions: TypedExprAtRegion.List,
-if_branches: IfBranch.List,
-when_branches: WhenBranch.List,
-patterns: Pattern.List,
-patterns_at_regions: PatternAtRegion.List,
-typed_patterns_at_regions: TypedPatternAtRegion.List,
-type_indices: collections.SafeList(TypeVar),
-// type_var_names: Ident.Store,
+store: NodeStore,
 ingested_files: IngestedFile.List,
+imports: ModuleImport.Store,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -40,45 +33,36 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(gpa: std.mem.Allocator) Self {
-    var env = base.ModuleEnv.init(gpa);
-
+pub fn init(env: ModuleEnv) Self {
+    var ident_store = env.idents;
     return Self{
         .env = env,
-        .aliases = .{},
-        .imports = ModuleImport.Store.init(&.{}, &env.idents, gpa),
-        .defs = .{},
-        .exprs = .{},
-        .exprs_at_regions = .{},
-        .typed_exprs_at_regions = .{},
-        .if_branches = .{},
-        .when_branches = .{},
-        .patterns = .{},
-        .patterns_at_regions = .{},
-        .typed_patterns_at_regions = .{},
-        .type_indices = .{},
+        .store = NodeStore.initCapacity(env.gpa, 1000), // TODO: Figure out what this should be
         // .type_var_names = Ident.Store.init(gpa),
         .ingested_files = .{},
+        .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
+    };
+}
+
+/// Initialize the IR for a module's canonicalization info with a specified capacity.
+/// For more information refer to documentation on [init] as well
+pub fn initCapacity(env: ModuleEnv, capacity: usize) Self {
+    var ident_store = env.idents;
+    return Self{
+        .env = env,
+        .store = NodeStore.initCapacity(env.gpa, capacity), // TODO: Figure out what this should be
+        // .type_var_names = Ident.Store.init(gpa),
+        .ingested_files = .{},
+        .imports = ModuleImport.Store.init(&.{}, &ident_store, env.gpa),
     };
 }
 
 /// Deinit the IR's memory.
 pub fn deinit(self: *Self) void {
-    self.env.deinit();
-    self.aliases.deinit(self.env.gpa);
-    self.imports.deinit(self.env.gpa);
-    self.defs.deinit(self.env.gpa);
-    self.exprs.deinit(self.env.gpa);
-    self.exprs_at_regions.deinit(self.env.gpa);
-    self.typed_exprs_at_regions.deinit(self.env.gpa);
-    self.if_branches.deinit(self.env.gpa);
-    self.when_branches.deinit(self.env.gpa);
-    self.patterns.deinit(self.env.gpa);
-    self.patterns_at_regions.deinit(self.env.gpa);
-    self.typed_patterns_at_regions.deinit(self.env.gpa);
-    self.type_indices.deinit(self.env.gpa);
+    self.store.deinit();
     // self.type_var_names.deinit(self.env.gpa);
     self.ingested_files.deinit(self.env.gpa);
+    self.imports.deinit(self.env.gpa);
 }
 
 // Helper to add type index info
@@ -86,6 +70,11 @@ fn appendTypeVarChild(node: *sexpr.Expr, gpa: std.mem.Allocator, name: []const u
     var type_node = sexpr.Expr.init(gpa, name);
     type_node.appendUnsignedIntChild(gpa, @intCast(@intFromEnum(type_idx)));
     node.appendNodeChild(gpa, &type_node);
+    // TODO fix me
+    // if (self.ingested_files.items.items.len > 0) {
+    //     self.ingested_files.deinit(self.env.gpa);
+    // }
+    // self.imports.deinit(self.env.gpa);
 }
 
 // Helper to add identifier info
@@ -95,6 +84,481 @@ fn appendIdentChild(node: *sexpr.Expr, gpa: std.mem.Allocator, env: *const base.
     ident_node.appendStringChild(gpa, ident_text);
     node.appendNodeChild(gpa, &ident_node);
 }
+
+test {
+    const testing = std.testing;
+    try testing.expectEqual(24, @sizeOf(Node));
+}
+
+/// A single meaningful node in the Abstract Syntax Tree.
+/// Should always be inserted and fetched from a Node Store.
+///
+/// The Tag represents what type of Node it is, and
+/// therefore how it's data and main_token fields should
+/// be interpreted.
+pub const Node = struct {
+    data_1: u32,
+    data_2: u32,
+    data_3: u32,
+    region: Region,
+    tag: Tag,
+
+    pub const List = collections.SafeMultiList(Node);
+
+    /// Internal representation for where a node is stored
+    /// in the tree.
+    pub const Idx = List.Idx;
+
+    /// This is the tag associated with a raw Node in the list
+    pub const Tag = enum {
+        // Statements
+        statement_expr,
+        statement_decl,
+        statement_var,
+        statement_for,
+        statement_expect,
+        statement_return,
+        statement_import,
+        statement_type_decl,
+        statement_type_anno,
+        statement_crash,
+        // Expressions
+        expr_var,
+        expr_tuple,
+        expr_list,
+        expr_record,
+        expr_field_access,
+        expr_static_dispatch,
+        expr_apply,
+        expr_string,
+        expr_string_part,
+        expr_int,
+        expr_float,
+        expr_tag,
+        expr_lambda,
+        expr_record_update,
+        expr_bin_op,
+        expr_unary,
+        expr_suffix_single_question,
+        expr_if_then_else,
+        expr_match,
+        expr_dbg,
+        expr_block,
+        expr_ellipsis,
+        expr_record_builder,
+        // Type Header
+        type_decl_header,
+        // Type Annotation
+        type_anno_apply,
+        type_anno_var,
+        type_anno_ty,
+        type_anno_underscore,
+        type_anno_mod_ty,
+        type_anno_union,
+        type_anno_tuple,
+        type_anno_record,
+        type_anno_fn,
+        type_anno_parens,
+    };
+};
+
+/// Stores AST nodes and provides scratch arrays for working with nodes.
+pub const NodeStore = struct {
+    gpa: std.mem.Allocator,
+    nodes: Node.List,
+    extra_data: std.ArrayListUnmanaged(u32),
+    scratch_statements: Scratch(Statement.Idx),
+    scratch_exprs: Scratch(Expr.Idx),
+    scratch_record_fields: Scratch(RecordField.Idx),
+    scratch_when_branches: Scratch(WhenBranch.Idx),
+    scratch_where_clauses: Scratch(WhereClause.Idx),
+    scratch_patterns: Scratch(Pattern.Idx),
+    scratch_pattern_record_fields: Scratch(PatternRecordField.Idx),
+    scratch_type_annos: Scratch(TypeAnno.Idx),
+    scratch_anno_record_fields: Scratch(AnnoRecordField.Idx),
+    scratch_exposed_items: Scratch(ExposedItem.Idx),
+
+    pub fn init(gpa: std.mem.Allocator) NodeStore {
+        return NodeStore.initCapacity(gpa, 128);
+    }
+
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+        return .{
+            .gpa = gpa,
+            .nodes = Node.List.initCapacity(gpa, capacity),
+            .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
+            .scratch_statements = Scratch(Statement.Idx).init(gpa),
+            .scratch_exprs = Scratch(Expr.Idx).init(gpa),
+            .scratch_patterns = Scratch(Pattern.Idx).init(gpa),
+            .scratch_record_fields = Scratch(RecordField.Idx).init(gpa),
+            .scratch_pattern_record_fields = Scratch(PatternRecordField.Idx).init(gpa),
+            .scratch_when_branches = Scratch(WhenBranch.Idx).init(gpa),
+            .scratch_type_annos = Scratch(TypeAnno.Idx).init(gpa),
+            .scratch_anno_record_fields = Scratch(AnnoRecordField.Idx).init(gpa),
+            .scratch_exposed_items = Scratch(ExposedItem.Idx).init(gpa),
+            .scratch_where_clauses = Scratch(WhereClause.Idx).init(gpa),
+        };
+    }
+
+    pub fn deinit(store: *NodeStore) void {
+        store.nodes.deinit(store.gpa);
+        store.extra_data.deinit(store.gpa);
+        store.scratch_statements.items.deinit(store.gpa);
+        store.scratch_exprs.items.deinit(store.gpa);
+        store.scratch_patterns.items.deinit(store.gpa);
+        store.scratch_record_fields.items.deinit(store.gpa);
+        store.scratch_pattern_record_fields.items.deinit(store.gpa);
+        store.scratch_when_branches.items.deinit(store.gpa);
+        store.scratch_type_annos.items.deinit(store.gpa);
+        store.scratch_anno_record_fields.items.deinit(store.gpa);
+        store.scratch_exposed_items.items.deinit(store.gpa);
+        store.scratch_where_clauses.items.deinit(store.gpa);
+    }
+
+    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {
+        _ = store;
+        _ = statement;
+        @panic("TODO: implement getStatement");
+    }
+
+    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {
+        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
+        const node = store.nodes.get(node_idx);
+
+        switch (node.tag) {
+            .expr_var => {
+                return .{ .@"var" = .{
+                    .ident = @bitCast(node.data_1),
+                } };
+            },
+            else => @panic("TODO: implement other expr variants"),
+        }
+    }
+
+    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {
+        _ = store;
+        _ = whenBranch;
+        @panic("TODO: implement getWhenBranch");
+    }
+
+    pub fn whenBranchSlice(store: *NodeStore, range: WhenBranch.Range) []WhenBranch {
+        return store.nodes.rangeToSlice(range);
+    }
+
+    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {
+        _ = store;
+        _ = whereClause;
+        @panic("TODO: implement getWhereClause");
+    }
+    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {
+        _ = store;
+        _ = pattern;
+        @panic("TODO: implement getPattern");
+    }
+    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {
+        _ = store;
+        _ = patternRecordField;
+        @panic("TODO: implement getPatternRecordField");
+    }
+    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {
+        _ = store;
+        _ = typeAnno;
+        @panic("TODO: implement getTypeAnno");
+    }
+    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordField {
+        _ = store;
+        _ = annoRecordField;
+        @panic("TODO: implement getAnnoRecordField");
+    }
+    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {
+        _ = store;
+        _ = exposedItem;
+        @panic("TODO: implement getExposedItem");
+    }
+
+    // Add nodes
+
+    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {
+        const node = Node{};
+
+        switch (statement) {
+            else => {
+                std.debug.panic("Statement of type {s} not yet implemented in Can\n", .{@tagName(statement)});
+            },
+        }
+
+        return store.add(node);
+    }
+
+    pub const ExprSpan = struct { span: DataSpan };
+    pub const StatementSpan = struct { span: DataSpan };
+    pub const PatternSpan = struct { span: DataSpan };
+    pub const PatternRecordFieldSpan = struct { span: DataSpan };
+    pub const WhenBranchSpan = struct { span: DataSpan };
+    pub const TypeAnnoSpan = struct { span: DataSpan };
+    pub const AnnoRecordFieldSpan = struct { span: DataSpan };
+    pub const ExposedItemSpan = struct { span: DataSpan };
+    pub const WhereClauseSpan = struct { span: DataSpan };
+
+    pub fn addExpr(store: *NodeStore, expr: ExprAtRegion) Expr.Idx {
+        var node = Node{
+            .data_1 = 0,
+            .data_2 = 0,
+            .data_3 = 0,
+            .region = Region.zero(),
+            .tag = @enumFromInt(0),
+        };
+        node.region = expr.region;
+
+        switch (expr.expr) {
+            .lookup => |e| {
+                node.tag = .expr_var;
+                node.data_1 = @intCast(e.ident.idx);
+            },
+            else => {
+                std.debug.panic("Expression of type {s} not yet implemented in Can\n", .{@tagName(expr.expr)});
+            },
+        }
+
+        return @enumFromInt(@intFromEnum(store.nodes.append(store.gpa, node)));
+    }
+
+    pub fn addRecordField(store: *NodeStore, recordField: RecordField) RecordField.Idx {
+        _ = store;
+        _ = recordField;
+
+        return .{ .id = @enumFromInt(0) };
+    }
+
+    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {
+        _ = store;
+        _ = whenBranch;
+
+        return .{ .id = @enumFromInt(0) };
+    }
+
+    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {
+        _ = store;
+        _ = whereClause;
+
+        return .{ .id = @enumFromInt(0) };
+    }
+
+    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {
+        const node = Node{};
+
+        switch (pattern) {
+            else => {
+                std.debug.panic("Pattern of type {s} not yet implemented in Can\n", .{@tagName(pattern)});
+            },
+        }
+
+        return .{ .id = store.nodes.append(store.gpa, node) };
+    }
+
+    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {
+        _ = store;
+        _ = patternRecordField;
+
+        return .{ .id = @enumFromInt(0) };
+    }
+
+    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {
+        const node = Node{};
+
+        switch (typeAnno) {
+            else => {
+                std.debug.panic("Type Annotation of type {s} not yet implemented in Can\n", .{@tagName(typeAnno)});
+            },
+        }
+
+        const nid = store.nodes.append(store.gpa, node);
+        return @enumFromInt(nid);
+    }
+
+    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordField.Idx {
+        _ = store;
+        _ = annoRecordField;
+
+        return @enumFromInt(0);
+    }
+
+    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {
+        const node = Node{};
+
+        switch (exposedItem) {
+            else => {
+                std.debug.panic("Exposed Item of type {s} not yet implemented in Can\n", .{@tagName(exposedItem)});
+            },
+        }
+
+        const nid = store.nodes.append(store.gpa, node);
+        return @enumFromInt(nid);
+    }
+
+    pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {
+        _ = store;
+        _ = recordField;
+
+        return RecordField{};
+    }
+
+    pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
+        return store.extra_data.items[span.start..][0..span.len];
+    }
+};
+
+/// A single statement - either at the top-level or within a block.
+pub const Statement = union(enum) {
+    decl: Decl,
+    @"var": Var,
+    crash: Crash,
+    expr: ExprStmt,
+    expect: Expect,
+    @"for": For,
+    @"return": Return,
+    import: Import,
+    type_decl: TypeDecl,
+    type_anno: Statement.TypeAnno,
+
+    /// A simple immutable declaration
+    pub const Decl = struct {
+        pattern: Pattern.Idx,
+        expr: Expr.Idx,
+    };
+    /// A rebindable declaration using the "var" keyword
+    /// Not valid at the top level of a module
+    pub const Var = struct {
+        ident: Ident.Idx,
+        expr: Expr.Idx,
+    };
+    /// The "crash" keyword
+    /// Not valid at the top level of a module
+    pub const Crash = struct {
+        msg: Expr.Idx,
+    };
+    /// Just an expression - usually the return value for a block
+    /// Not valid at the top level of a module
+    pub const ExprStmt = struct {
+        expr: Expr.Idx,
+        region: Region,
+    };
+    /// An expression that will cause a panic (or some other error handling mechanism) if it evaluates to false
+    pub const Expect = struct {
+        body: Expr.Idx,
+        region: Region,
+    };
+    /// A block of code that will be ran multiple times for each item in a list.
+    /// Not valid at the top level of a module
+    pub const For = struct {
+        patt: Pattern.Idx,
+        expr: Expr.Idx,
+        body: Expr.Idx,
+        region: Region,
+    };
+    /// A early return of the enclosing function.
+    /// Not valid at the top level of a module
+    pub const Return = struct {
+        expr: Expr.Idx,
+        region: Region,
+    };
+    /// Brings in another module for use in the current module, optionally exposing only certain members of that module.
+    /// Only valid at the top level of a module
+    pub const Import = struct {
+        module_name_tok: Ident.Idx,
+        qualifier_tok: ?Ident.Idx,
+        alias_tok: ?Ident.Idx,
+        exposes: ExposedItem.Span,
+        region: Region,
+    };
+    /// A declaration of a new type - whether an alias or a new nominal custom type
+    /// Only valid at the top level of a module
+    pub const TypeDecl = struct {
+        header: TypeHeader.Idx,
+        anno: Self.TypeAnno.Idx,
+        where: ?WhereClause.Span,
+        region: Region,
+    };
+    /// A type annotation, declaring that the value referred to by an ident in the same scope should be a given type.
+    pub const TypeAnno = struct {
+        name: Ident.Idx,
+        anno: Self.TypeAnno.Idx,
+        where: ?WhereClause.Span,
+        region: Region,
+    };
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// A working representation of a record field
+pub const RecordField = struct {
+    name: Ident.Idx,
+    value: Expr.Idx,
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement WhereClause
+const WhereClause = union(enum) {
+    alias: WhereClause.Alias,
+    method: Method,
+    mod_method: ModuleMethod,
+
+    pub const Alias = struct {
+        var_tok: Ident.Idx,
+        alias_tok: Ident.Idx,
+        region: Region,
+    };
+    pub const Method = struct {
+        var_tok: Ident.Idx,
+        name_tok: Ident.Idx,
+        args: TypeAnno.Span,
+        ret_anno: TypeAnno.Idx,
+        region: Region,
+    };
+    pub const ModuleMethod = struct {
+        var_tok: Ident.Idx,
+        name_tok: Ident.Idx,
+        args: TypeAnno.Span,
+        ret_anno: TypeAnno.Span,
+        region: Region,
+    };
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement PatternRecordField
+const PatternRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement TypeAnno
+const TypeAnno = union(enum) {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement TypeHeader
+const TypeHeader = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement AnnoRecordField
+const AnnoRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
+
+/// TODO: implement ExposedItem
+const ExposedItem = struct {
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
+};
 
 /// Type variables that have been explicitly named, e.g. `a` in `items : List a`.
 pub const RigidVariables = struct {
@@ -144,14 +608,10 @@ pub const Expr = union(enum) {
         value: u32,
         bound: types.Num.Int,
     },
+    lookup: Lookup,
     list: struct {
         elem_var: TypeVar,
-        elems: ExprAtRegion.Range,
-    },
-
-    @"var": struct {
-        ident: Ident.Idx,
-        type_var: TypeVar,
+        elems: Expr.Span,
     },
 
     when: When.Idx,
@@ -159,13 +619,7 @@ pub const Expr = union(enum) {
         cond_var: TypeVar,
         branch_var: TypeVar,
         branches: IfBranch.Range,
-        final_else: ExprAtRegion.Idx,
-    },
-
-    let: struct {
-        defs: Def.Range,
-        cont: ExprAtRegion.Idx,
-        // cycle_mark: IllegalCycleMark,
+        final_else: Expr.Idx,
     },
 
     /// This is *only* for calling functions, not for tag application.
@@ -173,7 +627,7 @@ pub const Expr = union(enum) {
     call: struct {
         // TODO:
         // Box<(Variable, Loc<Expr>, Variable, Variable)>,
-        args: TypedExprAtRegion.Range,
+        args: Expr.Span,
         // called_via: base.CalledVia,
     },
 
@@ -189,18 +643,12 @@ pub const Expr = union(enum) {
     /// Empty record constant
     empty_record,
 
-    /// The "crash" keyword
-    crash: struct {
-        msg: ExprAtRegion.Idx,
-        ret_var: TypeVar,
-    },
-
     /// Look up exactly one field on a record, e.g. (expr).foo.
     record_access: struct {
         record_var: TypeVar,
         ext_var: TypeVar,
         field_var: TypeVar,
-        loc_expr: ExprAtRegion.Idx,
+        loc_expr: Expr.Idx,
         field: Ident.Idx,
     },
 
@@ -209,7 +657,7 @@ pub const Expr = union(enum) {
         tag_union_var: TypeVar,
         ext_var: TypeVar,
         name: Ident.Idx,
-        args: TypedExprAtRegion.Range,
+        args: Expr.Span,
     },
 
     zero_argument_tag: struct {
@@ -222,14 +670,11 @@ pub const Expr = union(enum) {
     /// Compiles, but will crash if reached
     RuntimeError: Problem.Idx,
 
-    /// A list of canonicalized expressions.
-    pub const List = collections.SafeList(@This());
-    /// An index into a list of canonicalized expressions.
-    pub const Idx = List.Idx;
-    /// A range of canonicalized expressions.
-    pub const Range = List.Range;
-    /// A non-empty slice of canonicalized expressions.
-    pub const NonEmptyRange = List.NonEmptyRange;
+    pub const Idx = enum(u32) { _ };
+    const Lookup = struct {
+        ident: Ident.Idx,
+    };
+    pub const Span = struct { span: DataSpan };
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
         const gpa = env.gpa;
@@ -239,7 +684,6 @@ pub const Expr = union(enum) {
                 node.appendStringChild(gpa, "literal"); // TODO: use e.literal
                 // TODO: Represent IntValue better
                 node.appendStringChild(gpa, "value=<int_value>");
-                appendTypeVarChild(&node, gpa, "num_var", e.num_var);
                 node.appendStringChild(gpa, @tagName(e.bound));
                 return node;
             },
@@ -248,8 +692,6 @@ pub const Expr = union(enum) {
                 node.appendStringChild(gpa, "literal"); // TODO: use e.literal
                 // TODO: Represent IntValue better
                 node.appendStringChild(gpa, "value=<int_value>");
-                appendTypeVarChild(&node, gpa, "num_var", e.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", e.precision_var);
                 node.appendStringChild(gpa, @tagName(e.bound));
                 return node;
             },
@@ -259,8 +701,6 @@ pub const Expr = union(enum) {
                 const val_str = std.fmt.allocPrint(gpa, "{d}", .{e.value}) catch "<oom>";
                 defer gpa.free(val_str);
                 node.appendStringChild(gpa, val_str);
-                appendTypeVarChild(&node, gpa, "num_var", e.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", e.precision_var);
                 node.appendStringChild(gpa, @tagName(e.bound));
                 return node;
             },
@@ -276,14 +716,11 @@ pub const Expr = union(enum) {
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{e.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendStringChild(gpa, char_str);
-                appendTypeVarChild(&node, gpa, "num_var", e.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", e.precision_var);
                 node.appendStringChild(gpa, @tagName(e.bound));
                 return node;
             },
             .list => |l| {
                 var node = sexpr.Expr.init(gpa, "list");
-                appendTypeVarChild(&node, gpa, "elem_var", l.elem_var);
                 var elems_node = sexpr.Expr.init(gpa, "elems");
                 for (ir.exprs_at_regions.rangeToSlice(l.elems).items(.expr)) |elem| {
                     var elem_sexpr = ir.exprs.get(elem).toSExpr(env, ir);
@@ -292,10 +729,9 @@ pub const Expr = union(enum) {
                 node.appendNodeChild(gpa, &elems_node);
                 return node;
             },
-            .@"var" => |v| {
-                var node = sexpr.Expr.init(gpa, "var");
+            .lookup => |v| {
+                var node = sexpr.Expr.init(gpa, "lookup");
                 appendIdentChild(&node, gpa, env, "ident", v.ident);
-                appendTypeVarChild(&node, gpa, "type_var", v.type_var);
                 return node;
             },
             .when => |when_idx| {
@@ -307,8 +743,6 @@ pub const Expr = union(enum) {
             },
             .@"if" => |i| {
                 var node = sexpr.Expr.init(gpa, "if");
-                appendTypeVarChild(&node, gpa, "cond_var", i.cond_var);
-                appendTypeVarChild(&node, gpa, "branch_var", i.branch_var);
 
                 var branches_node = sexpr.Expr.init(gpa, "branches");
                 for (ir.if_branches.rangeToSlice(i.branches).items(.cond), ir.if_branches.rangeToSlice(i.branches).items(.body)) |cond, body| {
@@ -360,9 +794,8 @@ pub const Expr = union(enum) {
                 node.appendNodeChild(gpa, &args_node);
                 return node;
             },
-            .record => |r| {
+            .record => {
                 var node = sexpr.Expr.init(gpa, "record");
-                appendTypeVarChild(&node, gpa, "record_var", r.record_var);
                 node.appendStringChild(gpa, "fields=<TODO: represent fields>");
                 return node;
             },
@@ -376,7 +809,6 @@ pub const Expr = union(enum) {
                 var msg_sexpr = msg_expr.toSExpr(env, ir);
                 msg_node.appendNodeChild(gpa, &msg_sexpr);
                 node.appendNodeChild(gpa, &msg_node);
-                appendTypeVarChild(&node, gpa, "ret_var", c.ret_var);
                 return node;
             },
             .record_access => |ra| {
@@ -388,16 +820,11 @@ pub const Expr = union(enum) {
                 node.appendNodeChild(gpa, &expr_node);
 
                 appendIdentChild(&node, gpa, env, "field", ra.field);
-                appendTypeVarChild(&node, gpa, "record_var", ra.record_var);
-                appendTypeVarChild(&node, gpa, "ext_var", ra.ext_var);
-                appendTypeVarChild(&node, gpa, "field_var", ra.field_var);
                 return node;
             },
             .tag => |t| {
                 var node = sexpr.Expr.init(gpa, "tag");
                 appendIdentChild(&node, gpa, env, "name", t.name);
-                appendTypeVarChild(&node, gpa, "tag_union_var", t.tag_union_var);
-                appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 var args_node = sexpr.Expr.init(gpa, "args");
                 for (ir.typed_exprs_at_regions.rangeToSlice(t.args).items(.expr), ir.typed_exprs_at_regions.rangeToSlice(t.args).items(.type_var)) |arg, ty_var| {
                     var arg_sexpr = ir.exprs.get(arg).toSExpr(env, ir);
@@ -412,8 +839,6 @@ pub const Expr = union(enum) {
             .zero_argument_tag => |t| {
                 var node = sexpr.Expr.init(gpa, "zero_argument_tag");
                 appendIdentChild(&node, gpa, env, "name", t.name);
-                appendTypeVarChild(&node, gpa, "variant_var", t.variant_var);
-                appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 return node;
             },
             .RuntimeError => |problem_idx| {
@@ -436,13 +861,9 @@ pub const IngestedFile = struct {
     ident: Ident.Idx,
     type: Annotation,
 
-    /// A list of ingested files.
     pub const List = collections.SafeList(@This());
-    /// In index into a list of ingested files.
     pub const Idx = List.Idx;
-    /// A range of ingested files.
     pub const Range = List.Range;
-    /// A non-empty slice of ingested files.
     pub const NonEmptyRange = List.NonEmptyRange;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
@@ -480,53 +901,49 @@ pub const Def = struct {
         pub fn toSExpr(self: *const @This(), gpa: std.mem.Allocator) sexpr.Expr {
             switch (self.*) {
                 .Let => return sexpr.Expr.init(gpa, "Let"),
-                .Stmt => |fx_var| {
-                    var node = sexpr.Expr.init(gpa, "Stmt");
-                    appendTypeVarChild(&node, gpa, "fx_var", fx_var);
+                .Stmt => {
+                    const node = sexpr.Expr.init(gpa, "Stmt");
                     return node;
                 },
-                .Ignored => |fx_var| {
-                    var node = sexpr.Expr.init(gpa, "Ignored");
-                    appendTypeVarChild(&node, gpa, "fx_var", fx_var);
+                .Ignored => {
+                    const node = sexpr.Expr.init(gpa, "Ignored");
                     return node;
                 },
             }
         }
     };
 
-    /// todo
     pub const List = collections.SafeList(@This());
-    /// todo
     pub const Idx = List.Idx;
-    /// todo
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "def");
+        var node = sexpr.Expr.init(env.gpa, "def");
 
-        var kind_node = self.kind.toSExpr(gpa);
-        node.appendNodeChild(gpa, &kind_node);
+        var kind_node = self.kind.toSExpr(env.gpa);
+        node.appendNodeChild(env.gpa, &kind_node);
 
-        var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        // pattern_node.appendRegionChild(gpa, self.pattern_region);
+        var pattern_node = sexpr.Expr.init(env.gpa, "pattern");
+
+        pattern_node.appendRegionChild(env.gpa, self.pattern_region);
+
         const pattern = ir.patterns.get(self.pattern);
         var pattern_sexpr = pattern.toSExpr(env, ir);
-        pattern_node.appendNodeChild(gpa, &pattern_sexpr);
-        node.appendNodeChild(gpa, &pattern_node);
+        pattern_node.appendNodeChild(env.gpa, &pattern_sexpr);
+        node.appendNodeChild(env.gpa, &pattern_node);
 
-        var expr_node = sexpr.Expr.init(gpa, "expr");
-        // expr_node.appendRegionChild(gpa, self.expr_region);
+        var expr_node = sexpr.Expr.init(env.gpa, "expr");
+        // expr_node.appendRegionChild(env.gpa, self.expr_region);
         const expr = ir.exprs.get(self.expr);
         var expr_sexpr = expr.toSExpr(env, ir);
-        expr_node.appendNodeChild(gpa, &expr_sexpr);
-        node.appendNodeChild(gpa, &expr_node);
+        expr_node.appendNodeChild(env.gpa, &expr_sexpr);
+        node.appendNodeChild(env.gpa, &expr_node);
 
-        appendTypeVarChild(&node, gpa, "expr_var", self.expr_var);
+        node.appendTypeVarChild(&node, env.gpa, "expr_var", self.expr_var);
 
         if (self.annotation) |anno| {
             var anno_node = anno.toSExpr(env, ir);
-            node.appendNodeChild(gpa, &anno_node);
+            node.appendNodeChild(env.gpa, &anno_node);
         }
 
         return node;
@@ -541,11 +958,11 @@ pub const Annotation = struct {
     region: Region,
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
+        _ = self;
         _ = ir; // ir not needed currently, but keep for signature consistency
         const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "annotation");
+        const node = sexpr.Expr.init(gpa, "annotation");
         // node.appendRegionChild(gpa, self.region);
-        appendTypeVarChild(&node, gpa, "signature", self.signature);
         // TODO: Add introduced_variables, aliases if needed
         return node;
     }
@@ -562,24 +979,20 @@ pub const IntValue = struct {
 
 /// todo
 pub const ExprAtRegion = struct {
-    expr: Expr.Idx,
+    expr: Expr,
     region: Region,
 
-    /// todo
-    pub const List = collections.SafeMultiList(@This());
-    /// todo
-    pub const Idx = List.Idx;
-    /// todo
-    pub const Range = List.Range;
-
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "expr_at_region");
-        // node.appendRegionChild(gpa, self.region);
-        const expr = ir.exprs.get(self.expr);
+        var node = sexpr.Expr.init(env.gpa, "expr_at_region");
+
+        node.appendRegionChild(env.gpa, self.region);
+
+        const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(env, ir);
-        node.appendNodeChild(gpa, &expr_sexpr);
-        return node;
+
+        node.appendNodeChild(env.gpa, &expr_sexpr);
+
+        return expr.toSExpr(env, ir);
     }
 };
 
@@ -589,19 +1002,18 @@ pub const TypedExprAtRegion = struct {
     type_var: TypeVar,
     region: Region,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        // node.appendRegionChild(gpa, self.region);
-        appendTypeVarChild(&node, gpa, "type_var", self.type_var);
-        const expr = ir.exprs.get(self.expr);
-        var expr_sexpr = expr.toSExpr(env, ir);
-        node.appendNodeChild(gpa, &expr_sexpr);
+        var node = sexpr.Expr.init(env.gpa, "typed_expr_at_region");
+
+        node.appendRegionChild(env.gpa, self.region);
+
+        const expr = ir.store.getExpr(self.expr);
+        node.appendNodeChild(env.gpa, &expr.toSExpr(env, ir));
+
         return node;
     }
 };
@@ -622,9 +1034,8 @@ pub const IfBranch = struct {
     cond: ExprAtRegion,
     body: ExprAtRegion,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     // Note: toSExpr is handled within Expr.if because the slice reference is there
@@ -633,46 +1044,46 @@ pub const IfBranch = struct {
 /// todo
 pub const When = struct {
     /// The actual condition of the when expression.
-    loc_cond: ExprAtRegion.Idx,
+    loc_cond: Expr.Idx,
     cond_var: TypeVar,
     /// Type of each branch (and therefore the type of the entire `when` expression)
     expr_var: TypeVar,
     region: Region,
     /// The branches of the when, and the type of the condition that they expect to be matched
     /// against.
-    branches: WhenBranch.Range,
+    branches: WhenBranch.Span,
     branches_cond_var: TypeVar,
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
     pub const Idx = List.Idx;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "when_data"); // Renamed to avoid clash with Expr.when
-        // node.appendRegionChild(gpa, self.region);
+        var node = sexpr.Expr.init(env.gpa, "when");
 
-        var cond_node = sexpr.Expr.init(gpa, "cond");
-        const cond_expr = ir.exprs_at_regions.get(self.loc_cond);
+        node.appendRegionChild(env.gpa, self.region);
+
+        var cond_node = sexpr.Expr.init(env.gpa, "cond");
+        const cond_expr = ir.store.getExpr(self.loc_cond);
         var cond_sexpr = cond_expr.toSExpr(env, ir);
-        cond_node.appendNodeChild(gpa, &cond_sexpr);
-        node.appendNodeChild(gpa, &cond_node);
+        cond_node.appendNodeChild(env.gpa, &cond_sexpr);
 
-        appendTypeVarChild(&node, gpa, "cond_var", self.cond_var);
-        appendTypeVarChild(&node, gpa, "expr_var", self.expr_var);
-        appendTypeVarChild(&node, gpa, "branches_cond_var", self.branches_cond_var);
-        appendTypeVarChild(&node, gpa, "exhaustive_mark", self.exhaustive);
+        node.appendNodeChild(env.gpa, &cond_node);
 
-        var branches_node = sexpr.Expr.init(gpa, "branches");
-        for (ir.when_branches.getSlice(self.branches)) |branch_idx| {
-            const branch = ir.when_branches.get(branch_idx);
+        appendTypeVarChild(&node, env.gpa, "cond_var", self.cond_var);
+        appendTypeVarChild(&node, env.gpa, "expr_var", self.expr_var);
+        appendTypeVarChild(&node, env.gpa, "branches_cond_var", self.branches_cond_var);
+        appendTypeVarChild(&node, env.gpa, "exhaustive_mark", self.exhaustive);
+
+        var branches_node = sexpr.Expr.init(env.gpa, "branches");
+        for (ir.store.whenBranchSlice(self.branches)) |branch_idx| {
+            const branch = ir.store.getWhenBranch(branch_idx);
+
             var branch_sexpr = branch.toSExpr(env, ir);
-            branches_node.appendNodeChild(gpa, &branch_sexpr);
+            branches_node.appendNodeChild(env.gpa, &branch_sexpr);
         }
-        node.appendNodeChild(gpa, &branches_node);
+        node.appendNodeChild(env.gpa, &branches_node);
 
         return node;
     }
@@ -686,9 +1097,8 @@ pub const WhenBranchPattern = struct {
     /// Degenerate patterns emit a runtime error if reached in a program.
     degenerate: bool,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
@@ -706,15 +1116,10 @@ pub const WhenBranchPattern = struct {
 /// todo
 pub const WhenBranch = struct {
     patterns: WhenBranchPattern.Range,
-    value: ExprAtRegion.Idx,
-    guard: ?ExprAtRegion.Idx,
+    value: Expr.Idx,
+    guard: ?Expr.Idx,
     /// Whether this branch is redundant in the `when` it appears in
     redundant: RedundantMark,
-
-    /// todo
-    pub const List = collections.SafeMultiList(@This());
-    /// todo
-    pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
         const gpa = env.gpa;
@@ -744,10 +1149,11 @@ pub const WhenBranch = struct {
             node.appendNodeChild(gpa, &guard_node);
         }
 
-        appendTypeVarChild(&node, gpa, "redundant_mark", self.redundant);
-
         return node;
     }
+
+    pub const Idx = enum(u32) { _ };
+    pub const Span = struct { span: DataSpan };
 };
 
 /// A pattern, including possible problems (e.g. shadowing) so that
@@ -839,8 +1245,6 @@ pub const Pattern = union(enum) {
             .applied_tag => |t| {
                 var node = sexpr.Expr.init(gpa, "pattern_applied_tag");
                 appendIdentChild(&node, gpa, env, "tag_name", t.tag_name);
-                appendTypeVarChild(&node, gpa, "whole_var", t.whole_var);
-                appendTypeVarChild(&node, gpa, "ext_var", t.ext_var);
                 var args_node = sexpr.Expr.init(gpa, "arguments");
                 for (ir.patterns_at_regions.rangeToSlice(t.arguments).items(.pattern), ir.typed_patterns_at_regions.rangeToSlice(t.arguments).items(.type_var)) |arg, type_var| {
                     var arg_sexpr = ir.patterns.get(arg).toSExpr(env, ir);
@@ -852,10 +1256,8 @@ pub const Pattern = union(enum) {
                 node.appendNodeChild(gpa, &args_node);
                 return node;
             },
-            .record_destructure => |r| {
+            .record_destructure => {
                 var node = sexpr.Expr.init(gpa, "pattern_record_destructure");
-                appendTypeVarChild(&node, gpa, "whole_var", r.whole_var);
-                appendTypeVarChild(&node, gpa, "ext_var", r.ext_var);
                 var destructs_node = sexpr.Expr.init(gpa, "destructs");
                 // Need RecordDestruct storage in IR
                 // Assuming ir.record_destructs exists:
@@ -869,8 +1271,6 @@ pub const Pattern = union(enum) {
             },
             .list => |l| {
                 var node = sexpr.Expr.init(gpa, "pattern_list");
-                appendTypeVarChild(&node, gpa, "list_var", l.list_var);
-                appendTypeVarChild(&node, gpa, "elem_var", l.elem_var);
                 var patterns_node = sexpr.Expr.init(gpa, "patterns");
                 for (ir.patterns.rangeToSlice(l.patterns)) |patt| {
                     var patt_sexpr = patt.toSExpr(env, ir);
@@ -883,7 +1283,6 @@ pub const Pattern = union(enum) {
                 var node = sexpr.Expr.init(gpa, "pattern_num");
                 node.appendStringChild(gpa, "literal"); // TODO: use l.literal
                 node.appendStringChild(gpa, "value=<int_value>");
-                appendTypeVarChild(&node, gpa, "num_var", l.num_var);
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
@@ -891,8 +1290,6 @@ pub const Pattern = union(enum) {
                 var node = sexpr.Expr.init(gpa, "pattern_int");
                 node.appendStringChild(gpa, "literal"); // TODO: use l.literal
                 node.appendStringChild(gpa, "value=<int_value>");
-                appendTypeVarChild(&node, gpa, "num_var", l.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", l.precision_var);
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
@@ -902,8 +1299,6 @@ pub const Pattern = union(enum) {
                 const val_str = std.fmt.allocPrint(gpa, "{d}", .{l.value}) catch "<oom>";
                 defer gpa.free(val_str);
                 node.appendStringChild(gpa, val_str);
-                appendTypeVarChild(&node, gpa, "num_var", l.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", l.precision_var);
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
@@ -918,8 +1313,6 @@ pub const Pattern = union(enum) {
                 const char_str = std.fmt.allocPrint(gpa, "'\\u({d})'", .{l.value}) catch "<oom>";
                 defer gpa.free(char_str);
                 node.appendStringChild(gpa, char_str);
-                appendTypeVarChild(&node, gpa, "num_var", l.num_var);
-                appendTypeVarChild(&node, gpa, "precision_var", l.precision_var);
                 node.appendStringChild(gpa, @tagName(l.bound));
                 return node;
             },
@@ -962,7 +1355,6 @@ pub const TypedPatternAtRegion = struct {
         const gpa = env.gpa;
         var node = sexpr.Expr.init(gpa, "typed_pattern_at_region");
         // node.appendRegionChild(gpa, self.region);
-        appendTypeVarChild(&node, gpa, "type_var", self.type_var);
         const pattern = ir.patterns.get(self.pattern);
         var pattern_sexpr = pattern.toSExpr(env, ir);
         node.appendNodeChild(gpa, &pattern_sexpr);
@@ -998,21 +1390,22 @@ pub const RecordDestruct = struct {
         }
     };
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-
-    /// todo
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
         const gpa = env.gpa;
         var node = sexpr.Expr.init(gpa, "record_destruct");
-        // node.appendRegionChild(gpa, self.region);
+
+        node.appendTypeVarChild(&node, gpa, "type_var", self.type_var);
+        node.appendRegionChild(gpa, self.region);
+
         appendIdentChild(&node, gpa, env, "label", self.label);
         appendIdentChild(&node, gpa, env, "ident", self.ident);
-        appendTypeVarChild(&node, gpa, "type_var", self.type_var);
+
         var kind_node = self.kind.toSExpr(env, ir);
         node.appendNodeChild(gpa, &kind_node);
+
         return node;
     }
 };
@@ -1026,35 +1419,35 @@ pub const ExhaustiveMark = TypeVar;
 /// Helper function to convert the entire Canonical IR to a string in S-expression format
 /// and write it to the given writer.
 pub fn toSExprStr(ir: *const Self, module_env: *base.ModuleEnv, writer: std.io.AnyWriter) !void {
-    _ = module_env; // module_env not needed currently, but keep for signature consistency
-
-    const gpa = ir.env.gpa;
-    var root_node = sexpr.Expr.init(gpa, "canonical_ir");
-    defer root_node.deinit(gpa);
+    _ = ir;
+    var root_node = sexpr.Expr.init(module_env.gpa, "canonical_ir");
+    defer root_node.deinit(module_env.gpa);
 
     // Represent top-level definitions
-    var defs_node = sexpr.Expr.init(gpa, "defs");
-    // Need a way to iterate all defs, assuming indices 0..ir.defs.len
-    var iter = ir.defs.iterIndices();
-    while (iter.next()) |i| {
-        const def = ir.defs.get(i);
-        var def_sexpr = def.toSExpr(&ir.env, ir);
-        defs_node.appendNodeChild(gpa, &def_sexpr);
-    }
-    root_node.appendNodeChild(gpa, &defs_node);
+    // TODO Need a way to iterate all defs, assuming indices 0..ir.defs.len
+    var defs_node = sexpr.Expr.init(module_env.gpa, "defs");
+    // var iter = ir.defs.iterIndices();
+    // while (iter.next()) |i| {
+    //     const def = ir.defs.get(i);
+    //     var def_sexpr = def.toSExpr(ir.env, ir);
+    //     defs_node.appendNodeChild(module_env.gpa, &def_sexpr);
+    // }
+    root_node.appendNodeChild(module_env.gpa, &defs_node);
+
+    defs_node.appendStringChild(module_env.gpa, "TODO: Implement using NodeStore");
 
     // TODO: Optionally add other top-level elements like imports, aliases, ingested files
-    // var imports_node = sexpr.Expr.init(gpa, "imports");
+    // var imports_node = sexpr.Expr.init(module_env.gpa, "imports");
     // ... iterate ir.imports ...
-    // root_node.appendNodeChild(gpa, &imports_node);
+    // root_node.appendNodeChild(module_env.gpa, &imports_node);
 
-    // var aliases_node = sexpr.Expr.init(gpa, "aliases");
+    // var aliases_node = sexpr.Expr.init(module_env.gpa, "aliases");
     // ... iterate ir.aliases ...
-    // root_node.appendNodeChild(gpa, &aliases_node);
+    // root_node.appendNodeChild(module_env.gpa, &aliases_node);
 
-    // var ingested_node = sexpr.Expr.init(gpa, "ingested_files");
+    // var ingested_node = sexpr.Expr.init(module_env.gpa, "ingested_files");
     // ... iterate ir.ingested_files ...
-    // root_node.appendNodeChild(gpa, &ingested_node);
+    // root_node.appendNodeChild(module_env.gpa, &ingested_node);
 
     root_node.toStringPretty(writer);
 }
@@ -1087,7 +1480,7 @@ pub const Content = union(enum) {
     Effectful,
 };
 
-/// todo
+/// todo: describe FlatType
 pub const FlatType = union(enum) {
     Apply: struct {
         ident: Ident.Idx,
@@ -1102,7 +1495,7 @@ pub const FlatType = union(enum) {
     EffectfulFunc,
     Record: struct {
         whole_var: TypeVar,
-        fields: RecordField.Range,
+        fields: FlatType.RecordField.Range,
     },
     // TagUnion: struct {
     //     union_tags: UnionTags,
@@ -1131,12 +1524,10 @@ pub const FlatType = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         type_var: TypeVar,
-        // type: Reco,
 
-        /// todo
         pub const List = collections.SafeMultiList(@This());
-        /// todo
         pub const Range = List.Range;
+        pub const Idx = enum(u32) { _ };
     };
 };
 

@@ -1,15 +1,15 @@
-//! TODO
+//! Since all of these can be passed across the host boundary, and since compiled Roc
+//! programs must not depend on libc or on Zig's standard library, it's important that
+//! none of these operations depend on any Zig types like slices or Allocator.
+//!
+//! All Roc functions that are exposed to the host return `void` and take a `*RocOps`
+//! followed by the address of the return type (which the Roc function will write into)
+//! and varargs (all pointers) to arguments to pass into the Roc function.
+//!
+//! This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
+//! return pointer, args pointers".
 
-// Since all of these can be passed across the host boundary, and since compiled Roc
-// programs must not depend on libc or on Zig's standard library, it's important that
-// none of these operations depend on any Zig types like slices or Allocator.
-
-/// All Roc functions that are exposed to the host return `void` and take a `*RocOps`
-/// followed by the address of the return type (which the Roc function will write into)
-/// and varargs (all pointers) to arguments to pass into the Roc function.
-///
-/// This design makes Roc's ABI very simple; the calling convention is just "Ops pointer,
-/// return pointer, args pointers".
+/// todo: describe RocCall
 pub fn RocCall(comptime CallEnv: type, comptime HostFns: type) type {
     return fn (
         /// Function pointers that the Roc program uses, e.g. alloc, dealloc, etc.
