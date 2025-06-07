@@ -29,12 +29,12 @@ const layout_bit_size = 32;
 /// The exact numbers here are important, because we use them to convert between
 /// Scalar and Idx using branchless arithmetic instructions. Don't change them
 /// lightly, and make sure to re-run tests if you do!
-pub const ScalarTag = enum(u3) {
-    bool = 0, // Maps to Idx 0
-    str = 1, // Maps to Idx 1
-    opaque_ptr = 2, // Maps to Idx 2
-    int = 3, // Maps to Idx 3-12 (add precision value)
-    frac = 4, // Maps to Idx 13-15 (add precision value + 11)
+pub const ScalarTag = enum(u2) {
+    opaque_ptr = 0, // Maps to Idx 0
+    bool = 1, // Maps to Idx 1
+    str = 2, // Maps to Idx 2
+    int = 3, // Maps to Idx 3-12 (depending on precision)
+    frac = 4, // Maps to Idx 13-15 (depending on precision)
 };
 
 /// The union portion of the Scalar packed tagged union.
@@ -43,9 +43,9 @@ pub const ScalarTag = enum(u3) {
 /// such as the precision of a particular int or frac. This union
 /// stores that extra information.
 pub const ScalarUnion = packed union {
+    opaque_ptr: void,
     bool: void,
     str: void,
-    opaque_ptr: void,
     int: types.Num.Int.Precision,
     frac: types.Num.Frac.Precision,
 };
@@ -73,7 +73,7 @@ pub const Idx = enum(@Type(.{
     // any type that resolves to one of these layouts use one of these hardcoded ones instead
     // of adding redundant layouts to the store.
     //
-    // The layout store's idxForScalar method relies on these exact numbers being what they are now,
+    // The layout store's idxFromScalar method relies on these exact numbers being what they are now,
     // so be careful when changing them! (Changing them will, at a minimum, cause tests to fail.)
     bool = 0,
     str = 1,
@@ -114,8 +114,7 @@ pub const LayoutUnion = packed union {
     tuple: TupleLayout,
 };
 
-/// The memory layout of a value in a running Roc program, including its
-/// size and alignment.
+/// The memory layout of a value in a running Roc program.
 ///
 /// A Layout can be created from a Roc type, given the additional information
 /// of the build target's `usize`. Layouts cannot be created without knowing

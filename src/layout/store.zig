@@ -59,11 +59,11 @@ pub const Store = struct {
 
     /// Get the sentinel Idx for a given scalar type using pure arithmetic - no branches!
     /// This relies on the careful ordering of ScalarTag and Idx enum values.
-    pub fn idxForScalar(scalar: Scalar) Idx {
+    pub fn idxFromScalar(scalar: Scalar) Idx {
         // Map scalar to idx using pure arithmetic:
-        // bool (tag 0) -> 0
-        // str (tag 1) -> 1
-        // opaque_ptr (tag 2) -> 2
+        // opaque_ptr (tag 0) -> 0
+        // bool (tag 1) -> 1
+        // str (tag 2) -> 2
         // int (tag 3) with precision p -> 3 + p
         // frac (tag 4) with precision p -> 13 + (p - 2) = 11 + p
 
@@ -95,38 +95,33 @@ pub const Store = struct {
         return @enumFromInt(base_idx + (is_numeric * precision));
     }
 
-    pub fn init(env: *base.ModuleEnv, type_store: *const types_store.Store) Self {
+    pub fn init(
+        env: *base.ModuleEnv,
+        type_store: *const types_store.Store,
+    ) std.mem.Allocator.Error!Self {
         const capacity = type_store.getNumVars();
-        const layouts_by_var = collections.ArrayListMap(Var, Idx).init(env.gpa, capacity) catch |err| exitOnOom(err);
+        const layouts_by_var = try collections.ArrayListMap(Var, Idx).init(env.gpa, capacity);
 
         var layouts = collections.SafeList(Layout){};
 
-        // Pre-populate primitive type layouts in order matching the Idx enum
-        // 0: bool
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .bool = {} }, .tag = .bool } }, .tag = .scalar });
-
-        // 1: str
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .str = {} }, .tag = .str } }, .tag = .scalar });
-
-        // 2: opaque_ptr
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr } }, .tag = .scalar });
-
-        // 3-12: Integer types
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u8 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i8 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u16 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i16 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u32 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i32 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u64 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i64 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .u128 }, .tag = .int } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .int = .i128 }, .tag = .int } }, .tag = .scalar });
-
-        // 13-15: Floating point types
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .f32 }, .tag = .frac } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .f64 }, .tag = .frac } }, .tag = .scalar });
-        _ = layouts.append(env.gpa, Layout{ .data = .{ .scalar = Scalar{ .data = .{ .frac = .dec }, .tag = .frac } }, .tag = .scalar });
+        // Pre-populate primitive type layouts in order matching the Idx enum.
+        // Changing the order of these can break things!
+        try layouts.append(env.gpa, Layout.opaquePtr());
+        try layouts.append(env.gpa, Layout.boolean());
+        try layouts.append(env.gpa, Layout.str());
+        try layouts.append(env.gpa, Layout.int(.u8));
+        try layouts.append(env.gpa, Layout.int(.i8));
+        try layouts.append(env.gpa, Layout.int(.u16));
+        try layouts.append(env.gpa, Layout.int(.i16));
+        try layouts.append(env.gpa, Layout.int(.u32));
+        try layouts.append(env.gpa, Layout.int(.i32));
+        try layouts.append(env.gpa, Layout.int(.u64));
+        try layouts.append(env.gpa, Layout.int(.i64));
+        try layouts.append(env.gpa, Layout.int(.u128));
+        try layouts.append(env.gpa, Layout.int(.i128));
+        try layouts.append(env.gpa, Layout.int(.f32));
+        try layouts.append(env.gpa, Layout.int(.f64));
+        try layouts.append(env.gpa, Layout.int(.dec));
 
         std.debug.assert(layouts.len() == num_scalars);
 
@@ -140,7 +135,7 @@ pub const Store = struct {
             .tuple_fields = TupleField.SafeMultiList.initCapacity(env.gpa, 256),
             .tuple_data = collections.SafeList(TupleData).initCapacity(env.gpa, 256),
             .layouts_by_var = layouts_by_var,
-            .work = Work.initCapacity(env.gpa, 32) catch |err| exitOnOom(err),
+            .work = try Work.initCapacity(env.gpa, 32),
         };
     }
 
@@ -158,7 +153,7 @@ pub const Store = struct {
     pub fn insertLayout(self: *Self, layout: Layout) std.mem.Allocator.Error!Idx {
         // For scalar types, return the appropriate sentinel value instead of inserting
         if (layout.tag == .scalar) {
-            return idxForScalar(layout.data.scalar);
+            return idxFromScalar(layout.data.scalar);
         }
 
         // For non-scalar types, insert as normal

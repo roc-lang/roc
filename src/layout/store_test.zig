@@ -3206,7 +3206,7 @@ test "layouts_by_var uses ArrayListMap with pre-allocation" {
     try testing.expect(layout_store.layouts_by_var.entries.len >= type_store.getNumVars());
 }
 
-test "idxForScalar - arithmetic mapping with no branches" {
+test "idxFromScalar - arithmetic mapping with no branches" {
     const testing = std.testing;
 
     // Test every possible scalar type to ensure arithmetic mapping is correct
@@ -3214,21 +3214,21 @@ test "idxForScalar - arithmetic mapping with no branches" {
     // bool
     {
         const scalar = layout.Scalar{ .data = .{ .bool = {} }, .tag = .bool };
-        const idx = Store.idxForScalar(scalar);
+        const idx = Store.idxFromScalar(scalar);
         try testing.expectEqual(layout.Idx.bool, idx);
     }
 
     // str
     {
         const scalar = layout.Scalar{ .data = .{ .str = {} }, .tag = .str };
-        const idx = Store.idxForScalar(scalar);
+        const idx = Store.idxFromScalar(scalar);
         try testing.expectEqual(layout.Idx.str, idx);
     }
 
     // opaque_ptr
     {
         const scalar = layout.Scalar{ .data = .{ .opaque_ptr = {} }, .tag = .opaque_ptr };
-        const idx = Store.idxForScalar(scalar);
+        const idx = Store.idxFromScalar(scalar);
         try testing.expectEqual(layout.Idx.opaque_ptr, idx);
     }
 
@@ -3249,7 +3249,7 @@ test "idxForScalar - arithmetic mapping with no branches" {
 
         for (int_tests) |test_case| {
             const scalar = layout.Scalar{ .data = .{ .int = test_case.precision }, .tag = .int };
-            const idx = Store.idxForScalar(scalar);
+            const idx = Store.idxFromScalar(scalar);
             try testing.expectEqual(test_case.expected, idx);
         }
     }
@@ -3264,7 +3264,7 @@ test "idxForScalar - arithmetic mapping with no branches" {
 
         for (frac_tests) |test_case| {
             const scalar = layout.Scalar{ .data = .{ .frac = test_case.precision }, .tag = .frac };
-            const idx = Store.idxForScalar(scalar);
+            const idx = Store.idxFromScalar(scalar);
             try testing.expectEqual(test_case.expected, idx);
         }
     }
