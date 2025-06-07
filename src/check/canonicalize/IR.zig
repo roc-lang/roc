@@ -4,7 +4,8 @@ const types = @import("../../types.zig");
 const problem = @import("../../problem.zig");
 const collections = @import("../../collections.zig");
 const Alias = @import("./Alias.zig");
-const sexpr = @import("../../base/sexpr.zig"); // Added import
+const sexpr = @import("../../base/sexpr.zig");
+const exitOnOom = @import("../../collections/utils.zig").exitOnOom;
 
 const Ident = base.Ident;
 const Region = base.Region;
@@ -14,8 +15,10 @@ const TypeVar = types.Var;
 const Problem = problem.Problem;
 const Self = @This();
 
+env: *base.ModuleEnv,
 store: NodeStore,
 ingested_files: IngestedFile.List,
+imports: ModuleImport.List,
 
 /// Initialize the IR for a module's canonicalization info.
 ///
@@ -27,19 +30,21 @@ ingested_files: IngestedFile.List,
 ///
 /// Since the can IR holds indices into the `ModuleEnv`, we need
 /// the `ModuleEnv` to also be owned by the can IR to cache it.
-pub fn init(gpa: std.mem.Allocator) Self {
+pub fn init(env: *base.ModuleEnv) Self {
     return Self{
-        .store = NodeStore.init(gpa),
-        // .type_var_names = Ident.Store.init(gpa),
+        .env = env,
+        .store = NodeStore.init(env.gpa),
         .ingested_files = .{},
+        .imports = .{},
     };
 }
 
 /// Deinit the IR's memory.
-pub fn deinit(self: *Self, gpa: std.mem.Allocator) void {
-    self.store.deinit(gpa);
+pub fn deinit(self: *Self) void {
+    self.store.deinit();
     // self.type_var_names.deinit(self.env.gpa);
     self.ingested_files.deinit(self.env.gpa);
+    self.imports.deinit(self.env.gpa);
 }
 
 // Helper to add type index info
@@ -134,13 +139,15 @@ pub const Node = struct {
     };
 };
 
+/// todo: describe NodeStore
 pub const NodeStore = struct {
     gpa: std.mem.Allocator,
     nodes: Node.List,
     extra_data: std.ArrayListUnmanaged(u32),
     scratch_statements: Scratch(Statement.Idx),
     scratch_exprs: Scratch(Expr.Idx),
-    scratch_record_fields: Scratch(RecordField.Idx),
+    // todo do we need this?
+    //scratch_record_fields: Scratch(RecordField.Idx),
     scratch_when_branches: Scratch(WhenBranch.Idx),
     scratch_where_clauses: Scratch(WhereClause.Idx),
     scratch_patterns: Scratch(Pattern.Idx),
@@ -149,60 +156,163 @@ pub const NodeStore = struct {
     scratch_anno_record_fields: Scratch(AnnoRecordField.Idx),
     scratch_exposed_items: Scratch(ExposedItem.Idx),
 
-    pub fn initCapacity(gpa: std.mem.Allocator) NodeStore {
+    pub fn init(gpa: std.mem.Allocator) NodeStore {
+        return initCapacity(gpa, 128);
+    }
+
+    pub fn initCapacity(gpa: std.mem.Allocator, capacity: usize) NodeStore {
+        const scratch_90th_percentile_capacity = std.math.ceilPowerOfTwoAssert(usize, 64);
         return .{
             .gpa = gpa,
             .nodes = Node.List.initCapacity(gpa, capacity),
             .extra_data = std.ArrayListUnmanaged(u32).initCapacity(gpa, capacity / 2) catch |err| exitOnOom(err),
-            .scratch_statements = Scratch(StatementIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_exprs = Scratch(ExprIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_patterns = Scratch(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_record_fields = Scratch(RecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_pattern_record_fields = Scratch(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_when_branches = Scratch(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_type_annos = Scratch(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_anno_record_fields = Scratch(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_exposed_items = Scratch(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
-            .scratch_where_clauses = Scratch(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_statements = Scratch(Statement.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_exprs = Scratch(Expr.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_patterns = Scratch(Pattern.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_pattern_record_fields = Scratch(PatternRecordField.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_when_branches = Scratch(WhenBranch.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_type_annos = Scratch(TypeAnno.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_anno_record_fields = Scratch(AnnoRecordField.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_exposed_items = Scratch(ExposedItem.Idx).init(gpa, scratch_90th_percentile_capacity),
+            .scratch_where_clauses = Scratch(WhereClause.Idx).init(gpa, scratch_90th_percentile_capacity),
         };
     }
 
     pub fn deinit(store: *NodeStore) void {
-        self.nodes.deinit(store.gpa);
-        self.extra_data.deinit(store.gpa);
-        self.scratch_statements.deinit(store.gpa);
-        self.scratch_exprs.deinit(store.gpa);
-        self.scratch_patterns.deinit(store.gpa);
-        self.scratch_record_fields.deinit(store.gpa);
-        self.scratch_pattern_record_fields.deinit(store.gpa);
-        self.scratch_when_branches.deinit(store.gpa);
-        self.scratch_type_annos.deinit(store.gpa);
-        self.scratch_anno_record_fields.deinit(store.gpa);
-        self.scratch_exposed_items.deinit(store.gpa);
-        self.scratch_where_clauses.deinit(store.gpa);
+        store.nodes.deinit(store.gpa);
+        store.extra_data.deinit(store.gpa);
+        store.scratch_statements.items.deinit(store.gpa);
+        store.scratch_exprs.items.deinit(store.gpa);
+        store.scratch_patterns.items.deinit(store.gpa);
+        store.scratch_pattern_record_fields.items.deinit(store.gpa);
+        store.scratch_when_branches.items.deinit(store.gpa);
+        store.scratch_type_annos.items.deinit(store.gpa);
+        store.scratch_anno_record_fields.items.deinit(store.gpa);
+        store.scratch_exposed_items.items.deinit(store.gpa);
+        store.scratch_where_clauses.items.deinit(store.gpa);
     }
 
-    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {}
-    pub fn addExpr(store: *NodeStore, expr: Expr) Expr.Idx {}
-    pub fn addRecordField(store: *NodeStore, recordField: RecordField) RecordField.Idx {}
-    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {}
-    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {}
-    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {}
-    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {}
-    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {}
-    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordFiled.Idx {}
-    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {}
+    pub fn addStatement(store: *NodeStore, statement: Statement) Statement.Idx {
+        _ = store;
+        _ = statement;
+        @panic("TODO: implement addStatement");
+    }
+    pub fn addExpr(store: *NodeStore, expr: Expr) Expr.Idx {
+        var node = Node{
+            .data_1 = 0,
+            .data_2 = 0,
+            .data_3 = 0,
+            .region = .{ .start = .{ .offset = 0 }, .end = .{ .offset = 0 } },
+            .tag = .expr_var, // default, will be overridden
+        };
+        
+        switch (expr) {
+            .@"var" => |v| {
+                node.tag = .expr_var;
+                node.data_1 = @bitCast(v.ident);
+            },
+            else => @panic("TODO: implement other expr variants"),
+        }
+        
+        const node_idx = store.nodes.append(store.gpa, node);
+        return @enumFromInt(@intFromEnum(node_idx));
+    }
 
-    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {}
-    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {}
-    pub fn getRecordField(store: *NodeStore, recordField: RecordField.Idx) RecordField {}
-    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {}
-    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {}
-    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {}
-    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {}
-    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {}
-    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordFiled {}
-    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {}
+    pub fn addWhenBranch(store: *NodeStore, whenBranch: WhenBranch) WhenBranch.Idx {
+        _ = store;
+        _ = whenBranch;
+        @panic("TODO: implement addWhenBranch");
+    }
+    pub fn addWhereClause(store: *NodeStore, whereClause: WhereClause) WhereClause.Idx {
+        _ = store;
+        _ = whereClause;
+        @panic("TODO: implement addWhereClause");
+    }
+    pub fn addPattern(store: *NodeStore, pattern: Pattern) Pattern.Idx {
+        _ = store;
+        _ = pattern;
+        @panic("TODO: implement addPattern");
+    }
+    pub fn addPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField) PatternRecordField.Idx {
+        _ = store;
+        _ = patternRecordField;
+        @panic("TODO: implement addPatternRecordField");
+    }
+    pub fn addTypeAnno(store: *NodeStore, typeAnno: TypeAnno) TypeAnno.Idx {
+        _ = store;
+        _ = typeAnno;
+        @panic("TODO: implement addTypeAnno");
+    }
+    pub fn addAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField) AnnoRecordField.Idx {
+        _ = store;
+        _ = annoRecordField;
+        @panic("TODO: implement addAnnoRecordField");
+    }
+    pub fn addExposedItem(store: *NodeStore, exposedItem: ExposedItem) ExposedItem.Idx {
+        _ = store;
+        _ = exposedItem;
+        @panic("TODO: implement addExposedItem");
+    }
+
+    pub fn getStatement(store: *NodeStore, statement: Statement.Idx) Statement {
+        _ = store;
+        _ = statement;
+        @panic("TODO: implement getStatement");
+    }
+    pub fn getExpr(store: *NodeStore, expr: Expr.Idx) Expr {
+        const node_idx: Node.Idx = @enumFromInt(@intFromEnum(expr));
+        const node = store.nodes.get(node_idx);
+        
+        switch (node.tag) {
+            .expr_var => {
+                return .{ .@"var" = .{
+                    .ident = @bitCast(node.data_1),
+                } };
+            },
+            else => @panic("TODO: implement other expr variants"),
+        }
+    }
+
+    pub fn getWhenBranch(store: *NodeStore, whenBranch: WhenBranch.Idx) WhenBranch {
+        _ = store;
+        _ = whenBranch;
+        @panic("TODO: implement getWhenBranch");
+    }
+
+    pub fn whenBranchSlice(store: *NodeStore, range: WhenBranch.Range) []WhenBranch {
+        return store.nodes.rangeToSlice(range);
+    }
+
+    pub fn getWhereClause(store: *NodeStore, whereClause: WhereClause.Idx) WhereClause {
+        _ = store;
+        _ = whereClause;
+        @panic("TODO: implement getWhereClause");
+    }
+    pub fn getPattern(store: *NodeStore, pattern: Pattern.Idx) Pattern {
+        _ = store;
+        _ = pattern;
+        @panic("TODO: implement getPattern");
+    }
+    pub fn getPatternRecordField(store: *NodeStore, patternRecordField: PatternRecordField.Idx) PatternRecordField {
+        _ = store;
+        _ = patternRecordField;
+        @panic("TODO: implement getPatternRecordField");
+    }
+    pub fn getTypeAnno(store: *NodeStore, typeAnno: TypeAnno.Idx) TypeAnno {
+        _ = store;
+        _ = typeAnno;
+        @panic("TODO: implement getTypeAnno");
+    }
+    pub fn getAnnoRecordField(store: *NodeStore, annoRecordField: AnnoRecordField.Idx) AnnoRecordField {
+        _ = store;
+        _ = annoRecordField;
+        @panic("TODO: implement getAnnoRecordField");
+    }
+    pub fn getExposedItem(store: *NodeStore, exposedItem: ExposedItem.Idx) ExposedItem {
+        _ = store;
+        _ = exposedItem;
+        @panic("TODO: implement getExposedItem");
+    }
 
     pub const DataSpan = struct {
         start: u32,
@@ -213,7 +323,6 @@ pub const NodeStore = struct {
     pub const StatementSpan = struct { span: DataSpan };
     pub const PatternSpan = struct { span: DataSpan };
     pub const PatternRecordFieldSpan = struct { span: DataSpan };
-    pub const RecordFieldSpan = struct { span: DataSpan };
     pub const WhenBranchSpan = struct { span: DataSpan };
     pub const TypeAnnoSpan = struct { span: DataSpan };
     pub const AnnoRecordFieldSpan = struct { span: DataSpan };
@@ -221,59 +330,85 @@ pub const NodeStore = struct {
     pub const WhereClauseSpan = struct { span: DataSpan };
 
     pub fn sliceFromSpan(store: *NodeStore, comptime T: type, span: anytype) []T {
-        return @as([]T, @ptrCast(store.extra_data.items[span.span.start..(span.span.start + span.span.len)]));
+        return store.extra_data.items[span.start..][0..span.len];
     }
 
     pub fn Scratch(comptime T: type) type {
         return struct {
             items: std.ArrayListUnmanaged(T),
 
-            fn init(gpa: std.mem.Allocator, capacity: usize) Self {
+            fn init(gpa: std.mem.Allocator, capacity: usize) @This() {
                 return .{
-                    .items = std.ArrayListUnmanaged(T).initCapacity(gpa, std.math.ceilPowerOfTwoAssert(usize, 64)),
+                    .items = std.ArrayListUnmanaged(T).initCapacity(gpa, capacity) catch |err| exitOnOom(err),
                 };
             }
 
-            const Self = @This();
+            const ScratchType = @This();
 
-            /// Returns the start position for a new Span of whereClauseIdxs in scratch
-            pub fn top(self: *Self) u32 {
-                return @as(u32, @intCast(store.scratch_where_clauses.items.len));
+            /// Returns the start position for a new Span of items in scratch
+            pub fn top(self: *ScratchType) u32 {
+                return @as(u32, @intCast(self.items.items.len));
             }
 
-            /// Places a new WhereClauseIdx in the scratch.  Will panic on OOM.
-            pub fn append(self: *Self, idx: WhereClauseIdx) void {
-                store.scratch_where_clauses.append(store.gpa, idx) catch |err| exitOnOom(err);
+            /// Places a new item in the scratch. Will panic on OOM.
+            pub fn append(self: *ScratchType, gpa: std.mem.Allocator, item: T) void {
+                self.items.append(gpa, item) catch |err| exitOnOom(err);
             }
 
             /// Creates a new span starting at start.  Moves the items from scratch
             /// to extra_data as appropriate.
-            pub fn spanFromStart(self: *Self, start: u32, gpa: Allocator, data: *std.ArrayListUnmanaged(u32)) WhereClauseSpan {
-                const end = self.items.len;
+            pub fn spanFromStart(self: *ScratchType, start: u32, gpa: std.mem.Allocator, data: *std.ArrayListUnmanaged(u32), comptime SpanType: type) SpanType {
+                const end = self.items.items.len;
                 defer self.items.shrinkRetainingCapacity(start);
                 var i = @as(usize, @intCast(start));
                 const data_start = @as(u32, @intCast(data.items.len));
                 while (i < end) {
-                    data.append(gpa, self.items[i].id) catch |err| exitOnOom(err);
+                    data.append(gpa, @intFromEnum(self.items.items[i])) catch |err| exitOnOom(err);
                     i += 1;
                 }
                 return .{ .span = .{ .start = data_start, .len = @as(u32, @intCast(end)) - start } };
             }
 
-            /// Clears any WhereClauseIds added to scratch from start until the end.
+            /// Clears any items added to scratch from start until the end.
             /// Should be used wherever the scratch items will not be used,
             /// as in when parsing fails.
-            pub fn clearFrom(self: *Self, start: u32) void {
-                store.scratch_where_clauses.shrinkRetainingCapacity(start);
+            pub fn clearFrom(self: *ScratchType, start: u32) void {
+                self.items.shrinkRetainingCapacity(start);
             }
         };
     }
 };
 
+/// Todo: describe Statement
 pub const Statement = union(enum) {
     decl: Decl,
 
     pub const Decl = struct {};
+    pub const Idx = enum(u32) { _ };
+};
+
+/// TODO: implement WhereClause
+pub const WhereClause = struct {
+    pub const Idx = enum(u32) { _ };
+};
+
+/// TODO: implement PatternRecordField
+pub const PatternRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+};
+
+/// TODO: implement TypeAnno
+pub const TypeAnno = struct {
+    pub const Idx = enum(u32) { _ };
+};
+
+/// TODO: implement AnnoRecordField
+pub const AnnoRecordField = struct {
+    pub const Idx = enum(u32) { _ };
+};
+
+/// TODO: implement ExposedItem
+pub const ExposedItem = struct {
     pub const Idx = enum(u32) { _ };
 };
 
@@ -402,14 +537,7 @@ pub const Expr = union(enum) {
     /// Compiles, but will crash if reached
     RuntimeError: Problem.Idx,
 
-    /// A list of canonicalized expressions.
-    pub const List = collections.SafeList(@This());
-    /// An index into a list of canonicalized expressions.
-    pub const Idx = List.Idx;
-    /// A range of canonicalized expressions.
-    pub const Range = List.Range;
-    /// A non-empty slice of canonicalized expressions.
-    pub const NonEmptyRange = List.NonEmptyRange;
+    pub const Idx = enum(u32) { _ };
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
         const gpa = env.gpa;
@@ -615,13 +743,9 @@ pub const IngestedFile = struct {
     ident: Ident.Idx,
     type: Annotation,
 
-    /// A list of ingested files.
     pub const List = collections.SafeList(@This());
-    /// In index into a list of ingested files.
     pub const Idx = List.Idx;
-    /// A range of ingested files.
     pub const Range = List.Range;
-    /// A non-empty slice of ingested files.
     pub const NonEmptyRange = List.NonEmptyRange;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
@@ -673,39 +797,37 @@ pub const Def = struct {
         }
     };
 
-    /// todo
     pub const List = collections.SafeList(@This());
-    /// todo
     pub const Idx = List.Idx;
-    /// todo
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "def");
+        var node = sexpr.Expr.init(env.gpa, "def");
 
-        var kind_node = self.kind.toSExpr(gpa);
-        node.appendNodeChild(gpa, &kind_node);
+        var kind_node = self.kind.toSExpr(env.gpa);
+        node.appendNodeChild(env.gpa, &kind_node);
 
-        var pattern_node = sexpr.Expr.init(gpa, "pattern");
-        // pattern_node.appendRegionChild(gpa, self.pattern_region);
+        var pattern_node = sexpr.Expr.init(env.gpa, "pattern");
+
+        pattern_node.appendRegionChild(env.gpa, self.pattern_region);
+
         const pattern = ir.patterns.get(self.pattern);
         var pattern_sexpr = pattern.toSExpr(env, ir);
-        pattern_node.appendNodeChild(gpa, &pattern_sexpr);
-        node.appendNodeChild(gpa, &pattern_node);
+        pattern_node.appendNodeChild(env.gpa, &pattern_sexpr);
+        node.appendNodeChild(env.gpa, &pattern_node);
 
-        var expr_node = sexpr.Expr.init(gpa, "expr");
-        // expr_node.appendRegionChild(gpa, self.expr_region);
+        var expr_node = sexpr.Expr.init(env.gpa, "expr");
+        // expr_node.appendRegionChild(env.gpa, self.expr_region);
         const expr = ir.exprs.get(self.expr);
         var expr_sexpr = expr.toSExpr(env, ir);
-        expr_node.appendNodeChild(gpa, &expr_sexpr);
-        node.appendNodeChild(gpa, &expr_node);
+        expr_node.appendNodeChild(env.gpa, &expr_sexpr);
+        node.appendNodeChild(env.gpa, &expr_node);
 
-        appendTypeVarChild(&node, gpa, "expr_var", self.expr_var);
+        appendTypeVarChild(&node, env.gpa, "expr_var", self.expr_var);
 
         if (self.annotation) |anno| {
             var anno_node = anno.toSExpr(env, ir);
-            node.appendNodeChild(gpa, &anno_node);
+            node.appendNodeChild(env.gpa, &anno_node);
         }
 
         return node;
@@ -744,21 +866,21 @@ pub const ExprAtRegion = struct {
     expr: Expr.Idx,
     region: Region,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
     pub const Idx = List.Idx;
-    /// todo
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "expr_at_region");
-        // node.appendRegionChild(gpa, self.region);
-        const expr = ir.exprs.get(self.expr);
+        var node = sexpr.Expr.init(env.gpa, "expr_at_region");
+
+        node.appendRegionChild(env.gpa, self.region);
+
+        const expr = ir.store.getExpr(self.expr);
         var expr_sexpr = expr.toSExpr(env, ir);
-        node.appendNodeChild(gpa, &expr_sexpr);
-        return node;
+
+        node.appendNodeChild(env.gpa, &expr_sexpr);
+
+        return expr.toSExpr(env, ir);
     }
 };
 
@@ -768,19 +890,18 @@ pub const TypedExprAtRegion = struct {
     type_var: TypeVar,
     region: Region,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "typed_expr_at_region");
-        // node.appendRegionChild(gpa, self.region);
-        appendTypeVarChild(&node, gpa, "type_var", self.type_var);
-        const expr = ir.exprs.get(self.expr);
-        var expr_sexpr = expr.toSExpr(env, ir);
-        node.appendNodeChild(gpa, &expr_sexpr);
+        var node = sexpr.Expr.init(env.gpa, "typed_expr_at_region");
+
+        node.appendRegionChild(env.gpa, self.region);
+
+        const expr = ir.store.getExpr(self.expr);
+        node.appendNodeChild(env.gpa, &expr.toSExpr(env, ir));
+
         return node;
     }
 };
@@ -801,9 +922,8 @@ pub const IfBranch = struct {
     cond: ExprAtRegion,
     body: ExprAtRegion,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     // Note: toSExpr is handled within Expr.if because the slice reference is there
@@ -824,34 +944,33 @@ pub const When = struct {
     /// Whether the branches are exhaustive.
     exhaustive: ExhaustiveMark,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
     pub const Idx = List.Idx;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
-        const gpa = env.gpa;
-        var node = sexpr.Expr.init(gpa, "when_data"); // Renamed to avoid clash with Expr.when
-        // node.appendRegionChild(gpa, self.region);
+        var node = sexpr.Expr.init(env.gpa, "when");
 
-        var cond_node = sexpr.Expr.init(gpa, "cond");
-        const cond_expr = ir.exprs_at_regions.get(self.loc_cond);
+        node.appendRegionChild(env.gpa, self.region);
+
+        var cond_node = sexpr.Expr.init(env.gpa, "cond");
+        const cond_expr = ir.store.getExpr(self.loc_cond);
         var cond_sexpr = cond_expr.toSExpr(env, ir);
-        cond_node.appendNodeChild(gpa, &cond_sexpr);
-        node.appendNodeChild(gpa, &cond_node);
+        cond_node.appendNodeChild(env.gpa, &cond_sexpr);
 
-        appendTypeVarChild(&node, gpa, "cond_var", self.cond_var);
-        appendTypeVarChild(&node, gpa, "expr_var", self.expr_var);
-        appendTypeVarChild(&node, gpa, "branches_cond_var", self.branches_cond_var);
-        appendTypeVarChild(&node, gpa, "exhaustive_mark", self.exhaustive);
+        node.appendNodeChild(env.gpa, &cond_node);
 
-        var branches_node = sexpr.Expr.init(gpa, "branches");
-        for (ir.when_branches.getSlice(self.branches)) |branch_idx| {
-            const branch = ir.when_branches.get(branch_idx);
+        appendTypeVarChild(&node, env.gpa, "cond_var", self.cond_var);
+        appendTypeVarChild(&node, env.gpa, "expr_var", self.expr_var);
+        appendTypeVarChild(&node, env.gpa, "branches_cond_var", self.branches_cond_var);
+        appendTypeVarChild(&node, env.gpa, "exhaustive_mark", self.exhaustive);
+
+        var branches_node = sexpr.Expr.init(env.gpa, "branches");
+        for (ir.store.whenBranchSlice(self.branches)) |branch_idx| {
+            const branch = ir.store.getWhenBranch(branch_idx);
             var branch_sexpr = branch.toSExpr(env, ir);
-            branches_node.appendNodeChild(gpa, &branch_sexpr);
+            branches_node.appendNodeChild(env.gpa, &branch_sexpr);
         }
-        node.appendNodeChild(gpa, &branches_node);
+        node.appendNodeChild(env.gpa, &branches_node);
 
         return node;
     }
@@ -865,9 +984,8 @@ pub const WhenBranchPattern = struct {
     /// Degenerate patterns emit a runtime error if reached in a program.
     degenerate: bool,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
@@ -890,9 +1008,8 @@ pub const WhenBranch = struct {
     /// Whether this branch is redundant in the `when` it appears in
     redundant: RedundantMark,
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-    /// todo
+    pub const Idx = List.Idx;
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
@@ -1177,21 +1294,22 @@ pub const RecordDestruct = struct {
         }
     };
 
-    /// todo
     pub const List = collections.SafeMultiList(@This());
-
-    /// todo
     pub const Range = List.Range;
 
     pub fn toSExpr(self: *const @This(), env: *const base.ModuleEnv, ir: *const Self) sexpr.Expr {
         const gpa = env.gpa;
         var node = sexpr.Expr.init(gpa, "record_destruct");
-        // node.appendRegionChild(gpa, self.region);
+
+        node.appendRegionChild(gpa, self.region);
+
         appendIdentChild(&node, gpa, env, "label", self.label);
         appendIdentChild(&node, gpa, env, "ident", self.ident);
         appendTypeVarChild(&node, gpa, "type_var", self.type_var);
+
         var kind_node = self.kind.toSExpr(env, ir);
         node.appendNodeChild(gpa, &kind_node);
+
         return node;
     }
 };
@@ -1213,13 +1331,14 @@ pub fn toSExprStr(ir: *const Self, module_env: *base.ModuleEnv, writer: std.io.A
 
     // Represent top-level definitions
     var defs_node = sexpr.Expr.init(gpa, "defs");
-    // Need a way to iterate all defs, assuming indices 0..ir.defs.len
-    var iter = ir.defs.iterIndices();
-    while (iter.next()) |i| {
-        const def = ir.defs.get(i);
-        var def_sexpr = def.toSExpr(ir.env, ir);
-        defs_node.appendNodeChild(gpa, &def_sexpr);
-    }
+    // // Need a way to iterate all defs, assuming indices 0..ir.defs.len
+    // var iter = ir.defs.iterIndices();
+    // while (iter.next()) |i| {
+    //     const def = ir.defs.get(i);
+    //     var def_sexpr = def.toSExpr(ir.env, ir);
+    //     defs_node.appendNodeChild(gpa, &def_sexpr);
+    // }
+    defs_node.appendStringChild(gpa, "TODO: Implement using NodeStore");
     root_node.appendNodeChild(gpa, &defs_node);
 
     // TODO: Optionally add other top-level elements like imports, aliases, ingested files
@@ -1266,7 +1385,7 @@ pub const Content = union(enum) {
     Effectful,
 };
 
-/// todo
+/// todo: describe FlatType
 pub const FlatType = union(enum) {
     Apply: struct {
         ident: Ident.Idx,
@@ -1310,12 +1429,10 @@ pub const FlatType = union(enum) {
     pub const RecordField = struct {
         name: Ident.Idx,
         type_var: TypeVar,
-        // type: Reco,
 
-        /// todo
         pub const List = collections.SafeMultiList(@This());
-        /// todo
         pub const Range = List.Range;
+        pub const Idx = enum(u32) { _ };
     };
 };
 

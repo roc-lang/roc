@@ -116,46 +116,49 @@ fn loadOrCompileCanIr(
 }
 
 fn collectAdjacencies(graph: *Self, package_store: *const Package.Store) void {
-    for (graph.modules.items, 0..) |metadata, metadata_index| {
-        const import_store = metadata.work.imports;
-        const package = package_store.packages.get(metadata.package_idx);
+    _ = graph;
+    _ = package_store;
+    @panic("TODO fix me");
+    // for (graph.modules.items, 0..) |metadata, metadata_index| {
+    //     const import_store = metadata.work.imports;
+    //     const package = package_store.packages.get(metadata.package_idx);
 
-        import_loop: for (import_store.imports.items.items) |*import| {
-            const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
-                for (package.dependencies.items.items) |dependency| {
-                    if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
-                        switch (dependency.package) {
-                            .idx => |idx| break :shorthand_blk idx,
-                            .err => continue :import_loop,
-                        }
-                    }
-                }
+    //     import_loop: for (import_store.imports.items.items) |*import| {
+    //         const from_package_idx = if (import.package_shorthand) |imp_shorthand| shorthand_blk: {
+    //             for (package.dependencies.items.items) |dependency| {
+    //                 if (std.mem.eql(u8, dependency.shorthand, imp_shorthand)) {
+    //                     switch (dependency.package) {
+    //                         .idx => |idx| break :shorthand_blk idx,
+    //                         .err => continue :import_loop,
+    //                     }
+    //                 }
+    //             }
 
-                continue :import_loop;
-            } else metadata.package_idx;
+    //             continue :import_loop;
+    //         } else metadata.package_idx;
 
-            const from_package = package_store.packages.get(from_package_idx);
-            const from_package_modules = from_package.modules;
+    //         const from_package = package_store.packages.get(from_package_idx);
+    //         const from_package_modules = from_package.modules;
 
-            for (from_package_modules.items.items, @as(u32, 0)..) |from_module, from_module_index| {
-                const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
-                if (!std.mem.eql(u8, from_module.name, import.name)) continue :import_loop;
+    //         for (from_package_modules.items.items, @as(u32, 0)..) |from_module, from_module_index| {
+    //             const from_module_idx: Package.Module.Idx = @enumFromInt(from_module_index);
+    //             if (!std.mem.eql(u8, from_module.name, import.name)) continue :import_loop;
 
-                import.resolved = ModuleImport.Resolved{
-                    .package_idx = from_package_idx,
-                    .module_idx = from_module_idx,
-                };
+    //             import.resolved = ModuleImport.Resolved{
+    //                 .package_idx = from_package_idx,
+    //                 .module_idx = from_module_idx,
+    //             };
 
-                // TODO: find out what we need to store to avoid needing this expensive loop
-                for (graph.modules.items, 0..) |search_metadata, search_index| {
-                    if (search_metadata.package_idx != from_package_idx) continue;
-                    if (search_metadata.module_idx != from_module_idx) continue;
+    //             // TODO: find out what we need to store to avoid needing this expensive loop
+    //             for (graph.modules.items, 0..) |search_metadata, search_index| {
+    //                 if (search_metadata.package_idx != from_package_idx) continue;
+    //                 if (search_metadata.module_idx != from_module_idx) continue;
 
-                    graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
-                }
-            }
-        }
-    }
+    //                 graph.adjacencies.items[metadata_index].append(search_index) catch |err| exitOnOom(err);
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 const Attributes = struct {

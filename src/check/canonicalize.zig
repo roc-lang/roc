@@ -117,20 +117,21 @@ fn bringImportIntoScope(
     ir: *IR,
     scope: *Scope,
 ) void {
-    const import_name: []u8 = &.{}; // import.module_name_tok;
-    const shorthand: []u8 = &.{}; // import.qualifier_tok;
-    const region = Region{
-        .start = Region.Position.zero(),
-        .end = Region.Position.zero(),
-    };
+    _ = ir;
+    // const import_name: []u8 = &.{}; // import.module_name_tok;
+    // const shorthand: []u8 = &.{}; // import.qualifier_tok;
+    // const region = Region{
+    //     .start = Region.Position.zero(),
+    //     .end = Region.Position.zero(),
+    // };
 
-    const res = ir.imports.getOrInsert(ir.env.gpa, import_name, shorthand);
+    // const res = ir.imports.getOrInsert(ir.env.gpa, import_name, shorthand);
 
-    if (res.was_present) {
-        _ = ir.env.problems.append(ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
-            .duplicate_import_region = region,
-        } }));
-    }
+    // if (res.was_present) {
+    //     _ = ir.env.problems.append(ir.env.gpa, Problem.Canonicalize.make(.{ .DuplicateImport = .{
+    //         .duplicate_import_region = region,
+    //     } }));
+    // }
 
     const exposesSlice = parse_ir.store.exposedItemSlice(import.exposes);
     for (exposesSlice) |exposed_idx| {
@@ -138,15 +139,17 @@ fn bringImportIntoScope(
         switch (exposed) {
             .lower_ident => |ident| {
                 if (parse_ir.tokens.resolveIdentifier(ident.ident)) |ident_idx| {
-                    if (ident.as) |as_| {
-                        const alias = Alias{
-                            .is_builtin = false,
-                            .kind = .imported_unknown,
-                            .name = ident_idx,
-                            .region = parse_ir.tokens.resolve(as_),
-                        };
-                        const alias_idx = ir.aliases.append(ir.env.gpa, alias);
-                        _ = scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
+                    if (ident.as) |_| {
+                        @panic("TODO fix me");
+                        // const alias = Alias{
+                        //     .is_builtin = false,
+                        //     .kind = .imported_unknown,
+                        //     .name = ident_idx,
+                        //     .region = parse_ir.tokens.resolve(as_),
+                        // };
+
+                        // const alias_idx = ir.aliases.append(ir.env.gpa, alias);
+                        // _ = scope.levels.introduce(.alias, .{ .scope_name = ident_idx, .alias = alias_idx });
                     } else {
                         _ = scope.levels.introduce(.ident, .{ .scope_name = ident_idx, .ident = ident_idx });
                     }
@@ -272,7 +275,7 @@ fn canonicalize_expr(
             if (parse_ir.tokens.resolveIdentifier(e.token)) |ident| {
                 switch (scope.levels.lookup(.ident, ident)) {
                     .InScope => {
-                        return ir.exprs.append(ir.env.gpa, .{ .@"var" = .{
+                        return ir.store.addExpr(.{ .@"var" = .{
                             .ident = ident,
                         } });
                     },
