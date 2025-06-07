@@ -625,7 +625,7 @@ pub const NodeStore = struct {
     scratch_pattern_record_fields: base.Scratch(PatternRecordFieldIdx),
     scratch_when_branches: base.Scratch(WhenBranchIdx),
     scratch_type_annos: base.Scratch(TypeAnnoIdx),
-    scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
+    scratch_anno_record_fields: base.Scratch(AnnoRecordFieldIdx),
     scratch_exposed_items: std.ArrayListUnmanaged(ExposedItemIdx),
     scratch_where_clauses: std.ArrayListUnmanaged(WhereClauseIdx),
 
@@ -645,7 +645,7 @@ pub const NodeStore = struct {
             .scratch_pattern_record_fields = base.Scratch(PatternRecordFieldIdx).init(gpa),
             .scratch_when_branches = base.Scratch(WhenBranchIdx).init(gpa),
             .scratch_type_annos = base.Scratch(TypeAnnoIdx).init(gpa),
-            .scratch_anno_record_fields = std.ArrayListUnmanaged(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_anno_record_fields = base.Scratch(AnnoRecordFieldIdx).init(gpa),
             .scratch_exposed_items = std.ArrayListUnmanaged(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_where_clauses = std.ArrayListUnmanaged(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
         };
@@ -693,7 +693,7 @@ pub const NodeStore = struct {
         store.scratch_pattern_record_fields.clearFrom(0);
         store.scratch_when_branches.clearFrom(0);
         store.scratch_type_annos.clearFrom(0);
-        store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
+        store.scratch_anno_record_fields.clearFrom(0);
         store.scratch_exposed_items.shrinkRetainingCapacity(0);
         store.scratch_where_clauses.shrinkRetainingCapacity(0);
     }
@@ -3799,23 +3799,23 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of annoRecordFieldIdxs in scratch
     pub fn scratchAnnoRecordFieldTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_anno_record_fields.items.len));
+        return store.scratch_anno_record_fields.top();
     }
 
     /// Places a new AnnoRecordFieldIdx in the scratch.  Will panic on OOM.
     pub fn addScratchAnnoRecordField(store: *NodeStore, idx: AnnoRecordFieldIdx) void {
-        store.scratch_anno_record_fields.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_anno_record_fields.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn annoRecordFieldSpanFrom(store: *NodeStore, start: u32) AnnoRecordFieldSpan {
-        const end = store.scratch_anno_record_fields.items.len;
-        defer store.scratch_anno_record_fields.shrinkRetainingCapacity(start);
+        const end = store.scratch_anno_record_fields.top();
+        defer store.scratch_anno_record_fields.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_anno_record_fields.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_anno_record_fields.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3825,7 +3825,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchAnnoRecordFieldsFrom(store: *NodeStore, start: u32) void {
-        store.scratch_anno_record_fields.shrinkRetainingCapacity(start);
+        store.scratch_anno_record_fields.clearFrom(start);
     }
 
     /// Returns a new AnnoRecordField slice so that the caller can iterate through
@@ -3873,7 +3873,7 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of exposedItemIdxs in scratch
     pub fn scratchExposedItemTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_anno_record_fields.items.len));
+        return store.scratch_anno_record_fields.top();
     }
 
     /// Places a new ExposedItemIdx in the scratch.  Will panic on OOM.
