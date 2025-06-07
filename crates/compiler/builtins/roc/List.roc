@@ -21,6 +21,7 @@ module [
     reverse,
     join,
     keep_if,
+    keep_if_try!,
     contains,
     sum,
     walk,
@@ -678,6 +679,28 @@ keep_if_help = |list, predicate, kept, index, length|
             keep_if_help(list, predicate, kept, Num.add_wrap(index, 1), length)
     else
         List.take_first(list, kept)
+
+## Run an effectful function that returns a [Result] on each element of a list, and return all the
+## elements for which the function returned `Ok(Bool.true)`.
+## ```roc
+## dirs_only = List.keep_if_try!(path_list, Path.is_dir!)?
+## ```
+##
+keep_if_try! : List a, (a => Result Bool err) => Result (List a) err
+keep_if_try! = |list, predicate!|
+    length = List.len(list)
+
+    keep_if_try_help!(list, predicate!, 0, 0, length)
+
+keep_if_try_help! : List a, (a => Result Bool err), U64, U64, U64 => Result (List a) err
+keep_if_try_help! = |list, predicate!, kept, index, length|
+    if index < length then
+        if predicate!(List.get_unsafe(list, index))? then
+            keep_if_try_help!(List.swap(list, kept, index), predicate!, Num.add_wrap(kept, 1), Num.add_wrap(index, 1), length)
+        else
+            keep_if_try_help!(list, predicate!, kept, Num.add_wrap(index, 1), length)
+    else
+        Ok(List.take_first(list, kept))
 
 ## Run the given function on each element of a list, and return all the
 ## elements for which the function returned `Bool.false`.

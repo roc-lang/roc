@@ -1425,7 +1425,7 @@ pub fn parseExprWithBp(self: *Parser, min_bp: u8) IR.NodeStore.ExprIdx {
         .OpenCurly => {
             self.advance();
             // Is this a Record or a Block?
-            if (self.peek() == .LowerIdent and (self.peekNext() == .OpColon or self.peekNext() == .Comma)) {
+            if (self.peek() == .CloseCurly or (self.peek() == .LowerIdent and (self.peekNext() == .OpColon or self.peekNext() == .Comma))) {
                 // This is the best guesstimation of this being a Record for now.  I believe we have to have a NoSpaceOpColon
                 // for this to be full-proof without backtracking.
                 const scratch_top = self.store.scratchRecordFieldTop();
@@ -1842,7 +1842,7 @@ pub fn parseTypeAnno(self: *Parser, looking_for_args: TyFnArgs) IR.NodeStore.Typ
             } });
             self.advance(); // Advance past LowerIdent
         },
-        .OpenRound => {
+        .NoSpaceOpenRound, .OpenRound => {
             // Probably a tuple
             self.advance(); // Advance past OpenRound
             const after_round = self.pos;

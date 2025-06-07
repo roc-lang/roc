@@ -449,16 +449,14 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
     // shouldn't be required in future
     parse_ast.store.emptyScratch();
 
-    // Overwrite the snapshot file
-    var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
-        log("failed to create file '{s}': {s}", .{ snapshot_path, @errorName(err) });
-        return false;
-    };
-    defer file.close();
+    // Buffer all output in memory before writing to the snapshot file
+    var buffer = std.ArrayList(u8).init(gpa);
+    defer buffer.deinit();
+
+    var writer = buffer.writer();
 
     // Copy original META
     {
-        var writer = file.writer();
         try writer.writeAll(Section.META);
         try writer.writeAll("\n");
         try content.meta.format(writer);
@@ -467,33 +465,33 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
 
     // Copy original SOURCE
     {
-        try file.writer().writeAll(Section.SOURCE);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(content.source);
-        try file.writer().writeAll("\n");
+        try writer.writeAll(Section.SOURCE);
+        try writer.writeAll("\n");
+        try writer.writeAll(content.source);
+        try writer.writeAll("\n");
     }
 
     // Write out any PROBLEMS
     const has_problems = module_env.problems.len() > 0;
     {
-        try file.writer().writeAll(Section.PROBLEMS);
-        try file.writer().writeAll("\n");
+        try writer.writeAll(Section.PROBLEMS);
+        try writer.writeAll("\n");
         if (has_problems) {
             var iter = module_env.problems.iterIndices();
             while (iter.next()) |problem_idx| {
                 const problem = module_env.problems.get(problem_idx);
-                try problem.toStr(gpa, content.source, file);
-                try file.writer().writeAll("\n");
+                try problem.toStr(gpa, content.source, writer);
+                try writer.writeAll("\n");
             }
         } else {
-            try file.writer().writeAll("NIL\n");
+            try writer.writeAll("NIL\n");
         }
     }
 
     // Write out any TOKENS
     {
-        try file.writer().writeAll(Section.TOKENS);
-        try file.writer().writeAll("\n");
+        try writer.writeAll(Section.TOKENS);
+        try writer.writeAll("\n");
         var tokenizedBuffer = parse_ast.tokens;
         const tokens = tokenizedBuffer.tokens.items(.tag);
         for (tokens, 0..) |tok, i| {
@@ -509,13 +507,13 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             });
             defer gpa.free(region_str);
 
-            try file.writeAll(region_str);
+            try writer.writeAll(region_str);
 
             if (tok == .Newline) {
-                try file.writer().writeAll("\n");
+                try writer.writeAll("\n");
             }
         }
-        try file.writer().writeAll("\n");
+        try writer.writeAll("\n");
     }
 
     // Write PARSE SECTION
@@ -539,10 +537,10 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
                 try parse_ast.nodeToSExprStr(node, &module_env, parse_buffer.writer().any());
             },
         }
-        try file.writer().writeAll(Section.PARSE);
-        try file.writer().writeAll("\n");
-        try file.writer().writeAll(parse_buffer.items);
-        try file.writer().writeAll("\n");
+        try writer.writeAll(Section.PARSE);
+        try writer.writeAll("\n");
+        try writer.writeAll(parse_buffer.items);
+        try writer.writeAll("\n");
     }
 
     // Write FORMAT SECTION
@@ -564,15 +562,15 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
             },
         }
 
-        try file.writer().writeAll(Section.FORMATTED);
-        try file.writer().writeAll("\n");
+        try writer.writeAll(Section.FORMATTED);
+        try writer.writeAll("\n");
 
         if (!std.mem.eql(u8, formatted.items, content.source)) {
-            try file.writer().writeAll(formatted.items);
-            try file.writer().writeAll("\n");
+            try writer.writeAll(formatted.items);
+            try writer.writeAll("\n");
         } else {
-            try file.writer().writeAll("NO CHANGE");
-            try file.writer().writeAll("\n");
+            try writer.writeAll("NO CHANGE");
+            try writer.writeAll("\n");
         }
     }
 
@@ -591,9 +589,22 @@ fn processSnapshotFile(gpa: Allocator, snapshot_path: []const u8, maybe_fuzz_cor
         defer canonicalized.deinit();
 
         try can_ir.toSExprStr(&module_env, canonicalized.writer().any());
+
+        try writer.writeAll(Section.CANONICALIZE);
+        try writer.writeAll("\n");
+        try writer.writeAll(canonicalized.items);
+        try writer.writeAll("\n");
     }
 
-    try file.writer().writeAll("~~~END");
+    try writer.writeAll("~~~END");
+
+    // Now write the buffer to the snapshot file in one go
+    var file = std.fs.cwd().createFile(snapshot_path, .{}) catch |err| {
+        log("failed to create file '{s}': {s}", .{ snapshot_path, @errorName(err) });
+        return false;
+    };
+    defer file.close();
+    try file.writer().writeAll(buffer.items);
 
     // If flag --fuzz-corpus is passed, so write the SOURCE to our corpus
     if (maybe_fuzz_corpus_path != null) {

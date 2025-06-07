@@ -60,7 +60,7 @@ pub const Mark = enum(u32) {
     none = 2,
     _,
 
-    /// Get the lowest rank
+    /// Get the next mark
     pub fn next(self: Self) Self {
         return self + 1;
     }
@@ -69,11 +69,6 @@ pub const Mark = enum(u32) {
 // content //
 
 /// Represents what the a type *is*
-///
-/// Numbers are special cased here. This means that when constraints, types
-/// like `Num(Int(Unsigned64))` should be reperesntsed as it's specific
-/// `flat_type.num` *not* as `flat_type.apply`. See 'Num' struct for additional
-/// details
 pub const Content = union(enum) {
     const Self = @This();
 
@@ -175,10 +170,10 @@ pub const Tuple = struct {
 
 /// Represents number
 ///
-/// Numbers could be representsed by `type_apply` and phantom types, but
-/// that ends up being inefficient because every number type requires
-/// multiple different type entries. By special casing them here we can
-/// ensure that they have more compact representations
+/// Numbers are special-cased here. We represent them to the Roc programmer
+/// as opaque types with phantom type variables, but since they come up so
+/// often, we unify that representation into a special (much more compact)
+/// representation which saves a lot of memory.
 pub const Num = union(enum) {
     const Self = @This();
 
@@ -287,14 +282,12 @@ pub const RecordField = struct {
 
     /// The name of the field
     name: Ident.Idx,
+    /// The type of the field's value
     var_: Var,
 
-    /// The context need by sortByFieldNameAsc
-    pub const SortCtx = struct { store: *const Ident.Store };
-
     /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByNameAsc(ctx: SortCtx, a: Self, b: Self) bool {
-        return Self.orderByName(ctx.store, a, b) == .lt;
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.orderByName(ident_store, a, b) == .lt;
     }
 
     /// Get the ordering of how a compares to b
@@ -341,12 +334,9 @@ pub const Tag = struct {
 
     const Self = @This();
 
-    /// The context need by sortByFieldNameAsc
-    pub const SortCtx = struct { store: *const Ident.Store };
-
     /// A function to be passed into std.mem.sort to sort fields by name
-    pub fn sortByNameAsc(ctx: SortCtx, a: Self, b: Self) bool {
-        return Self.orderByName(ctx.store, a, b) == .lt;
+    pub fn sortByNameAsc(ident_store: *const Ident.Store, a: Self, b: Self) bool {
+        return Self.orderByName(ident_store, a, b) == .lt;
     }
 
     /// Get the ordering of how a compares to b
