@@ -18,7 +18,7 @@ pub const TargetUsize = enum(u1) {
 
     /// The size of the target usize, in bytes
     pub fn size(self: @This()) u32 {
-        return @as(u32, @intCast(self.alignment().toByteUnits()));
+        return (@as(u32, @intCast(@intFromEnum(self))) + 1) * @sizeOf(u32);
     }
 
     /// The alignment of the target usize
