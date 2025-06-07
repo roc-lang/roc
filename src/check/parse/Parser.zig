@@ -1265,7 +1265,7 @@ pub fn parsePattern(self: *Parser, alternatives: Alternatives) IR.NodeStore.Patt
     if ((self.store.scratchPatternTop() - patterns_scratch_top) == 0) {
         return self.store.addMalformed(IR.NodeStore.PatternIdx, .pattern_unexpected_eof, .{ .start = outer_start, .end = self.pos });
     }
-    const last_pattern = self.store.scratch_patterns.items[self.store.scratchPatternTop() - 1];
+    const last_pattern = self.store.scratch_patterns.items.items[self.store.scratchPatternTop() - 1];
     const last_pattern_region = self.store.nodes.items.items(.region)[last_pattern.id];
     const patterns = self.store.patternSpanFrom(patterns_scratch_top);
     return self.store.addPattern(.{ .alternatives = .{

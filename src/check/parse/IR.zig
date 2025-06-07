@@ -620,7 +620,7 @@ pub const NodeStore = struct {
     scratch_statements: base.Scratch(StatementIdx),
     scratch_tokens: base.Scratch(TokenIdx),
     scratch_exprs: base.Scratch(ExprIdx),
-    scratch_patterns: std.ArrayListUnmanaged(PatternIdx),
+    scratch_patterns: base.Scratch(PatternIdx),
     scratch_record_fields: std.ArrayListUnmanaged(RecordFieldIdx),
     scratch_pattern_record_fields: std.ArrayListUnmanaged(PatternRecordFieldIdx),
     scratch_when_branches: std.ArrayListUnmanaged(WhenBranchIdx),
@@ -640,7 +640,7 @@ pub const NodeStore = struct {
             .scratch_statements = base.Scratch(StatementIdx).init(gpa),
             .scratch_tokens = base.Scratch(TokenIdx).init(gpa),
             .scratch_exprs = base.Scratch(ExprIdx).init(gpa),
-            .scratch_patterns = std.ArrayListUnmanaged(PatternIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_patterns = base.Scratch(PatternIdx).init(gpa),
             .scratch_record_fields = std.ArrayListUnmanaged(RecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_pattern_record_fields = std.ArrayListUnmanaged(PatternRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_when_branches = std.ArrayListUnmanaged(WhenBranchIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
@@ -688,7 +688,7 @@ pub const NodeStore = struct {
         store.scratch_statements.clearFrom(0);
         store.scratch_tokens.clearFrom(0);
         store.scratch_exprs.clearFrom(0);
-        store.scratch_patterns.shrinkRetainingCapacity(0);
+        store.scratch_patterns.clearFrom(0);
         store.scratch_record_fields.shrinkRetainingCapacity(0);
         store.scratch_pattern_record_fields.shrinkRetainingCapacity(0);
         store.scratch_when_branches.shrinkRetainingCapacity(0);
@@ -3539,7 +3539,7 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of ExprIdxs in scratch
     pub fn scratchExprTop(store: *NodeStore) u32 {
-        return store.scratch_exprs.len();
+        return store.scratch_exprs.top();
     }
 
     /// Places a new ExprIdx in the scratch.  Will panic on OOM.
@@ -3550,7 +3550,7 @@ pub const NodeStore = struct {
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn exprSpanFrom(store: *NodeStore, start: u32) ExprSpan {
-        const end = store.scratch_exprs.len();
+        const end = store.scratch_exprs.top();
         defer store.scratch_exprs.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -3577,7 +3577,7 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of StatementIdxs in scratch
     pub fn scratchStatementTop(store: *NodeStore) u32 {
-        return store.scratch_statements.len();
+        return store.scratch_statements.top();
     }
 
     /// Places a new StatementIdx in the scratch.  Will panic on OOM.
@@ -3588,7 +3588,7 @@ pub const NodeStore = struct {
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn statementSpanFrom(store: *NodeStore, start: u32) StatementSpan {
-        const end = store.scratch_statements.len();
+        const end = store.scratch_statements.top();
         defer store.scratch_statements.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
@@ -3615,24 +3615,24 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of patternIdxs in scratch
     pub fn scratchPatternTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_patterns.items.len));
+        return store.scratch_patterns.top();
     }
 
     /// Places a new PatternIdx in the scratch.  Will panic on OOM.
     pub fn addScratchPattern(store: *NodeStore, idx: PatternIdx) void {
-        store.scratch_patterns.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_patterns.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn patternSpanFrom(store: *NodeStore, start: u32) PatternSpan {
-        const end = store.scratch_patterns.items.len;
-        defer store.scratch_patterns.shrinkRetainingCapacity(start);
+        const end = store.scratch_patterns.top();
+        defer store.scratch_patterns.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         std.debug.assert(end >= i);
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_patterns.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_patterns.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3642,7 +3642,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchPatternsFrom(store: *NodeStore, start: u32) void {
-        store.scratch_patterns.shrinkRetainingCapacity(start);
+        store.scratch_patterns.clearFrom(start);
     }
 
     /// Returns a new Pattern slice so that the caller can iterate through
@@ -3836,7 +3836,7 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of token_Idxs in scratch
     pub fn scratchTokenTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_tokens.len()));
+        return store.scratch_tokens.top();
     }
 
     /// Places a new TokenIdx in the scratch.  Will panic on OOM.
@@ -3847,7 +3847,7 @@ pub const NodeStore = struct {
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn tokenSpanFrom(store: *NodeStore, start: u32) TokenSpan {
-        const end = store.scratch_tokens.len();
+        const end = store.scratch_tokens.top();
         defer store.scratch_tokens.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));

@@ -24,14 +24,9 @@ pub fn Scratch(comptime T: type) type {
             self.items.deinit(gpa);
         }
 
-        /// Returns the number of items in the scratch
-        pub fn len(self: *Self) u32 {
-            return @as(u32, @intCast(self.items.items.len));
-        }
-
         /// Returns the start position for a new Span of indexes in scratch
         pub fn top(self: *Self) u32 {
-            return @as(u32, @intCast(self.items.len));
+            return @as(u32, @intCast(self.items.items.len));
         }
 
         /// Places a new index of type `T` in the scratch.  Will panic on OOM.
