@@ -624,7 +624,7 @@ pub const NodeStore = struct {
     scratch_record_fields: base.Scratch(RecordFieldIdx),
     scratch_pattern_record_fields: base.Scratch(PatternRecordFieldIdx),
     scratch_when_branches: base.Scratch(WhenBranchIdx),
-    scratch_type_annos: std.ArrayListUnmanaged(TypeAnnoIdx),
+    scratch_type_annos: base.Scratch(TypeAnnoIdx),
     scratch_anno_record_fields: std.ArrayListUnmanaged(AnnoRecordFieldIdx),
     scratch_exposed_items: std.ArrayListUnmanaged(ExposedItemIdx),
     scratch_where_clauses: std.ArrayListUnmanaged(WhereClauseIdx),
@@ -644,7 +644,7 @@ pub const NodeStore = struct {
             .scratch_record_fields = base.Scratch(RecordFieldIdx).init(gpa),
             .scratch_pattern_record_fields = base.Scratch(PatternRecordFieldIdx).init(gpa),
             .scratch_when_branches = base.Scratch(WhenBranchIdx).init(gpa),
-            .scratch_type_annos = std.ArrayListUnmanaged(TypeAnnoIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
+            .scratch_type_annos = base.Scratch(TypeAnnoIdx).init(gpa),
             .scratch_anno_record_fields = std.ArrayListUnmanaged(AnnoRecordFieldIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_exposed_items = std.ArrayListUnmanaged(ExposedItemIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
             .scratch_where_clauses = std.ArrayListUnmanaged(WhereClauseIdx).initCapacity(gpa, scratch_90th_percentile_capacity) catch |err| exitOnOom(err),
@@ -692,7 +692,7 @@ pub const NodeStore = struct {
         store.scratch_record_fields.clearFrom(0);
         store.scratch_pattern_record_fields.clearFrom(0);
         store.scratch_when_branches.clearFrom(0);
-        store.scratch_type_annos.shrinkRetainingCapacity(0);
+        store.scratch_type_annos.clearFrom(0);
         store.scratch_anno_record_fields.shrinkRetainingCapacity(0);
         store.scratch_exposed_items.shrinkRetainingCapacity(0);
         store.scratch_where_clauses.shrinkRetainingCapacity(0);
@@ -3762,23 +3762,23 @@ pub const NodeStore = struct {
 
     /// Returns the start position for a new Span of typeAnnoIdxs in scratch
     pub fn scratchTypeAnnoTop(store: *NodeStore) u32 {
-        return @as(u32, @intCast(store.scratch_type_annos.items.len));
+        return store.scratch_type_annos.top();
     }
 
     /// Places a new TypeAnnoIdx in the scratch.  Will panic on OOM.
     pub fn addScratchTypeAnno(store: *NodeStore, idx: TypeAnnoIdx) void {
-        store.scratch_type_annos.append(store.gpa, idx) catch |err| exitOnOom(err);
+        store.scratch_type_annos.append(store.gpa, idx);
     }
 
     /// Creates a new span starting at start.  Moves the items from scratch
     /// to extra_data as appropriate.
     pub fn typeAnnoSpanFrom(store: *NodeStore, start: u32) TypeAnnoSpan {
-        const end = store.scratch_type_annos.items.len;
-        defer store.scratch_type_annos.shrinkRetainingCapacity(start);
+        const end = store.scratch_type_annos.top();
+        defer store.scratch_type_annos.clearFrom(start);
         var i = @as(usize, @intCast(start));
         const ed_start = @as(u32, @intCast(store.extra_data.items.len));
         while (i < end) {
-            store.extra_data.append(store.gpa, store.scratch_type_annos.items[i].id) catch |err| exitOnOom(err);
+            store.extra_data.append(store.gpa, store.scratch_type_annos.items.items[i].id) catch |err| exitOnOom(err);
             i += 1;
         }
         return .{ .span = .{ .start = ed_start, .len = @as(u32, @intCast(end)) - start } };
@@ -3788,7 +3788,7 @@ pub const NodeStore = struct {
     /// Should be used wherever the scratch items will not be used,
     /// as in when parsing fails.
     pub fn clearScratchTypeAnnosFrom(store: *NodeStore, start: u32) void {
-        store.scratch_type_annos.shrinkRetainingCapacity(start);
+        store.scratch_type_annos.clearFrom(start);
     }
 
     /// Returns a new TypeAnno slice so that the caller can iterate through
