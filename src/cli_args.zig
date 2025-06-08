@@ -216,6 +216,7 @@ fn parse_format(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     var check = false;
     for (args) |arg| {
         if (is_help_flag(arg)) {
+            // We need to free the paths here becuase we aren't returning the .format variant
             paths.deinit();
             return CliArgs{ .help = 
             \\Format a .roc file or the .roc files contained in a directory using standard Roc formatting
@@ -400,9 +401,11 @@ fn parse_run(gpa: mem.Allocator, args: []const []const u8) CliArgs {
     var app_args = std.ArrayList([]const u8).init(gpa);
     for (args) |arg| {
         if (is_help_flag(arg)) {
+            // We need to free the paths here becuase we aren't returning the .run variant
             app_args.deinit();
             return CliArgs{ .help = main_help };
         } else if (mem.eql(u8, arg, "-v") or mem.eql(u8, arg, "--version")) {
+            // We need to free the paths here becuase we aren't returning the .format variant
             app_args.deinit();
             return CliArgs.version;
         } else if (mem.startsWith(u8, arg, "--opt")) {
@@ -432,6 +435,7 @@ fn is_help_flag(arg: []const u8) bool {
 
 fn get_flag_value(arg: []const u8) ?[]const u8 {
     var iter = mem.splitScalar(u8, arg, '=');
+    // ignore the flag key
     _ = iter.next();
     return iter.next();
 }
