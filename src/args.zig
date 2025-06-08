@@ -58,20 +58,21 @@ pub const DocsArgs = struct {
 // TODO: should we ignore extra arguments or return errors when they are included?
 pub fn parse(args: []const []const u8) CliArgs {
     if (args.len == 0) return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
-    if (mem.eql(u8, args[0], "check")) return parseCheck(args[1..]);
-    if (mem.eql(u8, args[0], "build")) return parseBuild(args[1..]);
-    if (mem.eql(u8, args[0], "format")) return parseFormat(args[1..]);
-    if (mem.eql(u8, args[0], "test")) return parseTest(args[1..]);
 
-    return parseRun(args[1..]);
+    if (mem.eql(u8, args[0], "check")) return parse_check(args[1..]);
+    if (mem.eql(u8, args[0], "build")) return parse_build(args[1..]);
+    if (mem.eql(u8, args[0], "format")) return parse_format(args[1..]);
+    if (mem.eql(u8, args[0], "test")) return parse_test(args[1..]);
+
+    return parse_run(args[1..]);
 }
 
-fn parseCheck(args: []const []const u8) CliArgs {
+fn parse_check(args: []const []const u8) CliArgs {
     if (args.len == 0) return CliArgs{ .check = CheckArgs{ .path = "main.roc" } };
     return CliArgs{ .check = CheckArgs{ .path = args[0] } };
 }
 
-fn parseBuild(args: []const []const u8) CliArgs {
+fn parse_build(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var output: ?[]const u8 = null;
@@ -111,7 +112,7 @@ fn parseBuild(args: []const []const u8) CliArgs {
     return CliArgs{ .build = BuildArgs{ .path = path orelse "main.roc", .opt = opt, .output = output } };
 }
 
-fn parseFormat(args: []const []const u8) CliArgs {
+fn parse_format(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var stdin = false;
     var check = false;
@@ -147,7 +148,7 @@ fn parseFormat(args: []const []const u8) CliArgs {
     return CliArgs{ .format = FormatArgs{ .path = path orelse "main.roc", .stdin = stdin, .check = check } };
 }
 
-fn parseTest(args: []const []const u8) CliArgs {
+fn parse_test(args: []const []const u8) CliArgs {
     var path: ?[]const u8 = null;
     var opt: OptLevel = .dev;
     var main: ?[]const u8 = null;
@@ -186,7 +187,7 @@ fn parseTest(args: []const []const u8) CliArgs {
     return CliArgs{ .test_cmd = TestArgs{ .path = path orelse "main.roc", .opt = opt, .main = main } };
 }
 
-fn parseRun(args: []const []const u8) CliArgs {
+fn parse_run(args: []const []const u8) CliArgs {
     _ = args;
     return CliArgs{ .run = RunArgs{ .path = "main.roc" } };
 }
