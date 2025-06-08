@@ -97,6 +97,7 @@ const main_help =
     \\                     e.g. `roc run -- arg1 arg2`
     \\Options:
     \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
+    \\
 ;
 
 fn parse_check(args: []const []const u8) CliArgs {
@@ -122,6 +123,7 @@ fn parse_build(args: []const []const u8) CliArgs {
             \\      --output=<output>      The full path to the output binary, including filename. To specify directory only, specify a path that ends in a directory separator (e.g. a slash)
             \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed (dev)
             \\      -h, --help             Print help
+            \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
             var iter = mem.splitScalar(u8, arg, '=');
@@ -165,6 +167,7 @@ fn parse_format(args: []const []const u8) CliArgs {
             \\  -h, --help     Print help
             \\
             \\If DIRECTORY_OR_FILES is omitted, the .roc files in the current working directory are formatted.
+            \\
         };
         } else if (mem.eql(u8, arg, "--stdin")) {
             stdin = true;
@@ -196,6 +199,7 @@ fn parse_test(args: []const []const u8) CliArgs {
             \\      --opt=<size|speed|dev> Optimize the build process for binary size, binary speed, or compilation speed. Defaults to compilation speed dev
             \\      --main <main>          The .roc file of the main app/package module to resolve dependencies from
             \\  -h, --help                 Print help
+            \\
         };
         } else if (mem.startsWith(u8, arg, "--main")) {
             var iter = mem.splitScalar(u8, arg, '=');
@@ -227,6 +231,7 @@ fn parse_repl(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\  -h, --help       Print help
+            \\
         };
         } else {
             return CliArgs{ .invalid = "unexpected argument" };
@@ -245,6 +250,7 @@ fn parse_version(args: []const []const u8) CliArgs {
             \\
             \\Options:
             \\  -h, --help  Print help
+            \\
         };
         } else {
             return CliArgs{ .invalid = "unexpected argument" };
@@ -271,6 +277,7 @@ fn parse_docs(args: []const []const u8) CliArgs {
             \\      --output=<output>      Output directory for the generated documentation files. [default: generated-docs]
             \\      --root-dir=<root-dir>  Set a root directory path to be used as a prefix for URL links in the generated documentation files.
             \\  -h, --help                 Print help
+            \\
         };
         } else if (mem.startsWith(u8, arg, "--output")) {
             var iter = mem.splitScalar(u8, arg, '=');
