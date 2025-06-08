@@ -15,7 +15,7 @@ NO CHANGE
 (expr
 	(float
 		(num_var "#0")
-		(precision_var "#0")
+		(precision_var "#1")
 		(literal "-2.5")
 		(value "0")
 		(bound "flex_var")))

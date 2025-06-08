@@ -275,15 +275,22 @@ pub const NodeStore = struct {
                 };
             },
             .expr_float => {
-                return .{
-                    .float = .{
-                        .num_var = @enumFromInt(0), // Placeholder
-                        .precision_var = @enumFromInt(0), // Placeholder
-                        .literal = @enumFromInt(node.data_1),
-                        .value = 0.0, // Placeholder value
-                        .bound = .flex_var, // Default bound
-                    },
-                };
+                // Retrieve the literal index from data_1
+                const literal: StringLiteral.Idx = @enumFromInt(node.data_1);
+
+                // Retrieve type variables from data_2 and data_3
+                const num_var = @as(types.Var, @enumFromInt(node.data_2));
+                const precision_var = @as(types.Var, @enumFromInt(node.data_3));
+
+                // TODO get value and bound from extra_data
+
+                return Expr{ .float = .{
+                    .num_var = num_var,
+                    .precision_var = precision_var,
+                    .literal = literal,
+                    .value = 0,
+                    .bound = .flex_var,
+                } };
             },
             .expr_string => {
                 return .{
@@ -405,8 +412,15 @@ pub const NodeStore = struct {
             },
             .float => |e| {
                 node.tag = .expr_float;
-                // TODO: Store float data properly. For now, just store the literal idx
+
+                // Store the literal index in data_1
                 node.data_1 = @intFromEnum(e.literal);
+
+                // Store type variables in data_2 and data_3
+                node.data_2 = @intFromEnum(e.num_var);
+                node.data_3 = @intFromEnum(e.precision_var);
+
+                // TODO for storing the value and bound, use extra_data
             },
             .str => |e| {
                 node.tag = .expr_string;
